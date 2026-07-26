@@ -1,0 +1,20 @@
+{
+  "name": "@crewhelm/cli",
+  "version": "0.0.0",
+  "private": true,
+  "bin": {
+    "crewhelm": "dist/crewhelm.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node24 --outfile=dist/crewhelm.js"
+  },
+  "dependencies": {
+    "@crewhelm/contracts": "workspace:*",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.1",
+    "vitest": "4.1.10"
+  }
+}

@@ -1,6 +1,7 @@
+import { healthReportSchema } from "@crewhelm/contracts";
 import { describe, expect, it, vi } from "vitest";
 
-import worker, { createWorker, healthReportSchema } from "../src/index.js";
+import worker, { createWorker } from "../src/index.js";
 
 const origin = "https://crewhelm.test";
 

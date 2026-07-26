@@ -20,5 +20,11 @@
     "types": ["node", "vitest/globals"],
     "verbatimModuleSyntax": true
   },
-  "include": ["apps/**/*.ts", "scripts/**/*.mjs", "test/**/*.ts", "vitest.config.ts"]
+  "include": [
+    "apps/**/*.ts",
+    "packages/**/*.ts",
+    "scripts/**/*.mjs",
+    "test/**/*.ts",
+    "vitest.config.ts"
+  ]
 }

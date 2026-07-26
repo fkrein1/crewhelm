@@ -5,8 +5,8 @@ Cloudflare. It is designed to be administered through MCP, with a bootstrap CLI 
 shareable agent recipes. Composio supplies the broad app and web integration plane, including
 toolkits such as Firecrawl.
 
-The repository is implementing its first Cloudflare runtime slices. A deployable health Worker is
-available, but no usable agent runtime has been released yet.
+The repository is implementing its first Cloudflare runtime slices. A deployable health Worker and
+local diagnostic CLI are available, but no usable agent runtime has been released yet.
 
 ## Principles
 
@@ -27,6 +27,18 @@ corepack enable
 pnpm install --frozen-lockfile
 pnpm verify
 ```
+
+## Bootstrap CLI
+
+Build the local CLI and diagnose a deployed Worker origin:
+
+```sh
+pnpm --filter @crewhelm/cli build
+node apps/cli/dist/crewhelm.js doctor --endpoint https://your-worker.example
+```
+
+Use `--json` for machine-readable output. HTTP is accepted only for exact loopback hosts during
+local development.
 
 Read [AGENTS.md](AGENTS.md) before using an AI coding agent in this repository. Human contribution
 guidance lives in [CONTRIBUTING.md](CONTRIBUTING.md). Shared language is defined in

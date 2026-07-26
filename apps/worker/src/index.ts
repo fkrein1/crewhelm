@@ -1,10 +1,5 @@
+import { healthReportSchema } from "@crewhelm/contracts";
 import { Hono } from "hono";
-import * as z from "zod";
-
-export const healthReportSchema = z.strictObject({
-  service: z.literal("crewhelm"),
-  status: z.literal("ok"),
-});
 
 const HEALTH_REPORT = healthReportSchema.parse({
   service: "crewhelm",

@@ -30,14 +30,30 @@ importers:
         specifier: 2.9.0
         version: 2.9.0
 
-  apps/worker:
+  apps/cli:
     dependencies:
-      hono:
-        specifier: 4.12.32
-        version: 4.12.32
+      '@crewhelm/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       zod:
         specifier: 4.4.3
         version: 4.4.3
+    devDependencies:
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
+      vitest:
+        specifier: 4.1.10
+        version: 4.1.10(@types/node@24.13.3)(esbuild@0.28.1)(yaml@2.9.0)
+
+  apps/worker:
+    dependencies:
+      '@crewhelm/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      hono:
+        specifier: 4.12.32
+        version: 4.12.32
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: 0.18.8
@@ -48,6 +64,12 @@ importers:
       wrangler:
         specifier: 4.114.0
         version: 4.114.0
+
+  packages/contracts:
+    dependencies:
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
 packages:
 

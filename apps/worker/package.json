@@ -7,8 +7,8 @@
     "build": "wrangler deploy --dry-run --outdir dist"
   },
   "dependencies": {
-    "hono": "4.12.32",
-    "zod": "4.4.3"
+    "@crewhelm/contracts": "workspace:*",
+    "hono": "4.12.32"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.18.8",
