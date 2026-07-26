@@ -5,6 +5,7 @@ worktree and therefore cannot be enforced by the bootstrap commit alone.
 
 ## Security
 
+- Enable the dependency graph; the required dependency-review workflow fails closed without it.
 - Enable private vulnerability reporting.
 - Enable Dependabot alerts and security updates.
 - Enable secret scanning and push protection.

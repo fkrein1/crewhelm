@@ -406,9 +406,51 @@ describe("repository foundation", () => {
   it("keeps GitHub workflows minimally privileged and immutable", async () => {
     const workflows = await readWorkflows();
     const dependabot = parseYamlObject(await read(".github/dependabot.yml"));
+    const dependabotUpdates = dependabot["updates"];
+    const pnpmSetupInputs: unknown[] = [];
 
     expect(workflows.length).toBeGreaterThan(0);
     expect(dependabot["version"]).toBe(2);
+    expect(Array.isArray(dependabotUpdates)).toBe(true);
+
+    if (!Array.isArray(dependabotUpdates)) {
+      throw new TypeError("Expected Dependabot update configuration.");
+    }
+
+    const npmUpdates = dependabotUpdates.find(
+      (update) => isRecord(update) && update["package-ecosystem"] === "npm",
+    );
+    const githubActionsUpdates = dependabotUpdates.find(
+      (update) => isRecord(update) && update["package-ecosystem"] === "github-actions",
+    );
+
+    expect(npmUpdates).toMatchObject({
+      groups: {
+        "development-tooling": {
+          "dependency-type": "development",
+          "update-types": ["minor", "patch"],
+        },
+      },
+      ignore: [
+        {
+          "dependency-name": "*",
+          "update-types": ["version-update:semver-major"],
+        },
+      ],
+    });
+    expect(githubActionsUpdates).toMatchObject({
+      groups: {
+        "github-actions": {
+          patterns: ["*"],
+        },
+      },
+      ignore: [
+        {
+          "dependency-name": "*",
+          "update-types": ["version-update:semver-major"],
+        },
+      ],
+    });
 
     for (const { name, workflow } of workflows) {
       expect(workflowPolicyErrors(name, workflow)).toEqual([]);
@@ -429,6 +471,10 @@ describe("repository foundation", () => {
           checkoutSettings.push(record["with"]);
         }
 
+        if (typeof action === "string" && action.startsWith("pnpm/action-setup@")) {
+          pnpmSetupInputs.push(record["with"]);
+        }
+
         if (typeof command === "string") {
           shellCommands.push(command);
         }
@@ -446,6 +492,8 @@ describe("repository foundation", () => {
         expect(command).not.toContain("${{");
       }
     }
+
+    expect(pnpmSetupInputs).toEqual([{ run_install: false }]);
 
     const baseWorkflow = {
       jobs: { verify: { runsOn: "ubuntu-24.04", steps: [] } },
