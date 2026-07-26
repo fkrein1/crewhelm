@@ -32,9 +32,10 @@ security controls, and documentation required to make that objective complete.
    - When creating or materially changing a module interface, read
      `docs/engineering/module-design.md`.
    - For nontrivial code or a refactor, read `docs/engineering/code-philosophy.md`.
-5. Before editing, state a short commit card with the objective, risk, acceptance evidence, and
-   proposed commit. Add why, non-goals, invariants, abuse cases, and detailed validation only when
-   they materially clarify R2 or R3 work.
+5. Before the first edit, state one short objective card for the pull request with the objective,
+   risk, acceptance evidence, and proposed first commit. Update it only when the objective, risk,
+   or intended commit boundary materially changes. Add why, non-goals, invariants, abuse cases, and
+   detailed validation only when they materially clarify R2 or R3 work.
 
 ```text
 Objective:
@@ -82,7 +83,7 @@ Run validation workloads sequentially:
 1. Run focused tests for the changed behavior.
 2. For nontrivial code, read `references/simplification-review.md`, perform the bounded review, and
    re-run focused tests after any change.
-3. Once the change is settled, run `pnpm verify` once.
+3. Once the branch is settled, run `pnpm verify` once before marking the pull request ready.
 4. Run any risk-specific integration, migration, recovery, packaging, or staging checks.
 5. Inspect `git diff --check`, the complete diff, and the staged diff.
 6. Confirm no secret, generated junk, unrelated formatting, or accidental public API change is
@@ -102,16 +103,18 @@ Self-review every commit on two axes:
 2. **Standards**: repository instructions, module design, compatibility, and operations.
 
 R0 through R2 require self-review; request independent review when uncertainty or impact warrants
-it. For R3, require one independent review covering objective, standards, and the relevant security
-questions. Require a second, security-focused reviewer only when the change directly alters a trust
-boundary, authentication, authorization, secret handling, MCP or external mutations, sandboxing,
-remote execution, destructive behavior, migration recovery, or deployment and release authority.
+it. For R3, require one independent review of the settled pull-request diff covering objective,
+standards, and the relevant security questions. Require a second, security-focused reviewer only
+when the change directly alters a trust boundary, authentication, authorization, secret handling,
+MCP or external mutations, sandboxing, remote execution, destructive behavior, migration recovery,
+or deployment and release authority.
 
 Resolve every blocker and repeat affected validations. Do not let a reviewer approve its own fix.
 
-## Commit and report
+## Commit, publish, and report
 
-Stage explicit files and create one signed-off semantic commit with `git commit -s`:
+Work on a short-lived branch, never directly on `main`. Stage explicit files and create signed-off
+semantic commits with `git commit -s`:
 
 ```text
 <type>: <summary>
@@ -119,12 +122,17 @@ Stage explicit files and create one signed-off semantic commit with `git commit 
 <concise explanation of why and how>
 ```
 
-Use `feat`, `fix`, `refactor`, `test`, `docs`, or `chore` as appropriate. Do not silently amend a
-commit after reporting it complete.
+Use `feat`, `fix`, `refactor`, `test`, `docs`, or `chore` as appropriate. Keep each commit green,
+bisectable, and independently revertible, but do not repeat the full gate or independent review
+after every intermediate commit when the pull-request objective is still in progress.
 
-Report a receipt containing the short hash, objective, acceptance result, exact validation
-commands, review result, residual risk, and next objective. Do not push, deploy, publish, or mutate
-external resources without explicit authorization.
+When pushing is authorized, publish the feature branch and open a pull request with the same
+semantic title. Mark it ready only after the full local gate and required review are complete.
+Merge only when required GitHub checks pass and blocking conversations are resolved.
+
+Report a receipt containing the commit hashes, pull-request URL and state, objective, acceptance
+result, exact validation commands, review result, residual risk, and next objective. Do not push,
+merge, deploy, publish, or mutate external resources without explicit authorization.
 
 ## Stop the line
 

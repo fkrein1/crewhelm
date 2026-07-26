@@ -18,17 +18,26 @@ Use the terms in [CONTEXT.md](CONTEXT.md). Design new or materially changed inte
 boundaries, and apply the [code philosophy](docs/engineering/code-philosophy.md) to nontrivial
 implementations. Test behavior through interfaces instead of coupling tests to internals.
 
-Keep production code, relevant tests, security controls, and necessary documentation together.
-Do not submit intentionally insecure placeholders or defer correctness to a follow-up.
+Keep production code, relevant tests, security controls, and necessary documentation together. Do
+not submit intentionally insecure placeholders or defer correctness to a follow-up.
 
-Run the local gate before opening a pull request:
+Create a short-lived branch from `main` and submit every change through a pull request. Direct
+pushes to `main` are blocked. Use focused checks while iterating, then run the local gate before
+marking the pull request ready:
 
 ```sh
 pnpm verify
 ```
 
 Use semantic commit and pull-request titles such as `feat: add recipe validation` or
-`fix: reject expired approvals`. Keep commits green and independently reviewable.
+`fix: reject expired approvals`. Keep commits green and independently reviewable. Sign off every
+commit; the pull request's `DCO` check enforces this.
+
+GitHub requires `Verify`, `Dependency review`, `Analyze JavaScript and TypeScript`, and `DCO` on
+each pull request. `Verify` and CodeQL run again on the resulting `main` commit for monitoring;
+dependency review runs only on pull requests because it compares the proposed dependency graph
+with the base branch. Merge only after the required checks pass and blocking conversations are
+resolved.
 
 Security-sensitive changes should include negative tests and update the threat model or a decision
 record when they alter a trust boundary. Report vulnerabilities according to [SECURITY.md](SECURITY.md).

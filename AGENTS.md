@@ -31,19 +31,29 @@ Before making any change intended for commit, read and follow
 
 ## Validation
 
-- Run focused tests first, then run `pnpm verify` once after the change settles.
+- Run focused tests while iterating, then run `pnpm verify` once before marking the pull request
+  ready.
 - Run lint, typecheck, tests, and builds sequentially.
 - Cap every Vitest run at `--maxWorkers=50%`; use one worker for shared-state suites.
-- Inspect `git diff --check`, the full diff, and the staged diff before committing.
-- Self-review every commit. R3 work requires one independent combined review. Add a separate
-  security reviewer only for changes to trust boundaries, authority, secrets, external mutations,
-  sandboxing, destructive behavior, migrations, or deployment and release authority.
+- Inspect `git diff --check`, each staged commit, and the complete pull-request diff before
+  publishing.
+- Self-review each commit. Apply required independent and security reviews once to the final R3
+  pull-request diff, and repeat the affected review only when later changes invalidate it.
 - Stop when a required check is failing or flaky.
 
 Routine changes do not require a new process document. Add an architecture decision record only
 for a durable, hard-to-reverse choice.
 
-## Commits and external actions
+## Branches, commits, and pull requests
+
+- Branch from protected `main`; use a short-lived `codex/*` branch for Codex-authored work.
+- Never commit or push directly to `main`. Deliver every change through a pull request.
+- Keep local commits green, bisectable, signed off, and scoped, but treat the complete pull request
+  as the integration and independent-review unit.
+- Use focused checks during iteration. Run the full local gate and required independent reviews
+  after the branch settles and before marking the pull request ready.
+- Merge only when the required GitHub checks are successful and all blocking conversations are
+  resolved. Codex may merge when the user has authorized it for the repository.
 
 Use semantic commits:
 
@@ -53,7 +63,8 @@ Use semantic commits:
 <concise explanation>
 ```
 
-Certify every commit with a Developer Certificate of Origin signoff using `git commit -s`.
+Certify every commit with a Developer Certificate of Origin signoff using `git commit -s`. Use the
+same semantic format for the pull-request title.
 
-Do not push, deploy, publish, reserve names, create external resources, or perform destructive
-actions unless the user has explicitly authorized that operation.
+Do not push, merge, deploy, publish, reserve names, create external resources, or perform
+destructive actions unless the user has explicitly authorized that operation.
