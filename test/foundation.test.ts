@@ -3,6 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { parseDocument } from "yaml";
 
+import { workspaceBuildArguments } from "../scripts/build.mjs";
 import { validateToolchain } from "../scripts/toolchain-policy.mjs";
 import { verificationChecks } from "../scripts/verify.mjs";
 
@@ -177,6 +178,10 @@ describe("repository foundation", () => {
     const workspace = parseYamlObject(await read("pnpm-workspace.yaml"));
 
     expect(workspace).toMatchObject({
+      allowBuilds: {
+        esbuild: true,
+        workerd: true,
+      },
       autoInstallPeers: false,
       blockExoticSubdeps: true,
       enableGlobalVirtualStore: false,
@@ -192,7 +197,6 @@ describe("repository foundation", () => {
       trustPolicy: "no-downgrade",
       verifyDepsBeforeRun: "error",
     });
-    expect(workspace).not.toHaveProperty("allowBuilds");
     expect(workspace).not.toHaveProperty("dangerouslyAllowAllBuilds");
     expect(workspace).not.toHaveProperty("trustLockfile");
   });
@@ -202,14 +206,43 @@ describe("repository foundation", () => {
     const scripts = manifest["scripts"];
 
     expect(isRecord(scripts)).toBe(true);
-    expect([...verificationChecks]).toEqual(["format:check", "lint", "typecheck", "test"]);
+    expect([...verificationChecks]).toEqual(["format:check", "lint", "typecheck", "test", "build"]);
+    expect([...workspaceBuildArguments]).toEqual([
+      "--filter=!crewhelm-monorepo",
+      "--workspace-concurrency=1",
+      "--if-present",
+      "run",
+      "build",
+    ]);
     expect(scripts).toMatchObject({
+      build: "node ./scripts/build.mjs",
       "format:check": "oxfmt --check .",
       lint: "oxlint --type-aware --type-check --deny-warnings --report-unused-disable-directives .",
       test: "vitest run --maxWorkers=50%",
       "test:watch": "vitest --maxWorkers=50%",
       typecheck: "tsc --noEmit",
       verify: "node ./scripts/verify.mjs",
+    });
+  });
+
+  it("pins the deployable Worker toolchain in its workspace manifest", async () => {
+    const manifest = parseJsonObject(await read("apps/worker/package.json"));
+
+    expect(manifest).toMatchObject({
+      name: "@crewhelm/worker",
+      private: true,
+      scripts: {
+        build: "wrangler deploy --dry-run --outdir dist",
+      },
+      dependencies: {
+        hono: "4.12.32",
+        zod: "4.4.3",
+      },
+      devDependencies: {
+        "@cloudflare/vitest-pool-workers": "0.18.8",
+        vitest: "4.1.10",
+        wrangler: "4.114.0",
+      },
     });
   });
 
@@ -439,6 +472,18 @@ describe("repository foundation", () => {
     });
 
     expect(dependencyReviewInputs).toMatchObject({
+      "allow-dependencies-licenses": [
+        "pkg:npm/@img/sharp-libvips-darwin-arm64@1.3.1",
+        "pkg:npm/@img/sharp-libvips-darwin-x64@1.3.1",
+        "pkg:npm/@img/sharp-libvips-linux-arm64@1.3.1",
+        "pkg:npm/@img/sharp-libvips-linux-arm@1.3.1",
+        "pkg:npm/@img/sharp-libvips-linux-ppc64@1.3.1",
+        "pkg:npm/@img/sharp-libvips-linux-riscv64@1.3.1",
+        "pkg:npm/@img/sharp-libvips-linux-s390x@1.3.1",
+        "pkg:npm/@img/sharp-libvips-linux-x64@1.3.1",
+        "pkg:npm/@img/sharp-libvips-linuxmusl-arm64@1.3.1",
+        "pkg:npm/@img/sharp-libvips-linuxmusl-x64@1.3.1",
+      ].join(", "),
       "allow-licenses":
         "0BSD, Apache-2.0, BSD-2-Clause, BSD-3-Clause, BlueOak-1.0.0, CC0-1.0, ISC, MIT, Unlicense",
       "fail-on-scopes": "runtime, development, unknown",

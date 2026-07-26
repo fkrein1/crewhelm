@@ -5,8 +5,8 @@ Cloudflare. It is designed to be administered through MCP, with a bootstrap CLI 
 shareable agent recipes. Composio supplies the broad app and web integration plane, including
 toolkits such as Firecrawl.
 
-The repository is currently establishing its engineering and security foundation. No usable
-agent runtime has been released yet.
+The repository is implementing its first Cloudflare runtime slices. A deployable health Worker is
+available, but no usable agent runtime has been released yet.
 
 ## Principles
 

@@ -3,6 +3,10 @@ packages:
   - packages/*
   - tooling/*
 
+allowBuilds:
+  esbuild: true
+  workerd: true
+
 autoInstallPeers: false
 blockExoticSubdeps: true
 enableGlobalVirtualStore: false

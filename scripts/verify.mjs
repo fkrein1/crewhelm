@@ -4,7 +4,13 @@ import { pathToFileURL } from "node:url";
 
 import { validateToolchain } from "./toolchain-policy.mjs";
 
-export const verificationChecks = Object.freeze(["format:check", "lint", "typecheck", "test"]);
+export const verificationChecks = Object.freeze([
+  "format:check",
+  "lint",
+  "typecheck",
+  "test",
+  "build",
+]);
 
 function run() {
   const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
