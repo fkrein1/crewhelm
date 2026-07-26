@@ -9,9 +9,14 @@ Before writing code:
 3. Identify any security invariant or architecture decision affected.
 4. Agree on the validation needed to prove the change.
 
+Use the [product philosophy](docs/product/philosophy.md) to shape a meaningful new capability.
+Routine fixes and maintenance do not need a product pitch.
+
 Use the terms in [CONTEXT.md](CONTEXT.md). Design new or materially changed interfaces according to
-[the module design standard](docs/engineering/module-design.md), and test behavior through those
-interfaces instead of coupling tests to internals.
+[the module design standard](docs/engineering/module-design.md), follow the
+[system architecture](docs/architecture/system.md) when changing ownership or dependency
+boundaries, and apply the [code philosophy](docs/engineering/code-philosophy.md) to nontrivial
+implementations. Test behavior through interfaces instead of coupling tests to internals.
 
 Keep production code, relevant tests, security controls, and necessary documentation together.
 Do not submit intentionally insecure placeholders or defer correctness to a follow-up.

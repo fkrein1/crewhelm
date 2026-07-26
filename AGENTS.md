@@ -21,6 +21,12 @@ Before making any change intended for commit, read and follow
 - Keep authorization and capability decisions deterministic and outside the model.
 - Use the domain terms in `CONTEXT.md`. When a change creates or materially changes a module
   interface, follow `docs/engineering/module-design.md`.
+- Shape meaningful product capabilities with `docs/product/philosophy.md`; routine fixes and
+  maintenance do not need a product pitch.
+- Read `docs/architecture/system.md` before changing a state owner, trust boundary, dependency
+  direction, runtime contract, or strict invariant.
+- Follow `docs/engineering/code-philosophy.md` for nontrivial code and perform its bounded
+  simplification pass after the focused behavior is green.
 
 ## Validation
 

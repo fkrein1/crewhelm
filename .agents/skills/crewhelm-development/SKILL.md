@@ -24,8 +24,12 @@ security controls, and documentation required to make that objective complete.
 4. Load only the guidance this objective needs:
    - For a bug or performance regression, read `references/bug-diagnosis.md`.
    - For R2 or R3 work, read `references/security-review.md`.
+   - For a meaningful product capability, read `docs/product/philosophy.md`.
+   - When changing state ownership, a trust boundary, dependency direction, a runtime contract,
+     or a strict invariant, read `docs/architecture/system.md` and the relevant decision records.
    - When creating or materially changing a module interface, read
      `docs/engineering/module-design.md`.
+   - For nontrivial code or a refactor, read `docs/engineering/code-philosophy.md`.
 5. Present a commit card before editing:
 
 ```text
@@ -67,16 +71,20 @@ unsettled architecture decision, a new trust boundary, or authority the user has
 - Stop and create a separate objective when an unrelated prerequisite appears.
 - Add dependencies only with explicit rationale, exact versions, license review, and supply-chain
   review.
+- If a capability grows materially beyond its shaped appetite, counteroffer with a smaller,
+  coherent outcome instead of silently widening the bet.
 
 ## Validate
 
 Run validation workloads sequentially:
 
 1. Run focused tests for the changed behavior.
-2. Run `pnpm verify`.
-3. Run any risk-specific integration, migration, recovery, packaging, or staging checks.
-4. Inspect `git diff --check`, the complete diff, and the staged diff.
-5. Confirm no secret, generated junk, unrelated formatting, or accidental public API change is
+2. For nontrivial code, read `references/simplification-review.md`, perform the bounded review, and
+   re-run focused tests after any change.
+3. Run `pnpm verify`.
+4. Run any risk-specific integration, migration, recovery, packaging, or staging checks.
+5. Inspect `git diff --check`, the complete diff, and the staged diff.
+6. Confirm no secret, generated junk, unrelated formatting, or accidental public API change is
    present.
 
 Every Vitest invocation must use a maximum of 50% workers. Use one worker for shared-state or

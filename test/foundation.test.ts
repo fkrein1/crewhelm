@@ -254,9 +254,15 @@ describe("repository foundation", () => {
     const bugDiagnosis = await read(
       ".agents/skills/crewhelm-development/references/bug-diagnosis.md",
     );
+    const simplificationReview = await read(
+      ".agents/skills/crewhelm-development/references/simplification-review.md",
+    );
 
     expect(instructions).toContain(".agents/skills/crewhelm-development/SKILL.md");
     expect(instructions).toContain("docs/engineering/module-design.md");
+    expect(instructions).toContain("docs/product/philosophy.md");
+    expect(instructions).toContain("docs/architecture/system.md");
+    expect(instructions).toContain("docs/engineering/code-philosophy.md");
     expect(instructions).toContain("git commit -s");
     expect(context).toContain("A recipe may request a capability");
     expect(frontmatter["name"]).toBe("crewhelm-development");
@@ -272,14 +278,65 @@ describe("repository foundation", () => {
     expect(skill).toContain("Complete one observable objective at a time.");
     expect(skill).toContain("Prefer deep modules with small, explicit interfaces.");
     expect(skill).toContain("dependencies or lockfiles");
+    expect(skill).toContain("references/simplification-review.md");
     expect(skill).toContain("git commit -s");
     expect(bugDiagnosis).toContain("Build the feedback loop first");
+    expect(simplificationReview).toContain("would a clean implementation use a materially simpler");
+    expect(simplificationReview).toContain("Clarity outranks line count");
     expect(metadata).toMatchObject({
       interface: {
         display_name: "Crewhelm Development",
         short_description: "Ship small, verified Crewhelm changes",
       },
     });
+  });
+
+  it("records product shaping, system ownership, and code simplification guardrails", async () => {
+    const productPhilosophy = await read("docs/product/philosophy.md");
+    const systemArchitecture = await read("docs/architecture/system.md");
+    const codePhilosophy = await read("docs/engineering/code-philosophy.md");
+    const controlPlaneDecision = await read(
+      "docs/decisions/0002-owner-scoped-durable-object-control-plane.md",
+    );
+    const runtimeDecision = await read(
+      "docs/decisions/0003-declarative-recipes-and-hardened-think.md",
+    );
+
+    for (const field of [
+      "Problem and evidence:",
+      "Appetite:",
+      "Epicenter:",
+      "Security and compatibility invariants:",
+      "Stop or reshape condition:",
+    ]) {
+      expect(productPhilosophy).toContain(field);
+    }
+
+    expect(productPhilosophy).toContain("Composio is the integration and web plane");
+    expect(productPhilosophy).toContain("owner-confirmed PR");
+    expect(productPhilosophy).toContain("Updates never silently widen grants");
+    expect(systemArchitecture).toContain("OwnerControlPlane");
+    expect(systemArchitecture).toContain("D1 is not an authoritative store");
+    expect(systemArchitecture).toContain("`ScheduleSpec`");
+    expect(systemArchitecture).toContain("`TurnExecution`");
+    expect(systemArchitecture).toContain("`WorkflowExecution`");
+    expect(systemArchitecture).toContain("workspaceBash = false");
+    expect(systemArchitecture).toContain("includeMcpTools = false");
+    expect(systemArchitecture).toContain("Tool discovery is not authorization");
+    expect(systemArchitecture).toContain("fresh MCP");
+    expect(systemArchitecture).toContain("Only composition roots");
+    expect(systemArchitecture).toContain("control plane owns admission and administration");
+    expect(systemArchitecture).toContain("never fall through to `latest`");
+    expect(systemArchitecture).toContain("Do not expose Composio Sessions");
+    expect(systemArchitecture).toContain("Firecrawl is one Composio toolkit");
+    expect(systemArchitecture).toContain("approval-required actions remain unavailable");
+    expect(codePhilosophy).toContain("Correctness and security");
+    expect(codePhilosophy).toContain("Given what this implementation taught us");
+    expect(codePhilosophy).toContain("Never simplify away");
+    expect(controlPlaneDecision).toContain("Status: accepted");
+    expect(controlPlaneDecision).toContain("One SQLite-backed `OwnerControlPlane`");
+    expect(runtimeDecision).toContain("Status: accepted");
+    expect(runtimeDecision).toContain("one data-driven `CrewAgent`");
   });
 
   it("keeps GitHub workflows minimally privileged and immutable", async () => {
@@ -414,6 +471,8 @@ describe("repository foundation", () => {
     expect(invariants).toContain("Models may propose actions but cannot grant permissions");
     expect(threatModel).toContain("MCP client to public MCP ingress");
     expect(threatModel).toContain("Instruction poisoning");
+    expect(threatModel).toContain("self-approval");
+    expect(threatModel).toContain("raw Composio paths bypassing `ToolGate`");
     expect(settings).toContain("secret scanning and push protection");
     expect(settings).toContain("Developer Certificate of Origin");
     expect(notices).toContain("Copyright (c) 2026 Matt Pocock");

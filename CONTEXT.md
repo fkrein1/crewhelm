@@ -8,6 +8,11 @@ and documentation.
 A long-lived, owner-controlled actor with an explicit model, instructions, capability grants, and
 execution limits.
 
+## Agent revision
+
+An immutable snapshot of an agent's configuration and installed recipe. A configuration change
+creates a new revision; a run records the revision it uses.
+
 ## Bootstrap CLI
 
 The local command-line tool that creates or connects the infrastructure needed to operate a
@@ -25,8 +30,9 @@ agents by an opaque identifier, never by the underlying credential.
 
 ## Control plane
 
-The owner-authoritative source of truth for agents, connections, recipes, policy, runs, and their
-lifecycle.
+The owner-authoritative source of truth for agent, connection, recipe, and policy definitions,
+along with run admission and administrative lifecycle. Runtime execution state belongs to the
+agent or Workflow performing it.
 
 ## MCP client
 
@@ -41,3 +47,8 @@ connection requirements, and limits. A recipe contains neither credentials nor e
 ## Run
 
 One bounded attempt by an agent to complete a task under a fixed policy and budget snapshot.
+
+## Tool gate
+
+The deterministic execution-time policy boundary that decides whether a requested tool action is
+allowed, denied, or requires approval. Tool visibility alone is not authorization.
