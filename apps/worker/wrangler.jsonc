@@ -3,4 +3,18 @@
   "name": "crewhelm",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-22",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "OWNER_CONTROL_PLANE",
+        "class_name": "OwnerControlPlane",
+      },
+    ],
+  },
+  "exports": {
+    "OwnerControlPlane": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+  },
 }

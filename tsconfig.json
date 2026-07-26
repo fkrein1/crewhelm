@@ -21,7 +21,7 @@
     "verbatimModuleSyntax": true
   },
   "include": [
-    "apps/**/*.ts",
+    "apps/cli/**/*.ts",
     "packages/**/*.ts",
     "scripts/**/*.mjs",
     "test/**/*.ts",

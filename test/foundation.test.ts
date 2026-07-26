@@ -220,7 +220,8 @@ describe("repository foundation", () => {
       lint: "oxlint --type-aware --type-check --deny-warnings --report-unused-disable-directives .",
       test: "vitest run --maxWorkers=50%",
       "test:watch": "vitest --maxWorkers=50%",
-      typecheck: "tsc --noEmit",
+      typecheck:
+        "tsc --noEmit && tsc --noEmit --project apps/worker/tsconfig.json && tsc --noEmit --project apps/worker/test/tsconfig.json",
       verify: "node ./scripts/verify.mjs",
     });
   });
@@ -240,6 +241,7 @@ describe("repository foundation", () => {
       },
       devDependencies: {
         "@cloudflare/vitest-pool-workers": "0.18.8",
+        "@cloudflare/workers-types": "5.20260724.1",
         vitest: "4.1.10",
         wrangler: "4.114.0",
       },

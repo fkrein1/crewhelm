@@ -57,6 +57,18 @@ logical agent. Never use a global control-plane object. D1 is not an authoritati
 individual release. See
 [ADR 0002](../decisions/0002-owner-scoped-durable-object-control-plane.md).
 
+### Durable Object lifecycle and recovery
+
+Declare new SQLite-backed classes with Wrangler's `exports` lifecycle map. After a class has been
+deployed, a recovery release must roll forward: retain the class export, binding, and SQLite
+storage declaration while disabling or reverting callers. Do not use a source-control revert or
+Workers version rollback that removes an established class lifecycle declaration.
+
+Before a recovery deployment, run the object eviction/reconstruction tests and a Wrangler dry-run.
+If a bad release changed stored state, block new admissions first and use Cloudflare's SQLite
+point-in-time recovery before re-enabling callers. Namespace deletion or a lifecycle tombstone is a
+separate destructive operation and requires explicit approval.
+
 ## Identity and references
 
 Build the owner principal only from verified OAuth issuer and subject claims, plus a tenant claim

@@ -1,6 +1,8 @@
 import { healthReportSchema } from "@crewhelm/contracts";
 import { Hono } from "hono";
 
+export { OwnerControlPlane } from "./owner-control-plane.js";
+
 const HEALTH_REPORT = healthReportSchema.parse({
   service: "crewhelm",
   status: "ok",

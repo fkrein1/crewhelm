@@ -12,7 +12,7 @@
     "lint": "oxlint --type-aware --type-check --deny-warnings --report-unused-disable-directives .",
     "test": "vitest run --maxWorkers=50%",
     "test:watch": "vitest --maxWorkers=50%",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit --project apps/worker/tsconfig.json && tsc --noEmit --project apps/worker/test/tsconfig.json",
     "verify": "node ./scripts/verify.mjs"
   },
   "devDependencies": {
