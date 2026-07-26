@@ -1,0 +1,3 @@
+# Crewhelm instructions
+
+@AGENTS.md

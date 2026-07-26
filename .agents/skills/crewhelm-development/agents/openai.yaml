@@ -1,0 +1,4 @@
+interface:
+  display_name: "Crewhelm Development"
+  short_description: "Ship small, verified Crewhelm changes"
+  default_prompt: "Use $crewhelm-development to implement the next approved Crewhelm work item as one secure, validated commit."

@@ -1,0 +1,18 @@
+packages:
+  - apps/*
+  - packages/*
+  - tooling/*
+
+autoInstallPeers: false
+blockExoticSubdeps: true
+enableGlobalVirtualStore: false
+engineStrict: true
+minimumReleaseAge: 1440
+minimumReleaseAgeIgnoreMissingTime: false
+minimumReleaseAgeStrict: true
+nodeVersion: 24.18.0
+savePrefix: ""
+strictDepBuilds: true
+strictPeerDependencies: true
+trustPolicy: no-downgrade
+verifyDepsBeforeRun: error
