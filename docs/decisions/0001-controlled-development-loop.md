@@ -13,10 +13,12 @@ to arrive after functionality.
 Develop Crewhelm through one green, observable objective per commit. Define acceptance and abuse
 cases before editing, design evidence before implementation, and validate sequentially.
 
-Use one writer. Self-review every commit; require independent two-axis review for R2 and R3 work
-and a separate security review for R3. Use additional agents for bounded research and read-only
-review. Keep routine evidence in commit receipts and CI rather than adding a process document for
-every change.
+Use one writer and self-review every commit. Require one independent combined review for R3 work.
+Add a separate security reviewer only when a change directly alters a trust boundary, authority,
+secrets, external mutations, sandboxing, destructive behavior, migrations, or deployment and
+release authority. Use additional agents for bounded research and read-only review when their value
+justifies the coordination. Keep routine evidence in commit receipts and CI rather than adding a
+process document for every change.
 
 ## Consequences
 
