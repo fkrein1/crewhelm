@@ -13,14 +13,16 @@ security controls, and documentation required to make that objective complete.
 1. Read `AGENTS.md`, `CONTEXT.md`, `docs/security/invariants.md`, and any relevant decision
    record.
 2. Inspect the worktree and preserve unrelated changes.
-3. Classify the work:
-   - **R0**: documentation or isolated tooling.
-   - **R1**: pure internal logic without persistence or external effects.
-   - **R2**: persistence, schedules, provider adapters, or public contracts.
-   - **R3**: authentication, authorization, secrets, MCP mutations, migrations, sandboxing,
-     remote execution, deployment, destructive behavior, dependencies or lockfiles,
-     package-manager or lifecycle policy, CI or release automation, and repository instructions
-     that govern agents.
+3. Classify the work. Risk is determined by behavior, not file type:
+   - **R0**: documentation, tests, or process wording with no executable product behavior.
+   - **R1**: stateless internal logic or isolated tooling without persistence, authority, or
+     external effects.
+   - **R2**: public contracts, ordinary persistence, schedules, provider adapters, or ordinary
+     exact-pinned dependencies or lockfiles that add no privileged lifecycle behavior.
+   - **R3**: authentication, authorization, secrets, MCP or external mutations, state ownership,
+     migrations, sandboxing, remote execution, deployment, destructive behavior, privileged
+     package-manager or lifecycle policy, CI or release permissions, or dependencies with install
+     scripts, native code, or runtime authority.
 4. Load only the guidance this objective needs:
    - For a bug or performance regression, read `references/bug-diagnosis.md`.
    - For R2 or R3 work, read `references/security-review.md`.
@@ -30,17 +32,14 @@ security controls, and documentation required to make that objective complete.
    - When creating or materially changing a module interface, read
      `docs/engineering/module-design.md`.
    - For nontrivial code or a refactor, read `docs/engineering/code-philosophy.md`.
-5. Present a commit card before editing:
+5. Before editing, state a short commit card with the objective, risk, acceptance evidence, and
+   proposed commit. Add why, non-goals, invariants, abuse cases, and detailed validation only when
+   they materially clarify R2 or R3 work.
 
 ```text
 Objective:
-Why:
-Non-goals:
 Risk:
-Invariants:
 Acceptance:
-Abuse and failure cases:
-Validation:
 Proposed commit:
 ```
 
@@ -69,8 +68,10 @@ unsettled architecture decision, a new trust boundary, or authority the user has
 - Avoid drive-by cleanup, speculative abstractions, hidden fallbacks, broad permissions,
   swallowed errors, unexplained `any`, disabled checks, and security TODOs.
 - Stop and create a separate objective when an unrelated prerequisite appears.
-- Add dependencies only with explicit rationale, exact versions, license review, and supply-chain
-  review.
+- Review each new or updated direct dependency for rationale, exact version, license, and relevant
+  supply-chain risk. Let automated audit and license gates cover the unchanged transitive graph.
+  Trace transitive packages manually only when a gate flags them or they add native code,
+  lifecycle scripts, unclear licensing, or sensitive runtime authority.
 - If a capability grows materially beyond its shaped appetite, counteroffer with a smaller,
   coherent outcome instead of silently widening the bet.
 
@@ -81,11 +82,14 @@ Run validation workloads sequentially:
 1. Run focused tests for the changed behavior.
 2. For nontrivial code, read `references/simplification-review.md`, perform the bounded review, and
    re-run focused tests after any change.
-3. Run `pnpm verify`.
+3. Once the change is settled, run `pnpm verify` once.
 4. Run any risk-specific integration, migration, recovery, packaging, or staging checks.
 5. Inspect `git diff --check`, the complete diff, and the staged diff.
 6. Confirm no secret, generated junk, unrelated formatting, or accidental public API change is
    present.
+
+After a fix, re-run the affected focused check. Re-run `pnpm verify` only when code or configuration
+changed after the last full gate.
 
 Every Vitest invocation must use a maximum of 50% workers. Use one worker for shared-state or
 serial end-to-end suites.
@@ -97,9 +101,11 @@ Self-review every commit on two axes:
 1. **Objective**: fidelity to acceptance criteria, test sensitivity, scope, and failure behavior.
 2. **Standards**: repository instructions, module design, compatibility, and operations.
 
-For R2 and R3 work, give a read-only reviewer the objective, invariants, diff, and validation
-evidence and require the same two-axis report. For R3 work, require a separate security-focused
-review.
+R0 through R2 require self-review; request independent review when uncertainty or impact warrants
+it. For R3, require one independent review covering objective, standards, and the relevant security
+questions. Require a second, security-focused reviewer only when the change directly alters a trust
+boundary, authentication, authorization, secret handling, MCP or external mutations, sandboxing,
+remote execution, destructive behavior, migration recovery, or deployment and release authority.
 
 Resolve every blocker and repeat affected validations. Do not let a reviewer approve its own fix.
 

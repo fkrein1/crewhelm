@@ -9,7 +9,8 @@ Before making any change intended for commit, read and follow
 ## Working agreement
 
 - Keep one objective and one writer active at a time.
-- Present a commit card before editing and a commit receipt after committing.
+- State a short objective, risk, acceptance check, and proposed commit before editing; add detail
+  only when it clarifies higher-risk work. Provide a concise receipt after committing.
 - Implement small, complete vertical slices. Include necessary tests, security controls,
   observability, and documentation in the same commit.
 - Keep every commit green, bisectable, and independently revertible.
@@ -30,12 +31,13 @@ Before making any change intended for commit, read and follow
 
 ## Validation
 
-- Run focused tests first, then `pnpm verify`.
+- Run focused tests first, then run `pnpm verify` once after the change settles.
 - Run lint, typecheck, tests, and builds sequentially.
 - Cap every Vitest run at `--maxWorkers=50%`; use one worker for shared-state suites.
 - Inspect `git diff --check`, the full diff, and the staged diff before committing.
-- Self-review every commit. Require independent review of objective fidelity and repository
-  standards for R2 and R3 work, and a separate security review for R3.
+- Self-review every commit. R3 work requires one independent combined review. Add a separate
+  security reviewer only for changes to trust boundaries, authority, secrets, external mutations,
+  sandboxing, destructive behavior, migrations, or deployment and release authority.
 - Stop when a required check is failing or flaky.
 
 Routine changes do not require a new process document. Add an architecture decision record only

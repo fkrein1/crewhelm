@@ -32,6 +32,9 @@ The model may propose an action. Deterministic policy decides whether it may exe
 
 ## R3 completion gate
 
-Require an independent security review and rollback or recovery evidence. Update the threat model
-when an update trigger applies. Add an accepted decision record only for a durable,
-hard-to-reverse choice. Require explicit user approval before deployment or publication.
+Require one independent review that covers the relevant security questions and rollback or recovery
+evidence. Require a second security-focused reviewer only when the change directly alters a trust
+boundary, authentication, authorization, secret handling, MCP or external mutations, sandboxing,
+remote execution, destructive behavior, migration recovery, or deployment and release authority.
+Update the threat model when an update trigger applies. Add an accepted decision record only for a
+durable, hard-to-reverse choice. Require explicit user approval before deployment or publication.
