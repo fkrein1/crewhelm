@@ -497,6 +497,22 @@ describe("repository foundation", () => {
 
     expect(pnpmSetupInputs).toEqual([{ run_install: false }]);
 
+    const workflowByName = Object.fromEntries(
+      workflows.map(({ name, workflow }) => [name, workflow]),
+    );
+    expect(workflowTriggers(workflowByName["ci.yml"]?.["on"]).toSorted()).toEqual([
+      "pull_request",
+      "push",
+    ]);
+    expect(workflowTriggers(workflowByName["codeql.yml"]?.["on"]).toSorted()).toEqual([
+      "pull_request",
+      "push",
+      "schedule",
+    ]);
+    expect(workflowTriggers(workflowByName["dependency-review.yml"]?.["on"])).toEqual([
+      "pull_request",
+    ]);
+
     const baseWorkflow = {
       jobs: { verify: { runsOn: "ubuntu-24.04", steps: [] } },
       permissions: { contents: "read" },
@@ -585,6 +601,66 @@ describe("repository foundation", () => {
     ]);
   });
 
+  it("versions the protected main ruleset", async () => {
+    const ruleset = parseJsonObject(await read(".github/rulesets/main.json"));
+    const rules = ruleset["rules"];
+
+    expect(ruleset).toMatchObject({
+      bypass_actors: [],
+      conditions: {
+        ref_name: {
+          exclude: [],
+          include: ["~DEFAULT_BRANCH"],
+        },
+      },
+      enforcement: "active",
+      name: "Protected main",
+      target: "branch",
+    });
+    expect(Array.isArray(rules)).toBe(true);
+
+    if (!Array.isArray(rules)) {
+      throw new TypeError("Expected ruleset rules.");
+    }
+
+    const ruleByType = Object.fromEntries(
+      rules.filter(isRecord).map((rule) => [rule["type"], rule]),
+    );
+    expect(Object.keys(ruleByType).toSorted()).toEqual([
+      "code_scanning",
+      "deletion",
+      "non_fast_forward",
+      "pull_request",
+      "required_linear_history",
+      "required_status_checks",
+    ]);
+    expect(ruleByType["pull_request"]?.["parameters"]).toMatchObject({
+      allowed_merge_methods: ["rebase"],
+      require_code_owner_review: false,
+      require_last_push_approval: false,
+      required_approving_review_count: 0,
+      required_review_thread_resolution: true,
+    });
+    expect(ruleByType["required_status_checks"]?.["parameters"]).toMatchObject({
+      strict_required_status_checks_policy: true,
+      required_status_checks: [
+        { context: "Verify", integration_id: 15368 },
+        { context: "Dependency review", integration_id: 15368 },
+        { context: "Analyze JavaScript and TypeScript", integration_id: 15368 },
+        { context: "DCO", integration_id: 1861 },
+      ],
+    });
+    expect(ruleByType["code_scanning"]?.["parameters"]).toEqual({
+      code_scanning_tools: [
+        {
+          alerts_threshold: "errors",
+          security_alerts_threshold: "high_or_higher",
+          tool: "CodeQL",
+        },
+      ],
+    });
+  });
+
   it("records the security, maintenance, and attribution foundation", async () => {
     const ignoredFiles = await read(".gitignore");
     const invariants = await read("docs/security/invariants.md");
@@ -601,6 +677,10 @@ describe("repository foundation", () => {
     expect(threatModel).toContain("raw Composio paths bypassing `ToolGate`");
     expect(settings).toContain("secret scanning and push protection");
     expect(settings).toContain("Developer Certificate of Origin");
+    expect(settings).toContain("require zero approvals");
+    expect(settings).toContain("Dependency review is a pull-request-only comparison");
+    expect(settings).toContain("Disable merge commits and squash merges");
+    expect(settings).toContain("Ruleset rollout and recovery");
     expect(notices).toContain("Copyright (c) 2026 Matt Pocock");
   });
 });

@@ -1,0 +1,72 @@
+{
+  "name": "Protected main",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": {
+      "include": ["~DEFAULT_BRANCH"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "required_linear_history"
+    },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "allowed_merge_methods": ["rebase"],
+        "automatic_copilot_code_review_enabled": false,
+        "dismiss_stale_reviews_on_push": false,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_approving_review_count": 0,
+        "required_review_thread_resolution": true
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "do_not_enforce_on_create": false,
+        "strict_required_status_checks_policy": true,
+        "required_status_checks": [
+          {
+            "context": "Verify",
+            "integration_id": 15368
+          },
+          {
+            "context": "Dependency review",
+            "integration_id": 15368
+          },
+          {
+            "context": "Analyze JavaScript and TypeScript",
+            "integration_id": 15368
+          },
+          {
+            "context": "DCO",
+            "integration_id": 1861
+          }
+        ]
+      }
+    },
+    {
+      "type": "code_scanning",
+      "parameters": {
+        "code_scanning_tools": [
+          {
+            "tool": "CodeQL",
+            "security_alerts_threshold": "high_or_higher",
+            "alerts_threshold": "errors"
+          }
+        ]
+      }
+    }
+  ]
+}
