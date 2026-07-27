@@ -157,7 +157,7 @@ async function readGithubOwner(
         "user-agent": "crewhelm-worker",
         "x-github-api-version": "2022-11-28",
       },
-      redirect: "error",
+      redirect: "manual",
       signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
     });
   } catch {
