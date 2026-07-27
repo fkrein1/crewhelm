@@ -27,7 +27,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
         authorization_servers: ["https://crewhelm.example/api/auth"],
         bearer_methods_supported: ["header"],
         resource: "https://crewhelm.example/mcp",
-        scopes_supported: ["control:read", "control:write"],
+        scopes_supported: ["control:read", "control:write", "integrations:read"],
       };
     } else {
       payload = {
@@ -41,7 +41,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
         response_modes_supported: ["query"],
         response_types_supported: ["code"],
         revocation_endpoint: "https://crewhelm.example/api/auth/oauth2/revoke",
-        scopes_supported: ["control:read", "control:write"],
+        scopes_supported: ["control:read", "control:write", "integrations:read"],
         token_endpoint: "https://crewhelm.example/api/auth/oauth2/token",
         token_endpoint_auth_methods_supported: ["none"],
       };
@@ -78,6 +78,7 @@ describe("Crewhelm CLI", () => {
 
     await expect(runCli([], harness.dependencies)).resolves.toBe(0);
     expect(harness.output).toEqual([CLI_HELP]);
+    expect(CLI_HELP).toContain("CREWHELM_COMPOSIO_API_KEY");
     expect(harness.dependencies.fetch).not.toHaveBeenCalled();
   });
 
@@ -137,6 +138,10 @@ describe("Crewhelm CLI", () => {
     await writeFile(resolve(directory, "migrations", "0001_better_auth.sql"), "SELECT 1;\n");
     await writeFile(
       resolve(directory, "migrations", "0002_control_write_scope.sql"),
+      "SELECT 1;\n",
+    );
+    await writeFile(
+      resolve(directory, "migrations", "0003_integration_catalog_scope.sql"),
       "SELECT 1;\n",
     );
     await writeFile(

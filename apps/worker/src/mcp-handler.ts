@@ -1,12 +1,17 @@
 import {
+  INTEGRATIONS_READ_SCOPE,
   controlPlaneStatusResultSchema,
   createAgentInputSchema,
   createAgentResultSchema,
+  integrationCatalogSearchInputSchema,
+  integrationCatalogSearchResultSchema,
   listAgentsInputSchema,
   listAgentsResultSchema,
   ownerAuthoritySchema,
+  type IntegrationCatalogSearchResult,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
+import { createComposioCatalog } from "@crewhelm/composio";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import * as z from "zod";
@@ -15,6 +20,7 @@ import type { WorkerEnv } from "./env.js";
 import { readBoundedPostRequest } from "./request-body.js";
 
 interface McpEnvironment {
+  COMPOSIO_API_KEY?: string | undefined;
   OWNER_CONTROL_PLANE: {
     getByName(ownerKey: string): {
       createAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -68,6 +74,7 @@ const NOT_FOUND_BODY = JSON.stringify({
 
 export const MCP_CREATE_AGENT_TOOL_NAME = "crewhelm_create_agent";
 export const MCP_LIST_AGENTS_TOOL_NAME = "crewhelm_list_agents";
+export const MCP_SEARCH_INTEGRATIONS_TOOL_NAME = "crewhelm_search_integrations";
 export const MCP_STATUS_TOOL_NAME = "crewhelm_status";
 
 export const mcpAuthPropsSchema = z.strictObject({
@@ -136,9 +143,17 @@ async function controlPlaneToolResult<Result extends { ok: boolean }>(
   };
 }
 
-function createMcpServer(env: McpEnvironment, authority: OwnerAuthority): McpServer {
+function createMcpServer(
+  env: McpEnvironment,
+  authority: OwnerAuthority,
+  signal: AbortSignal,
+): McpServer {
   const server = new McpServer(MCP_SERVER_INFO);
   const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+  const integrationCatalog = createComposioCatalog({
+    apiKey: env.COMPOSIO_API_KEY,
+    signal,
+  });
 
   server.registerTool(
     MCP_CREATE_AGENT_TOOL_NAME,
@@ -180,6 +195,45 @@ function createMcpServer(env: McpEnvironment, authority: OwnerAuthority): McpSer
         () => controlPlane.listAgents(authority, input),
         listAgentsResultSchema,
       ),
+  );
+
+  server.registerTool(
+    MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+        readOnlyHint: true,
+      },
+      description:
+        "Search the complete Composio integration catalog without a Crewhelm-maintained toolkit allowlist.",
+      inputSchema: integrationCatalogSearchInputSchema,
+      title: "Search integrations",
+    },
+    async (input) => {
+      const result: IntegrationCatalogSearchResult = authority.scopes.includes(
+        INTEGRATIONS_READ_SCOPE,
+      )
+        ? await integrationCatalog.search(input)
+        : {
+            error: {
+              code: "insufficient_scope",
+              message: "Integration catalog request denied.",
+            },
+            ok: false,
+          };
+
+      return {
+        content: [
+          {
+            text: JSON.stringify(integrationCatalogSearchResultSchema.parse(result)),
+            type: "text" as const,
+          },
+        ],
+        isError: !result.ok,
+      };
+    },
   );
 
   server.registerTool(
@@ -233,7 +287,7 @@ export async function handleAuthenticatedMcpRequest(
     return fixedJsonResponse(REQUEST_TOO_LARGE_BODY, 413);
   }
 
-  const server = createMcpServer(env, authority);
+  const server = createMcpServer(env, authority, boundedRequest.signal);
   const transport = new WebStandardStreamableHTTPServerTransport({
     enableJsonResponse: true,
   });

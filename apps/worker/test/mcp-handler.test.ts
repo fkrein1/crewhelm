@@ -1,19 +1,22 @@
 import { env } from "cloudflare:test";
 import {
+  INTEGRATIONS_READ_SCOPE,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   createAgentResultSchema,
   controlPlaneStatusResultSchema,
+  integrationCatalogSearchResultSchema,
   listAgentsResultSchema,
   ownerAuthoritySchema,
   type OwnerScope,
 } from "@crewhelm/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as z from "zod";
 
 import {
   MCP_CREATE_AGENT_TOOL_NAME,
   MCP_LIST_AGENTS_TOOL_NAME,
+  MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_STATUS_TOOL_NAME,
   handleAuthenticatedMcpRequest,
 } from "../src/mcp-handler.js";
@@ -28,6 +31,7 @@ const jsonRpcToolResultSchema = z.looseObject({
         type: z.string(),
       }),
     ),
+    isError: z.boolean(),
   }),
 });
 
@@ -317,5 +321,124 @@ describe("authenticated MCP handler", () => {
       },
       ok: false,
     });
+  });
+
+  it("searches the complete Composio integration catalog with read scope", async () => {
+    const authority = await ownerAuthority("mcp-catalog-owner", [INTEGRATIONS_READ_SCOPE]);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        items: [
+          {
+            auth_schemes: ["OAUTH2"],
+            meta: {
+              description: "Search and scrape the web.",
+              tools_count: 18,
+              version: "20260701_00",
+            },
+            name: "Firecrawl",
+            no_auth: false,
+            slug: "firecrawl",
+          },
+        ],
+        next_cursor: null,
+      }),
+    );
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 13,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { limit: 20, query: "web research" },
+            name: MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload: unknown = await response.json();
+    const result = jsonRpcToolResultSchema.parse(payload).result;
+    const text = result.content[0]?.text;
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(response.status).toBe(200);
+    expect(result.isError).toBe(false);
+    expect(integrationCatalogSearchResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
+      integrations: [
+        {
+          authSchemes: ["oauth2"],
+          description: "Search and scrape the web.",
+          name: "Firecrawl",
+          noAuth: false,
+          slug: "firecrawl",
+          toolsCount: 18,
+          version: "20260701_00",
+        },
+      ],
+      nextCursor: null,
+      ok: true,
+    });
+  });
+
+  it("does not widen control read into integration catalog egress", async () => {
+    const authority = await ownerAuthority("mcp-control-read-catalog-owner", [OWNER_READ_SCOPE]);
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 14,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {},
+            name: MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload: unknown = await response.json();
+    const result = jsonRpcToolResultSchema.parse(payload).result;
+    const text = result.content[0]?.text;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.isError).toBe(true);
+    expect(integrationCatalogSearchResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
+      error: {
+        code: "insufficient_scope",
+        message: "Integration catalog request denied.",
+      },
+      ok: false,
+    });
+  });
+
+  it("rejects a too-short integration search before provider egress", async () => {
+    const authority = await ownerAuthority("mcp-short-catalog-query-owner", [
+      INTEGRATIONS_READ_SCOPE,
+    ]);
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 15,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { query: "ab" },
+            name: MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload: unknown = await response.json();
+    const result = jsonRpcToolResultSchema.parse(payload).result;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.isError).toBe(true);
   });
 });

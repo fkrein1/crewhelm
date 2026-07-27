@@ -15,10 +15,12 @@ import { type RunWrangler, type WranglerResult, WranglerExecutionError } from ".
 
 const REQUIRED_SECRET_NAMES = [
   "BETTER_AUTH_SECRET",
+  "COMPOSIO_API_KEY",
   "GITHUB_CLIENT_ID",
   "GITHUB_CLIENT_SECRET",
   "OWNER_GITHUB_USER_ID",
 ] as const;
+const COMPOSIO_API_KEY_ENVIRONMENT = "CREWHELM_COMPOSIO_API_KEY";
 const GITHUB_SECRET_ENVIRONMENT = {
   clientId: "CREWHELM_GITHUB_CLIENT_ID",
   clientSecret: "CREWHELM_GITHUB_CLIENT_SECRET",
@@ -30,7 +32,11 @@ const EXPECTED_DEPLOYMENT_FILES = [
   "migrations",
   "wrangler-template.json",
 ] as const;
-const EXPECTED_MIGRATIONS = ["0001_better_auth.sql", "0002_control_write_scope.sql"] as const;
+const EXPECTED_MIGRATIONS = [
+  "0001_better_auth.sql",
+  "0002_control_write_scope.sql",
+  "0003_integration_catalog_scope.sql",
+] as const;
 const MAX_ASSET_BYTES = 10 * 1_048_576;
 const MAX_MIGRATION_BYTES = 1_048_576;
 const WORKER_NOT_FOUND_CODE = /\[code:\s*10007\]/u;
@@ -70,6 +76,7 @@ const githubSecretsSchema = z.strictObject({
   clientSecret: z.string().min(1).max(1_024),
   ownerUserId: z.string().regex(/^[1-9][0-9]{0,19}$/),
 });
+const composioApiKeySchema = z.string().min(16).max(4_096).regex(/^\S+$/);
 const whoamiSchema = z.looseObject({
   accounts: z
     .array(
@@ -463,6 +470,28 @@ function readGitHubSecrets(
   return parsed.data;
 }
 
+function readComposioApiKey(
+  workerExists: boolean,
+  dependencies: BootstrapDependencies,
+): string | undefined {
+  const candidate = dependencies.readEnvironment(COMPOSIO_API_KEY_ENVIRONMENT);
+
+  if (workerExists && candidate === undefined) {
+    return undefined;
+  }
+
+  const parsed = composioApiKeySchema.safeParse(candidate);
+
+  if (!parsed.success) {
+    throw commandFailed(
+      "configuration",
+      `Set ${COMPOSIO_API_KEY_ENVIRONMENT} to a valid Composio project API key.`,
+    );
+  }
+
+  return parsed.data;
+}
+
 async function listDatabases(context: CloudflareContext) {
   const result = await runCloudflare(
     context,
@@ -691,17 +720,24 @@ async function stageDeployment(
 async function writeSecretsFile(
   cwd: string,
   github: GitHubSecrets | undefined,
+  composioApiKey: string | undefined,
   workerExists: boolean,
 ): Promise<string | undefined> {
-  if (!github) {
+  if (!github && !composioApiKey) {
     return undefined;
   }
 
-  const secrets: Record<string, string> = {
-    GITHUB_CLIENT_ID: github.clientId,
-    GITHUB_CLIENT_SECRET: github.clientSecret,
-    OWNER_GITHUB_USER_ID: github.ownerUserId,
-  };
+  const secrets: Record<string, string> = {};
+
+  if (github) {
+    secrets.GITHUB_CLIENT_ID = github.clientId;
+    secrets.GITHUB_CLIENT_SECRET = github.clientSecret;
+    secrets.OWNER_GITHUB_USER_ID = github.ownerUserId;
+  }
+
+  if (composioApiKey) {
+    secrets.COMPOSIO_API_KEY = composioApiKey;
+  }
 
   if (!workerExists) {
     secrets.BETTER_AUTH_SECRET = randomBytes(48).toString("base64url");
@@ -713,7 +749,7 @@ async function writeSecretsFile(
     await writeFile(path, JSON.stringify(secrets), { mode: 0o600 });
     return path;
   } catch {
-    throw commandFailed("configuration", "OAuth secrets could not be staged.");
+    throw commandFailed("configuration", "Deployment secrets could not be staged.");
   }
 }
 
@@ -763,6 +799,7 @@ export async function bootstrapDeployment(
     const context = { accountConfigPath, cwd, dependencies };
     const workerInventory = await readWorkerInventory(options.workerName, context);
     const githubSecrets = readGitHubSecrets(workerInventory.exists, dependencies);
+    const composioApiKey = readComposioApiKey(workerInventory.exists, dependencies);
     const { action: databaseAction, database } = await ensureDatabase(
       options,
       assets.migrations,
@@ -785,7 +822,12 @@ export async function bootstrapDeployment(
       );
     }
 
-    const secretsPath = await writeSecretsFile(cwd, githubSecrets, workerInventory.exists);
+    const secretsPath = await writeSecretsFile(
+      cwd,
+      githubSecrets,
+      composioApiKey,
+      workerInventory.exists,
+    );
     const deploymentMessage = `Crewhelm bootstrap ${randomUUID()}`;
     const deployArguments = [
       "deploy",

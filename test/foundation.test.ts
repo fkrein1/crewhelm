@@ -236,6 +236,7 @@ describe("repository foundation", () => {
         build: "wrangler deploy --dry-run --outdir dist",
       },
       dependencies: {
+        "@crewhelm/composio": "workspace:*",
         "@crewhelm/contracts": "workspace:*",
         hono: "4.12.32",
       },
@@ -248,8 +249,9 @@ describe("repository foundation", () => {
     });
   });
 
-  it("pins the bootstrap CLI and shared contract workspaces", async () => {
+  it("pins the bootstrap CLI and shared provider and contract workspaces", async () => {
     const cliManifest = parseJsonObject(await read("apps/cli/package.json"));
+    const composioManifest = parseJsonObject(await read("packages/composio/package.json"));
     const contractsManifest = parseJsonObject(await read("packages/contracts/package.json"));
 
     expect(cliManifest).toMatchObject({
@@ -265,6 +267,17 @@ describe("repository foundation", () => {
       devDependencies: {
         esbuild: "0.28.1",
         vitest: "4.1.10",
+      },
+    });
+    expect(composioManifest).toMatchObject({
+      name: "@crewhelm/composio",
+      private: true,
+      dependencies: {
+        "@crewhelm/contracts": "workspace:*",
+        zod: "4.4.3",
+      },
+      exports: {
+        ".": "./src/index.ts",
       },
     });
     expect(contractsManifest).toMatchObject({

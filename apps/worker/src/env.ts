@@ -5,6 +5,7 @@ declare global {
     interface Env {
       AUTH_DB: D1Database;
       BETTER_AUTH_SECRET: string;
+      COMPOSIO_API_KEY?: string;
       GITHUB_CLIENT_ID: string;
       GITHUB_CLIENT_SECRET: string;
       AUTH_RATE_LIMIT: RateLimit;

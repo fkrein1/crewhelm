@@ -1,9 +1,19 @@
 import * as z from "zod";
 
+export const INTEGRATIONS_READ_SCOPE = "integrations:read";
 export const OWNER_READ_SCOPE = "control:read";
 export const OWNER_WRITE_SCOPE = "control:write";
-export const OWNER_SCOPES = [OWNER_READ_SCOPE, OWNER_WRITE_SCOPE] as const;
-export const OWNER_DEFAULT_SCOPE_CLAIM = "control:read control:write";
+export const OWNER_SCOPES = [OWNER_READ_SCOPE, OWNER_WRITE_SCOPE, INTEGRATIONS_READ_SCOPE] as const;
+export const OWNER_DEFAULT_SCOPE_CLAIM = "control:read control:write integrations:read";
+const OWNER_SCOPE_CLAIMS = [
+  OWNER_READ_SCOPE,
+  OWNER_WRITE_SCOPE,
+  INTEGRATIONS_READ_SCOPE,
+  `${OWNER_READ_SCOPE} ${OWNER_WRITE_SCOPE}`,
+  `${OWNER_READ_SCOPE} ${INTEGRATIONS_READ_SCOPE}`,
+  `${OWNER_WRITE_SCOPE} ${INTEGRATIONS_READ_SCOPE}`,
+  OWNER_DEFAULT_SCOPE_CLAIM,
+] as const;
 
 export const ownerScopeSchema = z.enum(OWNER_SCOPES);
 export const ownerScopesSchema = z
@@ -28,7 +38,7 @@ export const ownerScopeClaimSchema = z
 
     return OWNER_SCOPES.filter((scope) => parsedScopes.data.includes(scope)).join(" ");
   })
-  .pipe(z.enum([OWNER_READ_SCOPE, OWNER_WRITE_SCOPE, OWNER_DEFAULT_SCOPE_CLAIM]));
+  .pipe(z.enum(OWNER_SCOPE_CLAIMS));
 
 export const ownerKeySchema = z
   .string()

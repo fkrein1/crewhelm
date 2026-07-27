@@ -46,16 +46,18 @@ node apps/cli/dist/crewhelm.js bootstrap \
 Bootstrap selects the only Cloudflare account available to the authenticated Wrangler identity. If
 that identity can access more than one account, select the intended account with `--account-id`.
 Before a new deployment, provide `CREWHELM_GITHUB_CLIENT_ID`,
-`CREWHELM_GITHUB_CLIENT_SECRET`, and `CREWHELM_OWNER_GITHUB_USER_ID` through the process
-environment. The last value is the stable numeric GitHub user ID, not a login or email. Avoid
-putting the client secret directly in shell history.
+`CREWHELM_GITHUB_CLIENT_SECRET`, `CREWHELM_OWNER_GITHUB_USER_ID`, and
+`CREWHELM_COMPOSIO_API_KEY` through the process environment. The owner value is the stable numeric
+GitHub user ID, not a login or email. Avoid putting either secret directly in shell history.
 
 Bootstrap creates or reuses the exact D1 database name, applies packaged migrations, generates the
 Better Auth secret, deploys the packaged Worker and secrets together, and then diagnoses the public
 origin. Bootstrap endpoints must use HTTPS. A retry preserves the D1 database and any secrets on an
 existing Worker. Reusing an existing database requires its exact UUID through `--database-id`;
 bootstrap verifies its table and migration provenance before changing it. Supply all three GitHub
-settings together to update an existing deployment; omit all three to preserve its current secrets.
+GitHub settings together to update an existing deployment; omit all three to preserve its current
+OAuth secrets. Supply `CREWHELM_COMPOSIO_API_KEY` to set or rotate the Composio project key; omit it
+on an existing deployment to preserve the current key.
 
 Diagnose without deploying:
 
@@ -72,9 +74,10 @@ machine-readable reports. HTTP is accepted only for exact loopback hosts during 
 The Worker exposes Streamable HTTP MCP at `/mcp`. OAuth clients dynamically register at
 `/api/auth/oauth2/register` and authenticate the owner through a GitHub OAuth App. Clients request
 `control:read` to inspect control-plane status and Agent summaries, `control:write` to create Agent
-definitions, or both. Registrations default to both scopes; every token keeps the exact approved
-scope set, so widening the resource configuration never widens an issued read-only token. The
-consent page shows each requested permission. The app callback URL must be:
+definitions, and `integrations:read` to search Composio's catalog. Registrations default to all
+three scopes; every token keeps the exact approved scope set, so adding a capability never widens
+an issued token. The consent page discloses that integration searches send terms to Composio. The
+app callback URL must be:
 
 ```text
 https://YOUR_WORKER_HOST/api/auth/callback/github
@@ -84,6 +87,7 @@ The bootstrap CLI configures these Worker secrets so account-specific identity a
 configuration do not enter source control:
 
 - `BETTER_AUTH_SECRET` — generated as 48 random bytes for a new deployment
+- `COMPOSIO_API_KEY` — the project key used only for fixed-origin Composio catalog requests
 - `GITHUB_CLIENT_ID`
 - `GITHUB_CLIENT_SECRET`
 - `OWNER_GITHUB_USER_ID` — the stable numeric GitHub user ID, not a login or email
@@ -101,6 +105,9 @@ The MCP surface exposes:
 
 - `crewhelm_status` — return control-plane readiness; requires `control:read`.
 - `crewhelm_list_agents` — return bounded Agent summaries; requires `control:read`.
+- `crewhelm_search_integrations` — search and paginate the complete non-deprecated Composio
+  integration catalog, including Composio-managed and project toolkits; requires
+  `integrations:read`.
 - `crewhelm_create_agent` — create an idempotent owner-scoped Agent revision with an explicit
   model, bounded instructions and execution limits, and no capability grants; requires
   `control:write`. Each owner can store at most 100 Agents.
