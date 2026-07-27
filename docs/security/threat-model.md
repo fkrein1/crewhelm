@@ -30,6 +30,7 @@ implementation must address as those components are introduced.
 6. Runtime to Composio and external toolkits
 7. Repository recipe to installed, owner-approved configuration
 8. Build and release automation to published packages and deployments
+9. Local bootstrap CLI to the selected Cloudflare account, D1 database, and Worker deployment
 
 ## Primary threats
 
@@ -110,6 +111,31 @@ The provider seeds the exact MCP resource in insert-only mode so public requests
 configuration into repeated D1 writes. A future scope or access-token lifetime change requires an
 explicit migration of the stored resource row; changing configuration alone intentionally does not
 overwrite it.
+
+## Bootstrap and deployment authority
+
+The bootstrap CLI holds the operator's Cloudflare deployment authority. It runs the exact pinned
+Wrangler package without a shell, from a private temporary directory, with an allowlisted
+environment so an ambient Worker config, `.env`, API base override, or Worker-name override cannot
+redirect that authority. It resolves one account from validated `whoami` output, requires explicit
+selection when more than one account is available, writes that account ID into every remote command
+configuration, and requires HTTPS before any external mutation.
+
+Packaged Worker code, source maps, configuration, and migrations are treated as a release artifact.
+Bootstrap validates their exact inventory, file types, size limits, and security-critical config
+shape before contacting Cloudflare. An existing D1 database is never selected by name alone: the
+operator must confirm its UUID, and Crewhelm checks its table and migration provenance before
+applying packaged migrations. A new database that appears after an ambiguous create is preserved
+but not trusted automatically.
+
+GitHub OAuth values enter through the parent process environment, are removed from Wrangler's child
+environment, and are passed to Cloudflare only through a mode-0600 file inside the private
+directory. Existing Worker secrets are additive and preserved. The directory is removed after
+Wrangler has exited. Wrangler output is bounded and never reflected to the user. On timeout or
+excess output, the CLI terminates the process with bounded escalation and marks the remote outcome
+unknown. Database creation, migration, and deployment are reconciled through validated Cloudflare
+inventory; an unconfirmed result stops with resources preserved for inspection and an explicit
+retry.
 
 ## Update triggers
 

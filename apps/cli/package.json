@@ -7,10 +7,11 @@
   },
   "type": "module",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node24 --outfile=dist/crewhelm.js"
+    "build": "node ./scripts/build.mjs"
   },
   "dependencies": {
     "@crewhelm/contracts": "workspace:*",
+    "wrangler": "4.114.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
