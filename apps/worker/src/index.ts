@@ -4,6 +4,10 @@ import { Hono, type Context } from "hono";
 import * as z from "zod";
 
 import { createCrewhelmAuth, verifyMcpAccessToken } from "./auth.js";
+import {
+  CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX,
+  registerConnectionAuthorizationReturnRoutes,
+} from "./connection-authorization-return.js";
 import type { WorkerEnv } from "./env.js";
 import { handleAuthenticatedMcpRequest } from "./mcp-handler.js";
 import {
@@ -192,6 +196,7 @@ export function createWorker(): Hono<{ Bindings: WorkerEnv }> {
 
   registerOAuthUiRoutes(worker, createAuth);
   registerAuthServerRoutes(worker, createAuth);
+  registerConnectionAuthorizationReturnRoutes(worker);
   worker.all("/mcp", (context) => handleMcpRequest(context.req.raw, context.env));
 
   worker.notFound((context) =>
@@ -210,6 +215,7 @@ function isRateLimitedPath(path: string): "auth" | "mcp" | null {
 
   if (
     path.startsWith("/api/auth/") ||
+    path.startsWith(CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX) ||
     path === "/oauth/login" ||
     path === "/oauth/consent" ||
     path === "/.well-known/oauth-authorization-server/api/auth"
@@ -242,11 +248,14 @@ export async function handleWorkerRequest(
 
   if (limitedPath !== null) {
     const clientAddress = request.headers.get("cf-connecting-ip") ?? "unknown";
+    const rateLimitKeyPath = path.startsWith(CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX)
+      ? CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX
+      : path;
     let rateLimit: RateLimitOutcome;
 
     try {
       rateLimit = await (limitedPath === "mcp" ? env.MCP_RATE_LIMIT : env.AUTH_RATE_LIMIT).limit({
-        key: `${path}:${clientAddress.slice(0, 64)}`,
+        key: `${rateLimitKeyPath}:${clientAddress.slice(0, 64)}`,
       });
     } catch {
       return jsonResponse(RATE_LIMITED_BODY, RATE_LIMITED_BODY_LENGTH, 503, {

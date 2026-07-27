@@ -182,10 +182,13 @@ grants, and execution remain separate boundaries.
 
 The `connections:read` MCP tool queries only the authenticated owner's Durable Object and requires
 its dedicated scope at that boundary. It returns at most 50 Crewhelm connection IDs,
-auth-configuration references, local statuses, and creation timestamps in stable ID order. It
-never performs Composio egress and excludes connected-account IDs, hosted links, provider state,
-and credentials. The current `initiated` status records only successful local link finalization; it
-is not evidence that human provider consent completed.
+auth-configuration references, local statuses, authorization-return outcomes, and creation
+timestamps in stable ID order. It never performs Composio egress and excludes connected-account
+IDs, hosted links, provider state, and credentials. The current `initiated` status records only
+successful local link finalization. Authorization outcomes distinguish a pending, returned,
+failed, or expired hosted browser flow; `untracked` identifies a pre-v4 connection for which no
+callback evidence exists. None is evidence that provider consent completed or that a connection is
+active.
 
 The `connections:write` MCP tool accepts any structurally valid Composio auth-config ID; it has no
 toolkit allowlist and grants no Agent or execution authority. The owner Durable Object first binds
@@ -196,18 +199,49 @@ account, rejects redirects, bounds time and bytes, and accepts only an unexpired
 `https://connect.composio.dev/link/ln_…` URL whose token matches the provider response. Provider
 bodies, errors, headers, and project keys are never persisted or returned.
 
-Successful finalization atomically stores a Crewhelm-generated connection ID, Composio's opaque
-connected-account ID, the auth-config reference, the expiring hosted link, the idempotency result,
-and one audit event. An owner-local alarm normally scrubs an expired capability URL at its exact
-expiry while retaining the non-secret idempotency tombstone. The recovery-deadline alarm is
-scheduled before provider egress, so cleanup remains bounded by the 30-minute recovery window even
-if exact-expiry rescheduling fails. Crewhelm never calls credential-bearing connected-account list
-or get endpoints. Exact retries replay the same unexpired link; conflicting key reuse fails. A
-dispatched request with no validated response remains unknown and cannot dispatch again. Another
-key for the same auth config is blocked for the conservative recovery window, after which any
-unreceived hosted link has expired and a new intent may proceed. Link-attempt and connection
-ceilings bound owner-local storage. Completing consent remains a human action; activation checks,
-labels, grants, execution, disablement, and deletion require separate reviewed slices.
+The reservation transaction also binds a 256-bit random callback token to the exact owner-local
+reservation and conservative recovery deadline while storing only its SHA-256 digest. Before
+sending the callback URL, the Worker adds a domain-separated HMAC over the owner, reservation,
+conservative expiry, and random token. Successful finalization atomically stores a
+Crewhelm-generated connection ID, Composio's opaque connected-account ID, the auth-config
+reference, the expiring hosted link, the idempotency result, and one audit event; it also binds the
+callback row to that account and replaces the conservative deadline with the shorter provider link
+expiry. The raw token and authenticator exist only in the callback URL sent to Composio and in
+transient MCP request handling; neither is returned in the MCP result or persisted. The adapter
+rejects a normalized Composio result that reflects either secret.
+
+The public callback accepts only GET, the exact capability path, one documented `status`, and at
+most one exact connected-account ID. Before an untrusted owner key can select a Durable Object, the
+Worker rejects an expired conservative deadline and verifies the HMAC using its secret binding.
+The owner object then verifies the random-token digest, the potentially shorter provider expiry,
+the reservation, and the connected-account ID. Malformed, forged, cross-owner, substituted,
+expired, or contradictory replays receive one fixed denial. Exact terminal replay is inert.
+Responses contain no identifiers, use no-store, a no-referrer policy, deny framing, and a
+default-deny content security policy. Callback requests share a coarse per-address authorization
+rate-limit key that excludes the capability. Recording a return changes only the local
+authorization outcome and adds a bounded audit event; it cannot create a grant, execution permit,
+or active status.
+
+Callback authentication is domain-separated but derives from the Worker authentication secret.
+Rotating that secret intentionally invalidates every outstanding callback URL; the owner must
+request a new Connect Link.
+
+An owner-local alarm normally scrubs an expired capability URL and expires an unused callback at
+its exact expiry while retaining non-secret idempotency and callback tombstones. The
+recovery-deadline alarm is scheduled before provider egress, so cleanup remains bounded by the
+30-minute recovery window even if exact-expiry rescheduling fails. Crewhelm never calls
+credential-bearing connected-account list or get endpoints. Exact retries replay the same
+unexpired link; conflicting key reuse fails. A dispatched request with no validated response
+remains unknown and cannot dispatch again. Another key for the same auth config is blocked for the
+conservative recovery window, after which any unreceived hosted link has expired and a new intent
+may proceed. Link-attempt and connection ceilings bound owner-local storage.
+
+The Composio browser redirect is not a signed provider assertion. Someone who obtains an unexpired
+callback URL could submit its one-time receipt, and Composio or browser infrastructure may observe
+the bearer URL. The exact account binding, short lifetime, digest-only storage, no-referrer
+response, and lack of execution authority bound that residual risk. Completing consent remains a
+human action; active-account evidence, labels, grants, execution, disablement, and deletion require
+separate reviewed slices.
 
 ## Bootstrap and deployment authority
 

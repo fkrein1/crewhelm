@@ -13,6 +13,7 @@ import {
   listAgentRevisionsResultSchema,
   listConnectionsResultSchema,
   ownerAuthoritySchema,
+  recordConnectionAuthorizationReturnResultSchema,
   type CreateAgentInput,
   type CreateConnectionLinkInput,
   type OwnerAuthority,
@@ -116,6 +117,16 @@ function fixedConnectionReadFailure(code: string) {
   };
 }
 
+function fixedConnectionAuthorizationReturnFailure() {
+  return {
+    error: {
+      code: "invalid_return",
+      message: "Connection authorization return denied.",
+    },
+    ok: false,
+  };
+}
+
 describe("owner identity", () => {
   it("derives a deterministic opaque key without retaining provider identity", async () => {
     const identity = {
@@ -163,7 +174,7 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toEqual({
       ok: true,
       status: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         status: "ready",
       },
     });
@@ -214,12 +225,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 3, status: "ready" },
+      status: { schemaVersion: 4, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 3, status: "ready" },
+      status: { schemaVersion: 4, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -233,7 +244,7 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 3 },
+      status: { schemaVersion: 4 },
     });
     await runInDurableObject(stub, (_instance, state) => {
       state.storage.transactionSync(() => {
@@ -255,6 +266,7 @@ describe("OwnerControlPlane", () => {
         state.storage.sql.exec("DROP TABLE agent_revisions");
         state.storage.sql.exec("DROP TABLE agents");
         state.storage.sql.exec("DROP TABLE audit_events");
+        state.storage.sql.exec("DROP TABLE connection_authorization_returns");
         state.storage.sql.exec("DROP TABLE connection_link_requests");
         state.storage.sql.exec("DROP TABLE connections");
       });
@@ -264,7 +276,7 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toEqual({
       ok: true,
       status: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         status: "ready",
       },
     });
@@ -272,7 +284,7 @@ describe("OwnerControlPlane", () => {
       runInDurableObject(stub, (_instance, state) =>
         state.storage.sql.exec("SELECT owner_key, schema_version FROM control_plane").toArray(),
       ),
-    ).resolves.toEqual([{ owner_key: authority.ownerKey, schema_version: 3 }]);
+    ).resolves.toEqual([{ owner_key: authority.ownerKey, schema_version: 4 }]);
   });
 
   it("fails closed instead of guessing how to migrate an unknown schema", async () => {
@@ -282,19 +294,19 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toMatchObject({ ok: true });
     await runInDurableObject(stub, (_instance, state) => {
       state.storage.transactionSync(() => {
-        state.storage.sql.exec("ALTER TABLE control_plane RENAME TO control_plane_v3");
+        state.storage.sql.exec("ALTER TABLE control_plane RENAME TO control_plane_v4");
         state.storage.sql.exec(`
           CREATE TABLE control_plane (
             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
             owner_key TEXT NOT NULL UNIQUE,
-            schema_version INTEGER NOT NULL CHECK (schema_version = 4)
+            schema_version INTEGER NOT NULL CHECK (schema_version = 5)
           )
         `);
         state.storage.sql.exec(`
           INSERT INTO control_plane (singleton, owner_key, schema_version)
-          SELECT singleton, owner_key, 4 FROM control_plane_v3
+          SELECT singleton, owner_key, 5 FROM control_plane_v4
         `);
-        state.storage.sql.exec("DROP TABLE control_plane_v3");
+        state.storage.sql.exec("DROP TABLE control_plane_v4");
       });
     });
     await evictDurableObject(stub);
@@ -326,6 +338,7 @@ describe("OwnerControlPlane", () => {
 
     await runInDurableObject(stub, (_instance, state) => {
       state.storage.transactionSync(() => {
+        state.storage.sql.exec("DROP TABLE connection_authorization_returns");
         state.storage.sql.exec("DROP TABLE connection_link_requests");
         state.storage.sql.exec("DROP TABLE connections");
         state.storage.sql.exec("ALTER TABLE control_plane RENAME TO control_plane_v3");
@@ -347,7 +360,7 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 3 },
+      status: { schemaVersion: 4 },
     });
     await expect(stub.listAgents(authority, {})).resolves.toMatchObject({
       agents: [{ id: created.agent.id }],
@@ -359,12 +372,114 @@ describe("OwnerControlPlane", () => {
           .exec(
             `SELECT name
              FROM sqlite_master
-             WHERE type = 'table' AND name IN ('connections', 'connection_link_requests')
+             WHERE type = 'table'
+               AND name IN (
+                 'connections',
+                 'connection_authorization_returns',
+                 'connection_link_requests'
+               )
              ORDER BY name`,
           )
           .toArray(),
       ),
-    ).resolves.toEqual([{ name: "connection_link_requests" }, { name: "connections" }]);
+    ).resolves.toEqual([
+      { name: "connection_authorization_returns" },
+      { name: "connection_link_requests" },
+      { name: "connections" },
+    ]);
+  });
+
+  it("migrates version 3 connection state and reconstructs callback storage atomically", async () => {
+    const authority = await authorityFor("129", [
+      OWNER_READ_SCOPE,
+      CONNECTIONS_READ_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const reservation = await stub.reserveConnectionLink(
+      authority,
+      connectionLinkInput("migration-v3-link"),
+    );
+
+    if (!reservation.ok || reservation.state !== "dispatch") {
+      throw new Error("Expected a version 3 migration fixture reservation.");
+    }
+
+    const completion = await stub.completeConnectionLink(authority, {
+      authorizationToken: reservation.authorizationToken,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+      providerConnectionId: "ca_migration_v3",
+      reservationId: reservation.reservationId,
+      url: "https://connect.composio.dev/link/ln_migration_v3",
+    });
+
+    if (!completion.ok) {
+      throw new Error("Expected a version 3 migration fixture connection.");
+    }
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.transactionSync(() => {
+        state.storage.sql.exec("DROP TABLE connection_authorization_returns");
+        state.storage.sql.exec("ALTER TABLE control_plane RENAME TO control_plane_v4");
+        state.storage.sql.exec(`
+          CREATE TABLE control_plane (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            owner_key TEXT NOT NULL UNIQUE,
+            schema_version INTEGER NOT NULL CHECK (schema_version = 3)
+          )
+        `);
+        state.storage.sql.exec(`
+          INSERT INTO control_plane (singleton, owner_key, schema_version)
+          SELECT singleton, owner_key, 3 FROM control_plane_v4
+        `);
+        state.storage.sql.exec("DROP TABLE control_plane_v4");
+      });
+    });
+    await evictDurableObject(stub);
+
+    await expect(stub.status(authority)).resolves.toEqual({
+      ok: true,
+      status: {
+        schemaVersion: 4,
+        status: "ready",
+      },
+    });
+    await expect(stub.listConnections(authority, {})).resolves.toMatchObject({
+      connections: [
+        {
+          authorizationOutcome: "untracked",
+          connectionId: completion.connectionLink.connectionId,
+          status: "initiated",
+        },
+      ],
+      ok: true,
+    });
+
+    const newReservation = await stub.reserveConnectionLink(
+      authority,
+      connectionLinkInput("post-migration-v3-link", "ac_linear_managed"),
+    );
+
+    expect(newReservation).toMatchObject({
+      authorizationToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+      ok: true,
+      state: "dispatch",
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec("SELECT reservation_id, status FROM connection_authorization_returns")
+          .toArray(),
+      ),
+    ).resolves.toEqual([
+      {
+        reservation_id:
+          newReservation.ok && newReservation.state === "dispatch"
+            ? newReservation.reservationId
+            : "",
+        status: "pending",
+      },
+    ]);
   });
 
   it("reserves, completes, replays, audits, and survives eviction without credentials", async () => {
@@ -379,6 +494,7 @@ describe("OwnerControlPlane", () => {
     }
 
     const completion = {
+      authorizationToken: reservation.authorizationToken,
       expiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
       providerConnectionId: "ca_owner_112",
       reservationId: reservation.reservationId,
@@ -463,27 +579,270 @@ describe("OwnerControlPlane", () => {
       state: "replay",
     });
     await runInDurableObject(stub, (_instance, state) => {
-      state.storage.sql.exec(
-        "UPDATE connection_link_requests SET expires_at = 1 WHERE idempotency_key = ?",
-        input.idempotencyKey,
-      );
+      state.storage.transactionSync(() => {
+        state.storage.sql.exec(
+          "UPDATE connection_link_requests SET expires_at = 1 WHERE idempotency_key = ?",
+          input.idempotencyKey,
+        );
+        state.storage.sql.exec(
+          "UPDATE connection_authorization_returns SET expires_at = 1 WHERE reservation_id = ?",
+          reservation.reservationId,
+        );
+      });
     });
     await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
     await expect(
       runInDurableObject(stub, (_instance, state) =>
         state.storage.sql
           .exec(
-            `SELECT status, redirect_url
-             FROM connection_link_requests
-             WHERE idempotency_key = ?`,
+            `SELECT
+               r.status,
+               r.redirect_url,
+               a.status AS authorization_status
+             FROM connection_link_requests r
+             JOIN connection_authorization_returns a
+               ON a.reservation_id = r.reservation_id
+             WHERE r.idempotency_key = ?`,
             input.idempotencyKey,
           )
           .one(),
       ),
-    ).resolves.toEqual({ redirect_url: null, status: "expired" });
+    ).resolves.toEqual({
+      authorization_status: "expired",
+      redirect_url: null,
+      status: "expired",
+    });
     await expect(stub.completeConnectionLink(authority, completion)).resolves.toEqual(
       fixedConnectionLinkFailure("connection_link_expired"),
     );
+  });
+
+  it("records an exact connection authorization return once without claiming activation", async () => {
+    const authority = await authorityFor("126", [CONNECTIONS_READ_SCOPE, CONNECTIONS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const reservation = await stub.reserveConnectionLink(
+      authority,
+      connectionLinkInput("authorization-return-126"),
+    );
+
+    if (!reservation.ok || reservation.state !== "dispatch") {
+      throw new Error("Expected connection authorization return reservation.");
+    }
+
+    const providerConnectionId = "ca_authorization_return_126";
+    const completion = await stub.completeConnectionLink(authority, {
+      authorizationToken: reservation.authorizationToken,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+      providerConnectionId,
+      reservationId: reservation.reservationId,
+      url: "https://connect.composio.dev/link/ln_authorization_return_126",
+    });
+
+    if (!completion.ok) {
+      throw new Error("Expected connection authorization return completion.");
+    }
+
+    await expect(stub.listConnections(authority, {})).resolves.toMatchObject({
+      connections: [{ authorizationOutcome: "pending", status: "initiated" }],
+      ok: true,
+    });
+    const input = {
+      authorizationToken: reservation.authorizationToken,
+      providerConnectionId,
+      reservationId: reservation.reservationId,
+      status: "success",
+    };
+
+    expect(
+      recordConnectionAuthorizationReturnResultSchema.parse(
+        await stub.recordConnectionAuthorizationReturn(input),
+      ),
+    ).toEqual({ ok: true, outcome: "returned", recorded: true });
+    await evictDurableObject(stub);
+    await expect(stub.recordConnectionAuthorizationReturn(input)).resolves.toEqual({
+      ok: true,
+      outcome: "returned",
+      recorded: false,
+    });
+    await expect(
+      stub.recordConnectionAuthorizationReturn({ ...input, status: "failed" }),
+    ).resolves.toEqual(fixedConnectionAuthorizationReturnFailure());
+    await expect(stub.listConnections(authority, {})).resolves.toEqual({
+      connections: [
+        {
+          authorizationOutcome: "returned",
+          authConfigId: "ac_github_managed",
+          connectionId: completion.connectionLink.connectionId,
+          createdAt: expect.any(String),
+          status: "initiated",
+        },
+      ],
+      nextCursor: null,
+      ok: true,
+    });
+
+    const stored = await runInDurableObject(stub, (_instance, state) => ({
+      audit: state.storage.sql
+        .exec("SELECT action, subject_id FROM audit_events ORDER BY event_id")
+        .toArray(),
+      authorizationReturns: state.storage.sql
+        .exec(
+          `SELECT reservation_id, token_digest, status, connection_id, completed_at
+           FROM connection_authorization_returns`,
+        )
+        .toArray(),
+    }));
+
+    expect(stored.audit).toEqual([
+      {
+        action: "connection.link_reserved",
+        subject_id: reservation.reservationId,
+      },
+      {
+        action: "connection.link_created",
+        subject_id: completion.connectionLink.connectionId,
+      },
+      {
+        action: "connection.authorization_returned",
+        subject_id: completion.connectionLink.connectionId,
+      },
+    ]);
+    expect(stored.authorizationReturns).toEqual([
+      {
+        completed_at: expect.any(Number),
+        connection_id: completion.connectionLink.connectionId,
+        reservation_id: reservation.reservationId,
+        status: "returned",
+        token_digest: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+      },
+    ]);
+    expect(JSON.stringify(stored)).not.toContain(reservation.authorizationToken);
+  });
+
+  it("denies malformed, cross-owner, substituted, and expired authorization returns", async () => {
+    const authority = await authorityFor("127", [CONNECTIONS_WRITE_SCOPE]);
+    const other = await authorityFor("128", [CONNECTIONS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const reservation = await stub.reserveConnectionLink(
+      authority,
+      connectionLinkInput("authorization-return-127"),
+    );
+
+    if (!reservation.ok || reservation.state !== "dispatch") {
+      throw new Error("Expected denied authorization return reservation.");
+    }
+
+    await stub.completeConnectionLink(authority, {
+      authorizationToken: reservation.authorizationToken,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+      providerConnectionId: "ca_authorization_return_127",
+      reservationId: reservation.reservationId,
+      url: "https://connect.composio.dev/link/ln_authorization_return_127",
+    });
+    const input = {
+      authorizationToken: reservation.authorizationToken,
+      providerConnectionId: "ca_authorization_return_127",
+      reservationId: reservation.reservationId,
+      status: "success",
+    };
+
+    await expect(
+      env.OWNER_CONTROL_PLANE.getByName(other.ownerKey).recordConnectionAuthorizationReturn(input),
+    ).resolves.toEqual(fixedConnectionAuthorizationReturnFailure());
+    await expect(
+      stub.recordConnectionAuthorizationReturn({
+        ...input,
+        authorizationToken: "a".repeat(43),
+      }),
+    ).resolves.toEqual(fixedConnectionAuthorizationReturnFailure());
+    await expect(
+      stub.recordConnectionAuthorizationReturn({
+        ...input,
+        providerConnectionId: "ca_substituted_127",
+      }),
+    ).resolves.toEqual(fixedConnectionAuthorizationReturnFailure());
+    await expect(
+      stub.recordConnectionAuthorizationReturn({ ...input, credential: "must-not-reflect" }),
+    ).resolves.toEqual(fixedConnectionAuthorizationReturnFailure());
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE connection_authorization_returns SET expires_at = 1 WHERE reservation_id = ?",
+        reservation.reservationId,
+      );
+    });
+    await expect(stub.recordConnectionAuthorizationReturn(input)).resolves.toEqual(
+      fixedConnectionAuthorizationReturnFailure(),
+    );
+  });
+
+  it("rolls back an authorization return when audit persistence fails", async () => {
+    const authority = await authorityFor("130", [CONNECTIONS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const reservation = await stub.reserveConnectionLink(
+      authority,
+      connectionLinkInput("authorization-return-rollback-130"),
+    );
+
+    if (!reservation.ok || reservation.state !== "dispatch") {
+      throw new Error("Expected an authorization-return rollback reservation.");
+    }
+
+    await stub.completeConnectionLink(authority, {
+      authorizationToken: reservation.authorizationToken,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+      providerConnectionId: "ca_authorization_return_rollback_130",
+      reservationId: reservation.reservationId,
+      url: "https://connect.composio.dev/link/ln_authorization_return_rollback_130",
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(`
+        CREATE TRIGGER reject_connection_authorization_return_audit
+        BEFORE INSERT ON audit_events
+        WHEN NEW.action = 'connection.authorization_returned'
+        BEGIN
+          SELECT RAISE(ABORT, 'forced authorization-return audit failure');
+        END
+      `);
+    });
+    const input = {
+      authorizationToken: reservation.authorizationToken,
+      providerConnectionId: "ca_authorization_return_rollback_130",
+      reservationId: reservation.reservationId,
+      status: "success",
+    };
+
+    await expect(
+      runInDurableObject(stub, (instance) => instance.recordConnectionAuthorizationReturn(input)),
+    ).rejects.toThrow("forced authorization-return audit failure");
+    await expect(
+      runInDurableObject(stub, (_instance, state) => ({
+        audit: state.storage.sql
+          .exec("SELECT action FROM audit_events ORDER BY event_id")
+          .toArray(),
+        authorizationReturn: state.storage.sql
+          .exec(
+            `SELECT status, completed_at
+             FROM connection_authorization_returns
+             WHERE reservation_id = ?`,
+            reservation.reservationId,
+          )
+          .one(),
+      })),
+    ).resolves.toEqual({
+      audit: [{ action: "connection.link_reserved" }, { action: "connection.link_created" }],
+      authorizationReturn: {
+        completed_at: null,
+        status: "pending",
+      },
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("DROP TRIGGER reject_connection_authorization_return_audit");
+    });
+    await expect(stub.recordConnectionAuthorizationReturn(input)).resolves.toEqual({
+      ok: true,
+      outcome: "returned",
+      recorded: true,
+    });
   });
 
   it("lists only bounded owner connection summaries across pagination and eviction", async () => {
@@ -510,6 +869,7 @@ describe("OwnerControlPlane", () => {
     expect(firstPage).toEqual({
       connections: [
         {
+          authorizationOutcome: "untracked",
           authConfigId: "ac_github_managed",
           connectionId: "connection_00000000-0000-4000-8000-000000000001",
           createdAt: "1970-01-01T00:00:00.001Z",
@@ -530,6 +890,7 @@ describe("OwnerControlPlane", () => {
     ).resolves.toEqual({
       connections: [
         {
+          authorizationOutcome: "untracked",
           authConfigId: "ac_slack_managed",
           connectionId: "connection_00000000-0000-4000-8000-000000000002",
           createdAt: "1970-01-01T00:00:00.002Z",
@@ -590,11 +951,12 @@ describe("OwnerControlPlane", () => {
           .exec(
             `SELECT
                (SELECT COUNT(*) FROM connection_link_requests) AS requests,
+               (SELECT COUNT(*) FROM connection_authorization_returns) AS authorization_returns,
                (SELECT COUNT(*) FROM audit_events) AS audit_events`,
           )
           .one(),
       ),
-    ).resolves.toEqual({ audit_events: 0, requests: 0 });
+    ).resolves.toEqual({ audit_events: 0, authorization_returns: 0, requests: 0 });
   });
 
   it("rolls back a connection-link completion when audit persistence fails", async () => {
@@ -622,6 +984,7 @@ describe("OwnerControlPlane", () => {
     await expect(
       runInDurableObject(stub, (instance) =>
         instance.completeConnectionLink(authority, {
+          authorizationToken: reservation.authorizationToken,
           expiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
           providerConnectionId: "ca_rollback_121",
           reservationId: reservation.reservationId,
@@ -634,6 +997,14 @@ describe("OwnerControlPlane", () => {
         audit: state.storage.sql
           .exec("SELECT action FROM audit_events ORDER BY event_id")
           .toArray(),
+        authorizationReturn: state.storage.sql
+          .exec(
+            `SELECT status, connection_id, completed_at
+             FROM connection_authorization_returns
+             WHERE reservation_id = ?`,
+            reservation.reservationId,
+          )
+          .one(),
         connections: state.storage.sql.exec("SELECT COUNT(*) AS count FROM connections").one(),
         request: state.storage.sql
           .exec(
@@ -646,6 +1017,11 @@ describe("OwnerControlPlane", () => {
       })),
     ).resolves.toEqual({
       audit: [{ action: "connection.link_reserved" }],
+      authorizationReturn: {
+        completed_at: null,
+        connection_id: null,
+        status: "pending",
+      },
       connections: { count: 0 },
       request: {
         completed_at: null,
@@ -742,6 +1118,16 @@ describe("OwnerControlPlane", () => {
     }
     await expect(
       stub.completeConnectionLink(authority, {
+        authorizationToken: "a".repeat(43),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        providerConnectionId: "ca_wrong_capability_115",
+        reservationId: reservation.reservationId,
+        url: "https://connect.composio.dev/link/ln_wrong_capability_115",
+      }),
+    ).resolves.toEqual(fixedConnectionLinkFailure("invalid_request"));
+    await expect(
+      stub.completeConnectionLink(authority, {
+        authorizationToken: reservation.authorizationToken,
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
         providerConnectionId: "ca_substituted_115",
         reservationId: reservation.reservationId,
@@ -756,6 +1142,7 @@ describe("OwnerControlPlane", () => {
     });
     await expect(
       stub.completeConnectionLink(authority, {
+        authorizationToken: reservation.authorizationToken,
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
         providerConnectionId: "ca_late_115",
         reservationId: reservation.reservationId,
@@ -928,6 +1315,7 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toMatchObject({ ok: true });
     await runInDurableObject(stub, (_instance, state) => {
       state.storage.transactionSync(() => {
+        state.storage.sql.exec("DROP TABLE connection_authorization_returns");
         state.storage.sql.exec("DROP TABLE connection_link_requests");
         state.storage.sql.exec("DROP TABLE connections");
         state.storage.sql.exec("ALTER TABLE control_plane RENAME TO control_plane_v3");
@@ -946,7 +1334,7 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toEqual({
       ok: true,
       status: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         status: "ready",
       },
     });
@@ -959,14 +1347,23 @@ describe("OwnerControlPlane", () => {
           .exec(
             `SELECT name
              FROM sqlite_master
-             WHERE type = 'table' AND name IN ('connections', 'connection_link_requests')
+             WHERE type = 'table'
+               AND name IN (
+                 'connections',
+                 'connection_authorization_returns',
+                 'connection_link_requests'
+               )
              ORDER BY name`,
           )
           .toArray(),
       })),
     ).resolves.toEqual({
-      connectionTables: [{ name: "connection_link_requests" }, { name: "connections" }],
-      controlPlane: [{ owner_key: authority.ownerKey, schema_version: 3 }],
+      connectionTables: [
+        { name: "connection_authorization_returns" },
+        { name: "connection_link_requests" },
+        { name: "connections" },
+      ],
+      controlPlane: [{ owner_key: authority.ownerKey, schema_version: 4 }],
     });
   });
 
@@ -1596,7 +1993,7 @@ describe("OwnerControlPlane", () => {
     });
     await expect(stub.status({ ...authority, scopes: [OWNER_READ_SCOPE] })).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 3 },
+      status: { schemaVersion: 4 },
     });
   });
 

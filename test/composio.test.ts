@@ -659,6 +659,11 @@ describe("Composio connection-link adapter", () => {
   const now = Date.parse("2026-07-27T12:00:00.000Z");
   const input = {
     authConfigId: "ac_github_managed",
+    callbackSecrets: ["b".repeat(43), "c".repeat(43)] as [string, string],
+    callbackUrl:
+      `https://crewhelm.example/connections/composio/callback/owner_${"a".repeat(43)}/` +
+      "connection_link_00000000-0000-4000-8000-000000000000/1785155400000/" +
+      `${"b".repeat(43)}/${"c".repeat(43)}`,
     userId: `owner_${"a".repeat(43)}`,
   };
   const providerResponse = {
@@ -708,6 +713,7 @@ describe("Composio connection-link adapter", () => {
 
     expect(JSON.parse(init.body)).toEqual({
       auth_config_id: input.authConfigId,
+      callback_url: input.callbackUrl,
       experimental: {
         account_type: "PRIVATE",
       },
@@ -741,6 +747,13 @@ describe("Composio connection-link adapter", () => {
         now: () => now,
       }).create({ ...input, authConfigId: "github" }),
     ).resolves.toMatchObject({ ok: false });
+    await expect(
+      createComposioConnectionLinks({
+        apiKey: "composio-project-secret",
+        fetch: fetchMock,
+        now: () => now,
+      }).create({ ...input, callbackUrl: "https://crewhelm.example/callback?token=secret" }),
+    ).resolves.toMatchObject({ ok: false });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -766,6 +779,41 @@ describe("Composio connection-link adapter", () => {
           {
             ...providerResponse,
             redirect_url: "https://connect.composio.dev/link/ln_different",
+          },
+          { status: 201 },
+        ),
+    ],
+    [
+      "a callback token reflected as the connected account",
+      () =>
+        catalogResponse(
+          {
+            ...providerResponse,
+            connected_account_id: `ca_${input.callbackSecrets[0]}`,
+          },
+          { status: 201 },
+        ),
+    ],
+    [
+      "a callback token reflected as the hosted link",
+      () =>
+        catalogResponse(
+          {
+            ...providerResponse,
+            link_token: `ln_${input.callbackSecrets[0]}`,
+            redirect_url: `https://connect.composio.dev/link/ln_${input.callbackSecrets[0]}`,
+          },
+          { status: 201 },
+        ),
+    ],
+    [
+      "a callback authenticator reflected as the hosted link",
+      () =>
+        catalogResponse(
+          {
+            ...providerResponse,
+            link_token: `ln_${input.callbackSecrets[1]}`,
+            redirect_url: `https://connect.composio.dev/link/ln_${input.callbackSecrets[1]}`,
           },
           { status: 201 },
         ),

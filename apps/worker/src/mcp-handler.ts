@@ -39,10 +39,13 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import * as z from "zod";
 
 import type { WorkerEnv } from "./env.js";
+import { createConnectionAuthorizationCallback } from "./connection-authorization-return.js";
 import { readBoundedPostRequest } from "./request-body.js";
 
 interface McpEnvironment {
+  BETTER_AUTH_SECRET: string;
   COMPOSIO_API_KEY?: string | undefined;
+  PUBLIC_ORIGIN: string;
   OWNER_CONTROL_PLANE: {
     getByName(ownerKey: string): {
       createAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -231,6 +234,8 @@ async function connectionLinkToolResult(
   authority: OwnerAuthority,
   controlPlane: ReturnType<McpEnvironment["OWNER_CONTROL_PLANE"]["getByName"]>,
   connectionLinks: ComposioConnectionLinks,
+  publicOrigin: string,
+  signingSecret: string,
   input: unknown,
 ) {
   if (!authority.scopes.includes(CONNECTIONS_WRITE_SCOPE)) {
@@ -287,8 +292,19 @@ async function connectionLinkToolResult(
   let providerResult: Awaited<ReturnType<ComposioConnectionLinks["create"]>>;
 
   try {
+    const callback = await createConnectionAuthorizationCallback({
+      authorizationExpiresAt: reservation.authorizationExpiresAt,
+      authorizationToken: reservation.authorizationToken,
+      ownerKey: authority.ownerKey,
+      origin: publicOrigin,
+      reservationId: reservation.reservationId,
+      signingSecret,
+    });
+
     providerResult = await connectionLinks.create({
       authConfigId: request.authConfigId,
+      callbackSecrets: callback.callbackSecrets,
+      callbackUrl: callback.callbackUrl,
       userId: authority.ownerKey,
     });
   } catch {
@@ -302,6 +318,7 @@ async function connectionLinkToolResult(
   try {
     const completion = completeConnectionLinkInputSchema.parse({
       ...providerResult.connectionLink,
+      authorizationToken: reservation.authorizationToken,
       reservationId: reservation.reservationId,
     });
 
@@ -364,7 +381,15 @@ function createMcpServer(
       inputSchema: createConnectionLinkInputSchema,
       title: "Create integration connection link",
     },
-    async (input) => connectionLinkToolResult(authority, controlPlane, connectionLinks, input),
+    async (input) =>
+      connectionLinkToolResult(
+        authority,
+        controlPlane,
+        connectionLinks,
+        env.PUBLIC_ORIGIN,
+        env.BETTER_AUTH_SECRET,
+        input,
+      ),
   );
 
   server.registerTool(

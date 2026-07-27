@@ -24,6 +24,14 @@ export const connectionLinkIdempotencyKeySchema = z
   .min(1)
   .max(128)
   .regex(/^[A-Za-z0-9._~-]+$/, "Expected an opaque idempotency key.");
+export const connectionAuthorizationTokenSchema = z
+  .string()
+  .length(43)
+  .regex(/^[A-Za-z0-9_-]+$/, "Expected an opaque connection authorization token.");
+export const connectionAuthorizationAuthenticatorSchema = z
+  .string()
+  .length(43)
+  .regex(/^[A-Za-z0-9_-]+$/, "Expected an opaque connection authorization authenticator.");
 export const composioConnectedAccountIdSchema = z
   .string()
   .regex(/^ca_[A-Za-z0-9_-]{1,124}$/, "Expected an opaque Composio connected account ID.");
@@ -46,8 +54,16 @@ export const connectionLinkSchema = z.strictObject({
   expiresAt: z.iso.datetime(),
   url: connectionLinkUrlSchema,
 });
+export const connectionAuthorizationOutcomeSchema = z.enum([
+  "pending",
+  "returned",
+  "failed",
+  "expired",
+  "untracked",
+]);
 export const connectionStatusSchema = z.enum(["initiated"]);
 export const connectionSummarySchema = z.strictObject({
+  authorizationOutcome: connectionAuthorizationOutcomeSchema,
   authConfigId: connectionAuthConfigIdSchema,
   connectionId: connectionIdSchema,
   createdAt: z.iso.datetime(),
@@ -105,6 +121,8 @@ export const reserveConnectionLinkResultSchema = z.union([
     state: z.literal("replay"),
   }),
   z.strictObject({
+    authorizationExpiresAt: z.iso.datetime(),
+    authorizationToken: connectionAuthorizationTokenSchema,
     ok: z.literal(true),
     reservationId: connectionLinkReservationIdSchema,
     state: z.literal("dispatch"),
@@ -116,11 +134,32 @@ export const reserveConnectionLinkResultSchema = z.union([
 ]);
 
 export const completeConnectionLinkInputSchema = z.strictObject({
+  authorizationToken: connectionAuthorizationTokenSchema,
   expiresAt: z.iso.datetime(),
   providerConnectionId: composioConnectedAccountIdSchema,
   reservationId: connectionLinkReservationIdSchema,
   url: connectionLinkUrlSchema,
 });
+export const recordConnectionAuthorizationReturnInputSchema = z.strictObject({
+  authorizationToken: connectionAuthorizationTokenSchema,
+  providerConnectionId: composioConnectedAccountIdSchema.optional(),
+  reservationId: connectionLinkReservationIdSchema,
+  status: z.enum(["success", "failed"]),
+});
+export const recordConnectionAuthorizationReturnResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    ok: z.literal(true),
+    outcome: z.enum(["returned", "failed"]),
+    recorded: z.boolean(),
+  }),
+  z.strictObject({
+    error: z.strictObject({
+      code: z.literal("invalid_return"),
+      message: z.literal("Connection authorization return denied."),
+    }),
+    ok: z.literal(false),
+  }),
+]);
 export const listConnectionsResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     connections: z.array(connectionSummarySchema).max(50),
@@ -134,9 +173,16 @@ export const listConnectionsResultSchema = z.discriminatedUnion("ok", [
 ]);
 
 export type CompleteConnectionLinkInput = z.infer<typeof completeConnectionLinkInputSchema>;
+export type ConnectionAuthorizationOutcome = z.infer<typeof connectionAuthorizationOutcomeSchema>;
 export type ConnectionSummary = z.infer<typeof connectionSummarySchema>;
 export type CreateConnectionLinkInput = z.infer<typeof createConnectionLinkInputSchema>;
 export type CreateConnectionLinkResult = z.infer<typeof createConnectionLinkResultSchema>;
 export type ListConnectionsInput = z.infer<typeof listConnectionsInputSchema>;
 export type ListConnectionsResult = z.infer<typeof listConnectionsResultSchema>;
+export type RecordConnectionAuthorizationReturnInput = z.infer<
+  typeof recordConnectionAuthorizationReturnInputSchema
+>;
+export type RecordConnectionAuthorizationReturnResult = z.infer<
+  typeof recordConnectionAuthorizationReturnResultSchema
+>;
 export type ReserveConnectionLinkResult = z.infer<typeof reserveConnectionLinkResultSchema>;

@@ -187,8 +187,14 @@ Unknown tools remain unavailable until classified. Grants bind exact tool slugs,
 and effect classes; open-world tools also bind targets and budgets.
 
 Connection setup returns a Composio Connect Link through an owner-facing MCP flow; completing the
-provider consent remains a human action. Keep the Composio project key in a Cloudflare secret,
-separate environments into separate Composio projects, and never expose the key to a model.
+provider consent remains a human action. Each link carries a short-lived Crewhelm callback
+capability bound to the exact owner, reservation, and connected-account reference. Its browser
+return records only `pending`, `returned`, `failed`, `expired`, or legacy `untracked` lifecycle
+evidence. The Worker authenticates callback routing before selecting an owner Durable Object; the
+owner object then enforces the one-time stored binding. Because the browser redirect is not a
+signed provider assertion, it never marks a connection active and never creates a grant or
+execution permit. Keep the Composio project key in a Cloudflare secret, separate environments into
+separate Composio projects, and never expose the key to a model.
 
 Web tools such as Firecrawl use the same boundary. Constrain domains, pages, depth, concurrency,
 time, output, and cost; treat results as hostile. Arbitrary headers, cookies, TLS bypass, robots
