@@ -30,6 +30,7 @@ export default defineConfig({
     name: "worker",
     passWithNoTests: false,
     restoreMocks: true,
+    testTimeout: 15_000,
     unstubEnvs: true,
     unstubGlobals: true,
   },

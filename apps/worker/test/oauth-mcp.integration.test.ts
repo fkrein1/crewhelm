@@ -63,7 +63,10 @@ function allowRateLimit(): RateLimit {
   };
 }
 
-function integrationEnv(rateLimit = allowRateLimit()): WorkerEnv {
+function integrationEnv(
+  rateLimit = allowRateLimit(),
+  configuredOwnerGithubUserId = ownerGithubUserId,
+): WorkerEnv {
   return {
     AUTH_DB: env.AUTH_DB,
     AUTH_RATE_LIMIT: rateLimit,
@@ -72,7 +75,7 @@ function integrationEnv(rateLimit = allowRateLimit()): WorkerEnv {
     GITHUB_CLIENT_SECRET: "github-client-secret",
     MCP_RATE_LIMIT: rateLimit,
     OWNER_CONTROL_PLANE: env.OWNER_CONTROL_PLANE,
-    OWNER_GITHUB_USER_ID: ownerGithubUserId,
+    OWNER_GITHUB_USER_ID: configuredOwnerGithubUserId,
     PUBLIC_ORIGIN: origin,
   };
 }
@@ -275,7 +278,7 @@ async function completeOAuthFlow(
     }
 
     if (url === "https://api.github.com/user") {
-      return Response.json({ id: Number(ownerGithubUserId) });
+      return Response.json({ id: Number(workerEnv.OWNER_GITHUB_USER_ID) });
     }
 
     throw new Error(`Unexpected fetch: ${url}`);
@@ -705,7 +708,7 @@ describe("public OAuth to MCP integration", () => {
   });
 
   it("keeps a signed read-only token unable to create or persist an Agent", async () => {
-    const workerEnv = integrationEnv();
+    const workerEnv = integrationEnv(allowRateLimit(), "123457");
     const { consentPage, token } = await completeOAuthFlow(workerEnv, OWNER_READ_SCOPE);
 
     expect(token.scope).toBe(OWNER_READ_SCOPE);
@@ -715,7 +718,7 @@ describe("public OAuth to MCP integration", () => {
     );
     const ownerKey = await deriveOwnerKey({
       issuer: "https://github.com",
-      subject: ownerGithubUserId,
+      subject: workerEnv.OWNER_GITHUB_USER_ID,
     });
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(ownerKey);
     const auditCount = () =>
@@ -771,7 +774,7 @@ describe("public OAuth to MCP integration", () => {
   });
 
   it("keeps a signed write-only token unable to read owner state", async () => {
-    const workerEnv = integrationEnv();
+    const workerEnv = integrationEnv(allowRateLimit(), "123458");
     const { consentPage, token } = await completeOAuthFlow(workerEnv, OWNER_WRITE_SCOPE);
 
     expect(token.scope).toBe(OWNER_WRITE_SCOPE);
