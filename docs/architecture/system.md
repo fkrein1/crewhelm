@@ -54,6 +54,17 @@ The control plane owns admission and administration, the agent owns turns, and a
 steps. Any control-plane runtime status is a timestamped projection, never a second source of
 truth. Cross-object work is idempotent because Durable Objects do not share transactions.
 
+The Worker source includes one data-driven `CrewAgent` class based on Think. Its persisted runtime
+configuration is a closed exact Agent-revision contract bound to the canonical owner-plus-Agent
+object name. The initial runtime foundation is deliberately absent from the production Worker
+exports, Durable Object bindings, and Workers AI bindings; a test-only Worker entry binds it under
+Miniflare. Direct Think configuration, fetch, and turn-submission entrypoints fail closed. The class
+keeps Think's durable sessions, recovery, sub-agent, scheduling, and extension seams available for
+a future permit-verifying receiver while defaulting every grant-free turn to no active tools, no
+action authority, no automatic MCP tool materialization, no workspace Bash, and no model reasoning
+or tool payload telemetry. Production wiring must install the exact configuration and start the
+turn only after verifying a short-lived cross-object permit.
+
 Use one SQLite-backed control-plane object per owner and one name-addressed agent object per
 logical agent. Never use a global control-plane object. D1 is not an authoritative store for
 control-plane or agent domain state in the individual release; the auth D1 database is narrowly

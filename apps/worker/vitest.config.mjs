@@ -9,6 +9,7 @@ export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
   plugins: [
     cloudflareTest(async () => ({
+      main: fileURLToPath(new URL("./test/worker-entry.ts", import.meta.url)),
       miniflare: {
         bindings: {
           BETTER_AUTH_SECRET: "test-better-auth-secret-that-is-at-least-32-bytes",
@@ -18,6 +19,12 @@ export default defineConfig({
           OWNER_GITHUB_USER_ID: "123456",
           PUBLIC_ORIGIN: "https://crewhelm.test",
           TEST_MIGRATIONS: await readD1Migrations(migrationsPath),
+        },
+        durableObjects: {
+          CREW_AGENT: {
+            className: "CrewAgent",
+            useSQLite: true,
+          },
         },
       },
       wrangler: {

@@ -166,6 +166,24 @@ allowed update and its exact retries succeed, while a distinct update at the cei
 partial writes. Agent registry methods have no delete, run, connection-grant, or execution
 operation; connection onboarding is a separate scope and state machine.
 
+## CrewAgent runtime reachability and defaults
+
+The source contains a `CrewAgent` class based on Cloudflare Think, but the production Worker does
+not export or bind that class and has no Workers AI binding. A test-only Worker entry supplies the
+SQLite Durable Object binding under Miniflare. Even there, inherited Think configuration, fetch,
+and turn-submission entrypoints fail closed. Persisted configuration is accepted only when its
+validated owner and Agent identifiers derive the exact Durable Object name. Missing, malformed, or
+wrong-object configuration fails before model selection or prompt assembly.
+
+Grant-free turns expose no active tools and deny Think action authority. Workspace Bash, automatic
+MCP tool materialization, fetch tools, reasoning emission, and model or tool payload telemetry are
+disabled. These are deny-by-default policy settings, not a replacement for Think's durable
+framework features. Production Durable Object and Workers AI bindings remain denied until the
+control plane can issue a short-lived verified permit that binds owner, Agent revision, run, prompt
+digest, budget reservation, expiry, nonce, and idempotency key, and the receiver can verify that
+permit before calling the superclass configuration and turn APIs. A future execution path must
+enforce a total deadline in addition to the configured stream-stall timeout.
+
 ## ToolGate policy authority and residual risk
 
 The pure ToolGate policy module accepts only closed, bounded Crewhelm contracts. It intersects an

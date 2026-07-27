@@ -6,8 +6,9 @@ shareable agent recipes. Composio supplies the broad app and web integration pla
 toolkits such as Firecrawl.
 
 The implemented surface includes a deployable Worker, an authenticated MCP control plane with an
-owner-scoped Agent registry, a pure ToolGate policy module for classified Composio actions, and
-local bootstrap and diagnostic commands. Agent execution is outside this surface.
+owner-scoped Agent registry, an unbound fail-closed CrewAgent runtime foundation based on Cloudflare
+Think, a pure ToolGate policy module for classified Composio actions, and local bootstrap and
+diagnostic commands. Run admission and Agent execution remain outside this surface.
 
 ## Principles
 
