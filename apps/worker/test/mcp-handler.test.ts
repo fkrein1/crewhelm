@@ -6,6 +6,7 @@ import {
   createAgentResultSchema,
   controlPlaneStatusResultSchema,
   integrationCatalogSearchResultSchema,
+  inspectIntegrationToolResultSchema,
   integrationToolSearchResultSchema,
   listAgentsResultSchema,
   ownerAuthoritySchema,
@@ -16,6 +17,7 @@ import * as z from "zod";
 
 import {
   MCP_CREATE_AGENT_TOOL_NAME,
+  MCP_INSPECT_INTEGRATION_TOOL_NAME,
   MCP_LIST_AGENTS_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME,
@@ -520,6 +522,106 @@ describe("authenticated MCP handler", () => {
     });
   });
 
+  it("inspects one exact Composio tool schema with integration read scope", async () => {
+    const authority = await ownerAuthority("mcp-tool-inspection-owner", [INTEGRATIONS_READ_SCOPE]);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        input_parameters: {
+          url: { type: "string" },
+        },
+        is_deprecated: false,
+        name: "Scrape",
+        no_auth: false,
+        output_parameters: {
+          markdown: { type: "string" },
+        },
+        scopes: [],
+        slug: "FIRECRAWL_SCRAPE",
+        tags: ["web"],
+        toolkit: {
+          name: "Firecrawl",
+          slug: "firecrawl",
+        },
+        version: "20260701_00",
+      }),
+    );
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 17,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              slug: "FIRECRAWL_SCRAPE",
+              version: "20260701_00",
+            },
+            name: MCP_INSPECT_INTEGRATION_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload: unknown = await response.json();
+    const result = jsonRpcToolResultSchema.parse(payload).result;
+    const text = result.content[0]?.text;
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(result.isError).toBe(false);
+    expect(inspectIntegrationToolResultSchema.parse(JSON.parse(text ?? ""))).toMatchObject({
+      ok: true,
+      tool: {
+        inputParameters: {
+          url: { type: "string" },
+        },
+        outputParameters: {
+          markdown: { type: "string" },
+        },
+        slug: "FIRECRAWL_SCRAPE",
+        version: "20260701_00",
+      },
+    });
+  });
+
+  it("does not widen control read into exact tool inspection egress", async () => {
+    const authority = await ownerAuthority("mcp-control-read-tool-inspection-owner", [
+      OWNER_READ_SCOPE,
+    ]);
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 18,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              slug: "GITHUB_CREATE_ISSUE",
+              version: "20260720_00",
+            },
+            name: MCP_INSPECT_INTEGRATION_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload: unknown = await response.json();
+    const result = jsonRpcToolResultSchema.parse(payload).result;
+    const text = result.content[0]?.text;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.isError).toBe(true);
+    expect(inspectIntegrationToolResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
+      error: {
+        code: "insufficient_scope",
+        message: "Integration catalog request denied.",
+      },
+      ok: false,
+    });
+  });
+
   it("rejects a too-short integration search before provider egress", async () => {
     const authority = await ownerAuthority("mcp-short-catalog-query-owner", [
       INTEGRATIONS_READ_SCOPE,
@@ -528,7 +630,7 @@ describe("authenticated MCP handler", () => {
     const response = await handleAuthenticatedMcpRequest(
       toolRequest(
         JSON.stringify({
-          id: 17,
+          id: 19,
           jsonrpc: "2.0",
           method: "tools/call",
           params: {

@@ -1,13 +1,19 @@
 import {
   integrationCatalogSearchInputSchema,
   integrationCatalogSearchResultSchema,
+  inspectIntegrationToolInputSchema,
+  inspectIntegrationToolResultSchema,
   integrationToolkitVersionSchema,
+  integrationToolParameterMapSchema,
   integrationToolSearchInputSchema,
   integrationToolSearchResultSchema,
   type IntegrationCatalogItem,
   type IntegrationCatalogSearchInput,
   type IntegrationCatalogSearchResult,
+  type InspectIntegrationToolInput,
+  type InspectIntegrationToolResult,
   type IntegrationToolCatalogItem,
+  type IntegrationToolInspection,
   type IntegrationToolSearchInput,
   type IntegrationToolSearchResult,
 } from "@crewhelm/contracts";
@@ -53,8 +59,14 @@ const composioToolCatalogResponseSchema = z.looseObject({
   items: z.array(composioToolSchema).max(20),
   next_cursor: z.string().min(1).max(2_048).nullish(),
 });
+const composioToolInspectionSchema = composioToolSchema.extend({
+  input_parameters: integrationToolParameterMapSchema,
+  is_deprecated: z.literal(false),
+  output_parameters: integrationToolParameterMapSchema,
+});
 
 export interface ComposioCatalog {
+  inspectTool(input: InspectIntegrationToolInput): Promise<InspectIntegrationToolResult>;
   search(input: IntegrationCatalogSearchInput): Promise<IntegrationCatalogSearchResult>;
   searchTools(input: IntegrationToolSearchInput): Promise<IntegrationToolSearchResult>;
 }
@@ -113,16 +125,29 @@ function unavailable() {
 }
 
 function containsSecret(value: unknown, secret: string): boolean {
-  if (typeof value === "string") {
-    return value.includes(secret);
-  }
+  const pending: unknown[] = [value];
 
-  if (Array.isArray(value)) {
-    return value.some((item) => containsSecret(item, secret));
-  }
+  while (pending.length > 0) {
+    const current = pending.pop();
 
-  if (typeof value === "object" && value !== null) {
-    return Object.values(value).some((item) => containsSecret(item, secret));
+    if (typeof current === "string" && current.includes(secret)) {
+      return true;
+    }
+
+    if (Array.isArray(current)) {
+      pending.push(...current);
+      continue;
+    }
+
+    if (typeof current === "object" && current !== null) {
+      for (const [key, item] of Object.entries(current)) {
+        if (key.includes(secret)) {
+          return true;
+        }
+
+        pending.push(item);
+      }
+    }
   }
 
   return false;
@@ -153,6 +178,16 @@ function normalizeTool(tool: z.infer<typeof composioToolSchema>): IntegrationToo
     slug: tool.slug,
     tags: tool.tags ?? [],
     version: tool.version,
+  };
+}
+
+function normalizeToolInspection(
+  tool: z.infer<typeof composioToolInspectionSchema>,
+): IntegrationToolInspection {
+  return {
+    ...normalizeTool(tool),
+    inputParameters: tool.input_parameters,
+    outputParameters: tool.output_parameters,
   };
 }
 
@@ -189,6 +224,39 @@ export function createComposioCatalog(options: ComposioCatalogOptions): Composio
   }
 
   return {
+    async inspectTool(input) {
+      const request = inspectIntegrationToolInputSchema.safeParse(input);
+
+      if (!apiKey.success || !request.success) {
+        return unavailable();
+      }
+
+      const endpoint = new URL(`${COMPOSIO_TOOLS_URL}/${encodeURIComponent(request.data.slug)}`);
+      endpoint.searchParams.set("version", request.data.version);
+
+      try {
+        const inspected = composioToolInspectionSchema.safeParse(
+          await fetchCatalog(endpoint, MAXIMUM_TOOL_RESPONSE_BYTES),
+        );
+
+        if (
+          !inspected.success ||
+          inspected.data.slug !== request.data.slug ||
+          inspected.data.version !== request.data.version
+        ) {
+          return unavailable();
+        }
+
+        const result = inspectIntegrationToolResultSchema.parse({
+          ok: true,
+          tool: normalizeToolInspection(inspected.data),
+        });
+
+        return containsSecret(result, apiKey.data) ? unavailable() : result;
+      } catch {
+        return unavailable();
+      }
+    },
     async search(input) {
       const request = integrationCatalogSearchInputSchema.safeParse(input);
 

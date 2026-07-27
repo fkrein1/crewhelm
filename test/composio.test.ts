@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createComposioCatalog } from "../packages/composio/src/index.js";
+import { integrationToolParameterMapSchema } from "../packages/contracts/src/index.js";
 
 function catalogResponse(body: unknown, init?: ResponseInit): Response {
   const headers = new Headers(init?.headers);
@@ -10,6 +11,60 @@ function catalogResponse(body: unknown, init?: ResponseInit): Response {
 }
 
 describe("Composio catalog adapter", () => {
+  it("accepts only bounded inert JSON parameter maps", () => {
+    expect(
+      integrationToolParameterMapSchema.parse({
+        array: [null, true, 42, "value", { nested: false }],
+        object: {
+          additionalProperties: false,
+          type: "string",
+        },
+      }),
+    ).toEqual({
+      array: [null, true, 42, "value", { nested: false }],
+      object: {
+        additionalProperties: false,
+        type: "string",
+      },
+    });
+
+    let tooDeep: Record<string, unknown> = { type: "string" };
+
+    for (let depth = 0; depth < 25; depth += 1) {
+      tooDeep = { nested: tooDeep };
+    }
+
+    const tooManyNodes = Object.fromEntries(
+      Array.from({ length: 20 }, (_, index) => [`group${index}`, Array(512).fill(null)]),
+    );
+    const arrayWithExtraProperty = Object.assign([], { extra: null });
+    const arrayWithToJson = Object.defineProperty([], "toJSON", {
+      value: () => ({ changed: "after-validation" }),
+    });
+    const arrayWithSymbol = Object.assign([], { [Symbol("hidden")]: null });
+    const objectWithAccessor = Object.defineProperty({}, "type", {
+      enumerable: true,
+      get: () => "string",
+    });
+
+    for (const invalid of [
+      [],
+      { arrayWithExtraProperty },
+      { arrayWithSymbol },
+      { arrayWithToJson },
+      { objectWithAccessor },
+      { [Symbol("hidden")]: null },
+      { ["k".repeat(257)]: null },
+      { value: "x".repeat(32 * 1_024 + 1) },
+      { value: undefined },
+      Object.fromEntries(Array.from({ length: 513 }, (_, index) => [`key${index}`, null])),
+      tooDeep,
+      tooManyNodes,
+    ]) {
+      expect(integrationToolParameterMapSchema.safeParse(invalid).success).toBe(false);
+    }
+  });
+
   it("searches the complete current catalog through a fixed, bounded request", async () => {
     const apiKey = "composio-project-secret";
     const cancellation = new AbortController();
@@ -245,6 +300,187 @@ describe("Composio catalog adapter", () => {
     }
 
     expect(endpoint.searchParams.get("toolkit_slug")).toBe("github");
+  });
+
+  it("inspects bounded parameter schemas for one exact tool version", async () => {
+    const apiKey = "composio-project-secret";
+    const cancellation = new AbortController();
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      catalogResponse({
+        description: "Create an issue in a repository.",
+        input_parameters: {
+          body: {
+            description: "Issue body.",
+            type: "string",
+          },
+          repo: {
+            description: "Repository in owner/name form.",
+            type: "string",
+          },
+        },
+        is_deprecated: false,
+        name: "Create issue",
+        no_auth: false,
+        output_parameters: {
+          issue_number: {
+            type: "number",
+          },
+        },
+        scopes: ["repo"],
+        slug: "GITHUB_CREATE_ISSUE",
+        tags: ["issues", "write"],
+        toolkit: {
+          name: "GitHub",
+          slug: "github",
+        },
+        version: "20260720_00",
+      }),
+    );
+    const catalog = createComposioCatalog({
+      apiKey,
+      fetch: fetchMock,
+      signal: cancellation.signal,
+    });
+    const result = await catalog.inspectTool({
+      slug: "GITHUB_CREATE_ISSUE",
+      version: "20260720_00",
+    });
+    const endpoint = fetchMock.mock.calls[0]?.[0];
+    const init = fetchMock.mock.calls[0]?.[1];
+
+    expect(endpoint).toBeInstanceOf(URL);
+
+    if (!(endpoint instanceof URL)) {
+      throw new TypeError("Expected the adapter to use a fixed URL.");
+    }
+
+    expect(endpoint.origin).toBe("https://backend.composio.dev");
+    expect(endpoint.pathname).toBe("/api/v3.1/tools/GITHUB_CREATE_ISSUE");
+    expect(Object.fromEntries(endpoint.searchParams)).toEqual({
+      version: "20260720_00",
+    });
+    expect(new Headers(init?.headers).get("x-api-key")).toBe(apiKey);
+    expect(init?.redirect).toBe("manual");
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    cancellation.abort();
+    expect(init?.signal?.aborted).toBe(true);
+    expect(result).toEqual({
+      ok: true,
+      tool: {
+        description: "Create an issue in a repository.",
+        inputParameters: {
+          body: {
+            description: "Issue body.",
+            type: "string",
+          },
+          repo: {
+            description: "Repository in owner/name form.",
+            type: "string",
+          },
+        },
+        integration: {
+          name: "GitHub",
+          slug: "github",
+        },
+        name: "Create issue",
+        noAuth: false,
+        outputParameters: {
+          issue_number: {
+            type: "number",
+          },
+        },
+        requiredScopes: ["repo"],
+        slug: "GITHUB_CREATE_ISSUE",
+        tags: ["issues", "write"],
+        version: "20260720_00",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(apiKey);
+  });
+
+  it.each([
+    {
+      label: "a substituted slug",
+      mutate: (tool: Record<string, unknown>) => ({ ...tool, slug: "GITHUB_DELETE_ISSUE" }),
+    },
+    {
+      label: "a substituted version",
+      mutate: (tool: Record<string, unknown>) => ({ ...tool, version: "20260721_00" }),
+    },
+    {
+      label: "a deprecated tool",
+      mutate: (tool: Record<string, unknown>) => ({ ...tool, is_deprecated: true }),
+    },
+    {
+      label: "a reflected project key",
+      mutate: (tool: Record<string, unknown>, apiKey: string) => ({
+        ...tool,
+        input_parameters: {
+          token: {
+            description: apiKey,
+            type: "string",
+          },
+        },
+      }),
+    },
+    {
+      label: "a project key reflected as a parameter name",
+      mutate: (tool: Record<string, unknown>, apiKey: string) => ({
+        ...tool,
+        input_parameters: {
+          [apiKey]: {
+            type: "string",
+          },
+        },
+      }),
+    },
+    {
+      label: "an excessively deep schema",
+      mutate: (tool: Record<string, unknown>) => {
+        let schema: Record<string, unknown> = { type: "string" };
+
+        for (let depth = 0; depth < 25; depth += 1) {
+          schema = { nested: schema };
+        }
+
+        return { ...tool, input_parameters: schema };
+      },
+    },
+    {
+      label: "a missing deprecation marker",
+      mutate: (tool: Record<string, unknown>) =>
+        Object.fromEntries(Object.entries(tool).filter(([key]) => key !== "is_deprecated")),
+    },
+  ])("rejects $label during exact tool inspection", async ({ mutate }) => {
+    const apiKey = "composio-project-secret";
+    const tool = {
+      input_parameters: {},
+      is_deprecated: false,
+      name: "Create issue",
+      output_parameters: {},
+      slug: "GITHUB_CREATE_ISSUE",
+      toolkit: {
+        name: "GitHub",
+        slug: "github",
+      },
+      version: "20260720_00",
+    };
+    const result = await createComposioCatalog({
+      apiKey,
+      fetch: vi.fn<typeof fetch>().mockResolvedValue(catalogResponse(mutate(tool, apiKey))),
+    }).inspectTool({
+      slug: "GITHUB_CREATE_ISSUE",
+      version: "20260720_00",
+    });
+
+    expect(result).toEqual({
+      error: {
+        code: "integration_catalog_unavailable",
+        message: "Integration catalog request denied.",
+      },
+      ok: false,
+    });
+    expect(JSON.stringify(result)).not.toContain(apiKey);
   });
 
   it("rejects reflected credentials, deprecated tools, and unresolved versions", async () => {

@@ -222,7 +222,7 @@ function consentPage(
       ? "<li>Create Agent definitions with bounded configuration and no capability grants.</li>"
       : "",
     requestedScopes.includes(INTEGRATIONS_READ_SCOPE)
-      ? "<li>Search the Composio integration catalog. Search terms are sent to Composio.</li>"
+      ? "<li>Search the Composio integration catalog and inspect exact tool schemas. Search terms are sent to Composio.</li>"
       : "",
   ].join("");
 

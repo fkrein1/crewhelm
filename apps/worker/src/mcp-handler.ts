@@ -5,6 +5,8 @@ import {
   createAgentResultSchema,
   integrationCatalogSearchInputSchema,
   integrationCatalogSearchResultSchema,
+  inspectIntegrationToolInputSchema,
+  inspectIntegrationToolResultSchema,
   integrationToolSearchInputSchema,
   integrationToolSearchResultSchema,
   listAgentsInputSchema,
@@ -74,6 +76,7 @@ const NOT_FOUND_BODY = JSON.stringify({
 });
 
 export const MCP_CREATE_AGENT_TOOL_NAME = "crewhelm_create_agent";
+export const MCP_INSPECT_INTEGRATION_TOOL_NAME = "crewhelm_inspect_integration_tool";
 export const MCP_LIST_AGENTS_TOOL_NAME = "crewhelm_list_agents";
 export const MCP_SEARCH_INTEGRATIONS_TOOL_NAME = "crewhelm_search_integrations";
 export const MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME = "crewhelm_search_integration_tools";
@@ -224,6 +227,28 @@ function createMcpServer(
       controlPlaneToolResult(
         () => controlPlane.listAgents(authority, input),
         listAgentsResultSchema,
+      ),
+  );
+
+  server.registerTool(
+    MCP_INSPECT_INTEGRATION_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+        readOnlyHint: true,
+      },
+      description:
+        "Inspect bounded input and output parameter schemas for one exact Composio tool version.",
+      inputSchema: inspectIntegrationToolInputSchema,
+      title: "Inspect integration tool",
+    },
+    async (input) =>
+      integrationReadToolResult(
+        authority,
+        () => integrationCatalog.inspectTool(input),
+        inspectIntegrationToolResultSchema,
       ),
   );
 
