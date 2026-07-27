@@ -157,11 +157,11 @@ function htmlAttribute(body: string, name: string): string {
   }
 
   return match[1]
-    .replaceAll("&amp;", "&")
     .replaceAll("&quot;", '"')
     .replaceAll("&#39;", "'")
     .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">");
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
 }
 
 function responseLocation(response: Response): string {
