@@ -249,7 +249,7 @@ export async function exchangeGithubAuthorizationCode(
         "content-type": "application/x-www-form-urlencoded",
       },
       method: "POST",
-      redirect: "error",
+      redirect: "manual",
       signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
     });
   } catch {

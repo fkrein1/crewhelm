@@ -301,7 +301,7 @@ describe("public OAuth to MCP integration", () => {
     const consentLocation = new URL(responseLocation(callbackResponse), origin);
 
     expect(callbackResponse.status).toBe(302);
-    expect(githubRequestOptions.map((options) => options?.redirect)).toEqual(["error", "error"]);
+    expect(githubRequestOptions.map((options) => options?.redirect)).toEqual(["manual", "error"]);
     expect(githubRequestOptions.every((options) => options?.signal instanceof AbortSignal)).toBe(
       true,
     );
@@ -619,7 +619,7 @@ describe("public OAuth to MCP integration", () => {
     ).rejects.toThrow("GitHub OAuth token exchange failed.");
     const init = fetchMock.mock.calls[0]?.[1];
 
-    expect(init?.redirect).toBe("error");
+    expect(init?.redirect).toBe("manual");
     expect(init?.signal).toBeInstanceOf(AbortSignal);
   });
 
