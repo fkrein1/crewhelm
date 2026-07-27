@@ -22,12 +22,16 @@ Keep production code, relevant tests, security controls, and necessary documenta
 not submit intentionally insecure placeholders or defer correctness to a follow-up.
 
 Create a short-lived branch from `main` and submit every change through a pull request. Direct
-pushes to `main` are blocked. Use focused checks while iterating, then run the local gate before
-marking the pull request ready:
+pushes to `main` are blocked. Treat the pull request as the integration unit: use focused checks
+while iterating and run the local gate once after an R1 through R3 branch settles:
 
 ```sh
 pnpm verify
 ```
+
+For documentation-only R0 changes, formatting, relevant document or foundation tests, and diff
+checks are sufficient unless executable configuration, tests, generated artifacts, or shared
+automation changed. Keep successful output compact and expand logs when diagnosing a failure.
 
 Use semantic commit and pull-request titles such as `feat: add recipe validation` or
 `fix: reject expired approvals`. Keep commits green and independently reviewable. Sign off every

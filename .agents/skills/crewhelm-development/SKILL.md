@@ -10,8 +10,11 @@ security controls, and documentation required to make that objective complete.
 
 ## Prepare the objective
 
-1. Read `AGENTS.md`, `CONTEXT.md`, `docs/security/invariants.md`, and any relevant decision
-   record.
+1. At the start of a pull-request objective, read `AGENTS.md`. Read `CONTEXT.md`,
+   `docs/security/invariants.md`, and relevant decisions when the objective uses that domain or
+   changes its contracts, authority, or invariants. Within the same logical objective, reuse
+   guidance already loaded unless the objective, risk, or source changed or prior context is no
+   longer available.
 2. Inspect the worktree and preserve unrelated changes.
 3. Classify the work. Risk is determined by behavior, not file type:
    - **R0**: documentation, tests, or process wording with no executable product behavior.
@@ -46,6 +49,18 @@ Proposed commit:
 
 Split the work when the objective combines unrelated outcomes. Pause when it requires an
 unsettled architecture decision, a new trust boundary, or authority the user has not granted.
+
+## Work economically
+
+- Make one high-recall semantic retrieval for an unfamiliar area, then use exact searches and
+  bounded file reads for proof. Do not repeatedly dump complete files, logs, diffs, or unchanged
+  status.
+- Keep successful command output to the result and useful counts. Retain full logs and show the
+  smallest relevant failure context when a check fails.
+- Poll remote checks compactly and report state transitions rather than repeating unchanged
+  tables.
+- Treat the complete pull request as the integration unit. Closely related green commits may share
+  one objective, one full gate, and one final-diff review.
 
 ## Design the evidence
 
@@ -84,14 +99,17 @@ Run validation workloads sequentially:
 1. Run focused tests for the changed behavior.
 2. For nontrivial code, read `references/simplification-review.md`, perform the bounded review, and
    re-run focused tests after any change.
-3. Once the branch is settled, run `pnpm verify` once before marking the pull request ready.
+3. Once an R1 through R3 branch is settled, run `pnpm verify` once before marking the pull request
+   ready. For an R0 documentation-only change, run the formatter, relevant document or foundation
+   tests, and diff checks; run the full gate if executable configuration, tests, generated
+   artifacts, or shared automation changed.
 4. Run any risk-specific integration, migration, recovery, packaging, or staging checks.
 5. Inspect `git diff --check`, the complete diff, and the staged diff.
 6. Confirm no secret, generated junk, unrelated formatting, or accidental public API change is
    present.
 
-After a fix, re-run the affected focused check. Re-run `pnpm verify` only when code or configuration
-changed after the last full gate.
+After a fix, re-run the affected focused check. Re-run `pnpm verify` only when code or executable
+configuration changed after the last full gate.
 
 Every Vitest invocation must use a maximum of 50% workers. Use one worker for shared-state or
 serial end-to-end suites.
@@ -111,6 +129,7 @@ MCP or external mutations, sandboxing, remote execution, destructive behavior, m
 or deployment and release authority.
 
 Resolve every blocker and repeat affected validations. Do not let a reviewer approve its own fix.
+Repeat only the review invalidated by a later change.
 
 ## Commit, publish, and report
 
