@@ -22,6 +22,19 @@ const MAX_GITHUB_RESPONSE_BYTES = 16 * 1024;
 const GITHUB_REQUEST_TIMEOUT_MS = 10_000;
 const AUTH_BASE_PATH = "/api/auth";
 
+type AuthorizationFailureStage =
+  | "better_auth"
+  | "github_owner_mismatch"
+  | "github_token_body"
+  | "github_token_payload"
+  | "github_token_request"
+  | "github_token_response"
+  | "github_user_body"
+  | "github_user_payload"
+  | "github_user_request"
+  | "github_user_response"
+  | "github_user_token";
+
 const configurationSchema = z.strictObject({
   BETTER_AUTH_SECRET: z.string().min(32).max(1_024),
   GITHUB_CLIENT_ID: z.string().min(1).max(255),
@@ -55,6 +68,10 @@ const accessTokenClaimsSchema = z.looseObject({
 });
 
 export type CrewhelmAuth = ReturnType<typeof createCrewhelmAuth>;
+
+function logAuthorizationFailure(stage: AuthorizationFailureStage): void {
+  console.error("crewhelm.authorization_unavailable", { stage });
+}
 
 function isBetterAuthPlugin(plugin: unknown): plugin is BetterAuthPlugin {
   return (
@@ -130,24 +147,40 @@ async function readGithubOwner(
   accessToken: string,
   ownerGithubUserId: string,
 ): Promise<{ ownerKey: string } | null> {
-  const response = await fetch(GITHUB_USER_URL, {
-    headers: {
-      accept: "application/vnd.github+json",
-      authorization: `Bearer ${accessToken}`,
-      "user-agent": "crewhelm-worker",
-      "x-github-api-version": "2022-11-28",
-    },
-    redirect: "error",
-    signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
-  });
+  let response: Response;
 
-  if (!response.ok) {
+  try {
+    response = await fetch(GITHUB_USER_URL, {
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${accessToken}`,
+        "user-agent": "crewhelm-worker",
+        "x-github-api-version": "2022-11-28",
+      },
+      redirect: "error",
+      signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    logAuthorizationFailure("github_user_request");
     return null;
   }
 
-  const rawBody = await readBoundedResponseBody(response, MAX_GITHUB_RESPONSE_BYTES);
+  if (!response.ok) {
+    logAuthorizationFailure("github_user_response");
+    return null;
+  }
+
+  let rawBody: string | null;
+
+  try {
+    rawBody = await readBoundedResponseBody(response, MAX_GITHUB_RESPONSE_BYTES);
+  } catch {
+    logAuthorizationFailure("github_user_body");
+    return null;
+  }
 
   if (rawBody === null) {
+    logAuthorizationFailure("github_user_body");
     return null;
   }
 
@@ -156,12 +189,19 @@ async function readGithubOwner(
   try {
     body = JSON.parse(rawBody);
   } catch {
+    logAuthorizationFailure("github_user_payload");
     return null;
   }
 
   const result = githubUserSchema.safeParse(body);
 
-  if (!result.success || String(result.data.id) !== ownerGithubUserId) {
+  if (!result.success) {
+    logAuthorizationFailure("github_user_payload");
+    return null;
+  }
+
+  if (String(result.data.id) !== ownerGithubUserId) {
+    logAuthorizationFailure("github_owner_mismatch");
     return null;
   }
 
@@ -199,19 +239,40 @@ export async function exchangeGithubAuthorizationCode(
     body.set("code_verifier", input.codeVerifier);
   }
 
-  const response = await fetch(GITHUB_TOKEN_URL, {
-    body,
-    headers: {
-      accept: "application/json",
-      "content-type": "application/x-www-form-urlencoded",
-    },
-    method: "POST",
-    redirect: "error",
-    signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
-  });
-  const rawBody = await readBoundedResponseBody(response, MAX_GITHUB_RESPONSE_BYTES);
+  let response: Response;
 
-  if (!response.ok || rawBody === null) {
+  try {
+    response = await fetch(GITHUB_TOKEN_URL, {
+      body,
+      headers: {
+        accept: "application/json",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      method: "POST",
+      redirect: "error",
+      signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    logAuthorizationFailure("github_token_request");
+    throw new Error("GitHub OAuth token exchange failed.");
+  }
+
+  if (!response.ok) {
+    logAuthorizationFailure("github_token_response");
+    throw new Error("GitHub OAuth token exchange failed.");
+  }
+
+  let rawBody: string | null;
+
+  try {
+    rawBody = await readBoundedResponseBody(response, MAX_GITHUB_RESPONSE_BYTES);
+  } catch {
+    logAuthorizationFailure("github_token_body");
+    throw new Error("GitHub OAuth token exchange failed.");
+  }
+
+  if (rawBody === null) {
+    logAuthorizationFailure("github_token_body");
     throw new Error("GitHub OAuth token exchange failed.");
   }
 
@@ -220,12 +281,14 @@ export async function exchangeGithubAuthorizationCode(
   try {
     payload = JSON.parse(rawBody);
   } catch {
+    logAuthorizationFailure("github_token_payload");
     throw new Error("GitHub OAuth token exchange failed.");
   }
 
   const result = githubTokenSchema.safeParse(payload);
 
   if (!result.success) {
+    logAuthorizationFailure("github_token_payload");
     throw new Error("GitHub OAuth token exchange failed.");
   }
 
@@ -310,7 +373,10 @@ export function createCrewhelmAuth(env: WorkerEnv, origin: string) {
       },
     },
     logger: {
-      disabled: true,
+      level: "error",
+      log: () => {
+        logAuthorizationFailure("better_auth");
+      },
     },
     onAPIError: {
       errorURL: "/oauth/error",
@@ -327,6 +393,7 @@ export function createCrewhelmAuth(env: WorkerEnv, origin: string) {
             getToken: (input) => exchangeGithubAuthorizationCode(configuration, input),
             getUserInfo: async (tokens) => {
               if (typeof tokens.accessToken !== "string" || tokens.accessToken.length > 4_096) {
+                logAuthorizationFailure("github_user_token");
                 return null;
               }
 
