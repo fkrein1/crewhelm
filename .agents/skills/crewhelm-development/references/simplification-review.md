@@ -8,6 +8,6 @@ Use this after focused tests pass for nontrivial code. The standard is
 3. Ask: would a clean implementation use a materially simpler design?
 4. Remove accidental concepts, indirection, nesting, duplication, weak names, and scattered logic.
 5. Preserve security, recovery, observability, and ownership boundaries.
-6. Re-run focused tests and `pnpm verify`.
+6. Re-run the affected focused checks. Leave `pnpm verify` to the settled pull-request gate.
 
 Clarity outranks line count. Do not turn simplification into unrelated cleanup or a dense rewrite.

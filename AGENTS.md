@@ -9,6 +9,10 @@ Before making any change intended for commit, read and follow
 ## Working agreement
 
 - Keep one objective and one writer active at a time.
+- Treat one pull-request objective as one logical workflow. Do not repeat an unchanged objective
+  card, guidance read, full gate, or independent review for every commit or continuation. Re-read
+  guidance when the objective or risk changes, the file changed, or prior context is no longer
+  available.
 - State a short objective, risk, acceptance check, and proposed commit before editing; add detail
   only when it clarifies higher-risk work. Provide a concise receipt after committing.
 - Implement small, complete vertical slices. Include necessary tests, security controls,
@@ -39,9 +43,13 @@ Before making any change intended for commit, read and follow
 ## Validation
 
 - Run focused tests while iterating, then run `pnpm verify` once before marking the pull request
-  ready.
+  ready for R1 through R3 work. For R0 documentation-only changes, run formatting, relevant
+  document/foundation checks, and diff checks; use the full gate only when executable
+  configuration, tests, generated artifacts, or shared automation changed.
 - Run lint, typecheck, tests, and builds sequentially.
 - Cap every Vitest run at `--maxWorkers=50%`; use one worker for shared-state suites.
+- Keep successful command output compact. Preserve full logs, but surface detailed output only for
+  failures or evidence that cannot be summarized safely.
 - Inspect `git diff --check`, each staged commit, and the complete pull-request diff before
   publishing.
 - Self-review each commit. Apply required independent and security reviews once to the final R3
