@@ -261,6 +261,46 @@ describe("GitHub owner authorization", () => {
     expect(JSON.stringify(completion)).not.toContain("github-client-secret");
   });
 
+  it("logs only a fixed stage when authorization grant storage fails", async () => {
+    const internalFailure = "oauth-provider-secret-that-must-not-appear";
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const oauthHelpers = createOAuthHelpers({
+      completeAuthorization: vi.fn<OAuthAuthorizationApi["completeAuthorization"]>(async () => {
+        throw new Error(internalFailure);
+      }),
+    });
+    const { githubState, workerEnv } = await beginGithubAuthorization(oauthHelpers);
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+      return url === "https://github.com/login/oauth/access_token"
+        ? Response.json({
+            access_token: githubToken,
+            scope: "",
+            token_type: "bearer",
+          })
+        : Response.json({ id: Number(githubUserId) });
+    });
+    const response = await createWorker().fetch(
+      new Request(`${origin}/oauth/github/callback?code=github-code&state=${githubState}`, {
+        headers: {
+          cookie: `__Host-crewhelm-github-state=${githubState}`,
+        },
+      }),
+      workerEnv,
+    );
+    const body = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(body).toBe("Authorization is temporarily unavailable.\n");
+    expect(consoleError.mock.calls).toEqual([
+      ["crewhelm.authorization_unavailable", { stage: "callback_grant_write" }],
+    ]);
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(internalFailure);
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(githubToken);
+  });
+
   it("fails closed when GitHub authenticates a different account", async () => {
     const completeAuthorization = vi.fn<OAuthAuthorizationApi["completeAuthorization"]>();
     const oauthHelpers = createOAuthHelpers({ completeAuthorization });

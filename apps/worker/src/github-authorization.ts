@@ -63,6 +63,17 @@ const configurationSchema = z.strictObject({
 
 type AuthorizationApp = Hono<{ Bindings: WorkerEnv }>;
 type WorkerContext = Context<{ Bindings: WorkerEnv }>;
+type AuthorizationUnavailableStage =
+  | "callback_github_identity"
+  | "callback_grant_write"
+  | "callback_provider_binding"
+  | "callback_state_read"
+  | "consent_client_lookup"
+  | "consent_provider_binding"
+  | "consent_state_read"
+  | "consent_state_write"
+  | "github_configuration"
+  | "github_state_write";
 
 function readConfiguration(env: WorkerEnv): z.infer<typeof configurationSchema> | null {
   const result = configurationSchema.safeParse({
@@ -91,7 +102,9 @@ function invalidAuthorizationRequest(): Response {
   return fixedResponse("Authorization request denied.\n", 400);
 }
 
-function authorizationUnavailable(): Response {
+function authorizationUnavailable(stage: AuthorizationUnavailableStage): Response {
+  console.error("crewhelm.authorization_unavailable", { stage });
+
   return fixedResponse("Authorization is temporarily unavailable.\n", 503);
 }
 
@@ -511,7 +524,7 @@ async function showConsent(context: WorkerContext): Promise<Response> {
   const oauth = context.env.OAUTH_PROVIDER;
 
   if (oauth === undefined) {
-    return authorizationUnavailable();
+    return authorizationUnavailable("consent_provider_binding");
   }
 
   let parsedRequest: AuthRequest;
@@ -533,7 +546,7 @@ async function showConsent(context: WorkerContext): Promise<Response> {
   try {
     client = await oauth.lookupClient(request.clientId);
   } catch {
-    return authorizationUnavailable();
+    return authorizationUnavailable("consent_client_lookup");
   }
 
   if (client === null) {
@@ -549,7 +562,7 @@ async function showConsent(context: WorkerContext): Promise<Response> {
   try {
     await putState(context.env.OAUTH_KV, stateKey("consent", consent), storedState);
   } catch {
-    return authorizationUnavailable();
+    return authorizationUnavailable("consent_state_write");
   }
 
   return consentResponse(consentPage(storedState.client, consent), consent);
@@ -569,7 +582,7 @@ async function submitConsent(context: WorkerContext): Promise<Response> {
     storedState = await getState(context.env.OAUTH_KV, key, consentStateSchema);
     await context.env.OAUTH_KV.delete(key);
   } catch {
-    return authorizationUnavailable();
+    return authorizationUnavailable("consent_state_read");
   }
 
   if (storedState === null) {
@@ -589,14 +602,14 @@ async function submitConsent(context: WorkerContext): Promise<Response> {
       githubStateSchema.parse({ request: storedState.request }),
     );
   } catch {
-    return authorizationUnavailable();
+    return authorizationUnavailable("github_state_write");
   }
 
   const response = githubAuthorizeRedirect(context, githubState);
 
   if (response === null) {
     await context.env.OAUTH_KV.delete(stateKey("github", githubState));
-    return authorizationUnavailable();
+    return authorizationUnavailable("github_configuration");
   }
 
   response.headers.append("set-cookie", clearStateCookie(CONSENT_COOKIE));
@@ -607,7 +620,7 @@ async function completeGithubAuthorization(context: WorkerContext): Promise<Resp
   const oauth = context.env.OAUTH_PROVIDER;
 
   if (oauth === undefined) {
-    return authorizationUnavailable();
+    return authorizationUnavailable("callback_provider_binding");
   }
 
   const callback = githubCallbackSchema.safeParse({
@@ -629,7 +642,7 @@ async function completeGithubAuthorization(context: WorkerContext): Promise<Resp
     storedState = await getState(context.env.OAUTH_KV, key, githubStateSchema);
     await context.env.OAUTH_KV.delete(key);
   } catch {
-    return authorizationUnavailable();
+    return authorizationUnavailable("callback_state_read");
   }
 
   if (storedState === null) {
@@ -641,7 +654,7 @@ async function completeGithubAuthorization(context: WorkerContext): Promise<Resp
   try {
     githubUserId = await authenticateGithubOwner(context, callback.data.code);
   } catch {
-    return authorizationUnavailable();
+    return authorizationUnavailable("callback_github_identity");
   }
 
   if (githubUserId === null) {
@@ -670,7 +683,7 @@ async function completeGithubAuthorization(context: WorkerContext): Promise<Resp
       userId: authority.ownerKey,
     }));
   } catch {
-    return authorizationUnavailable();
+    return authorizationUnavailable("callback_grant_write");
   }
 
   return redirectResponse(redirectTo, [clearStateCookie(GITHUB_STATE_COOKIE)]);
