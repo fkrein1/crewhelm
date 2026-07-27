@@ -193,6 +193,11 @@ describe("repository foundation", () => {
       minimumReleaseAgeIgnoreMissingTime: false,
       minimumReleaseAgeStrict: true,
       nodeVersion: "24.18.0",
+      overrides: {
+        "@esbuild-kit/core-utils>esbuild": "0.25.12",
+        "@hono/node-server": "2.0.10",
+        "partyserver@0.5.8>@cloudflare/workers-types": ">=4.20260424.1 <6",
+      },
       packages: ["apps/*", "packages/*", "tooling/*"],
       savePrefix: "",
       strictDepBuilds: true,
@@ -237,6 +242,7 @@ describe("repository foundation", () => {
       private: true,
       scripts: {
         build: "wrangler deploy --dry-run --outdir dist",
+        "db:control-plane:generate": "node ./scripts/generate-control-plane-migrations.mjs",
       },
       dependencies: {
         "@cloudflare/think": "0.15.0",
@@ -244,6 +250,7 @@ describe("repository foundation", () => {
         "@crewhelm/contracts": "workspace:*",
         agents: "0.19.0",
         ai: "7.0.37",
+        "drizzle-orm": "0.45.2",
         hono: "4.12.32",
         react: "19.2.8",
       },
@@ -251,10 +258,47 @@ describe("repository foundation", () => {
         "@babel/core": "8.0.1",
         "@cloudflare/vitest-pool-workers": "0.18.8",
         "@cloudflare/workers-types": "5.20260724.1",
+        "drizzle-kit": "0.31.10",
         vitest: "4.1.10",
         wrangler: "4.114.0",
       },
     });
+  });
+
+  it("keeps control-plane Drizzle migrations complete and runtime queries typed", async () => {
+    const journal = parseJsonObject(
+      await read("apps/worker/control-plane-migrations/meta/_journal.json"),
+    );
+    const entries = journal["entries"];
+    const manifest = await read("apps/worker/control-plane-migrations/index.ts");
+    const migrationFiles = (await readdir(new URL("apps/worker/control-plane-migrations/", root)))
+      .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/.test(name))
+      .toSorted();
+    const ownerControlPlane = await read("apps/worker/src/owner-control-plane.ts");
+
+    expect(journal["dialect"]).toBe("sqlite");
+    expect(Array.isArray(entries)).toBe(true);
+    if (!Array.isArray(entries)) {
+      throw new TypeError("Expected a Drizzle migration journal.");
+    }
+
+    expect(migrationFiles).toEqual(
+      entries.map((entry, index) => {
+        if (!isRecord(entry) || entry["idx"] !== index || typeof entry["tag"] !== "string") {
+          throw new TypeError("Expected contiguous Drizzle migration entries.");
+        }
+
+        expect(manifest).toContain(`import migration${index} from "./${entry["tag"]}.sql";`);
+        expect(manifest).toContain(`version: ${index + 1},`);
+
+        return `${entry["tag"]}.sql`;
+      }),
+    );
+    expect(manifest).toContain(
+      "export const CONTROL_PLANE_SCHEMA_VERSION = controlPlaneMigrations.length;",
+    );
+    expect(ownerControlPlane.match(/\.sql\.exec\(/g)).toEqual([".sql.exec("]);
+    expect(ownerControlPlane).toContain('this.#storage.sql.exec("PRAGMA foreign_keys = ON");');
   });
 
   it("keeps the unadmitted CrewAgent runtime out of production bindings and exports", async () => {

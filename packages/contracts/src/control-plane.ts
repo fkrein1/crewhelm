@@ -60,7 +60,7 @@ export const ownerAuthoritySchema = z.strictObject({
 });
 
 export const controlPlaneStatusSchema = z.strictObject({
-  schemaVersion: z.literal(4),
+  schemaVersion: z.number().int().positive(),
   status: z.literal("ready"),
 });
 

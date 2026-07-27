@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "wrangler deploy --dry-run --outdir dist"
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "db:control-plane:generate": "node ./scripts/generate-control-plane-migrations.mjs"
   },
   "dependencies": {
     "@better-auth/oauth-provider": "1.7.0-beta.10",
@@ -24,6 +25,7 @@
     "@babel/core": "8.0.1",
     "@cloudflare/vitest-pool-workers": "0.18.8",
     "@cloudflare/workers-types": "5.20260724.1",
+    "drizzle-kit": "0.31.10",
     "vitest": "4.1.10",
     "wrangler": "4.114.0"
   }

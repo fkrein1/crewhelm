@@ -4,6 +4,13 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-22",
   "compatibility_flags": ["nodejs_compat"],
+  "rules": [
+    {
+      "type": "Text",
+      "globs": ["**/*.sql"],
+      "fallthrough": true,
+    },
+  ],
   "d1_databases": [
     {
       "binding": "AUTH_DB",
