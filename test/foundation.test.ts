@@ -623,6 +623,11 @@ describe("repository foundation", () => {
         "pkg:npm/@img/sharp-libvips-linux-x64@1.3.1",
         "pkg:npm/@img/sharp-libvips-linuxmusl-arm64@1.3.1",
         "pkg:npm/@img/sharp-libvips-linuxmusl-x64@1.3.1",
+        "pkg:npm/caniuse-lite@1.0.30001806",
+        "pkg:npm/json-schema@0.4.0",
+        "pkg:npm/node-liblzma@2.2.0",
+        "pkg:npm/pako@1.0.11",
+        "pkg:npm/strtok3@10.3.5",
       ].join(", "),
       "allow-licenses":
         "0BSD, Apache-2.0, BSD-2-Clause, BSD-3-Clause, BlueOak-1.0.0, CC0-1.0, ISC, MIT, Unlicense",
