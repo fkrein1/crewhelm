@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createComposioCatalog } from "../packages/composio/src/index.js";
+import {
+  createComposioCatalog,
+  createComposioConnectionLinks,
+} from "../packages/composio/src/index.js";
 import { integrationToolParameterMapSchema } from "../packages/contracts/src/index.js";
 
 function catalogResponse(body: unknown, init?: ResponseInit): Response {
@@ -649,5 +652,217 @@ describe("Composio catalog adapter", () => {
       ok: false,
     });
     expect(JSON.stringify(result)).not.toContain("secret");
+  });
+});
+
+describe("Composio connection-link adapter", () => {
+  const now = Date.parse("2026-07-27T12:00:00.000Z");
+  const input = {
+    authConfigId: "ac_github_managed",
+    userId: `owner_${"a".repeat(43)}`,
+  };
+  const providerResponse = {
+    connected_account_id: "ca_connection_123",
+    expires_at: "2026-07-27T12:10:00.000Z",
+    experimental: {
+      account_type: "PRIVATE",
+    },
+    link_token: "ln_secure_link_123",
+    redirect_url: "https://connect.composio.dev/link/ln_secure_link_123",
+  };
+
+  it("creates a private hosted link through one fixed, bounded request", async () => {
+    const apiKey = "composio-project-secret";
+    const cancellation = new AbortController();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(catalogResponse(providerResponse, { status: 201 }));
+    const connectionLinks = createComposioConnectionLinks({
+      apiKey,
+      fetch: fetchMock,
+      now: () => now,
+      signal: cancellation.signal,
+    });
+
+    await expect(connectionLinks.create(input)).resolves.toEqual({
+      connectionLink: {
+        expiresAt: providerResponse.expires_at,
+        providerConnectionId: providerResponse.connected_account_id,
+        url: providerResponse.redirect_url,
+      },
+      ok: true,
+    });
+    expect(connectionLinks.isAvailable()).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const [endpoint, init] = fetchMock.mock.calls[0] ?? [];
+
+    expect(endpoint).toBe("https://backend.composio.dev/api/v3/connected_accounts/link");
+    expect(init?.method).toBe("POST");
+    expect(init?.redirect).toBe("manual");
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect(new Headers(init?.headers).get("x-api-key")).toBe(apiKey);
+    if (typeof init?.body !== "string") {
+      throw new TypeError("Expected a serialized Composio request body.");
+    }
+
+    expect(JSON.parse(init.body)).toEqual({
+      auth_config_id: input.authConfigId,
+      experimental: {
+        account_type: "PRIVATE",
+      },
+      user_id: input.userId,
+    });
+    cancellation.abort();
+    expect(init?.signal?.aborted).toBe(true);
+    expect(JSON.stringify(await connectionLinks.create(input))).not.toContain(apiKey);
+  });
+
+  it("does not dispatch without valid local configuration or input", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    const connectionLinks = createComposioConnectionLinks({
+      apiKey: undefined,
+      fetch: fetchMock,
+      now: () => now,
+    });
+
+    expect(connectionLinks.isAvailable()).toBe(false);
+    await expect(connectionLinks.create(input)).resolves.toEqual({
+      error: {
+        code: "connection_link_outcome_unknown",
+        message: "Connection link request denied.",
+      },
+      ok: false,
+    });
+    await expect(
+      createComposioConnectionLinks({
+        apiKey: "composio-project-secret",
+        fetch: fetchMock,
+        now: () => now,
+      }).create({ ...input, authConfigId: "github" }),
+    ).resolves.toMatchObject({ ok: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a redirect", () => new Response(null, { status: 302 })],
+    ["a provider rejection", () => catalogResponse({ error: "provider-secret" }, { status: 422 })],
+    ["a non-JSON success", () => new Response("created", { status: 201 })],
+    [
+      "an untrusted hosted-link origin",
+      () =>
+        catalogResponse(
+          {
+            ...providerResponse,
+            redirect_url: "https://attacker.example/link/ln_secure_link_123",
+          },
+          { status: 201 },
+        ),
+    ],
+    [
+      "a substituted link token",
+      () =>
+        catalogResponse(
+          {
+            ...providerResponse,
+            redirect_url: "https://connect.composio.dev/link/ln_different",
+          },
+          { status: 201 },
+        ),
+    ],
+    [
+      "a missing private-account confirmation",
+      () =>
+        catalogResponse(
+          {
+            ...providerResponse,
+            experimental: undefined,
+          },
+          { status: 201 },
+        ),
+    ],
+    [
+      "a shared account",
+      () =>
+        catalogResponse(
+          {
+            ...providerResponse,
+            experimental: { account_type: "SHARED" },
+          },
+          { status: 201 },
+        ),
+    ],
+    [
+      "an already expired link",
+      () =>
+        catalogResponse(
+          {
+            ...providerResponse,
+            expires_at: "2026-07-27T11:59:59.000Z",
+          },
+          { status: 201 },
+        ),
+    ],
+    [
+      "an excessively long-lived link",
+      () =>
+        catalogResponse(
+          {
+            ...providerResponse,
+            expires_at: "2026-07-27T12:30:00.001Z",
+          },
+          { status: 201 },
+        ),
+    ],
+    [
+      "an oversized response",
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new Uint8Array(32 * 1_024 + 1));
+              controller.close();
+            },
+          }),
+          {
+            headers: { "content-type": "application/json" },
+            status: 201,
+          },
+        ),
+    ],
+  ])("fails closed on %s after dispatch", async (_label, response) => {
+    const result = await createComposioConnectionLinks({
+      apiKey: "composio-project-secret",
+      fetch: vi.fn<typeof fetch>().mockResolvedValue(response()),
+      now: () => now,
+    }).create(input);
+
+    expect(result).toEqual({
+      error: {
+        code: "connection_link_outcome_unknown",
+        message: "Connection link request denied.",
+      },
+      ok: false,
+    });
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("treats a thrown or cancelled fetch as an unknown external outcome", async () => {
+    for (const failure of [
+      new DOMException("timed out with secret", "TimeoutError"),
+      new Error("network failed with secret"),
+    ]) {
+      const result = await createComposioConnectionLinks({
+        apiKey: "composio-project-secret",
+        fetch: vi.fn<typeof fetch>().mockRejectedValue(failure),
+        now: () => now,
+      }).create(input);
+
+      expect(result).toMatchObject({
+        error: { code: "connection_link_outcome_unknown" },
+        ok: false,
+      });
+      expect(JSON.stringify(result)).not.toContain("secret");
+    }
   });
 });

@@ -18,6 +18,7 @@ export {
   controlPlaneStatusResultSchema,
   createAgentInputSchema,
   createAgentResultSchema,
+  CONNECTIONS_WRITE_SCOPE,
   getAgentInputSchema,
   getAgentRevisionInputSchema,
   getAgentRevisionResultSchema,
@@ -64,6 +65,26 @@ export {
   type UpdateAgentResult,
   type VerifiedOwnerIdentity,
 } from "./control-plane.js";
+export {
+  completeConnectionLinkInputSchema,
+  composioConnectedAccountIdSchema,
+  connectionAuthConfigIdSchema,
+  connectionIdSchema,
+  connectionLinkIdempotencyKeySchema,
+  connectionLinkReservationIdSchema,
+  connectionLinkSchema,
+  connectionLinkUrlSchema,
+  createConnectionLinkInputSchema,
+  createConnectionLinkResultSchema,
+  reserveConnectionLinkResultSchema,
+  CONNECTION_LINK_UNKNOWN_RECOVERY_MS,
+  MAXIMUM_CONNECTION_LINK_REQUESTS_PER_OWNER,
+  MAXIMUM_CONNECTIONS_PER_OWNER,
+  type CompleteConnectionLinkInput,
+  type CreateConnectionLinkInput,
+  type CreateConnectionLinkResult,
+  type ReserveConnectionLinkResult,
+} from "./connections.js";
 export { HEALTH_PATH, healthReportSchema, type HealthReport } from "./health.js";
 export {
   integrationCatalogCursorSchema,

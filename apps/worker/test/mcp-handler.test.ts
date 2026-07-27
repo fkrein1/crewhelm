@@ -1,11 +1,13 @@
-import { env } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  CONNECTIONS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   createAgentResultSchema,
+  createConnectionLinkResultSchema,
   controlPlaneStatusResultSchema,
   getAgentRevisionResultSchema,
   getAgentResultSchema,
@@ -23,6 +25,7 @@ import * as z from "zod";
 
 import {
   MCP_CREATE_AGENT_TOOL_NAME,
+  MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
   MCP_GET_AGENT_TOOL_NAME,
   MCP_GET_AGENT_REVISION_TOOL_NAME,
   MCP_INSPECT_INTEGRATION_TOOL_NAME,
@@ -98,6 +101,10 @@ function fixedAgentFailure(code: string) {
   };
 }
 
+async function unavailableControlPlane(): Promise<never> {
+  throw new Error("control-plane secret");
+}
+
 describe("authenticated MCP handler", () => {
   it("marks Agent replacement as destructive while keeping creation additive", async () => {
     const authority = await ownerAuthority();
@@ -120,6 +127,9 @@ describe("authenticated MCP handler", () => {
     const updateTool = payload.result.tools.find(
       (tool) => tool.name === MCP_UPDATE_AGENT_TOOL_NAME,
     );
+    const connectionLinkTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
+    );
     const revisionTools = payload.result.tools.filter(
       (tool) =>
         tool.name === MCP_GET_AGENT_REVISION_TOOL_NAME ||
@@ -136,6 +146,12 @@ describe("authenticated MCP handler", () => {
       destructiveHint: true,
       idempotentHint: true,
       openWorldHint: false,
+      readOnlyHint: false,
+    });
+    expect(connectionLinkTool?.annotations).toMatchObject({
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
       readOnlyHint: false,
     });
     expect(revisionTools).toHaveLength(2);
@@ -177,7 +193,7 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 2,
+        schemaVersion: 3,
         status: "ready",
       },
     });
@@ -246,6 +262,9 @@ describe("authenticated MCP handler", () => {
           createAgent: async () => {
             throw new Error("do-not-reflect-this");
           },
+          completeConnectionLink: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           getAgent: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -256,6 +275,9 @@ describe("authenticated MCP handler", () => {
             throw new Error("do-not-reflect-this");
           },
           listAgents: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          reserveConnectionLink: async () => {
             throw new Error("do-not-reflect-this");
           },
           status: async () => {
@@ -678,6 +700,396 @@ describe("authenticated MCP handler", () => {
       ],
       nextCursor: null,
       ok: true,
+    });
+  });
+
+  it("creates and exactly replays a private Composio Connect Link through MCP", async () => {
+    const authority = await ownerAuthority("mcp-connection-link-owner", [CONNECTIONS_WRITE_SCOPE]);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1_000).toISOString();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json(
+        {
+          connected_account_id: "ca_mcp_connection",
+          expires_at: expiresAt,
+          experimental: {
+            account_type: "PRIVATE",
+          },
+          link_token: "ln_mcp_connection",
+          redirect_url: "https://connect.composio.dev/link/ln_mcp_connection",
+        },
+        { status: 201 },
+      ),
+    );
+    const requestBody = JSON.stringify({
+      id: 140,
+      jsonrpc: "2.0",
+      method: "tools/call",
+      params: {
+        arguments: {
+          authConfigId: "ac_github_managed",
+          idempotencyKey: "mcp-connection-link-key",
+        },
+        name: MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
+      },
+    });
+    const firstResponse = await handleAuthenticatedMcpRequest(toolRequest(requestBody), env, {
+      authority,
+    });
+    const firstPayload = jsonRpcToolResultSchema.parse(await firstResponse.json()).result;
+    const first = createConnectionLinkResultSchema.parse(
+      JSON.parse(firstPayload.content[0]?.text ?? ""),
+    );
+    const replayResponse = await handleAuthenticatedMcpRequest(toolRequest(requestBody), env, {
+      authority,
+    });
+    const replayPayload = jsonRpcToolResultSchema.parse(await replayResponse.json()).result;
+    const replay = createConnectionLinkResultSchema.parse(
+      JSON.parse(replayPayload.content[0]?.text ?? ""),
+    );
+
+    expect(firstPayload.isError).toBe(false);
+    expect(first).toMatchObject({
+      connectionLink: {
+        connectionId: expect.stringMatching(/^connection_/),
+        expiresAt,
+        url: "https://connect.composio.dev/link/ln_mcp_connection",
+      },
+      created: true,
+      ok: true,
+    });
+    expect(replay).toEqual({
+      ...(first.ok ? { connectionLink: first.connectionLink } : {}),
+      created: false,
+      ok: true,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    const [endpoint, init] = fetchMock.mock.calls[0] ?? [];
+
+    expect(endpoint).toBe("https://backend.composio.dev/api/v3/connected_accounts/link");
+    if (typeof init?.body !== "string") {
+      throw new TypeError("Expected a serialized Composio request body.");
+    }
+
+    expect(JSON.parse(init.body)).toEqual({
+      auth_config_id: "ac_github_managed",
+      experimental: {
+        account_type: "PRIVATE",
+      },
+      user_id: authority.ownerKey,
+    });
+  });
+
+  it("does not widen catalog or control reads into connection-link mutation", async () => {
+    const scopeSets: OwnerScope[][] = [[OWNER_READ_SCOPE], [INTEGRATIONS_READ_SCOPE]];
+
+    for (const scopes of scopeSets) {
+      const authority = await ownerAuthority(`mcp-connection-denied-${scopes[0]}`, scopes);
+      const fetchMock = vi.spyOn(globalThis, "fetch");
+      const response = await handleAuthenticatedMcpRequest(
+        toolRequest(
+          JSON.stringify({
+            id: 141,
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: {
+              arguments: {
+                authConfigId: "ac_github_managed",
+                idempotencyKey: "mcp-denied-connection-link",
+              },
+              name: MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
+            },
+          }),
+        ),
+        env,
+        { authority },
+      );
+      const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(payload.isError).toBe(true);
+      expect(
+        createConnectionLinkResultSchema.parse(JSON.parse(payload.content[0]?.text ?? "")),
+      ).toEqual({
+        error: {
+          code: "insufficient_scope",
+          message: "Connection link request denied.",
+        },
+        ok: false,
+      });
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("does not reserve an intent when Composio connection linking is unconfigured", async () => {
+    const authority = await ownerAuthority("mcp-unconfigured-connection-owner", [
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 142,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              authConfigId: "ac_github_managed",
+              idempotencyKey: "mcp-unconfigured-link",
+            },
+            name: MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
+          },
+        }),
+      ),
+      { OWNER_CONTROL_PLANE: env.OWNER_CONTROL_PLANE },
+      { authority },
+    );
+    const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+
+    expect(payload.isError).toBe(true);
+    expect(
+      createConnectionLinkResultSchema.parse(JSON.parse(payload.content[0]?.text ?? "")),
+    ).toEqual({
+      error: {
+        code: "connection_link_unavailable",
+        message: "Connection link request denied.",
+      },
+      ok: false,
+    });
+    await expect(
+      runInDurableObject(
+        env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+        (_instance, state) =>
+          state.storage.sql.exec("SELECT COUNT(*) AS count FROM connection_link_requests").one(),
+      ),
+    ).resolves.toEqual({ count: 0 });
+  });
+
+  it("pins an unknown provider outcome without redispatching the same intent", async () => {
+    const authority = await ownerAuthority("mcp-unknown-connection-owner", [
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("secret timeout"));
+    const requestBody = JSON.stringify({
+      id: 143,
+      jsonrpc: "2.0",
+      method: "tools/call",
+      params: {
+        arguments: {
+          authConfigId: "ac_github_managed",
+          idempotencyKey: "mcp-unknown-link",
+        },
+        name: MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
+      },
+    });
+
+    for (const requestId of [143, 144]) {
+      const response = await handleAuthenticatedMcpRequest(
+        toolRequest(requestBody.replace(`"id":143`, `"id":${requestId}`)),
+        env,
+        { authority },
+      );
+      const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+      const result = createConnectionLinkResultSchema.parse(
+        JSON.parse(payload.content[0]?.text ?? ""),
+      );
+
+      expect(payload.isError).toBe(true);
+      expect(result).toEqual({
+        error: {
+          code: "connection_link_outcome_unknown",
+          message: "Connection link request denied.",
+        },
+        ok: false,
+      });
+      expect(JSON.stringify(result)).not.toContain("secret");
+    }
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("reports an unknown outcome when durable finalization fails after provider success", async () => {
+    const authority = await ownerAuthority("mcp-finalization-failure-owner", [
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const finalizationFailureEnv = {
+      COMPOSIO_API_KEY: "test-composio-api-key",
+      OWNER_CONTROL_PLANE: {
+        getByName: () => ({
+          completeConnectionLink: unavailableControlPlane,
+          createAgent: unavailableControlPlane,
+          getAgent: unavailableControlPlane,
+          getAgentRevision: unavailableControlPlane,
+          listAgentRevisions: unavailableControlPlane,
+          listAgents: unavailableControlPlane,
+          reserveConnectionLink: async () => ({
+            ok: true,
+            reservationId: "connection_link_00000000-0000-4000-8000-000000000000",
+            state: "dispatch",
+          }),
+          status: unavailableControlPlane,
+          updateAgent: unavailableControlPlane,
+        }),
+      },
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json(
+        {
+          connected_account_id: "ca_unfinalized",
+          expires_at: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+          experimental: {
+            account_type: "PRIVATE",
+          },
+          link_token: "ln_unfinalized",
+          redirect_url: "https://connect.composio.dev/link/ln_unfinalized",
+        },
+        { status: 201 },
+      ),
+    );
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 145,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              authConfigId: "ac_github_managed",
+              idempotencyKey: "mcp-finalization-failure",
+            },
+            name: MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
+          },
+        }),
+      ),
+      finalizationFailureEnv,
+      { authority },
+    );
+    const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+    const result = createConnectionLinkResultSchema.parse(
+      JSON.parse(payload.content[0]?.text ?? ""),
+    );
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(payload.isError).toBe(true);
+    expect(result).toEqual({
+      error: {
+        code: "connection_link_outcome_unknown",
+        message: "Connection link request denied.",
+      },
+      ok: false,
+    });
+    expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it("does not redispatch after completion audit persistence fails", async () => {
+    const authority = await ownerAuthority("mcp-completion-audit-failure-owner", [
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(`
+        CREATE TRIGGER reject_mcp_connection_completion_audit
+        BEFORE INSERT ON audit_events
+        WHEN NEW.action = 'connection.link_created'
+        BEGIN
+          SELECT RAISE(ABORT, 'forced MCP completion audit failure');
+        END
+      `);
+    });
+    const auditFailureEnv = {
+      COMPOSIO_API_KEY: "test-composio-api-key",
+      OWNER_CONTROL_PLANE: {
+        getByName: () => ({
+          completeConnectionLink: (authorityInput: unknown, input: unknown) =>
+            runInDurableObject(stub, (instance) =>
+              instance.completeConnectionLink(authorityInput, input),
+            ),
+          createAgent: unavailableControlPlane,
+          getAgent: unavailableControlPlane,
+          getAgentRevision: unavailableControlPlane,
+          listAgentRevisions: unavailableControlPlane,
+          listAgents: unavailableControlPlane,
+          reserveConnectionLink: (authorityInput: unknown, input: unknown) =>
+            runInDurableObject(stub, (instance) =>
+              instance.reserveConnectionLink(authorityInput, input),
+            ),
+          status: unavailableControlPlane,
+          updateAgent: unavailableControlPlane,
+        }),
+      },
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json(
+        {
+          connected_account_id: "ca_mcp_audit_failure",
+          expires_at: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+          experimental: {
+            account_type: "PRIVATE",
+          },
+          link_token: "ln_mcp_audit_failure",
+          redirect_url: "https://connect.composio.dev/link/ln_mcp_audit_failure",
+        },
+        { status: 201 },
+      ),
+    );
+    const requestBody = JSON.stringify({
+      id: 146,
+      jsonrpc: "2.0",
+      method: "tools/call",
+      params: {
+        arguments: {
+          authConfigId: "ac_github_managed",
+          idempotencyKey: "mcp-completion-audit-failure",
+        },
+        name: MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
+      },
+    });
+
+    for (const requestId of [146, 147]) {
+      const response = await handleAuthenticatedMcpRequest(
+        toolRequest(requestBody.replace(`"id":146`, `"id":${requestId}`)),
+        auditFailureEnv,
+        { authority },
+      );
+      const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+
+      expect(payload.isError).toBe(true);
+      expect(
+        createConnectionLinkResultSchema.parse(JSON.parse(payload.content[0]?.text ?? "")),
+      ).toEqual({
+        error: {
+          code: "connection_link_outcome_unknown",
+          message: "Connection link request denied.",
+        },
+        ok: false,
+      });
+    }
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    await expect(
+      runInDurableObject(stub, (_instance, state) => ({
+        audit: state.storage.sql
+          .exec("SELECT action FROM audit_events ORDER BY event_id")
+          .toArray(),
+        connections: state.storage.sql.exec("SELECT COUNT(*) AS count FROM connections").one(),
+        request: state.storage.sql
+          .exec(
+            `SELECT status, connection_id, redirect_url, expires_at, completed_at
+             FROM connection_link_requests
+             WHERE idempotency_key = 'mcp-completion-audit-failure'`,
+          )
+          .one(),
+      })),
+    ).resolves.toEqual({
+      audit: [{ action: "connection.link_reserved" }],
+      connections: { count: 0 },
+      request: {
+        completed_at: null,
+        connection_id: null,
+        expires_at: null,
+        redirect_url: null,
+        status: "pending",
+      },
     });
   });
 

@@ -78,6 +78,9 @@ surface.
 - Full Composio toolkit and exact-tool discovery through a fixed host, exact read scope, manual
   redirect handling, bounded time and response size, strict normalization, and
   provider-independent safe errors
+- Private Composio Connect Links through a fixed mutation endpoint, a separate write scope,
+  short-lived canonical hosted URLs, opaque owner and connection identifiers, bounded responses,
+  durable idempotency reservations, and no connected-account credential reads
 - Schema, provenance, size, and content validation
 - Idempotency, audit, budgets, rate limits, and a kill switch
 - Versioned migrations, backup, quarantined restore, and rollback procedures
@@ -106,15 +109,16 @@ before its client's lease expires remains valid for at most its independent 15-m
 
 Better Auth owns OAuth 2.1 mechanics, JWT/JWKS handling, GitHub login state, and secure session
 cookies. Crewhelm still owns the stricter authorization boundary: only HTTPS or exact loopback
-redirects, the explicit `control:read`, `control:write`, `agents:read`, `agents:write`, and
-`integrations:read` scopes, one exact resource, the configured GitHub numeric owner, a 24-hour
-public-client lease, no refresh grant, no upstream scope, and no persisted upstream token. The
-consent page distinguishes control-plane summary read, full Agent-definition read, Agent creation,
-Agent revision updates, and Composio catalog egress; each implementation independently enforces its
-required scope. Existing clients and tokens are never silently widened. Database hooks force every
-upstream token field to null before persistence. Revisit the provider configuration and threat
-model before adding broader mutation classes, multi-owner service, refresh tokens, additional
-identity providers, or longer token lifetimes.
+redirects, the explicit `control:read`, `control:write`, `agents:read`, `agents:write`,
+`connections:write`, and `integrations:read` scopes, one exact resource, the configured GitHub
+numeric owner, a 24-hour public-client lease, no refresh grant, no upstream scope, and no persisted
+upstream token. The consent page distinguishes control-plane summary read, full Agent-definition
+read, Agent creation, Agent revision updates, Composio catalog egress, and private connection-link
+creation; each implementation independently enforces its required scope. Existing clients and
+tokens are never silently widened. Database hooks force every upstream token field to null before
+persistence. Revisit the provider configuration and threat model before adding broader mutation
+classes, multi-owner service, refresh tokens, additional identity providers, or longer token
+lifetimes.
 
 The provider seeds the exact MCP resource in insert-only mode so public requests cannot turn
 configuration into repeated D1 writes. Scope and access-token lifetime changes require explicit
@@ -148,7 +152,8 @@ configuration cannot amplify MCP output. A transactional ceiling of 100 Agents p
 initial Agent storage; exact creation retries still succeed at the ceiling, while new creations
 fail without partial writes. Each Agent retains at most 1,000 immutable revisions; the final
 allowed update and its exact retries succeed, while a distinct update at the ceiling fails without
-partial writes. The registry has no delete, run, connection, or grant operation.
+partial writes. Agent registry methods have no delete, run, connection-grant, or execution
+operation; connection onboarding is a separate scope and state machine.
 
 ## Composio catalog authority and residual risk
 
@@ -172,6 +177,30 @@ contains the exact project key. Names and descriptions remain untrusted external
 structural validation. A provider outage, schema drift, malformed cursor, missing key, or reflected
 key fails closed as one catalog-unavailable result. Connection setup, exact tool classification,
 grants, and execution remain separate boundaries.
+
+## Composio connection-link authority and residual risk
+
+The `connections:write` MCP tool accepts any structurally valid Composio auth-config ID; it has no
+toolkit allowlist and grants no Agent or execution authority. The owner Durable Object first binds
+the normalized request digest to the authenticated MCP client and idempotency key, reserves a
+connection slot, and writes a minimal audit event. Only then does the adapter send the exact auth
+config and opaque owner key to Composio's fixed link endpoint. It explicitly requests a private
+account, rejects redirects, bounds time and bytes, and accepts only an unexpired canonical
+`https://connect.composio.dev/link/ln_…` URL whose token matches the provider response. Provider
+bodies, errors, headers, and project keys are never persisted or returned.
+
+Successful finalization atomically stores a Crewhelm-generated connection ID, Composio's opaque
+connected-account ID, the auth-config reference, the expiring hosted link, the idempotency result,
+and one audit event. An owner-local alarm normally scrubs an expired capability URL at its exact
+expiry while retaining the non-secret idempotency tombstone. The recovery-deadline alarm is
+scheduled before provider egress, so cleanup remains bounded by the 30-minute recovery window even
+if exact-expiry rescheduling fails. Crewhelm never calls credential-bearing connected-account list
+or get endpoints. Exact retries replay the same unexpired link; conflicting key reuse fails. A
+dispatched request with no validated response remains unknown and cannot dispatch again. Another
+key for the same auth config is blocked for the conservative recovery window, after which any
+unreceived hosted link has expired and a new intent may proceed. Link-attempt and connection
+ceilings bound owner-local storage. Completing consent remains a human action; activation checks,
+labels, grants, execution, disablement, and deletion require separate reviewed slices.
 
 ## Bootstrap and deployment authority
 

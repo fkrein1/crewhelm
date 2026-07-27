@@ -1,8 +1,12 @@
 import {
+  CONNECTIONS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
+  completeConnectionLinkInputSchema,
   controlPlaneStatusResultSchema,
   createAgentInputSchema,
   createAgentResultSchema,
+  createConnectionLinkInputSchema,
+  createConnectionLinkResultSchema,
   getAgentInputSchema,
   getAgentRevisionInputSchema,
   getAgentRevisionResultSchema,
@@ -18,11 +22,16 @@ import {
   listAgentsInputSchema,
   listAgentsResultSchema,
   ownerAuthoritySchema,
+  reserveConnectionLinkResultSchema,
   updateAgentInputSchema,
   updateAgentResultSchema,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
-import { createComposioCatalog } from "@crewhelm/composio";
+import {
+  createComposioCatalog,
+  createComposioConnectionLinks,
+  type ComposioConnectionLinks,
+} from "@crewhelm/composio";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import * as z from "zod";
@@ -35,10 +44,12 @@ interface McpEnvironment {
   OWNER_CONTROL_PLANE: {
     getByName(ownerKey: string): {
       createAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
+      completeConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;
       getAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
       getAgentRevision(authorityInput: unknown, input: unknown): Promise<unknown>;
       listAgentRevisions(authorityInput: unknown, input: unknown): Promise<unknown>;
       listAgents(authorityInput: unknown, input: unknown): Promise<unknown>;
+      reserveConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;
       status(authorityInput: unknown): Promise<unknown>;
       updateAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
     };
@@ -88,6 +99,7 @@ const NOT_FOUND_BODY = JSON.stringify({
 });
 
 export const MCP_CREATE_AGENT_TOOL_NAME = "crewhelm_create_agent";
+export const MCP_CREATE_CONNECTION_LINK_TOOL_NAME = "crewhelm_create_connection_link";
 export const MCP_GET_AGENT_TOOL_NAME = "crewhelm_get_agent";
 export const MCP_GET_AGENT_REVISION_TOOL_NAME = "crewhelm_get_agent_revision";
 export const MCP_INSPECT_INTEGRATION_TOOL_NAME = "crewhelm_inspect_integration_tool";
@@ -192,6 +204,111 @@ async function integrationReadToolResult<Result extends { ok: boolean }>(
   };
 }
 
+function connectionLinkMcpResult(result: unknown) {
+  const parsed = createConnectionLinkResultSchema.parse(result);
+
+  return {
+    content: [{ text: JSON.stringify(parsed), type: "text" as const }],
+    isError: !parsed.ok,
+  };
+}
+
+function unknownConnectionLinkMcpResult() {
+  return connectionLinkMcpResult({
+    error: {
+      code: "connection_link_outcome_unknown",
+      message: "Connection link request denied.",
+    },
+    ok: false,
+  });
+}
+
+async function connectionLinkToolResult(
+  authority: OwnerAuthority,
+  controlPlane: ReturnType<McpEnvironment["OWNER_CONTROL_PLANE"]["getByName"]>,
+  connectionLinks: ComposioConnectionLinks,
+  input: unknown,
+) {
+  if (!authority.scopes.includes(CONNECTIONS_WRITE_SCOPE)) {
+    return connectionLinkMcpResult({
+      error: {
+        code: "insufficient_scope",
+        message: "Connection link request denied.",
+      },
+      ok: false,
+    });
+  }
+
+  if (!connectionLinks.isAvailable()) {
+    return connectionLinkMcpResult({
+      error: {
+        code: "connection_link_unavailable",
+        message: "Connection link request denied.",
+      },
+      ok: false,
+    });
+  }
+
+  let reservation: z.infer<typeof reserveConnectionLinkResultSchema>;
+
+  try {
+    reservation = reserveConnectionLinkResultSchema.parse(
+      await controlPlane.reserveConnectionLink(authority, input),
+    );
+  } catch {
+    return {
+      content: [
+        {
+          text: CONTROL_PLANE_UNAVAILABLE_BODY,
+          type: "text" as const,
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  if (!reservation.ok) {
+    return connectionLinkMcpResult(reservation);
+  }
+
+  if (reservation.state === "replay") {
+    return connectionLinkMcpResult({
+      connectionLink: reservation.connectionLink,
+      created: false,
+      ok: true,
+    });
+  }
+
+  const request = createConnectionLinkInputSchema.parse(input);
+  let providerResult: Awaited<ReturnType<ComposioConnectionLinks["create"]>>;
+
+  try {
+    providerResult = await connectionLinks.create({
+      authConfigId: request.authConfigId,
+      userId: authority.ownerKey,
+    });
+  } catch {
+    return unknownConnectionLinkMcpResult();
+  }
+
+  if (!providerResult.ok) {
+    return connectionLinkMcpResult(providerResult);
+  }
+
+  try {
+    const completion = completeConnectionLinkInputSchema.parse({
+      ...providerResult.connectionLink,
+      reservationId: reservation.reservationId,
+    });
+
+    return connectionLinkMcpResult(
+      await controlPlane.completeConnectionLink(authority, completion),
+    );
+  } catch {
+    return unknownConnectionLinkMcpResult();
+  }
+}
+
 function createMcpServer(
   env: McpEnvironment,
   authority: OwnerAuthority,
@@ -200,6 +317,10 @@ function createMcpServer(
   const server = new McpServer(MCP_SERVER_INFO);
   const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
   const integrationCatalog = createComposioCatalog({
+    apiKey: env.COMPOSIO_API_KEY,
+    signal,
+  });
+  const connectionLinks = createComposioConnectionLinks({
     apiKey: env.COMPOSIO_API_KEY,
     signal,
   });
@@ -223,6 +344,23 @@ function createMcpServer(
         () => controlPlane.createAgent(authority, input),
         createAgentResultSchema,
       ),
+  );
+
+  server.registerTool(
+    MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+        readOnlyHint: false,
+      },
+      description:
+        "Create a short-lived, owner-scoped Composio Connect Link for any exact auth configuration without exposing provider credentials.",
+      inputSchema: createConnectionLinkInputSchema,
+      title: "Create integration connection link",
+    },
+    async (input) => connectionLinkToolResult(authority, controlPlane, connectionLinks, input),
   );
 
   server.registerTool(

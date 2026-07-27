@@ -75,8 +75,9 @@ The Worker exposes Streamable HTTP MCP at `/mcp`. OAuth clients dynamically regi
 `/api/auth/oauth2/register` and authenticate the owner through a GitHub OAuth App. Clients request
 `control:read` to inspect control-plane status and Agent summaries, `control:write` to create Agent
 definitions, `agents:read` to inspect full Agent definitions including instructions,
-`agents:write` to replace Agent configuration through immutable revisions, and `integrations:read`
-to search Composio's catalog and inspect exact tool schemas. Registrations default to all five
+`agents:write` to replace Agent configuration through immutable revisions, `connections:write` to
+create private hosted connection links, and `integrations:read` to search Composio's catalog and
+inspect exact tool schemas. Registrations default to all six
 scopes; every token keeps the exact approved scope set, so adding a capability never widens an
 issued token. The consent page discloses that integration searches send terms to Composio. The app
 callback URL must be:
@@ -89,7 +90,8 @@ The bootstrap CLI configures these Worker secrets so account-specific identity a
 configuration do not enter source control:
 
 - `BETTER_AUTH_SECRET` — generated as 48 random bytes for a new deployment
-- `COMPOSIO_API_KEY` — the project key used only for fixed-origin Composio catalog requests
+- `COMPOSIO_API_KEY` — the project key used only for fixed-origin Composio catalog and hosted
+  Connect Link requests
 - `GITHUB_CLIENT_ID`
 - `GITHUB_CLIENT_SECRET`
 - `OWNER_GITHUB_USER_ID` — the stable numeric GitHub user ID, not a login or email
@@ -122,6 +124,10 @@ The MCP surface exposes:
   current Composio integration, optionally within one integration; requires `integrations:read`.
 - `crewhelm_inspect_integration_tool` — inspect bounded input and output parameter schemas for one
   exact tool and toolkit version; requires `integrations:read`.
+- `crewhelm_create_connection_link` — create an idempotent private Composio Connect Link for any
+  exact authentication configuration; requires `connections:write`. Crewhelm stores opaque
+  connection, auth-configuration, and account references plus the short-lived hosted link, never
+  provider credentials.
 - `crewhelm_create_agent` — create an idempotent owner-scoped Agent revision with an explicit
   model, bounded instructions and execution limits, and no capability grants; requires
   `control:write`. Each owner can store at most 100 Agents.
@@ -130,7 +136,8 @@ Crewhelm's scopes and capability grants control authority, not catalog reach. Th
 preserves access to the underlying Agent framework rather than defining a permanently reduced
 facade, while deterministic policy decides which capabilities each Agent may use. Composio
 discovery covers its complete current non-deprecated catalog, including project toolkits, without
-a Crewhelm-maintained integration or tool allowlist.
+a Crewhelm-maintained integration or tool allowlist. Authentication completes on Composio's hosted
+page, so OAuth tokens and API keys do not pass through Crewhelm or the MCP client.
 
 Changing `OWNER_GITHUB_USER_ID` or the GitHub client secret blocks new authorization but does not
 revoke an already issued 15-minute access token. For emergency global revocation, create a fresh

@@ -2,6 +2,7 @@ import * as z from "zod";
 
 export const AGENTS_READ_SCOPE = "agents:read";
 export const AGENTS_WRITE_SCOPE = "agents:write";
+export const CONNECTIONS_WRITE_SCOPE = "connections:write";
 export const INTEGRATIONS_READ_SCOPE = "integrations:read";
 export const OWNER_READ_SCOPE = "control:read";
 export const OWNER_WRITE_SCOPE = "control:write";
@@ -10,10 +11,11 @@ export const OWNER_SCOPES = [
   OWNER_WRITE_SCOPE,
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  CONNECTIONS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
 ] as const;
 export const OWNER_DEFAULT_SCOPE_CLAIM =
-  "control:read control:write agents:read agents:write integrations:read";
+  "control:read control:write agents:read agents:write connections:write integrations:read";
 
 export const ownerScopeSchema = z.enum(OWNER_SCOPES);
 export const ownerScopesSchema = z
@@ -56,7 +58,7 @@ export const ownerAuthoritySchema = z.strictObject({
 });
 
 export const controlPlaneStatusSchema = z.strictObject({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
   status: z.literal("ready"),
 });
 

@@ -1,6 +1,7 @@
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  CONNECTIONS_WRITE_SCOPE,
   MAXIMUM_AGENTS_PER_OWNER,
   MAXIMUM_REVISIONS_PER_AGENT,
   OWNER_READ_SCOPE,
@@ -11,11 +12,12 @@ import {
   listAgentRevisionsResultSchema,
   ownerAuthoritySchema,
   type CreateAgentInput,
+  type CreateConnectionLinkInput,
   type OwnerAuthority,
   type OwnerScope,
   type UpdateAgentInput,
 } from "@crewhelm/contracts";
-import { evictDurableObject, runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
@@ -82,6 +84,26 @@ function fixedAgentFailure(code: string) {
   };
 }
 
+function connectionLinkInput(
+  idempotencyKey: string,
+  authConfigId = "ac_github_managed",
+): CreateConnectionLinkInput {
+  return {
+    authConfigId,
+    idempotencyKey,
+  };
+}
+
+function fixedConnectionLinkFailure(code: string) {
+  return {
+    error: {
+      code,
+      message: "Connection link request denied.",
+    },
+    ok: false,
+  };
+}
+
 describe("owner identity", () => {
   it("derives a deterministic opaque key without retaining provider identity", async () => {
     const identity = {
@@ -129,7 +151,7 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toEqual({
       ok: true,
       status: {
-        schemaVersion: 2,
+        schemaVersion: 3,
         status: "ready",
       },
     });
@@ -180,12 +202,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 2, status: "ready" },
+      status: { schemaVersion: 3, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 2, status: "ready" },
+      status: { schemaVersion: 3, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -199,7 +221,7 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 2 },
+      status: { schemaVersion: 3 },
     });
     await runInDurableObject(stub, (_instance, state) => {
       state.storage.transactionSync(() => {
@@ -221,6 +243,8 @@ describe("OwnerControlPlane", () => {
         state.storage.sql.exec("DROP TABLE agent_revisions");
         state.storage.sql.exec("DROP TABLE agents");
         state.storage.sql.exec("DROP TABLE audit_events");
+        state.storage.sql.exec("DROP TABLE connection_link_requests");
+        state.storage.sql.exec("DROP TABLE connections");
       });
     });
     await evictDurableObject(stub);
@@ -228,7 +252,7 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toEqual({
       ok: true,
       status: {
-        schemaVersion: 2,
+        schemaVersion: 3,
         status: "ready",
       },
     });
@@ -236,7 +260,7 @@ describe("OwnerControlPlane", () => {
       runInDurableObject(stub, (_instance, state) =>
         state.storage.sql.exec("SELECT owner_key, schema_version FROM control_plane").toArray(),
       ),
-    ).resolves.toEqual([{ owner_key: authority.ownerKey, schema_version: 2 }]);
+    ).resolves.toEqual([{ owner_key: authority.ownerKey, schema_version: 3 }]);
   });
 
   it("fails closed instead of guessing how to migrate an unknown schema", async () => {
@@ -246,19 +270,19 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toMatchObject({ ok: true });
     await runInDurableObject(stub, (_instance, state) => {
       state.storage.transactionSync(() => {
-        state.storage.sql.exec("ALTER TABLE control_plane RENAME TO control_plane_v2");
+        state.storage.sql.exec("ALTER TABLE control_plane RENAME TO control_plane_v3");
         state.storage.sql.exec(`
           CREATE TABLE control_plane (
             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
             owner_key TEXT NOT NULL UNIQUE,
-            schema_version INTEGER NOT NULL CHECK (schema_version = 3)
+            schema_version INTEGER NOT NULL CHECK (schema_version = 4)
           )
         `);
         state.storage.sql.exec(`
           INSERT INTO control_plane (singleton, owner_key, schema_version)
-          SELECT singleton, owner_key, 3 FROM control_plane_v2
+          SELECT singleton, owner_key, 4 FROM control_plane_v3
         `);
-        state.storage.sql.exec("DROP TABLE control_plane_v2");
+        state.storage.sql.exec("DROP TABLE control_plane_v3");
       });
     });
     await evictDurableObject(stub);
@@ -277,6 +301,442 @@ describe("OwnerControlPlane", () => {
       },
       ok: false,
     });
+  });
+
+  it("migrates version 2 Agent state and creates connection storage atomically", async () => {
+    const authority = await authorityFor("111", [OWNER_READ_SCOPE, OWNER_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("migration-v2-agent"));
+
+    if (!created.ok) {
+      throw new Error("Expected migration fixture Agent.");
+    }
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.transactionSync(() => {
+        state.storage.sql.exec("DROP TABLE connection_link_requests");
+        state.storage.sql.exec("DROP TABLE connections");
+        state.storage.sql.exec("ALTER TABLE control_plane RENAME TO control_plane_v3");
+        state.storage.sql.exec(`
+          CREATE TABLE control_plane (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            owner_key TEXT NOT NULL UNIQUE,
+            schema_version INTEGER NOT NULL CHECK (schema_version = 2)
+          )
+        `);
+        state.storage.sql.exec(`
+          INSERT INTO control_plane (singleton, owner_key, schema_version)
+          SELECT singleton, owner_key, 2 FROM control_plane_v3
+        `);
+        state.storage.sql.exec("DROP TABLE control_plane_v3");
+      });
+    });
+    await evictDurableObject(stub);
+
+    await expect(stub.status(authority)).resolves.toMatchObject({
+      ok: true,
+      status: { schemaVersion: 3 },
+    });
+    await expect(stub.listAgents(authority, {})).resolves.toMatchObject({
+      agents: [{ id: created.agent.id }],
+      ok: true,
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec(
+            `SELECT name
+             FROM sqlite_master
+             WHERE type = 'table' AND name IN ('connections', 'connection_link_requests')
+             ORDER BY name`,
+          )
+          .toArray(),
+      ),
+    ).resolves.toEqual([{ name: "connection_link_requests" }, { name: "connections" }]);
+  });
+
+  it("reserves, completes, replays, audits, and survives eviction without credentials", async () => {
+    const authority = await authorityFor("112", [CONNECTIONS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const input = connectionLinkInput("connection-link-112");
+    const reservation = await stub.reserveConnectionLink(authority, input);
+
+    expect(reservation).toMatchObject({ ok: true, state: "dispatch" });
+    if (!reservation.ok || reservation.state !== "dispatch") {
+      throw new Error("Expected connection-link dispatch reservation.");
+    }
+
+    const completion = {
+      expiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+      providerConnectionId: "ca_owner_112",
+      reservationId: reservation.reservationId,
+      url: "https://connect.composio.dev/link/ln_owner_112",
+    };
+    const created = await stub.completeConnectionLink(authority, completion);
+
+    expect(created).toMatchObject({
+      connectionLink: {
+        connectionId: expect.stringMatching(/^connection_/),
+        expiresAt: completion.expiresAt,
+        url: completion.url,
+      },
+      created: true,
+      ok: true,
+    });
+    await expect(stub.completeConnectionLink(authority, completion)).resolves.toMatchObject({
+      connectionLink: created.ok ? created.connectionLink : {},
+      created: false,
+      ok: true,
+    });
+    await expect(stub.reserveConnectionLink(authority, input)).resolves.toMatchObject({
+      connectionLink: created.ok ? created.connectionLink : {},
+      ok: true,
+      state: "replay",
+    });
+
+    const stored = await runInDurableObject(stub, (_instance, state) => ({
+      audit: state.storage.sql
+        .exec("SELECT action, subject_id FROM audit_events ORDER BY event_id")
+        .toArray(),
+      connections: state.storage.sql
+        .exec(
+          `SELECT connection_id, provider, provider_connection_id, auth_config_id, status
+           FROM connections`,
+        )
+        .toArray(),
+      requests: state.storage.sql
+        .exec(
+          `SELECT client_id, idempotency_key, request_digest, auth_config_id, status
+           FROM connection_link_requests`,
+        )
+        .toArray(),
+    }));
+    const serialized = JSON.stringify(stored);
+
+    expect(stored.audit).toEqual([
+      {
+        action: "connection.link_reserved",
+        subject_id: reservation.reservationId,
+      },
+      {
+        action: "connection.link_created",
+        subject_id: created.ok ? created.connectionLink.connectionId : "",
+      },
+    ]);
+    expect(stored.connections).toEqual([
+      {
+        auth_config_id: input.authConfigId,
+        connection_id: created.ok ? created.connectionLink.connectionId : "",
+        provider: "composio",
+        provider_connection_id: completion.providerConnectionId,
+        status: "initiated",
+      },
+    ]);
+    expect(stored.requests).toMatchObject([
+      {
+        auth_config_id: input.authConfigId,
+        client_id: authority.clientId,
+        idempotency_key: input.idempotencyKey,
+        request_digest: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+        status: "completed",
+      },
+    ]);
+    expect(serialized).not.toContain("access_token");
+    expect(serialized).not.toContain("api_key");
+
+    await evictDurableObject(stub);
+    await expect(stub.reserveConnectionLink(authority, input)).resolves.toMatchObject({
+      connectionLink: created.ok ? created.connectionLink : {},
+      ok: true,
+      state: "replay",
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE connection_link_requests SET expires_at = 1 WHERE idempotency_key = ?",
+        input.idempotencyKey,
+      );
+    });
+    await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec(
+            `SELECT status, redirect_url
+             FROM connection_link_requests
+             WHERE idempotency_key = ?`,
+            input.idempotencyKey,
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({ redirect_url: null, status: "expired" });
+    await expect(stub.completeConnectionLink(authority, completion)).resolves.toEqual(
+      fixedConnectionLinkFailure("connection_link_expired"),
+    );
+  });
+
+  it("rolls back a connection-link reservation when audit persistence fails", async () => {
+    const authority = await authorityFor("120", [CONNECTIONS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(`
+        CREATE TRIGGER reject_connection_reservation_audit
+        BEFORE INSERT ON audit_events
+        WHEN NEW.action = 'connection.link_reserved'
+        BEGIN
+          SELECT RAISE(ABORT, 'forced reservation audit failure');
+        END
+      `);
+    });
+
+    await expect(
+      runInDurableObject(stub, (instance) =>
+        instance.reserveConnectionLink(authority, connectionLinkInput("rollback-reservation-120")),
+      ),
+    ).rejects.toThrow("forced reservation audit failure");
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec(
+            `SELECT
+               (SELECT COUNT(*) FROM connection_link_requests) AS requests,
+               (SELECT COUNT(*) FROM audit_events) AS audit_events`,
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({ audit_events: 0, requests: 0 });
+  });
+
+  it("rolls back a connection-link completion when audit persistence fails", async () => {
+    const authority = await authorityFor("121", [CONNECTIONS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const reservation = await stub.reserveConnectionLink(
+      authority,
+      connectionLinkInput("rollback-completion-121"),
+    );
+
+    if (!reservation.ok || reservation.state !== "dispatch") {
+      throw new Error("Expected connection-link dispatch reservation.");
+    }
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(`
+        CREATE TRIGGER reject_connection_completion_audit
+        BEFORE INSERT ON audit_events
+        WHEN NEW.action = 'connection.link_created'
+        BEGIN
+          SELECT RAISE(ABORT, 'forced completion audit failure');
+        END
+      `);
+    });
+    await expect(
+      runInDurableObject(stub, (instance) =>
+        instance.completeConnectionLink(authority, {
+          expiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+          providerConnectionId: "ca_rollback_121",
+          reservationId: reservation.reservationId,
+          url: "https://connect.composio.dev/link/ln_rollback_121",
+        }),
+      ),
+    ).rejects.toThrow("forced completion audit failure");
+    await expect(
+      runInDurableObject(stub, (_instance, state) => ({
+        audit: state.storage.sql
+          .exec("SELECT action FROM audit_events ORDER BY event_id")
+          .toArray(),
+        connections: state.storage.sql.exec("SELECT COUNT(*) AS count FROM connections").one(),
+        request: state.storage.sql
+          .exec(
+            `SELECT status, connection_id, redirect_url, expires_at, completed_at
+             FROM connection_link_requests
+             WHERE reservation_id = ?`,
+            reservation.reservationId,
+          )
+          .one(),
+      })),
+    ).resolves.toEqual({
+      audit: [{ action: "connection.link_reserved" }],
+      connections: { count: 0 },
+      request: {
+        completed_at: null,
+        connection_id: null,
+        expires_at: null,
+        redirect_url: null,
+        status: "pending",
+      },
+    });
+  });
+
+  it("serializes connection-link intent and scopes idempotency to the MCP client", async () => {
+    const first = await authorityFor(
+      "113",
+      [CONNECTIONS_WRITE_SCOPE],
+      "https://first-client.example/mcp.json",
+    );
+    const second = await authorityFor(
+      "113",
+      [CONNECTIONS_WRITE_SCOPE],
+      "https://second-client.example/mcp.json",
+    );
+    const stub = env.OWNER_CONTROL_PLANE.getByName(first.ownerKey);
+    const [firstResult, concurrentResult] = await Promise.all([
+      stub.reserveConnectionLink(first, connectionLinkInput("first-key")),
+      stub.reserveConnectionLink(first, connectionLinkInput("concurrent-key")),
+    ]);
+
+    expect([firstResult, concurrentResult].filter((result) => result.ok)).toHaveLength(1);
+    expect([firstResult, concurrentResult].filter((result) => !result.ok)).toEqual([
+      fixedConnectionLinkFailure("connection_link_in_progress"),
+    ]);
+    await expect(
+      stub.reserveConnectionLink(first, connectionLinkInput("first-key", "ac_linear_managed")),
+    ).resolves.toEqual(fixedConnectionLinkFailure("idempotency_conflict"));
+    await expect(
+      stub.reserveConnectionLink(second, connectionLinkInput("first-key")),
+    ).resolves.toEqual(fixedConnectionLinkFailure("connection_link_in_progress"));
+  });
+
+  it("holds an unknown connection-link outcome until its bounded recovery window passes", async () => {
+    const authority = await authorityFor("114", [CONNECTIONS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const firstInput = connectionLinkInput("unknown-114");
+    const reservation = await stub.reserveConnectionLink(authority, firstInput);
+
+    expect(reservation).toMatchObject({ ok: true, state: "dispatch" });
+    await expect(stub.reserveConnectionLink(authority, firstInput)).resolves.toEqual(
+      fixedConnectionLinkFailure("connection_link_outcome_unknown"),
+    );
+    await expect(
+      stub.reserveConnectionLink(authority, connectionLinkInput("blocked-114")),
+    ).resolves.toEqual(fixedConnectionLinkFailure("connection_link_in_progress"));
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE connection_link_requests SET recover_after = 1 WHERE idempotency_key = ?",
+        firstInput.idempotencyKey,
+      );
+    });
+
+    await expect(
+      stub.reserveConnectionLink(authority, connectionLinkInput("recovered-114")),
+    ).resolves.toMatchObject({ ok: true, state: "dispatch" });
+    await expect(stub.reserveConnectionLink(authority, firstInput)).resolves.toEqual(
+      fixedConnectionLinkFailure("connection_link_outcome_unknown"),
+    );
+  });
+
+  it("rejects malformed, unauthorized, cross-owner, and late connection completions safely", async () => {
+    const authority = await authorityFor("115", [CONNECTIONS_WRITE_SCOPE]);
+    const other = await authorityFor("116", [CONNECTIONS_WRITE_SCOPE]);
+    const insufficient = await authorityFor("115", [OWNER_READ_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+
+    await expect(
+      stub.reserveConnectionLink(insufficient, connectionLinkInput("denied-115")),
+    ).resolves.toEqual(fixedConnectionLinkFailure("insufficient_scope"));
+    await expect(
+      stub.reserveConnectionLink(other, connectionLinkInput("cross-owner-115")),
+    ).resolves.toEqual(fixedConnectionLinkFailure("owner_mismatch"));
+    await expect(
+      stub.reserveConnectionLink(authority, {
+        ...connectionLinkInput("hostile-115"),
+        credential: "must-not-reflect",
+      }),
+    ).resolves.toEqual(fixedConnectionLinkFailure("invalid_request"));
+
+    const reservation = await stub.reserveConnectionLink(
+      authority,
+      connectionLinkInput("late-115"),
+    );
+    if (!reservation.ok || reservation.state !== "dispatch") {
+      throw new Error("Expected late-completion reservation.");
+    }
+    await expect(
+      stub.completeConnectionLink(authority, {
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        providerConnectionId: "ca_substituted_115",
+        reservationId: reservation.reservationId,
+        url: "https://attacker.example/link/ln_substituted_115",
+      }),
+    ).resolves.toEqual(fixedConnectionLinkFailure("invalid_request"));
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE connection_link_requests SET recover_after = 1 WHERE reservation_id = ?",
+        reservation.reservationId,
+      );
+    });
+    await expect(
+      stub.completeConnectionLink(authority, {
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        providerConnectionId: "ca_late_115",
+        reservationId: reservation.reservationId,
+        url: "https://connect.composio.dev/link/ln_late_115",
+      }),
+    ).resolves.toEqual(fixedConnectionLinkFailure("connection_link_outcome_unknown"));
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql.exec("SELECT COUNT(*) AS count FROM connections").one(),
+      ),
+    ).resolves.toEqual({ count: 0 });
+  });
+
+  it("bounds owner-local connection and link-intent storage", async () => {
+    const connectionAuthority = await authorityFor("117", [CONNECTIONS_WRITE_SCOPE]);
+    const connectionStub = env.OWNER_CONTROL_PLANE.getByName(connectionAuthority.ownerKey);
+
+    await runInDurableObject(connectionStub, (_instance, state) => {
+      state.storage.sql.exec(`
+        WITH RECURSIVE sequence(value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT value + 1 FROM sequence WHERE value < 1000
+        )
+        INSERT INTO connections
+          (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
+        SELECT
+          'connection_fixture_' || value,
+          'composio',
+          'ca_fixture_' || value,
+          'ac_fixture',
+          'initiated',
+          value
+        FROM sequence
+      `);
+    });
+    await expect(
+      connectionStub.reserveConnectionLink(
+        connectionAuthority,
+        connectionLinkInput("connection-cap-117"),
+      ),
+    ).resolves.toEqual(fixedConnectionLinkFailure("connection_limit_exceeded"));
+
+    const requestAuthority = await authorityFor("118", [CONNECTIONS_WRITE_SCOPE]);
+    const requestStub = env.OWNER_CONTROL_PLANE.getByName(requestAuthority.ownerKey);
+
+    await runInDurableObject(requestStub, (_instance, state) => {
+      state.storage.sql.exec(`
+        WITH RECURSIVE sequence(value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT value + 1 FROM sequence WHERE value < 5000
+        )
+        INSERT INTO connection_link_requests
+          (client_id, idempotency_key, request_digest, auth_config_id, reservation_id,
+           status, recover_after, created_at)
+        SELECT
+          'fixture-client',
+          'fixture-key-' || value,
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          'ac_fixture',
+          'connection_link_fixture_' || value,
+          'abandoned',
+          1,
+          value
+        FROM sequence
+      `);
+    });
+    await expect(
+      requestStub.reserveConnectionLink(requestAuthority, connectionLinkInput("request-cap-118")),
+    ).resolves.toEqual(fixedConnectionLinkFailure("connection_link_request_limit_exceeded"));
   });
 
   it("keeps distinct owner objects independent", async () => {
@@ -369,6 +829,55 @@ describe("OwnerControlPlane", () => {
         subject_id: created.agent.id,
       },
     ]);
+  });
+
+  it("migrates an instantiated but unauthorized empty version 2 object", async () => {
+    const authority = await authorityFor("119", [OWNER_READ_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+
+    await expect(stub.status(authority)).resolves.toMatchObject({ ok: true });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.transactionSync(() => {
+        state.storage.sql.exec("DROP TABLE connection_link_requests");
+        state.storage.sql.exec("DROP TABLE connections");
+        state.storage.sql.exec("ALTER TABLE control_plane RENAME TO control_plane_v3");
+        state.storage.sql.exec(`
+          CREATE TABLE control_plane (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            owner_key TEXT NOT NULL UNIQUE,
+            schema_version INTEGER NOT NULL CHECK (schema_version = 2)
+          )
+        `);
+        state.storage.sql.exec("DROP TABLE control_plane_v3");
+      });
+    });
+    await evictDurableObject(stub);
+
+    await expect(stub.status(authority)).resolves.toEqual({
+      ok: true,
+      status: {
+        schemaVersion: 3,
+        status: "ready",
+      },
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) => ({
+        controlPlane: state.storage.sql
+          .exec("SELECT owner_key, schema_version FROM control_plane")
+          .toArray(),
+        connectionTables: state.storage.sql
+          .exec(
+            `SELECT name
+             FROM sqlite_master
+             WHERE type = 'table' AND name IN ('connections', 'connection_link_requests')
+             ORDER BY name`,
+          )
+          .toArray(),
+      })),
+    ).resolves.toEqual({
+      connectionTables: [{ name: "connection_link_requests" }, { name: "connections" }],
+      controlPlane: [{ owner_key: authority.ownerKey, schema_version: 3 }],
+    });
   });
 
   it("denies malformed, missing, insufficient-scope, and cross-owner Agent reads safely", async () => {
@@ -997,7 +1506,7 @@ describe("OwnerControlPlane", () => {
     });
     await expect(stub.status({ ...authority, scopes: [OWNER_READ_SCOPE] })).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 2 },
+      status: { schemaVersion: 3 },
     });
   });
 
