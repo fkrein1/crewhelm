@@ -8,8 +8,10 @@ import {
   OWNER_WRITE_SCOPE,
   createAgentResultSchema,
   controlPlaneStatusResultSchema,
+  getAgentRevisionResultSchema,
   getAgentResultSchema,
   integrationCatalogSearchResultSchema,
+  listAgentRevisionsResultSchema,
   listAgentsResultSchema,
   ownerKeySchema,
   ownerScopeClaimSchema,
@@ -24,6 +26,8 @@ import { handleWorkerRequest } from "../src/index.js";
 import {
   MCP_CREATE_AGENT_TOOL_NAME,
   MCP_GET_AGENT_TOOL_NAME,
+  MCP_GET_AGENT_REVISION_TOOL_NAME,
+  MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
   MCP_LIST_AGENTS_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_STATUS_TOOL_NAME,
@@ -706,6 +710,41 @@ describe("public OAuth to MCP integration", () => {
       },
       ok: true,
       updated: true,
+    });
+    const revisionsResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
+      { id: createdAgent.agent.id },
+    );
+    const revisionsResult = toolResultSchema.parse(await revisionsResponse.json()).result;
+    const revisionsText = revisionsResult.content[0].text;
+
+    expect(revisionsResult.isError).toBe(false);
+    expect(listAgentRevisionsResultSchema.parse(JSON.parse(revisionsText))).toMatchObject({
+      nextCursor: null,
+      ok: true,
+      revisions: [
+        { name: "Authenticated work coordinator", revision: 2 },
+        { name: "Authenticated work queue", revision: 1 },
+      ],
+    });
+    expect(revisionsText).not.toContain(createdAgent.agent.instructions);
+    const revisionResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_GET_AGENT_REVISION_TOOL_NAME,
+      { id: createdAgent.agent.id, revision: 1 },
+    );
+    const revisionResult = toolResultSchema.parse(await revisionResponse.json()).result;
+
+    expect(revisionResult.isError).toBe(false);
+    expect(getAgentRevisionResultSchema.parse(JSON.parse(revisionResult.content[0].text))).toEqual({
+      agent: {
+        ...createdAgent.agent,
+        revisedAt: createdAgent.agent.createdAt,
+      },
+      ok: true,
     });
     const otherRegistration = registrationSchema.parse(
       await (
