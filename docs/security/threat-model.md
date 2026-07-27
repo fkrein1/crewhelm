@@ -27,7 +27,7 @@ surface.
 2. Crewhelm authorization routes to GitHub's fixed OAuth and user API endpoints
 3. OAuth ingress to the Cloudflare D1 database holding protocol state and signing keys
 4. Authenticated MCP ingress to the owner-named private control plane
-5. Authenticated MCP ingress to Composio's fixed catalog endpoint
+5. Authenticated MCP ingress to Composio's fixed toolkit and tool catalog endpoints
 6. Control plane to agent runtime and workflows
 7. Runtime to Composio and external toolkits
 8. Repository recipe to installed, owner-approved configuration
@@ -75,8 +75,9 @@ surface.
 - Default-empty tool inventory, capability IDs, and authority attenuation for child agents
 - Pinned Composio execution with explicit accounts; Sessions, raw proxy, and model connection
   management stay disabled
-- Full Composio catalog discovery through a fixed host, exact read scope, manual redirect handling,
-  bounded time and response size, strict normalization, and provider-independent safe errors
+- Full Composio toolkit and exact-tool discovery through a fixed host, exact read scope, manual
+  redirect handling, bounded time and response size, strict normalization, and
+  provider-independent safe errors
 - Schema, provenance, size, and content validation
 - Idempotency, audit, budgets, rate limits, and a kill switch
 - Versioned migrations, backup, quarantined restore, and rollback procedures
@@ -139,15 +140,18 @@ connection, or grant operation.
 
 ## Composio catalog authority and residual risk
 
-The `integrations:read` MCP catalog tool sends a bounded search and opaque pagination cursor only
-to Composio's fixed toolkit endpoint. `control:read` alone grants no provider egress. Crewhelm
-always requests `managed_by=all`, excludes deprecated toolkits, and does not maintain a toolkit
-allowlist, so newly available Composio and project integrations remain discoverable without a
-Crewhelm code change. Catalog discovery grants no connection or execution authority.
+The `integrations:read` MCP catalog tools send bounded searches, optional exact integration
+filters, and opaque pagination cursors only to Composio's fixed toolkit and tool endpoints.
+`control:read` alone grants no provider egress. Crewhelm always requests `managed_by=all` for
+toolkits, resolves current tool definitions explicitly, excludes deprecated entries, and does not
+maintain a toolkit or tool allowlist. Newly available Composio and project integrations and their
+exact tools therefore remain discoverable without a Crewhelm code change. Catalog discovery
+grants no connection or execution authority.
 
 The adapter sends the project key only in the fixed request header, rejects redirects, propagates
 request cancellation, limits latency and response bytes, validates provider structure, and returns
-a small normalized summary.
+small normalized summaries. Tool input and output schemas are deliberately not returned by search;
+exact schema inspection belongs to the later grant-snapshot boundary.
 Provider bodies, errors, request IDs, URLs, and the API key never enter MCP failures, logs, D1, or
 Durable Objects. A successful provider payload is also rejected if any normalized output string
 contains the exact project key. Names and descriptions remain untrusted external text even after

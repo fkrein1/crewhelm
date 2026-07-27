@@ -5,10 +5,11 @@ import {
   createAgentResultSchema,
   integrationCatalogSearchInputSchema,
   integrationCatalogSearchResultSchema,
+  integrationToolSearchInputSchema,
+  integrationToolSearchResultSchema,
   listAgentsInputSchema,
   listAgentsResultSchema,
   ownerAuthoritySchema,
-  type IntegrationCatalogSearchResult,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
 import { createComposioCatalog } from "@crewhelm/composio";
@@ -75,6 +76,7 @@ const NOT_FOUND_BODY = JSON.stringify({
 export const MCP_CREATE_AGENT_TOOL_NAME = "crewhelm_create_agent";
 export const MCP_LIST_AGENTS_TOOL_NAME = "crewhelm_list_agents";
 export const MCP_SEARCH_INTEGRATIONS_TOOL_NAME = "crewhelm_search_integrations";
+export const MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME = "crewhelm_search_integration_tools";
 export const MCP_STATUS_TOOL_NAME = "crewhelm_status";
 
 export const mcpAuthPropsSchema = z.strictObject({
@@ -131,6 +133,34 @@ async function controlPlaneToolResult<Result extends { ok: boolean }>(
       isError: true,
     };
   }
+
+  return {
+    content: [
+      {
+        text: JSON.stringify(result),
+        type: "text" as const,
+      },
+    ],
+    isError: !result.ok,
+  };
+}
+
+async function integrationReadToolResult<Result extends { ok: boolean }>(
+  authority: OwnerAuthority,
+  operation: () => Promise<unknown>,
+  schema: z.ZodType<Result>,
+) {
+  const result = schema.parse(
+    authority.scopes.includes(INTEGRATIONS_READ_SCOPE)
+      ? await operation()
+      : {
+          error: {
+            code: "insufficient_scope",
+            message: "Integration catalog request denied.",
+          },
+          ok: false,
+        },
+  );
 
   return {
     content: [
@@ -211,29 +241,34 @@ function createMcpServer(
       inputSchema: integrationCatalogSearchInputSchema,
       title: "Search integrations",
     },
-    async (input) => {
-      const result: IntegrationCatalogSearchResult = authority.scopes.includes(
-        INTEGRATIONS_READ_SCOPE,
-      )
-        ? await integrationCatalog.search(input)
-        : {
-            error: {
-              code: "insufficient_scope",
-              message: "Integration catalog request denied.",
-            },
-            ok: false,
-          };
+    async (input) =>
+      integrationReadToolResult(
+        authority,
+        () => integrationCatalog.search(input),
+        integrationCatalogSearchResultSchema,
+      ),
+  );
 
-      return {
-        content: [
-          {
-            text: JSON.stringify(integrationCatalogSearchResultSchema.parse(result)),
-            type: "text" as const,
-          },
-        ],
-        isError: !result.ok,
-      };
+  server.registerTool(
+    MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+        readOnlyHint: true,
+      },
+      description:
+        "Search exact tools and resolved versions across the complete Composio integration catalog.",
+      inputSchema: integrationToolSearchInputSchema,
+      title: "Search integration tools",
     },
+    async (input) =>
+      integrationReadToolResult(
+        authority,
+        () => integrationCatalog.searchTools(input),
+        integrationToolSearchResultSchema,
+      ),
   );
 
   server.registerTool(
