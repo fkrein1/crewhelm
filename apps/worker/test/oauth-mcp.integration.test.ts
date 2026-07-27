@@ -2,11 +2,13 @@ import { createExecutionContext, env, runInDurableObject } from "cloudflare:test
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  CONNECTIONS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
   OWNER_DEFAULT_SCOPE_CLAIM,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   createAgentResultSchema,
+  createConnectionLinkResultSchema,
   controlPlaneStatusResultSchema,
   getAgentRevisionResultSchema,
   getAgentResultSchema,
@@ -25,6 +27,7 @@ import { exchangeGithubAuthorizationCode } from "../src/auth.js";
 import { handleWorkerRequest } from "../src/index.js";
 import {
   MCP_CREATE_AGENT_TOOL_NAME,
+  MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
   MCP_GET_AGENT_TOOL_NAME,
   MCP_GET_AGENT_REVISION_TOOL_NAME,
   MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
@@ -40,7 +43,7 @@ const origin = "https://crewhelm.test";
 const redirectUri = "https://client.example/oauth/callback";
 const ownerGithubUserId = "123456";
 const githubToken = "transient-github-token-must-not-be-stored";
-const reversedOwnerScopeClaim = `${INTEGRATIONS_READ_SCOPE} ${AGENTS_WRITE_SCOPE} ${AGENTS_READ_SCOPE} ${OWNER_WRITE_SCOPE} ${OWNER_READ_SCOPE}`;
+const reversedOwnerScopeClaim = `${INTEGRATIONS_READ_SCOPE} ${CONNECTIONS_WRITE_SCOPE} ${AGENTS_WRITE_SCOPE} ${AGENTS_READ_SCOPE} ${OWNER_WRITE_SCOPE} ${OWNER_READ_SCOPE}`;
 const registrationSchema = z.looseObject({
   client_id: z.string().min(1),
   token_endpoint_auth_method: z.literal("none"),
@@ -505,6 +508,9 @@ describe("public OAuth to MCP integration", () => {
     expect(consentPage).toContain(
       "Search the Composio integration catalog and inspect exact tool schemas. Search terms are sent to Composio.",
     );
+    expect(consentPage).toContain(
+      "Create private, short-lived Composio Connect Links. The selected auth configuration and an opaque owner key are sent to Composio; provider credentials stay with Composio.",
+    );
     const consentResponse = await request(workerEnv, "/oauth/consent", {
       body: new URLSearchParams({
         decision: "approve",
@@ -631,7 +637,7 @@ describe("public OAuth to MCP integration", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(toolResult.content[0].text))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 2,
+        schemaVersion: 3,
         status: "ready",
       },
     });
@@ -819,6 +825,7 @@ describe("public OAuth to MCP integration", () => {
     expect(consentPage).not.toContain(
       "Search the Composio integration catalog and inspect exact tool schemas. Search terms are sent to Composio.",
     );
+    expect(consentPage).not.toContain("Create private, short-lived Composio Connect Links.");
     const ownerKey = await deriveOwnerKey({
       issuer: "https://github.com",
       subject: workerEnv.OWNER_GITHUB_USER_ID,
@@ -1193,6 +1200,91 @@ describe("public OAuth to MCP integration", () => {
         code: "insufficient_scope",
         message: "Control-plane request denied.",
       },
+      ok: false,
+    });
+  });
+
+  it("grants private connection-link creation without widening catalog or control reads", async () => {
+    const workerEnv = integrationEnv(allowRateLimit(), "123460");
+    const { consentPage, token } = await completeOAuthFlow(workerEnv, CONNECTIONS_WRITE_SCOPE);
+
+    expect(token.scope).toBe(CONNECTIONS_WRITE_SCOPE);
+    expect(consentPage).toContain(
+      "Create private, short-lived Composio Connect Links. The selected auth configuration and an opaque owner key are sent to Composio; provider credentials stay with Composio.",
+    );
+    expect(consentPage).not.toContain("View control-plane status and Agent summaries.");
+    expect(consentPage).not.toContain(
+      "Search the Composio integration catalog and inspect exact tool schemas.",
+    );
+
+    vi.restoreAllMocks();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1_000).toISOString();
+    const composioFetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json(
+        {
+          connected_account_id: "ca_oauth_connection",
+          expires_at: expiresAt,
+          experimental: {
+            account_type: "PRIVATE",
+          },
+          link_token: "ln_oauth_connection",
+          redirect_url: "https://connect.composio.dev/link/ln_oauth_connection",
+        },
+        { status: 201 },
+      ),
+    );
+    const connectionResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
+      {
+        authConfigId: "ac_linear_managed",
+        idempotencyKey: "oauth-connection-link",
+      },
+    );
+    const connectionResult = toolResultSchema.parse(await connectionResponse.json()).result;
+    const connection = createConnectionLinkResultSchema.parse(
+      JSON.parse(connectionResult.content[0].text),
+    );
+
+    expect(composioFetch).toHaveBeenCalledOnce();
+    expect(connectionResult.isError).toBe(false);
+    expect(connection).toMatchObject({
+      connectionLink: {
+        connectionId: expect.stringMatching(/^connection_/),
+        expiresAt,
+        url: "https://connect.composio.dev/link/ln_oauth_connection",
+      },
+      created: true,
+      ok: true,
+    });
+    expect(JSON.stringify(connection)).not.toContain(workerEnv.COMPOSIO_API_KEY);
+
+    const catalogResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
+      { query: "linear" },
+    );
+    const catalogResult = toolResultSchema.parse(await catalogResponse.json()).result;
+    expect(catalogResult.isError).toBe(true);
+    expect(
+      integrationCatalogSearchResultSchema.parse(JSON.parse(catalogResult.content[0].text)),
+    ).toEqual({
+      error: {
+        code: "insufficient_scope",
+        message: "Integration catalog request denied.",
+      },
+      ok: false,
+    });
+
+    const statusResponse = await callMcp(workerEnv, token.access_token);
+    const statusResult = toolResultSchema.parse(await statusResponse.json()).result;
+    expect(statusResult.isError).toBe(true);
+    expect(
+      controlPlaneStatusResultSchema.parse(JSON.parse(statusResult.content[0].text)),
+    ).toMatchObject({
+      error: { code: "insufficient_scope" },
       ok: false,
     });
   });

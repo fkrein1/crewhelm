@@ -1,13 +1,18 @@
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  CONNECTIONS_WRITE_SCOPE,
+  CONNECTION_LINK_UNKNOWN_RECOVERY_MS,
   agentRevisionSchema,
   agentRevisionSummarySchema,
   agentSchema,
   agentSummarySchema,
   controlPlaneStatusResultSchema,
+  completeConnectionLinkInputSchema,
   createAgentInputSchema,
   createAgentResultSchema,
+  createConnectionLinkInputSchema,
+  createConnectionLinkResultSchema,
   getAgentInputSchema,
   getAgentRevisionInputSchema,
   getAgentRevisionResultSchema,
@@ -16,11 +21,14 @@ import {
   listAgentRevisionsResultSchema,
   listAgentsInputSchema,
   listAgentsResultSchema,
+  MAXIMUM_CONNECTION_LINK_REQUESTS_PER_OWNER,
+  MAXIMUM_CONNECTIONS_PER_OWNER,
   MAXIMUM_AGENTS_PER_OWNER,
   MAXIMUM_REVISIONS_PER_AGENT,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   ownerAuthoritySchema,
+  reserveConnectionLinkResultSchema,
   updateAgentInputSchema,
   updateAgentResultSchema,
   type Agent,
@@ -30,18 +38,22 @@ import {
   type ControlPlaneStatusResult,
   type CreateAgentInput,
   type CreateAgentResult,
+  type CreateConnectionLinkInput,
+  type CreateConnectionLinkResult,
   type GetAgentRevisionResult,
   type GetAgentResult,
   type ListAgentRevisionsResult,
   type ListAgentsResult,
   type OwnerAuthority,
   type OwnerScope,
+  type ReserveConnectionLinkResult,
   type UpdateAgentInput,
   type UpdateAgentResult,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
 
-const CONTROL_PLANE_SCHEMA_VERSION = 2;
+const CONTROL_PLANE_SCHEMA_VERSION = 3;
+const COMPOSIO_CONNECT_ORIGIN = "https://connect.composio.dev";
 type AuthorityErrorCode =
   | "incompatible_schema"
   | "insufficient_scope"
@@ -57,6 +69,17 @@ type AgentRequestErrorCode =
   | "no_changes"
   | "revision_conflict";
 type AgentRequestFailure = Extract<CreateAgentResult, { ok: false }>;
+type ConnectionLinkRequestErrorCode =
+  | AuthorityErrorCode
+  | "connection_limit_exceeded"
+  | "connection_link_expired"
+  | "connection_link_in_progress"
+  | "connection_link_outcome_unknown"
+  | "connection_link_request_limit_exceeded"
+  | "connection_link_unavailable"
+  | "idempotency_conflict"
+  | "invalid_request";
+type ConnectionLinkRequestFailure = Extract<CreateConnectionLinkResult, { ok: false }>;
 type AuthorityResult =
   | { authority: OwnerAuthority; ok: true }
   | { code: AuthorityErrorCode; ok: false };
@@ -111,6 +134,25 @@ async function digestAgentUpdate(input: UpdateAgentInput): Promise<string> {
   );
 }
 
+async function digestConnectionLink(input: CreateConnectionLinkInput): Promise<string> {
+  return digestCanonicalRequest(
+    JSON.stringify({
+      authConfigId: input.authConfigId,
+    }),
+  );
+}
+
+function isCanonicalComposioConnectUrl(value: string): boolean {
+  const url = new URL(value);
+
+  return (
+    url.origin === COMPOSIO_CONNECT_ORIGIN &&
+    /^\/link\/ln_[A-Za-z0-9_-]+$/.test(url.pathname) &&
+    url.search === "" &&
+    url.hash === ""
+  );
+}
+
 export class OwnerControlPlane extends DurableObject {
   readonly #objectName: string | undefined;
   readonly #sql: SqlStorage;
@@ -141,27 +183,29 @@ export class OwnerControlPlane extends DurableObject {
         )
         .one();
       const controlPlaneDefinition = controlPlaneTable["sql"];
-      const isVersionOneTable =
+      const isEmptyMigratableTable =
         typeof controlPlaneDefinition === "string" &&
-        controlPlaneDefinition.includes("schema_version = 1");
+        (controlPlaneDefinition.includes("schema_version = 1") ||
+          controlPlaneDefinition.includes("schema_version = 2"));
 
       if (
-        (controlPlane === undefined && isVersionOneTable) ||
-        controlPlane?.["schema_version"] === CONTROL_PLANE_SCHEMA_VERSION - 1
+        (controlPlane === undefined && isEmptyMigratableTable) ||
+        controlPlane?.["schema_version"] === 1 ||
+        controlPlane?.["schema_version"] === 2
       ) {
-        this.#sql.exec("ALTER TABLE control_plane RENAME TO control_plane_v1");
+        this.#sql.exec("ALTER TABLE control_plane RENAME TO control_plane_previous");
         this.#sql.exec(`
           CREATE TABLE control_plane (
             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
             owner_key TEXT NOT NULL UNIQUE,
-            schema_version INTEGER NOT NULL CHECK (schema_version = 2)
+            schema_version INTEGER NOT NULL CHECK (schema_version = 3)
           )
         `);
         this.#sql.exec(`
           INSERT INTO control_plane (singleton, owner_key, schema_version)
-          SELECT singleton, owner_key, 2 FROM control_plane_v1
+          SELECT singleton, owner_key, 3 FROM control_plane_previous
         `);
-        this.#sql.exec("DROP TABLE control_plane_v1");
+        this.#sql.exec("DROP TABLE control_plane_previous");
       } else if (controlPlane?.["schema_version"] !== CONTROL_PLANE_SCHEMA_VERSION) {
         return;
       }
@@ -220,6 +264,59 @@ export class OwnerControlPlane extends DurableObject {
           action TEXT NOT NULL,
           subject_id TEXT NOT NULL
         )
+      `);
+      this.#sql.exec(`
+        CREATE TABLE IF NOT EXISTS connections (
+          connection_id TEXT PRIMARY KEY,
+          provider TEXT NOT NULL CHECK (provider = 'composio'),
+          provider_connection_id TEXT NOT NULL UNIQUE,
+          auth_config_id TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status = 'initiated'),
+          created_at INTEGER NOT NULL CHECK (created_at > 0)
+        )
+      `);
+      this.#sql.exec(`
+        CREATE TABLE IF NOT EXISTS connection_link_requests (
+          client_id TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          request_digest TEXT NOT NULL CHECK (length(request_digest) = 43),
+          auth_config_id TEXT NOT NULL,
+          reservation_id TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL
+            CHECK (status IN ('pending', 'completed', 'expired', 'abandoned')),
+          recover_after INTEGER NOT NULL CHECK (recover_after > 0),
+          connection_id TEXT,
+          redirect_url TEXT,
+          expires_at INTEGER,
+          created_at INTEGER NOT NULL CHECK (created_at > 0),
+          completed_at INTEGER,
+          PRIMARY KEY (client_id, idempotency_key),
+          FOREIGN KEY (connection_id) REFERENCES connections(connection_id) ON DELETE RESTRICT,
+          CHECK (
+            (status = 'completed'
+              AND connection_id IS NOT NULL
+              AND redirect_url IS NOT NULL
+              AND expires_at IS NOT NULL
+              AND completed_at IS NOT NULL)
+            OR
+            (status = 'expired'
+              AND connection_id IS NOT NULL
+              AND redirect_url IS NULL
+              AND expires_at IS NOT NULL
+              AND completed_at IS NOT NULL)
+            OR
+            (status IN ('pending', 'abandoned')
+              AND connection_id IS NULL
+              AND redirect_url IS NULL
+              AND expires_at IS NULL
+              AND completed_at IS NULL)
+          )
+        )
+      `);
+      this.#sql.exec(`
+        CREATE INDEX IF NOT EXISTS connection_link_requests_pending_auth_config
+        ON connection_link_requests (auth_config_id, recover_after)
+        WHERE status = 'pending'
       `);
     });
   }
@@ -353,6 +450,333 @@ export class OwnerControlPlane extends DurableObject {
 
       return createAgentResultSchema.parse({ agent, created: true, ok: true });
     });
+  }
+
+  async reserveConnectionLink(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<ReserveConnectionLinkResult> {
+    const authorization = this.#authorize(authorityInput, CONNECTIONS_WRITE_SCOPE);
+
+    if (!authorization.ok) {
+      return this.#deniedConnectionLink(authorization.code);
+    }
+
+    const request = createConnectionLinkInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return this.#deniedConnectionLink("invalid_request");
+    }
+
+    const requestDigest = await digestConnectionLink(request.data);
+    const currentTime = Date.now();
+    const recoverAfter = currentTime + CONNECTION_LINK_UNKNOWN_RECOVERY_MS;
+
+    await this.#scheduleConnectionLinkCleanup(recoverAfter);
+
+    return this.#storage.transactionSync(() => {
+      this.#expireConnectionLinkRequests(currentTime);
+
+      const existingRequest = this.#sql
+        .exec<Record<string, SqlStorageValue>>(
+          `SELECT
+             request_digest,
+             status,
+             reservation_id,
+             connection_id,
+             redirect_url,
+             expires_at
+           FROM connection_link_requests
+           WHERE client_id = ? AND idempotency_key = ?`,
+          authorization.authority.clientId,
+          request.data.idempotencyKey,
+        )
+        .toArray()[0];
+
+      if (existingRequest !== undefined) {
+        if (existingRequest["request_digest"] !== requestDigest) {
+          return this.#deniedConnectionLink("idempotency_conflict");
+        }
+
+        if (existingRequest["status"] === "expired") {
+          return this.#deniedConnectionLink("connection_link_expired");
+        }
+
+        if (existingRequest["status"] !== "completed") {
+          return this.#deniedConnectionLink("connection_link_outcome_unknown");
+        }
+
+        const expiresAt = existingRequest["expires_at"];
+
+        if (typeof expiresAt !== "number" || expiresAt <= currentTime) {
+          return this.#deniedConnectionLink("connection_link_expired");
+        }
+
+        return reserveConnectionLinkResultSchema.parse({
+          connectionLink: this.#connectionLinkFromRow(existingRequest),
+          ok: true,
+          state: "replay",
+        });
+      }
+
+      const pendingRequest = this.#sql
+        .exec<Record<string, SqlStorageValue>>(
+          `SELECT reservation_id
+           FROM connection_link_requests
+           WHERE auth_config_id = ? AND status = 'pending' AND recover_after > ?
+           LIMIT 1`,
+          request.data.authConfigId,
+          currentTime,
+        )
+        .toArray()[0];
+
+      if (pendingRequest !== undefined) {
+        return this.#deniedConnectionLink("connection_link_in_progress");
+      }
+
+      const requestCount = this.#countRows("connection_link_requests");
+
+      if (requestCount >= MAXIMUM_CONNECTION_LINK_REQUESTS_PER_OWNER) {
+        return this.#deniedConnectionLink("connection_link_request_limit_exceeded");
+      }
+
+      const connectionCount = this.#countRows("connections");
+      const pendingCount = this.#sql
+        .exec<Record<string, SqlStorageValue>>(
+          `SELECT COUNT(*) AS count
+           FROM connection_link_requests
+           WHERE status = 'pending' AND recover_after > ?`,
+          currentTime,
+        )
+        .one()["count"];
+
+      if (
+        typeof pendingCount !== "number" ||
+        connectionCount + pendingCount >= MAXIMUM_CONNECTIONS_PER_OWNER
+      ) {
+        return this.#deniedConnectionLink("connection_limit_exceeded");
+      }
+
+      const reservationId = `connection_link_${crypto.randomUUID()}`;
+
+      this.#sql.exec(
+        `INSERT INTO connection_link_requests
+           (client_id, idempotency_key, request_digest, auth_config_id, reservation_id,
+            status, recover_after, created_at)
+         VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        authorization.authority.clientId,
+        request.data.idempotencyKey,
+        requestDigest,
+        request.data.authConfigId,
+        reservationId,
+        recoverAfter,
+        currentTime,
+      );
+      this.#sql.exec(
+        `INSERT INTO audit_events (occurred_at, client_id, action, subject_id)
+         VALUES (?, ?, 'connection.link_reserved', ?)`,
+        currentTime,
+        authorization.authority.clientId,
+        reservationId,
+      );
+
+      return reserveConnectionLinkResultSchema.parse({
+        ok: true,
+        reservationId,
+        state: "dispatch",
+      });
+    });
+  }
+
+  async completeConnectionLink(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<CreateConnectionLinkResult> {
+    const authorization = this.#authorize(authorityInput, CONNECTIONS_WRITE_SCOPE);
+
+    if (!authorization.ok) {
+      return this.#deniedConnectionLink(authorization.code);
+    }
+
+    const request = completeConnectionLinkInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return this.#deniedConnectionLink("invalid_request");
+    }
+
+    if (!isCanonicalComposioConnectUrl(request.data.url)) {
+      return this.#deniedConnectionLink("invalid_request");
+    }
+
+    const result = this.#storage.transactionSync(() => {
+      const currentTime = Date.now();
+
+      this.#expireConnectionLinkRequests(currentTime);
+
+      const row = this.#sql
+        .exec<Record<string, SqlStorageValue>>(
+          `SELECT
+             r.status,
+             r.recover_after,
+             r.connection_id,
+             r.redirect_url,
+             r.expires_at,
+             r.auth_config_id,
+             c.provider_connection_id
+           FROM connection_link_requests r
+           LEFT JOIN connections c ON c.connection_id = r.connection_id
+           WHERE r.client_id = ? AND r.reservation_id = ?`,
+          authorization.authority.clientId,
+          request.data.reservationId,
+        )
+        .toArray()[0];
+
+      if (row === undefined) {
+        return this.#deniedConnectionLink("invalid_request");
+      }
+
+      if (row["status"] === "expired") {
+        return this.#deniedConnectionLink("connection_link_expired");
+      }
+
+      if (row["status"] === "completed") {
+        if (
+          row["provider_connection_id"] !== request.data.providerConnectionId ||
+          row["redirect_url"] !== request.data.url ||
+          row["expires_at"] !== Date.parse(request.data.expiresAt)
+        ) {
+          return this.#deniedConnectionLink("invalid_request");
+        }
+
+        return createConnectionLinkResultSchema.parse({
+          connectionLink: this.#connectionLinkFromRow(row),
+          created: false,
+          ok: true,
+        });
+      }
+
+      const recoverAfter = row["recover_after"];
+      const expiresAt = Date.parse(request.data.expiresAt);
+
+      if (
+        row["status"] !== "pending" ||
+        typeof recoverAfter !== "number" ||
+        currentTime >= recoverAfter ||
+        expiresAt <= currentTime ||
+        expiresAt > recoverAfter
+      ) {
+        return this.#deniedConnectionLink("connection_link_outcome_unknown");
+      }
+
+      const authConfigId = row["auth_config_id"];
+
+      if (typeof authConfigId !== "string") {
+        throw new Error("Invalid connection-link storage.");
+      }
+
+      const existingConnection = this.#sql
+        .exec<Record<string, SqlStorageValue>>(
+          `SELECT connection_id, auth_config_id
+           FROM connections
+           WHERE provider_connection_id = ?`,
+          request.data.providerConnectionId,
+        )
+        .toArray()[0];
+      let connectionId: string;
+
+      if (existingConnection === undefined) {
+        connectionId = `connection_${crypto.randomUUID()}`;
+        this.#sql.exec(
+          `INSERT INTO connections
+             (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
+           VALUES (?, 'composio', ?, ?, 'initiated', ?)`,
+          connectionId,
+          request.data.providerConnectionId,
+          authConfigId,
+          currentTime,
+        );
+      } else {
+        if (existingConnection["auth_config_id"] !== authConfigId) {
+          return this.#deniedConnectionLink("connection_link_outcome_unknown");
+        }
+
+        const storedConnectionId = existingConnection["connection_id"];
+
+        if (typeof storedConnectionId !== "string") {
+          throw new Error("Invalid connection storage.");
+        }
+
+        connectionId = storedConnectionId;
+      }
+
+      this.#sql.exec(
+        `UPDATE connection_link_requests
+         SET status = 'completed',
+             connection_id = ?,
+             redirect_url = ?,
+             expires_at = ?,
+             completed_at = ?
+         WHERE client_id = ? AND reservation_id = ? AND status = 'pending'`,
+        connectionId,
+        request.data.url,
+        expiresAt,
+        currentTime,
+        authorization.authority.clientId,
+        request.data.reservationId,
+      );
+      this.#sql.exec(
+        `INSERT INTO audit_events (occurred_at, client_id, action, subject_id)
+         VALUES (?, ?, 'connection.link_created', ?)`,
+        currentTime,
+        authorization.authority.clientId,
+        connectionId,
+      );
+
+      return createConnectionLinkResultSchema.parse({
+        connectionLink: {
+          connectionId,
+          expiresAt: request.data.expiresAt,
+          url: request.data.url,
+        },
+        created: true,
+        ok: true,
+      });
+    });
+
+    if (result.ok) {
+      await this.#scheduleConnectionLinkCleanup(Date.parse(result.connectionLink.expiresAt));
+    }
+
+    return result;
+  }
+
+  override async alarm(): Promise<void> {
+    const nextCleanupAt = this.#storage.transactionSync(() => {
+      const currentTime = Date.now();
+
+      this.#expireConnectionLinkRequests(currentTime);
+
+      const nextCleanup = this.#sql
+        .exec<Record<string, SqlStorageValue>>(
+          `SELECT MIN(cleanup_at) AS cleanup_at
+           FROM (
+             SELECT expires_at AS cleanup_at
+             FROM connection_link_requests
+             WHERE status = 'completed'
+             UNION ALL
+             SELECT recover_after AS cleanup_at
+             FROM connection_link_requests
+             WHERE status = 'pending'
+           )`,
+        )
+        .one()["cleanup_at"];
+
+      return typeof nextCleanup === "number" ? nextCleanup : null;
+    });
+
+    if (nextCleanupAt !== null) {
+      await this.#storage.setAlarm(nextCleanupAt);
+    }
   }
 
   getAgent(authorityInput: unknown, input: unknown): GetAgentResult {
@@ -784,6 +1208,61 @@ export class OwnerControlPlane extends DurableObject {
     });
   }
 
+  #connectionLinkFromRow(row: Record<string, SqlStorageValue>) {
+    const connectionId = row["connection_id"];
+    const expiresAt = row["expires_at"];
+    const url = row["redirect_url"];
+
+    if (
+      typeof connectionId !== "string" ||
+      typeof expiresAt !== "number" ||
+      typeof url !== "string"
+    ) {
+      throw new Error("Invalid connection-link storage.");
+    }
+
+    return {
+      connectionId,
+      expiresAt: new Date(expiresAt).toISOString(),
+      url,
+    };
+  }
+
+  #countRows(table: "connection_link_requests" | "connections"): number {
+    const count = this.#sql
+      .exec<Record<string, SqlStorageValue>>(`SELECT COUNT(*) AS count FROM ${table}`)
+      .one()["count"];
+
+    if (typeof count !== "number") {
+      throw new Error("Invalid control-plane count.");
+    }
+
+    return count;
+  }
+
+  #expireConnectionLinkRequests(currentTime: number): void {
+    this.#sql.exec(
+      `UPDATE connection_link_requests
+       SET status = 'expired', redirect_url = NULL
+       WHERE status = 'completed' AND expires_at <= ?`,
+      currentTime,
+    );
+    this.#sql.exec(
+      `UPDATE connection_link_requests
+       SET status = 'abandoned'
+       WHERE status = 'pending' AND recover_after <= ?`,
+      currentTime,
+    );
+  }
+
+  async #scheduleConnectionLinkCleanup(cleanupAt: number): Promise<void> {
+    const scheduledAlarm = await this.#storage.getAlarm();
+
+    if (scheduledAlarm === null || cleanupAt < scheduledAlarm) {
+      await this.#storage.setAlarm(cleanupAt);
+    }
+  }
+
   #authorize(authorityInput: unknown, requiredScope: OwnerScope): AuthorityResult {
     const result = ownerAuthoritySchema.safeParse(authorityInput);
 
@@ -840,6 +1319,16 @@ export class OwnerControlPlane extends DurableObject {
       error: {
         code,
         message: "Agent request denied.",
+      },
+      ok: false,
+    };
+  }
+
+  #deniedConnectionLink(code: ConnectionLinkRequestErrorCode): ConnectionLinkRequestFailure {
+    return {
+      error: {
+        code,
+        message: "Connection link request denied.",
       },
       ok: false,
     };

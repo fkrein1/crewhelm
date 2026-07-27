@@ -1,6 +1,7 @@
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  CONNECTIONS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
@@ -228,6 +229,9 @@ function consentPage(
       : "",
     requestedScopes.includes(AGENTS_WRITE_SCOPE)
       ? "<li>Update Agent definitions by creating immutable revisions.</li>"
+      : "",
+    requestedScopes.includes(CONNECTIONS_WRITE_SCOPE)
+      ? "<li>Create private, short-lived Composio Connect Links. The selected auth configuration and an opaque owner key are sent to Composio; provider credentials stay with Composio.</li>"
       : "",
     requestedScopes.includes(INTEGRATIONS_READ_SCOPE)
       ? "<li>Search the Composio integration catalog and inspect exact tool schemas. Search terms are sent to Composio.</li>"

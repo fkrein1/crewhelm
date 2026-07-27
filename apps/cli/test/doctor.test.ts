@@ -27,6 +27,7 @@ function protectedResourceResponse(): Response {
       "control:write",
       "agents:read",
       "agents:write",
+      "connections:write",
       "integrations:read",
     ],
   });
@@ -49,6 +50,7 @@ function authorizationServerResponse(overrides: Record<string, unknown> = {}): R
       "control:write",
       "agents:read",
       "agents:write",
+      "connections:write",
       "integrations:read",
     ],
     token_endpoint: `${origin}/api/auth/oauth2/token`,

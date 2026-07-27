@@ -19,6 +19,8 @@ import {
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
+import { readBoundedJson } from "./bounded-json.js";
+
 const COMPOSIO_TOOLKITS_URL = "https://backend.composio.dev/api/v3/toolkits";
 const COMPOSIO_TOOLS_URL = "https://backend.composio.dev/api/v3.1/tools";
 const MAXIMUM_TOOLKIT_RESPONSE_BYTES = 256 * 1_024;
@@ -75,43 +77,6 @@ export interface ComposioCatalogOptions {
   apiKey: string | undefined;
   fetch?: typeof globalThis.fetch;
   signal?: AbortSignal;
-}
-
-async function readBoundedJson(response: Response, maximumBytes: number): Promise<unknown> {
-  if (!response.body) {
-    return null;
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let byteLength = 0;
-
-  while (true) {
-    const result = await reader.read();
-
-    if (result.done) {
-      break;
-    }
-
-    byteLength += result.value.byteLength;
-
-    if (byteLength > maximumBytes) {
-      await reader.cancel();
-      throw new Error("Composio catalog response exceeded the bounded reader.");
-    }
-
-    chunks.push(result.value);
-  }
-
-  const body = new Uint8Array(byteLength);
-  let offset = 0;
-
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-
-  return JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(body));
 }
 
 function unavailable() {
@@ -344,3 +309,11 @@ export function createComposioCatalog(options: ComposioCatalogOptions): Composio
     },
   };
 }
+
+export {
+  createComposioConnectionLinks,
+  type ComposioConnectionLink,
+  type ComposioConnectionLinkResult,
+  type ComposioConnectionLinks,
+  type ComposioConnectionLinksOptions,
+} from "./connection-links.js";

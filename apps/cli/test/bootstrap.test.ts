@@ -90,6 +90,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "control:write",
           "agents:read",
           "agents:write",
+          "connections:write",
           "integrations:read",
         ],
       };
@@ -110,6 +111,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "control:write",
           "agents:read",
           "agents:write",
+          "connections:write",
           "integrations:read",
         ],
         token_endpoint: "https://crewhelm.example/api/auth/oauth2/token",
@@ -138,6 +140,7 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
     "SELECT 1;\n",
   );
   await writeFile(resolve(assets, "migrations", "0005_agent_update_scope.sql"), "SELECT 1;\n");
+  await writeFile(resolve(assets, "migrations", "0006_connection_write_scope.sql"), "SELECT 1;\n");
   await writeFile(
     resolve(assets, "wrangler-template.json"),
     JSON.stringify({
@@ -221,6 +224,7 @@ describe("Cloudflare bootstrap", () => {
               "0003_integration_catalog_scope.sql",
               "0004_agent_definition_read_scope.sql",
               "0005_agent_update_scope.sql",
+              "0006_connection_write_scope.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
@@ -537,6 +541,7 @@ describe("Cloudflare bootstrap", () => {
               "0003_integration_catalog_scope.sql",
               "0004_agent_definition_read_scope.sql",
               "0005_agent_update_scope.sql",
+              "0006_connection_write_scope.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
