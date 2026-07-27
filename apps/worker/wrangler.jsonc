@@ -17,4 +17,31 @@
       "storage": "sqlite",
     },
   },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "691f2876a86542129c939f00e2f8a2a7",
+    },
+  ],
+  "ratelimits": [
+    {
+      "name": "AUTH_RATE_LIMIT",
+      "namespace_id": "10001",
+      "simple": {
+        "limit": 10,
+        "period": 60,
+      },
+    },
+    {
+      "name": "MCP_RATE_LIMIT",
+      "namespace_id": "10002",
+      "simple": {
+        "limit": 60,
+        "period": 60,
+      },
+    },
+  ],
+  "triggers": {
+    "crons": ["17 * * * *"],
+  },
 }

@@ -671,7 +671,7 @@ describe("repository foundation", () => {
     expect(ignoredFiles).toMatch(/^\.dev\.vars\*$/m);
     expect(ignoredFiles).toMatch(/^!\.dev\.vars\.example$/m);
     expect(invariants).toContain("Models may propose actions but cannot grant permissions");
-    expect(threatModel).toContain("MCP client to public MCP ingress");
+    expect(threatModel).toContain("MCP client to Crewhelm's public OAuth and MCP ingress");
     expect(threatModel).toContain("Instruction poisoning");
     expect(threatModel).toContain("self-approval");
     expect(threatModel).toContain("raw Composio paths bypassing `ToolGate`");

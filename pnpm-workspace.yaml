@@ -15,6 +15,8 @@ minimumReleaseAge: 1440
 minimumReleaseAgeIgnoreMissingTime: false
 minimumReleaseAgeStrict: true
 nodeVersion: 24.18.0
+overrides:
+  "@hono/node-server": 2.0.10
 savePrefix: ""
 strictDepBuilds: true
 strictPeerDependencies: true
