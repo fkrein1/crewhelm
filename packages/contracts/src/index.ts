@@ -1,4 +1,9 @@
 export {
+  crewAgentObjectName,
+  crewAgentRuntimeConfigSchema,
+  type CrewAgentRuntimeConfig,
+} from "./agent-runtime.js";
+export {
   COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
   capabilityEffectSchema,
   capabilityGrantIdSchema,

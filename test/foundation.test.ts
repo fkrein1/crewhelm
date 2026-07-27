@@ -179,7 +179,10 @@ describe("repository foundation", () => {
 
     expect(workspace).toMatchObject({
       allowBuilds: {
+        "@mongodb-js/zstd": false,
+        "core-js-pure": false,
         esbuild: true,
+        "node-liblzma": false,
         workerd: true,
       },
       autoInstallPeers: false,
@@ -236,17 +239,31 @@ describe("repository foundation", () => {
         build: "wrangler deploy --dry-run --outdir dist",
       },
       dependencies: {
+        "@cloudflare/think": "0.15.0",
         "@crewhelm/composio": "workspace:*",
         "@crewhelm/contracts": "workspace:*",
+        agents: "0.19.0",
+        ai: "7.0.37",
         hono: "4.12.32",
+        react: "19.2.8",
       },
       devDependencies: {
+        "@babel/core": "8.0.1",
         "@cloudflare/vitest-pool-workers": "0.18.8",
         "@cloudflare/workers-types": "5.20260724.1",
         vitest: "4.1.10",
         wrangler: "4.114.0",
       },
     });
+  });
+
+  it("keeps the unadmitted CrewAgent runtime out of production bindings and exports", async () => {
+    const workerEntry = await read("apps/worker/src/index.ts");
+    const wrangler = await read("apps/worker/wrangler.jsonc");
+
+    expect(workerEntry).not.toContain("CrewAgent");
+    expect(wrangler).not.toContain('"CREW_AGENT"');
+    expect(wrangler).not.toMatch(/^\s*"ai"\s*:/m);
   });
 
   it("pins the bootstrap CLI and shared provider and contract workspaces", async () => {

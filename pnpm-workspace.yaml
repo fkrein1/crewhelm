@@ -4,7 +4,10 @@ packages:
   - tooling/*
 
 allowBuilds:
+  "@mongodb-js/zstd": false
+  core-js-pure: false
   esbuild: true
+  node-liblzma: false
   workerd: true
 
 autoInstallPeers: false
@@ -17,6 +20,7 @@ minimumReleaseAgeStrict: true
 nodeVersion: 24.18.0
 overrides:
   "@hono/node-server": 2.0.10
+  "partyserver@0.5.8>@cloudflare/workers-types": ">=4.20260424.1 <6"
 savePrefix: ""
 strictDepBuilds: true
 strictPeerDependencies: true
