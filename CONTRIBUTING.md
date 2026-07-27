@@ -33,6 +33,17 @@ For documentation-only R0 changes, formatting, relevant document or foundation t
 checks are sufficient unless executable configuration, tests, generated artifacts, or shared
 automation changed. Keep successful output compact and expand logs when diagnosing a failure.
 
+For an `OwnerControlPlane` schema change, edit
+`apps/worker/src/control-plane-schema.ts`, then run:
+
+```sh
+pnpm --filter @crewhelm/worker db:control-plane:generate
+```
+
+The command runs Drizzle Kit and rebuilds the Worker migration manifest. Commit and review the
+generated SQL, snapshot, journal, and manifest together. Never edit generated migration SQL or a
+previously committed migration; fix the schema or add a new migration instead.
+
 Use semantic commit and pull-request titles such as `feat: add recipe validation` or
 `fix: reject expired approvals`. Keep commits green and independently reviewable. Sign off every
 commit; the pull request's `DCO` check enforces this.

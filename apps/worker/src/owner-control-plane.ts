@@ -61,8 +61,25 @@ import {
   type UpdateAgentResult,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
+import { and, asc, count, desc, eq, gt, inArray, lt, lte, min } from "drizzle-orm";
+import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
-const CONTROL_PLANE_SCHEMA_VERSION = 4;
+import { CONTROL_PLANE_SCHEMA_VERSION, migrateControlPlane } from "./control-plane-migrations.js";
+import {
+  agentCreations,
+  agentRevisions,
+  agentUpdates,
+  agents,
+  auditEvents,
+  connectionAuthorizationReturns,
+  connectionLinkRequests,
+  connections,
+  controlPlane,
+  controlPlaneSchema,
+  type ControlPlaneDatabaseSchema,
+  type StoredConnectionAuthorizationOutcome,
+} from "./control-plane-schema.js";
+
 const COMPOSIO_CONNECT_ORIGIN = "https://connect.composio.dev";
 type AuthorityErrorCode =
   | "incompatible_schema"
@@ -99,6 +116,30 @@ type ConnectionAuthorizationReturnFailure = Extract<
 type AuthorityResult =
   | { authority: OwnerAuthority; ok: true }
   | { code: AuthorityErrorCode; ok: false };
+type StoredAgentRow = {
+  agentId: string;
+  capabilityGrants: Agent["capabilityGrants"];
+  createdAt: number;
+  currentRevision: number;
+  executionLimits: Agent["executionLimits"];
+  instructions: string;
+  model: string;
+  name: string;
+};
+type StoredAgentRevisionRow = StoredAgentRow & { revisedAt: number };
+type StoredConnectionLinkRow = {
+  connectionId: string | null;
+  expiresAt: number | null;
+  redirectUrl: string | null;
+};
+type StoredConnectionSummaryRow = {
+  authConfigId: string;
+  authorizationOutcome: ConnectionSummary["authorizationOutcome"];
+  connectionId: string;
+  createdAt: number;
+  status: "initiated";
+};
+type ControlPlaneWriter = Pick<DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>, "update">;
 
 function encodeBase64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -176,202 +217,22 @@ function isCanonicalComposioConnectUrl(value: string): boolean {
 }
 
 export class OwnerControlPlane extends DurableObject {
+  readonly #database: DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
   readonly #objectName: string | undefined;
-  readonly #sql: SqlStorage;
   readonly #storage: DurableObjectStorage;
+  #migrationReady = false;
 
   constructor(state: DurableObjectState, environment: Cloudflare.Env) {
     super(state, environment);
     this.#objectName = state.id.name;
-    this.#sql = state.storage.sql;
     this.#storage = state.storage;
-    this.#sql.exec("PRAGMA foreign_keys = ON");
-    this.#storage.transactionSync(() => {
-      this.#sql.exec(`
-        CREATE TABLE IF NOT EXISTS control_plane (
-          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-          owner_key TEXT NOT NULL UNIQUE,
-          schema_version INTEGER NOT NULL CHECK (schema_version = 4)
-        )
-      `);
-      const controlPlane = this.#sql
-        .exec<Record<string, SqlStorageValue>>(
-          "SELECT schema_version FROM control_plane WHERE singleton = 1",
-        )
-        .toArray()[0];
-      const controlPlaneTable = this.#sql
-        .exec<Record<string, SqlStorageValue>>(
-          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'control_plane'",
-        )
-        .one();
-      const controlPlaneDefinition = controlPlaneTable["sql"];
-      const isEmptyMigratableTable =
-        typeof controlPlaneDefinition === "string" &&
-        (controlPlaneDefinition.includes("schema_version = 1") ||
-          controlPlaneDefinition.includes("schema_version = 2") ||
-          controlPlaneDefinition.includes("schema_version = 3"));
-
-      if (
-        (controlPlane === undefined && isEmptyMigratableTable) ||
-        controlPlane?.["schema_version"] === 1 ||
-        controlPlane?.["schema_version"] === 2 ||
-        controlPlane?.["schema_version"] === 3
-      ) {
-        this.#sql.exec("ALTER TABLE control_plane RENAME TO control_plane_previous");
-        this.#sql.exec(`
-          CREATE TABLE control_plane (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            owner_key TEXT NOT NULL UNIQUE,
-            schema_version INTEGER NOT NULL CHECK (schema_version = 4)
-          )
-        `);
-        this.#sql.exec(`
-          INSERT INTO control_plane (singleton, owner_key, schema_version)
-          SELECT singleton, owner_key, 4 FROM control_plane_previous
-        `);
-        this.#sql.exec("DROP TABLE control_plane_previous");
-      } else if (
-        controlPlane !== undefined &&
-        controlPlane["schema_version"] !== CONTROL_PLANE_SCHEMA_VERSION
-      ) {
-        return;
-      }
-      this.#sql.exec(`
-        CREATE TABLE IF NOT EXISTS agents (
-          agent_id TEXT PRIMARY KEY,
-          current_revision INTEGER NOT NULL CHECK (current_revision > 0),
-          created_at INTEGER NOT NULL CHECK (created_at > 0)
-        )
-      `);
-      this.#sql.exec(`
-        CREATE TABLE IF NOT EXISTS agent_revisions (
-          agent_id TEXT NOT NULL,
-          revision INTEGER NOT NULL CHECK (revision > 0),
-          name TEXT NOT NULL,
-          model TEXT NOT NULL,
-          instructions TEXT NOT NULL,
-          execution_limits TEXT NOT NULL,
-          capability_grants TEXT NOT NULL CHECK (capability_grants = '[]'),
-          created_at INTEGER NOT NULL CHECK (created_at > 0),
-          PRIMARY KEY (agent_id, revision),
-          FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE RESTRICT
-        )
-      `);
-      this.#sql.exec(`
-        CREATE TABLE IF NOT EXISTS agent_creations (
-          client_id TEXT NOT NULL,
-          idempotency_key TEXT NOT NULL,
-          request_digest TEXT NOT NULL CHECK (length(request_digest) = 43),
-          agent_id TEXT NOT NULL,
-          revision INTEGER NOT NULL CHECK (revision > 0),
-          PRIMARY KEY (client_id, idempotency_key),
-          UNIQUE (agent_id, revision),
-          FOREIGN KEY (agent_id, revision)
-            REFERENCES agent_revisions(agent_id, revision) ON DELETE RESTRICT
-        )
-      `);
-      this.#sql.exec(`
-        CREATE TABLE IF NOT EXISTS agent_updates (
-          client_id TEXT NOT NULL,
-          idempotency_key TEXT NOT NULL,
-          request_digest TEXT NOT NULL CHECK (length(request_digest) = 43),
-          agent_id TEXT NOT NULL,
-          revision INTEGER NOT NULL CHECK (revision > 1),
-          PRIMARY KEY (client_id, idempotency_key),
-          UNIQUE (agent_id, revision),
-          FOREIGN KEY (agent_id, revision)
-            REFERENCES agent_revisions(agent_id, revision) ON DELETE RESTRICT
-        )
-      `);
-      this.#sql.exec(`
-        CREATE TABLE IF NOT EXISTS audit_events (
-          event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-          occurred_at INTEGER NOT NULL CHECK (occurred_at > 0),
-          client_id TEXT NOT NULL,
-          action TEXT NOT NULL,
-          subject_id TEXT NOT NULL
-        )
-      `);
-      this.#sql.exec(`
-        CREATE TABLE IF NOT EXISTS connections (
-          connection_id TEXT PRIMARY KEY,
-          provider TEXT NOT NULL CHECK (provider = 'composio'),
-          provider_connection_id TEXT NOT NULL UNIQUE,
-          auth_config_id TEXT NOT NULL,
-          status TEXT NOT NULL CHECK (status = 'initiated'),
-          created_at INTEGER NOT NULL CHECK (created_at > 0)
-        )
-      `);
-      this.#sql.exec(`
-        CREATE TABLE IF NOT EXISTS connection_link_requests (
-          client_id TEXT NOT NULL,
-          idempotency_key TEXT NOT NULL,
-          request_digest TEXT NOT NULL CHECK (length(request_digest) = 43),
-          auth_config_id TEXT NOT NULL,
-          reservation_id TEXT NOT NULL UNIQUE,
-          status TEXT NOT NULL
-            CHECK (status IN ('pending', 'completed', 'expired', 'abandoned')),
-          recover_after INTEGER NOT NULL CHECK (recover_after > 0),
-          connection_id TEXT,
-          redirect_url TEXT,
-          expires_at INTEGER,
-          created_at INTEGER NOT NULL CHECK (created_at > 0),
-          completed_at INTEGER,
-          PRIMARY KEY (client_id, idempotency_key),
-          FOREIGN KEY (connection_id) REFERENCES connections(connection_id) ON DELETE RESTRICT,
-          CHECK (
-            (status = 'completed'
-              AND connection_id IS NOT NULL
-              AND redirect_url IS NOT NULL
-              AND expires_at IS NOT NULL
-              AND completed_at IS NOT NULL)
-            OR
-            (status = 'expired'
-              AND connection_id IS NOT NULL
-              AND redirect_url IS NULL
-              AND expires_at IS NOT NULL
-              AND completed_at IS NOT NULL)
-            OR
-            (status IN ('pending', 'abandoned')
-              AND connection_id IS NULL
-              AND redirect_url IS NULL
-              AND expires_at IS NULL
-              AND completed_at IS NULL)
-          )
-        )
-      `);
-      this.#sql.exec(`
-        CREATE INDEX IF NOT EXISTS connection_link_requests_pending_auth_config
-        ON connection_link_requests (auth_config_id, recover_after)
-        WHERE status = 'pending'
-      `);
-      this.#sql.exec(`
-        CREATE TABLE IF NOT EXISTS connection_authorization_returns (
-          reservation_id TEXT PRIMARY KEY,
-          token_digest TEXT NOT NULL UNIQUE CHECK (length(token_digest) = 43),
-          status TEXT NOT NULL CHECK (status IN ('pending', 'returned', 'failed', 'expired')),
-          connection_id TEXT,
-          expires_at INTEGER NOT NULL CHECK (expires_at > 0),
-          created_at INTEGER NOT NULL CHECK (created_at > 0),
-          completed_at INTEGER,
-          FOREIGN KEY (reservation_id)
-            REFERENCES connection_link_requests(reservation_id) ON DELETE RESTRICT,
-          FOREIGN KEY (connection_id) REFERENCES connections(connection_id) ON DELETE RESTRICT,
-          CHECK (
-            (status = 'pending' AND completed_at IS NULL)
-            OR
-            (status IN ('returned', 'failed')
-              AND connection_id IS NOT NULL
-              AND completed_at IS NOT NULL)
-            OR
-            (status = 'expired' AND completed_at IS NULL)
-          )
-        )
-      `);
-      this.#sql.exec(`
-        CREATE INDEX IF NOT EXISTS connection_authorization_returns_connection
-        ON connection_authorization_returns (connection_id, created_at DESC)
-      `);
+    this.#database = drizzle(this.#storage, {
+      logger: false,
+      schema: controlPlaneSchema,
+    });
+    this.#storage.sql.exec("PRAGMA foreign_keys = ON");
+    void this.ctx.blockConcurrencyWhile(async () => {
+      this.#migrationReady = await migrateControlPlane(this.#database, this.#storage);
     });
   }
 
@@ -406,31 +267,38 @@ export class OwnerControlPlane extends DurableObject {
 
     const requestDigest = await digestAgentCreation(request.data);
 
-    return this.#storage.transactionSync(() => {
-      const existingRow = this.#sql
-        .exec<Record<string, SqlStorageValue>>(
-          `SELECT
-               a.agent_id,
-               c.revision AS current_revision,
-               c.request_digest,
-               a.created_at,
-               r.name,
-               r.model,
-               r.instructions,
-               r.execution_limits,
-               r.capability_grants
-             FROM agent_creations c
-             JOIN agents a ON a.agent_id = c.agent_id
-             JOIN agent_revisions r
-               ON r.agent_id = c.agent_id AND r.revision = c.revision
-             WHERE c.client_id = ? AND c.idempotency_key = ?`,
-          authorization.authority.clientId,
-          request.data.idempotencyKey,
+    return this.#database.transaction((transaction) => {
+      const existingRow = transaction
+        .select({
+          agentId: agents.agentId,
+          capabilityGrants: agentRevisions.capabilityGrants,
+          createdAt: agents.createdAt,
+          currentRevision: agentCreations.revision,
+          executionLimits: agentRevisions.executionLimits,
+          instructions: agentRevisions.instructions,
+          model: agentRevisions.model,
+          name: agentRevisions.name,
+          requestDigest: agentCreations.requestDigest,
+        })
+        .from(agentCreations)
+        .innerJoin(agents, eq(agents.agentId, agentCreations.agentId))
+        .innerJoin(
+          agentRevisions,
+          and(
+            eq(agentRevisions.agentId, agentCreations.agentId),
+            eq(agentRevisions.revision, agentCreations.revision),
+          ),
         )
-        .toArray()[0];
+        .where(
+          and(
+            eq(agentCreations.clientId, authorization.authority.clientId),
+            eq(agentCreations.idempotencyKey, request.data.idempotencyKey),
+          ),
+        )
+        .all()[0];
 
       if (existingRow !== undefined) {
-        if (existingRow["request_digest"] !== requestDigest) {
+        if (existingRow.requestDigest !== requestDigest) {
           return this.#deniedAgent("idempotency_conflict");
         }
 
@@ -441,13 +309,7 @@ export class OwnerControlPlane extends DurableObject {
         });
       }
 
-      const agentCount = this.#sql
-        .exec<Record<string, SqlStorageValue>>("SELECT COUNT(*) AS count FROM agents")
-        .one()["count"];
-
-      if (typeof agentCount !== "number") {
-        throw new Error("Invalid Agent count.");
-      }
+      const agentCount = transaction.select({ value: count() }).from(agents).get()?.value ?? 0;
 
       if (agentCount >= MAXIMUM_AGENTS_PER_OWNER) {
         return this.#deniedAgent("agent_limit_exceeded");
@@ -455,41 +317,40 @@ export class OwnerControlPlane extends DurableObject {
 
       const agentId = `agent_${crypto.randomUUID()}`;
       const createdAt = Date.now();
-      const executionLimits = JSON.stringify(request.data.executionLimits);
 
-      this.#sql.exec(
-        `INSERT INTO agents (agent_id, current_revision, created_at) VALUES (?, 1, ?)`,
-        agentId,
-        createdAt,
-      );
-      this.#sql.exec(
-        `INSERT INTO agent_revisions
-             (agent_id, revision, name, model, instructions, execution_limits,
-              capability_grants, created_at)
-           VALUES (?, 1, ?, ?, ?, ?, '[]', ?)`,
-        agentId,
-        request.data.name,
-        request.data.model,
-        request.data.instructions,
-        executionLimits,
-        createdAt,
-      );
-      this.#sql.exec(
-        `INSERT INTO agent_creations
-             (client_id, idempotency_key, request_digest, agent_id, revision)
-           VALUES (?, ?, ?, ?, 1)`,
-        authorization.authority.clientId,
-        request.data.idempotencyKey,
-        requestDigest,
-        agentId,
-      );
-      this.#sql.exec(
-        `INSERT INTO audit_events (occurred_at, client_id, action, subject_id)
-           VALUES (?, ?, 'agent.created', ?)`,
-        createdAt,
-        authorization.authority.clientId,
-        agentId,
-      );
+      transaction.insert(agents).values({ agentId, createdAt, currentRevision: 1 }).run();
+      transaction
+        .insert(agentRevisions)
+        .values({
+          agentId,
+          capabilityGrants: [],
+          createdAt,
+          executionLimits: request.data.executionLimits,
+          instructions: request.data.instructions,
+          model: request.data.model,
+          name: request.data.name,
+          revision: 1,
+        })
+        .run();
+      transaction
+        .insert(agentCreations)
+        .values({
+          agentId,
+          clientId: authorization.authority.clientId,
+          idempotencyKey: request.data.idempotencyKey,
+          requestDigest,
+          revision: 1,
+        })
+        .run();
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: "agent.created",
+          clientId: authorization.authority.clientId,
+          occurredAt: createdAt,
+          subjectId: agentId,
+        })
+        .run();
 
       const agent = agentSchema.parse({
         capabilityGrants: [],
@@ -530,41 +391,43 @@ export class OwnerControlPlane extends DurableObject {
 
     await this.#scheduleConnectionLinkCleanup(recoverAfter);
 
-    return this.#storage.transactionSync(() => {
-      this.#expireConnectionLinkRequests(currentTime);
+    return this.#database.transaction((transaction) => {
+      this.#expireConnectionLinkRequests(transaction, currentTime);
 
-      const existingRequest = this.#sql
-        .exec<Record<string, SqlStorageValue>>(
-          `SELECT
-             request_digest,
-             status,
-             reservation_id,
-             connection_id,
-             redirect_url,
-             expires_at
-           FROM connection_link_requests
-           WHERE client_id = ? AND idempotency_key = ?`,
-          authorization.authority.clientId,
-          request.data.idempotencyKey,
+      const existingRequest = transaction
+        .select({
+          connectionId: connectionLinkRequests.connectionId,
+          expiresAt: connectionLinkRequests.expiresAt,
+          redirectUrl: connectionLinkRequests.redirectUrl,
+          requestDigest: connectionLinkRequests.requestDigest,
+          reservationId: connectionLinkRequests.reservationId,
+          status: connectionLinkRequests.status,
+        })
+        .from(connectionLinkRequests)
+        .where(
+          and(
+            eq(connectionLinkRequests.clientId, authorization.authority.clientId),
+            eq(connectionLinkRequests.idempotencyKey, request.data.idempotencyKey),
+          ),
         )
-        .toArray()[0];
+        .all()[0];
 
       if (existingRequest !== undefined) {
-        if (existingRequest["request_digest"] !== requestDigest) {
+        if (existingRequest.requestDigest !== requestDigest) {
           return this.#deniedConnectionLink("idempotency_conflict");
         }
 
-        if (existingRequest["status"] === "expired") {
+        if (existingRequest.status === "expired") {
           return this.#deniedConnectionLink("connection_link_expired");
         }
 
-        if (existingRequest["status"] !== "completed") {
+        if (existingRequest.status !== "completed") {
           return this.#deniedConnectionLink("connection_link_outcome_unknown");
         }
 
-        const expiresAt = existingRequest["expires_at"];
+        const expiresAt = existingRequest.expiresAt;
 
-        if (typeof expiresAt !== "number" || expiresAt <= currentTime) {
+        if (expiresAt === null || expiresAt <= currentTime) {
           return this.#deniedConnectionLink("connection_link_expired");
         }
 
@@ -575,75 +438,82 @@ export class OwnerControlPlane extends DurableObject {
         });
       }
 
-      const pendingRequest = this.#sql
-        .exec<Record<string, SqlStorageValue>>(
-          `SELECT reservation_id
-           FROM connection_link_requests
-           WHERE auth_config_id = ? AND status = 'pending' AND recover_after > ?
-           LIMIT 1`,
-          request.data.authConfigId,
-          currentTime,
+      const pendingRequest = transaction
+        .select({ reservationId: connectionLinkRequests.reservationId })
+        .from(connectionLinkRequests)
+        .where(
+          and(
+            eq(connectionLinkRequests.authConfigId, request.data.authConfigId),
+            eq(connectionLinkRequests.status, "pending"),
+            gt(connectionLinkRequests.recoverAfter, currentTime),
+          ),
         )
-        .toArray()[0];
+        .limit(1)
+        .all()[0];
 
       if (pendingRequest !== undefined) {
         return this.#deniedConnectionLink("connection_link_in_progress");
       }
 
-      const requestCount = this.#countRows("connection_link_requests");
+      const requestCount =
+        transaction.select({ value: count() }).from(connectionLinkRequests).get()?.value ?? 0;
 
       if (requestCount >= MAXIMUM_CONNECTION_LINK_REQUESTS_PER_OWNER) {
         return this.#deniedConnectionLink("connection_link_request_limit_exceeded");
       }
 
-      const connectionCount = this.#countRows("connections");
-      const pendingCount = this.#sql
-        .exec<Record<string, SqlStorageValue>>(
-          `SELECT COUNT(*) AS count
-           FROM connection_link_requests
-           WHERE status = 'pending' AND recover_after > ?`,
-          currentTime,
-        )
-        .one()["count"];
+      const connectionCount =
+        transaction.select({ value: count() }).from(connections).get()?.value ?? 0;
+      const pendingCount =
+        transaction
+          .select({ value: count() })
+          .from(connectionLinkRequests)
+          .where(
+            and(
+              eq(connectionLinkRequests.status, "pending"),
+              gt(connectionLinkRequests.recoverAfter, currentTime),
+            ),
+          )
+          .get()?.value ?? 0;
 
-      if (
-        typeof pendingCount !== "number" ||
-        connectionCount + pendingCount >= MAXIMUM_CONNECTIONS_PER_OWNER
-      ) {
+      if (connectionCount + pendingCount >= MAXIMUM_CONNECTIONS_PER_OWNER) {
         return this.#deniedConnectionLink("connection_limit_exceeded");
       }
 
       const reservationId = `connection_link_${crypto.randomUUID()}`;
 
-      this.#sql.exec(
-        `INSERT INTO connection_link_requests
-           (client_id, idempotency_key, request_digest, auth_config_id, reservation_id,
-            status, recover_after, created_at)
-         VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
-        authorization.authority.clientId,
-        request.data.idempotencyKey,
-        requestDigest,
-        request.data.authConfigId,
-        reservationId,
-        recoverAfter,
-        currentTime,
-      );
-      this.#sql.exec(
-        `INSERT INTO connection_authorization_returns
-           (reservation_id, token_digest, status, expires_at, created_at)
-         VALUES (?, ?, 'pending', ?, ?)`,
-        reservationId,
-        authorizationTokenDigest,
-        recoverAfter,
-        currentTime,
-      );
-      this.#sql.exec(
-        `INSERT INTO audit_events (occurred_at, client_id, action, subject_id)
-         VALUES (?, ?, 'connection.link_reserved', ?)`,
-        currentTime,
-        authorization.authority.clientId,
-        reservationId,
-      );
+      transaction
+        .insert(connectionLinkRequests)
+        .values({
+          authConfigId: request.data.authConfigId,
+          clientId: authorization.authority.clientId,
+          createdAt: currentTime,
+          idempotencyKey: request.data.idempotencyKey,
+          recoverAfter,
+          requestDigest,
+          reservationId,
+          status: "pending",
+        })
+        .run();
+      transaction
+        .insert(connectionAuthorizationReturns)
+        .values({
+          createdAt: currentTime,
+          expiresAt: recoverAfter,
+          reservationId,
+          status: "pending",
+          tokenDigest: authorizationTokenDigest,
+        })
+        .run();
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: "connection.link_reserved",
+          clientId: authorization.authority.clientId,
+          occurredAt: currentTime,
+          subjectId: reservationId,
+        })
+        .run();
 
       return reserveConnectionLinkResultSchema.parse({
         authorizationExpiresAt: new Date(recoverAfter).toISOString(),
@@ -676,46 +546,50 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     const authorizationTokenDigest = await digestCanonicalRequest(request.data.authorizationToken);
-    const result = this.#storage.transactionSync(() => {
+    const result = this.#database.transaction((transaction) => {
       const currentTime = Date.now();
 
-      this.#expireConnectionLinkRequests(currentTime);
+      this.#expireConnectionLinkRequests(transaction, currentTime);
 
-      const row = this.#sql
-        .exec<Record<string, SqlStorageValue>>(
-          `SELECT
-             r.status,
-             r.recover_after,
-             r.connection_id,
-             r.redirect_url,
-             r.expires_at,
-             r.auth_config_id,
-             c.provider_connection_id,
-             a.status AS authorization_status,
-             a.token_digest AS authorization_token_digest
-           FROM connection_link_requests r
-           LEFT JOIN connection_authorization_returns a
-             ON a.reservation_id = r.reservation_id
-           LEFT JOIN connections c ON c.connection_id = r.connection_id
-           WHERE r.client_id = ? AND r.reservation_id = ?`,
-          authorization.authority.clientId,
-          request.data.reservationId,
+      const row = transaction
+        .select({
+          authConfigId: connectionLinkRequests.authConfigId,
+          authorizationStatus: connectionAuthorizationReturns.status,
+          authorizationTokenDigest: connectionAuthorizationReturns.tokenDigest,
+          connectionId: connectionLinkRequests.connectionId,
+          expiresAt: connectionLinkRequests.expiresAt,
+          providerConnectionId: connections.providerConnectionId,
+          recoverAfter: connectionLinkRequests.recoverAfter,
+          redirectUrl: connectionLinkRequests.redirectUrl,
+          status: connectionLinkRequests.status,
+        })
+        .from(connectionLinkRequests)
+        .leftJoin(
+          connectionAuthorizationReturns,
+          eq(connectionAuthorizationReturns.reservationId, connectionLinkRequests.reservationId),
         )
-        .toArray()[0];
+        .leftJoin(connections, eq(connections.connectionId, connectionLinkRequests.connectionId))
+        .where(
+          and(
+            eq(connectionLinkRequests.clientId, authorization.authority.clientId),
+            eq(connectionLinkRequests.reservationId, request.data.reservationId),
+          ),
+        )
+        .all()[0];
 
-      if (row === undefined || row["authorization_token_digest"] !== authorizationTokenDigest) {
+      if (row === undefined || row.authorizationTokenDigest !== authorizationTokenDigest) {
         return this.#deniedConnectionLink("invalid_request");
       }
 
-      if (row["status"] === "expired") {
+      if (row.status === "expired") {
         return this.#deniedConnectionLink("connection_link_expired");
       }
 
-      if (row["status"] === "completed") {
+      if (row.status === "completed") {
         if (
-          row["provider_connection_id"] !== request.data.providerConnectionId ||
-          row["redirect_url"] !== request.data.url ||
-          row["expires_at"] !== Date.parse(request.data.expiresAt)
+          row.providerConnectionId !== request.data.providerConnectionId ||
+          row.redirectUrl !== request.data.url ||
+          row.expiresAt !== Date.parse(request.data.expiresAt)
         ) {
           return this.#deniedConnectionLink("invalid_request");
         }
@@ -727,13 +601,12 @@ export class OwnerControlPlane extends DurableObject {
         });
       }
 
-      const recoverAfter = row["recover_after"];
+      const recoverAfter = row.recoverAfter;
       const expiresAt = Date.parse(request.data.expiresAt);
 
       if (
-        row["status"] !== "pending" ||
-        row["authorization_status"] !== "pending" ||
-        typeof recoverAfter !== "number" ||
+        row.status !== "pending" ||
+        row.authorizationStatus !== "pending" ||
         currentTime >= recoverAfter ||
         expiresAt <= currentTime ||
         expiresAt > recoverAfter
@@ -741,78 +614,75 @@ export class OwnerControlPlane extends DurableObject {
         return this.#deniedConnectionLink("connection_link_outcome_unknown");
       }
 
-      const authConfigId = row["auth_config_id"];
-
-      if (typeof authConfigId !== "string") {
-        throw new Error("Invalid connection-link storage.");
-      }
-
-      const existingConnection = this.#sql
-        .exec<Record<string, SqlStorageValue>>(
-          `SELECT connection_id, auth_config_id
-           FROM connections
-           WHERE provider_connection_id = ?`,
-          request.data.providerConnectionId,
-        )
-        .toArray()[0];
+      const authConfigId = row.authConfigId;
+      const existingConnection = transaction
+        .select({
+          authConfigId: connections.authConfigId,
+          connectionId: connections.connectionId,
+        })
+        .from(connections)
+        .where(eq(connections.providerConnectionId, request.data.providerConnectionId))
+        .all()[0];
       let connectionId: string;
 
       if (existingConnection === undefined) {
         connectionId = `connection_${crypto.randomUUID()}`;
-        this.#sql.exec(
-          `INSERT INTO connections
-             (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
-           VALUES (?, 'composio', ?, ?, 'initiated', ?)`,
-          connectionId,
-          request.data.providerConnectionId,
-          authConfigId,
-          currentTime,
-        );
+        transaction
+          .insert(connections)
+          .values({
+            authConfigId,
+            connectionId,
+            createdAt: currentTime,
+            provider: "composio",
+            providerConnectionId: request.data.providerConnectionId,
+            status: "initiated",
+          })
+          .run();
       } else {
-        if (existingConnection["auth_config_id"] !== authConfigId) {
+        if (existingConnection.authConfigId !== authConfigId) {
           return this.#deniedConnectionLink("connection_link_outcome_unknown");
         }
 
-        const storedConnectionId = existingConnection["connection_id"];
-
-        if (typeof storedConnectionId !== "string") {
-          throw new Error("Invalid connection storage.");
-        }
-
-        connectionId = storedConnectionId;
+        connectionId = existingConnection.connectionId;
       }
 
-      this.#sql.exec(
-        `UPDATE connection_link_requests
-         SET status = 'completed',
-             connection_id = ?,
-             redirect_url = ?,
-             expires_at = ?,
-             completed_at = ?
-         WHERE client_id = ? AND reservation_id = ? AND status = 'pending'`,
-        connectionId,
-        request.data.url,
-        expiresAt,
-        currentTime,
-        authorization.authority.clientId,
-        request.data.reservationId,
-      );
-      this.#sql.exec(
-        `UPDATE connection_authorization_returns
-         SET connection_id = ?, expires_at = ?
-         WHERE reservation_id = ? AND token_digest = ? AND status = 'pending'`,
-        connectionId,
-        expiresAt,
-        request.data.reservationId,
-        authorizationTokenDigest,
-      );
-      this.#sql.exec(
-        `INSERT INTO audit_events (occurred_at, client_id, action, subject_id)
-         VALUES (?, ?, 'connection.link_created', ?)`,
-        currentTime,
-        authorization.authority.clientId,
-        connectionId,
-      );
+      transaction
+        .update(connectionLinkRequests)
+        .set({
+          completedAt: currentTime,
+          connectionId,
+          expiresAt,
+          redirectUrl: request.data.url,
+          status: "completed",
+        })
+        .where(
+          and(
+            eq(connectionLinkRequests.clientId, authorization.authority.clientId),
+            eq(connectionLinkRequests.reservationId, request.data.reservationId),
+            eq(connectionLinkRequests.status, "pending"),
+          ),
+        )
+        .run();
+      transaction
+        .update(connectionAuthorizationReturns)
+        .set({ connectionId, expiresAt })
+        .where(
+          and(
+            eq(connectionAuthorizationReturns.reservationId, request.data.reservationId),
+            eq(connectionAuthorizationReturns.tokenDigest, authorizationTokenDigest),
+            eq(connectionAuthorizationReturns.status, "pending"),
+          ),
+        )
+        .run();
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: "connection.link_created",
+          clientId: authorization.authority.clientId,
+          occurredAt: currentTime,
+          subjectId: connectionId,
+        })
+        .run();
 
       return createConnectionLinkResultSchema.parse({
         connectionLink: {
@@ -835,6 +705,10 @@ export class OwnerControlPlane extends DurableObject {
   async recordConnectionAuthorizationReturn(
     input: unknown,
   ): Promise<RecordConnectionAuthorizationReturnResult> {
+    if (!this.#migrationReady) {
+      return this.#deniedConnectionAuthorizationReturn();
+    }
+
     const request = recordConnectionAuthorizationReturnInputSchema.safeParse(input);
 
     if (!request.success) {
@@ -843,36 +717,44 @@ export class OwnerControlPlane extends DurableObject {
 
     const tokenDigest = await digestCanonicalRequest(request.data.authorizationToken);
 
-    return this.#storage.transactionSync(() => {
+    return this.#database.transaction((transaction) => {
       const currentTime = Date.now();
 
-      this.#expireConnectionLinkRequests(currentTime);
+      this.#expireConnectionLinkRequests(transaction, currentTime);
 
-      const row = this.#sql
-        .exec<Record<string, SqlStorageValue>>(
-          `SELECT
-             a.status AS authorization_status,
-             a.expires_at AS authorization_expires_at,
-             a.connection_id,
-             r.status AS request_status,
-             r.client_id,
-             c.provider_connection_id
-           FROM connection_authorization_returns a
-           JOIN connection_link_requests r ON r.reservation_id = a.reservation_id
-           LEFT JOIN connections c ON c.connection_id = a.connection_id
-           WHERE a.reservation_id = ? AND a.token_digest = ?`,
-          request.data.reservationId,
-          tokenDigest,
+      const row = transaction
+        .select({
+          authorizationExpiresAt: connectionAuthorizationReturns.expiresAt,
+          authorizationStatus: connectionAuthorizationReturns.status,
+          clientId: connectionLinkRequests.clientId,
+          connectionId: connectionAuthorizationReturns.connectionId,
+          providerConnectionId: connections.providerConnectionId,
+          requestStatus: connectionLinkRequests.status,
+        })
+        .from(connectionAuthorizationReturns)
+        .innerJoin(
+          connectionLinkRequests,
+          eq(connectionLinkRequests.reservationId, connectionAuthorizationReturns.reservationId),
         )
-        .toArray()[0];
+        .leftJoin(
+          connections,
+          eq(connections.connectionId, connectionAuthorizationReturns.connectionId),
+        )
+        .where(
+          and(
+            eq(connectionAuthorizationReturns.reservationId, request.data.reservationId),
+            eq(connectionAuthorizationReturns.tokenDigest, tokenDigest),
+          ),
+        )
+        .all()[0];
 
       if (row === undefined) {
         return this.#deniedConnectionAuthorizationReturn();
       }
 
       const desiredOutcome = request.data.status === "success" ? "returned" : "failed";
-      const currentOutcome = row["authorization_status"];
-      const storedProviderConnectionId = row["provider_connection_id"];
+      const currentOutcome = row.authorizationStatus;
+      const storedProviderConnectionId = row.providerConnectionId;
 
       if (currentOutcome === "returned" || currentOutcome === "failed") {
         if (
@@ -893,18 +775,16 @@ export class OwnerControlPlane extends DurableObject {
         });
       }
 
-      const authorizationExpiresAt = row["authorization_expires_at"];
-      const connectionId = row["connection_id"];
-      const clientId = row["client_id"];
+      const authorizationExpiresAt = row.authorizationExpiresAt;
+      const connectionId = row.connectionId;
+      const clientId = row.clientId;
 
       if (
         currentOutcome !== "pending" ||
-        row["request_status"] !== "completed" ||
-        typeof authorizationExpiresAt !== "number" ||
+        row.requestStatus !== "completed" ||
         authorizationExpiresAt <= currentTime ||
-        typeof connectionId !== "string" ||
-        typeof clientId !== "string" ||
-        typeof storedProviderConnectionId !== "string" ||
+        connectionId === null ||
+        storedProviderConnectionId === null ||
         (request.data.providerConnectionId !== undefined &&
           request.data.providerConnectionId !== storedProviderConnectionId) ||
         (desiredOutcome === "returned" &&
@@ -913,25 +793,29 @@ export class OwnerControlPlane extends DurableObject {
         return this.#deniedConnectionAuthorizationReturn();
       }
 
-      this.#sql.exec(
-        `UPDATE connection_authorization_returns
-         SET status = ?, completed_at = ?
-         WHERE reservation_id = ? AND token_digest = ? AND status = 'pending'`,
-        desiredOutcome,
-        currentTime,
-        request.data.reservationId,
-        tokenDigest,
-      );
-      this.#sql.exec(
-        `INSERT INTO audit_events (occurred_at, client_id, action, subject_id)
-         VALUES (?, ?, ?, ?)`,
-        currentTime,
-        clientId,
-        desiredOutcome === "returned"
-          ? "connection.authorization_returned"
-          : "connection.authorization_failed",
-        connectionId,
-      );
+      transaction
+        .update(connectionAuthorizationReturns)
+        .set({ completedAt: currentTime, status: desiredOutcome })
+        .where(
+          and(
+            eq(connectionAuthorizationReturns.reservationId, request.data.reservationId),
+            eq(connectionAuthorizationReturns.tokenDigest, tokenDigest),
+            eq(connectionAuthorizationReturns.status, "pending"),
+          ),
+        )
+        .run();
+      transaction
+        .insert(auditEvents)
+        .values({
+          action:
+            desiredOutcome === "returned"
+              ? "connection.authorization_returned"
+              : "connection.authorization_failed",
+          clientId,
+          occurredAt: currentTime,
+          subjectId: connectionId,
+        })
+        .run();
 
       return recordConnectionAuthorizationReturnResultSchema.parse({
         ok: true,
@@ -942,27 +826,32 @@ export class OwnerControlPlane extends DurableObject {
   }
 
   override async alarm(): Promise<void> {
-    const nextCleanupAt = this.#storage.transactionSync(() => {
+    if (!this.#migrationReady) {
+      return;
+    }
+
+    const nextCleanupAt = this.#database.transaction((transaction) => {
       const currentTime = Date.now();
 
-      this.#expireConnectionLinkRequests(currentTime);
+      this.#expireConnectionLinkRequests(transaction, currentTime);
 
-      const nextCleanup = this.#sql
-        .exec<Record<string, SqlStorageValue>>(
-          `SELECT MIN(cleanup_at) AS cleanup_at
-           FROM (
-             SELECT expires_at AS cleanup_at
-             FROM connection_link_requests
-             WHERE status = 'completed'
-             UNION ALL
-             SELECT recover_after AS cleanup_at
-             FROM connection_link_requests
-             WHERE status = 'pending'
-           )`,
-        )
-        .one()["cleanup_at"];
+      const completedCleanup =
+        transaction
+          .select({ value: min(connectionLinkRequests.expiresAt) })
+          .from(connectionLinkRequests)
+          .where(eq(connectionLinkRequests.status, "completed"))
+          .get()?.value ?? null;
+      const pendingCleanup =
+        transaction
+          .select({ value: min(connectionLinkRequests.recoverAfter) })
+          .from(connectionLinkRequests)
+          .where(eq(connectionLinkRequests.status, "pending"))
+          .get()?.value ?? null;
+      const scheduled = [completedCleanup, pendingCleanup].filter(
+        (value): value is number => value !== null,
+      );
 
-      return typeof nextCleanup === "number" ? nextCleanup : null;
+      return scheduled.length === 0 ? null : Math.min(...scheduled);
     });
 
     if (nextCleanupAt !== null) {
@@ -1033,35 +922,31 @@ export class OwnerControlPlane extends DurableObject {
       return this.#deniedAgent("invalid_request");
     }
 
-    const bindings: Array<number | string> = [request.data.id];
-    let cursorClause = "";
-
-    if (request.data.cursor !== undefined) {
-      cursorClause = "AND r.revision < ?";
-      bindings.push(request.data.cursor);
-    }
-
-    bindings.push(request.data.limit + 1);
-    const rows = this.#sql
-      .exec<Record<string, SqlStorageValue>>(
-        `SELECT
-             a.agent_id,
-             r.revision AS current_revision,
-             a.created_at,
-             r.created_at AS revised_at,
-             r.name,
-             r.model,
-             r.execution_limits,
-             r.capability_grants
-           FROM agents a
-           JOIN agent_revisions r ON r.agent_id = a.agent_id
-           WHERE a.agent_id = ?
-             ${cursorClause}
-           ORDER BY r.revision DESC
-           LIMIT ?`,
-        ...bindings,
+    const rows = this.#database
+      .select({
+        agentId: agents.agentId,
+        capabilityGrants: agentRevisions.capabilityGrants,
+        createdAt: agents.createdAt,
+        currentRevision: agentRevisions.revision,
+        executionLimits: agentRevisions.executionLimits,
+        instructions: agentRevisions.instructions,
+        model: agentRevisions.model,
+        name: agentRevisions.name,
+        revisedAt: agentRevisions.createdAt,
+      })
+      .from(agents)
+      .innerJoin(agentRevisions, eq(agentRevisions.agentId, agents.agentId))
+      .where(
+        and(
+          eq(agents.agentId, request.data.id),
+          request.data.cursor === undefined
+            ? undefined
+            : lt(agentRevisions.revision, request.data.cursor),
+        ),
       )
-      .toArray();
+      .orderBy(desc(agentRevisions.revision))
+      .limit(request.data.limit + 1)
+      .all();
 
     if (rows.length === 0 && !this.#agentExists(request.data.id)) {
       return this.#deniedAgent("agent_not_found");
@@ -1091,31 +976,38 @@ export class OwnerControlPlane extends DurableObject {
 
     const requestDigest = await digestAgentUpdate(request.data);
 
-    return this.#storage.transactionSync(() => {
-      const existingUpdate = this.#sql
-        .exec<Record<string, SqlStorageValue>>(
-          `SELECT
-               a.agent_id,
-               u.revision AS current_revision,
-               u.request_digest,
-               a.created_at,
-               r.name,
-               r.model,
-               r.instructions,
-               r.execution_limits,
-               r.capability_grants
-             FROM agent_updates u
-             JOIN agents a ON a.agent_id = u.agent_id
-             JOIN agent_revisions r
-               ON r.agent_id = u.agent_id AND r.revision = u.revision
-             WHERE u.client_id = ? AND u.idempotency_key = ?`,
-          authorization.authority.clientId,
-          request.data.idempotencyKey,
+    return this.#database.transaction((transaction) => {
+      const existingUpdate = transaction
+        .select({
+          agentId: agents.agentId,
+          capabilityGrants: agentRevisions.capabilityGrants,
+          createdAt: agents.createdAt,
+          currentRevision: agentUpdates.revision,
+          executionLimits: agentRevisions.executionLimits,
+          instructions: agentRevisions.instructions,
+          model: agentRevisions.model,
+          name: agentRevisions.name,
+          requestDigest: agentUpdates.requestDigest,
+        })
+        .from(agentUpdates)
+        .innerJoin(agents, eq(agents.agentId, agentUpdates.agentId))
+        .innerJoin(
+          agentRevisions,
+          and(
+            eq(agentRevisions.agentId, agentUpdates.agentId),
+            eq(agentRevisions.revision, agentUpdates.revision),
+          ),
         )
-        .toArray()[0];
+        .where(
+          and(
+            eq(agentUpdates.clientId, authorization.authority.clientId),
+            eq(agentUpdates.idempotencyKey, request.data.idempotencyKey),
+          ),
+        )
+        .all()[0];
 
       if (existingUpdate !== undefined) {
-        if (existingUpdate["request_digest"] !== requestDigest) {
+        if (existingUpdate.requestDigest !== requestDigest) {
           return this.#deniedAgent("idempotency_conflict");
         }
 
@@ -1126,7 +1018,27 @@ export class OwnerControlPlane extends DurableObject {
         });
       }
 
-      const currentRow = this.#currentAgentRow(request.data.id);
+      const currentRow = transaction
+        .select({
+          agentId: agents.agentId,
+          capabilityGrants: agentRevisions.capabilityGrants,
+          createdAt: agents.createdAt,
+          currentRevision: agents.currentRevision,
+          executionLimits: agentRevisions.executionLimits,
+          instructions: agentRevisions.instructions,
+          model: agentRevisions.model,
+          name: agentRevisions.name,
+        })
+        .from(agents)
+        .innerJoin(
+          agentRevisions,
+          and(
+            eq(agentRevisions.agentId, agents.agentId),
+            eq(agentRevisions.revision, agents.currentRevision),
+          ),
+        )
+        .where(eq(agents.agentId, request.data.id))
+        .all()[0];
 
       if (currentRow === undefined) {
         return this.#deniedAgent("agent_not_found");
@@ -1142,8 +1054,12 @@ export class OwnerControlPlane extends DurableObject {
         currentAgent.name === request.data.name &&
         currentAgent.model === request.data.model &&
         currentAgent.instructions === request.data.instructions &&
-        JSON.stringify(currentAgent.executionLimits) ===
-          JSON.stringify(request.data.executionLimits)
+        currentAgent.executionLimits.maxDurationSeconds ===
+          request.data.executionLimits.maxDurationSeconds &&
+        currentAgent.executionLimits.maxModelTokens ===
+          request.data.executionLimits.maxModelTokens &&
+        currentAgent.executionLimits.maxToolCalls === request.data.executionLimits.maxToolCalls &&
+        currentAgent.executionLimits.maxTurns === request.data.executionLimits.maxTurns
       ) {
         return this.#deniedAgent("no_changes");
       }
@@ -1152,50 +1068,46 @@ export class OwnerControlPlane extends DurableObject {
         return this.#deniedAgent("agent_revision_limit_exceeded");
       }
 
-      const capabilityGrants = currentRow["capability_grants"];
       const updatedAt = Date.now();
       const revision = currentAgent.revision + 1;
 
-      if (typeof capabilityGrants !== "string") {
-        throw new Error("Invalid Agent capability grants.");
-      }
-
-      this.#sql.exec(
-        `INSERT INTO agent_revisions
-             (agent_id, revision, name, model, instructions, execution_limits,
-              capability_grants, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        currentAgent.id,
-        revision,
-        request.data.name,
-        request.data.model,
-        request.data.instructions,
-        JSON.stringify(request.data.executionLimits),
-        capabilityGrants,
-        updatedAt,
-      );
-      this.#sql.exec(
-        "UPDATE agents SET current_revision = ? WHERE agent_id = ?",
-        revision,
-        currentAgent.id,
-      );
-      this.#sql.exec(
-        `INSERT INTO agent_updates
-             (client_id, idempotency_key, request_digest, agent_id, revision)
-           VALUES (?, ?, ?, ?, ?)`,
-        authorization.authority.clientId,
-        request.data.idempotencyKey,
-        requestDigest,
-        currentAgent.id,
-        revision,
-      );
-      this.#sql.exec(
-        `INSERT INTO audit_events (occurred_at, client_id, action, subject_id)
-           VALUES (?, ?, 'agent.updated', ?)`,
-        updatedAt,
-        authorization.authority.clientId,
-        currentAgent.id,
-      );
+      transaction
+        .insert(agentRevisions)
+        .values({
+          agentId: currentAgent.id,
+          capabilityGrants: currentAgent.capabilityGrants,
+          createdAt: updatedAt,
+          executionLimits: request.data.executionLimits,
+          instructions: request.data.instructions,
+          model: request.data.model,
+          name: request.data.name,
+          revision,
+        })
+        .run();
+      transaction
+        .update(agents)
+        .set({ currentRevision: revision })
+        .where(eq(agents.agentId, currentAgent.id))
+        .run();
+      transaction
+        .insert(agentUpdates)
+        .values({
+          agentId: currentAgent.id,
+          clientId: authorization.authority.clientId,
+          idempotencyKey: request.data.idempotencyKey,
+          requestDigest,
+          revision,
+        })
+        .run();
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: "agent.updated",
+          clientId: authorization.authority.clientId,
+          occurredAt: updatedAt,
+          subjectId: currentAgent.id,
+        })
+        .run();
 
       return updateAgentResultSchema.parse({
         agent: {
@@ -1227,40 +1139,38 @@ export class OwnerControlPlane extends DurableObject {
       return this.#deniedAgent("invalid_request");
     }
 
-    const bindings: Array<number | string> = [];
-    let cursorClause = "";
-
-    if (request.data.cursor !== undefined) {
-      cursorClause = "WHERE a.agent_id > ?";
-      bindings.push(request.data.cursor);
-    }
-
-    bindings.push(request.data.limit + 1);
-    const rows = this.#sql
-      .exec<Record<string, SqlStorageValue>>(
-        `SELECT
-             a.agent_id,
-             a.current_revision,
-             a.created_at,
-             r.name,
-             r.model,
-             r.instructions,
-             r.execution_limits,
-             r.capability_grants
-           FROM agents a
-           JOIN agent_revisions r
-             ON r.agent_id = a.agent_id AND r.revision = a.current_revision
-           ${cursorClause}
-           ORDER BY a.agent_id
-         LIMIT ?`,
-        ...bindings,
+    const rows = this.#database
+      .select({
+        agentId: agents.agentId,
+        capabilityGrants: agentRevisions.capabilityGrants,
+        createdAt: agents.createdAt,
+        currentRevision: agents.currentRevision,
+        executionLimits: agentRevisions.executionLimits,
+        instructions: agentRevisions.instructions,
+        model: agentRevisions.model,
+        name: agentRevisions.name,
+      })
+      .from(agents)
+      .innerJoin(
+        agentRevisions,
+        and(
+          eq(agentRevisions.agentId, agents.agentId),
+          eq(agentRevisions.revision, agents.currentRevision),
+        ),
       )
-      .toArray();
+      .where(
+        request.data.cursor === undefined ? undefined : gt(agents.agentId, request.data.cursor),
+      )
+      .orderBy(asc(agents.agentId))
+      .limit(request.data.limit + 1)
+      .all();
     const hasMore = rows.length > request.data.limit;
-    const agents = rows.slice(0, request.data.limit).map((row) => this.#agentSummaryFromRow(row));
-    const nextCursor = hasMore ? (agents.at(-1)?.id ?? null) : null;
+    const agentSummaries = rows
+      .slice(0, request.data.limit)
+      .map((row) => this.#agentSummaryFromRow(row));
+    const nextCursor = hasMore ? (agentSummaries.at(-1)?.id ?? null) : null;
 
-    return listAgentsResultSchema.parse({ agents, nextCursor, ok: true });
+    return listAgentsResultSchema.parse({ agents: agentSummaries, nextCursor, ok: true });
   }
 
   listConnections(authorityInput: unknown, input: unknown): ListConnectionsResult {
@@ -1276,144 +1186,141 @@ export class OwnerControlPlane extends DurableObject {
       return this.#deniedConnectionRead("invalid_request");
     }
 
-    const bindings: Array<number | string> = [];
-    let cursorClause = "";
+    const rows = this.#database
+      .select({
+        authConfigId: connections.authConfigId,
+        connectionId: connections.connectionId,
+        createdAt: connections.createdAt,
+        status: connections.status,
+      })
+      .from(connections)
+      .where(
+        request.data.cursor === undefined
+          ? undefined
+          : gt(connections.connectionId, request.data.cursor),
+      )
+      .orderBy(asc(connections.connectionId))
+      .limit(request.data.limit + 1)
+      .all();
+    const connectionIds = rows.map((row) => row.connectionId);
+    const authorizationRows =
+      connectionIds.length === 0
+        ? []
+        : this.#database
+            .select({
+              connectionId: connectionAuthorizationReturns.connectionId,
+              reservationId: connectionAuthorizationReturns.reservationId,
+              status: connectionAuthorizationReturns.status,
+            })
+            .from(connectionAuthorizationReturns)
+            .where(inArray(connectionAuthorizationReturns.connectionId, connectionIds))
+            .orderBy(
+              desc(connectionAuthorizationReturns.createdAt),
+              desc(connectionAuthorizationReturns.reservationId),
+            )
+            .all();
+    const authorizationByConnection = new Map<string, StoredConnectionAuthorizationOutcome>();
 
-    if (request.data.cursor !== undefined) {
-      cursorClause = "WHERE c.connection_id > ?";
-      bindings.push(request.data.cursor);
+    for (const authorizationRow of authorizationRows) {
+      if (
+        authorizationRow.connectionId !== null &&
+        !authorizationByConnection.has(authorizationRow.connectionId)
+      ) {
+        authorizationByConnection.set(authorizationRow.connectionId, authorizationRow.status);
+      }
     }
 
-    bindings.push(request.data.limit + 1);
-    const rows = this.#sql
-      .exec<Record<string, SqlStorageValue>>(
-        `SELECT
-           c.connection_id,
-           c.auth_config_id,
-           c.status,
-           c.created_at,
-           COALESCE(
-             (
-               SELECT a.status
-               FROM connection_authorization_returns a
-               WHERE a.connection_id = c.connection_id
-               ORDER BY a.created_at DESC, a.rowid DESC
-               LIMIT 1
-             ),
-             'untracked'
-           ) AS authorization_outcome
-         FROM connections c
-         ${cursorClause}
-         ORDER BY c.connection_id
-         LIMIT ?`,
-        ...bindings,
-      )
-      .toArray();
+    const rowsWithAuthorization: StoredConnectionSummaryRow[] = rows.map((row) => ({
+      ...row,
+      authorizationOutcome: authorizationByConnection.get(row.connectionId) ?? "untracked",
+    }));
     const hasMore = rows.length > request.data.limit;
-    const connections = rows
+    const connectionSummaries = rowsWithAuthorization
       .slice(0, request.data.limit)
       .map((row) => this.#connectionSummaryFromRow(row));
-    const nextCursor = hasMore ? (connections.at(-1)?.connectionId ?? null) : null;
+    const nextCursor = hasMore ? (connectionSummaries.at(-1)?.connectionId ?? null) : null;
 
-    return listConnectionsResultSchema.parse({ connections, nextCursor, ok: true });
-  }
-
-  #agentFromRow(row: Record<string, SqlStorageValue>): Agent {
-    const createdAt = row["created_at"];
-    const executionLimits = row["execution_limits"];
-    const capabilityGrants = row["capability_grants"];
-
-    if (
-      typeof createdAt !== "number" ||
-      typeof executionLimits !== "string" ||
-      typeof capabilityGrants !== "string"
-    ) {
-      throw new Error("Invalid agent storage.");
-    }
-
-    return agentSchema.parse({
-      capabilityGrants: JSON.parse(capabilityGrants),
-      createdAt: new Date(createdAt).toISOString(),
-      executionLimits: JSON.parse(executionLimits),
-      id: row["agent_id"],
-      instructions: row["instructions"] ?? "",
-      model: row["model"],
-      name: row["name"],
-      revision: row["current_revision"],
+    return listConnectionsResultSchema.parse({
+      connections: connectionSummaries,
+      nextCursor,
+      ok: true,
     });
   }
 
-  #agentRevisionFromRow(row: Record<string, SqlStorageValue>): AgentRevision {
-    const revisedAt = row["revised_at"];
+  #agentFromRow(row: StoredAgentRow): Agent {
+    return agentSchema.parse({
+      capabilityGrants: row.capabilityGrants,
+      createdAt: new Date(row.createdAt).toISOString(),
+      executionLimits: row.executionLimits,
+      id: row.agentId,
+      instructions: row.instructions,
+      model: row.model,
+      name: row.name,
+      revision: row.currentRevision,
+    });
+  }
 
-    if (typeof revisedAt !== "number") {
-      throw new Error("Invalid Agent revision storage.");
-    }
-
+  #agentRevisionFromRow(row: StoredAgentRevisionRow): AgentRevision {
     return agentRevisionSchema.parse({
       ...this.#agentFromRow(row),
-      revisedAt: new Date(revisedAt).toISOString(),
+      revisedAt: new Date(row.revisedAt).toISOString(),
     });
   }
 
-  #agentRevisionRow(
-    agentId: string,
-    revision: number,
-  ): Record<string, SqlStorageValue> | undefined {
-    return this.#sql
-      .exec<Record<string, SqlStorageValue>>(
-        `SELECT
-             a.agent_id,
-             r.revision AS current_revision,
-             a.created_at,
-             r.created_at AS revised_at,
-             r.name,
-             r.model,
-             r.instructions,
-             r.execution_limits,
-             r.capability_grants
-           FROM agents a
-           JOIN agent_revisions r ON r.agent_id = a.agent_id
-           WHERE a.agent_id = ? AND r.revision = ?`,
-        agentId,
-        revision,
-      )
-      .toArray()[0];
+  #agentRevisionRow(agentId: string, revision: number): StoredAgentRevisionRow | undefined {
+    return this.#database
+      .select({
+        agentId: agents.agentId,
+        capabilityGrants: agentRevisions.capabilityGrants,
+        createdAt: agents.createdAt,
+        currentRevision: agentRevisions.revision,
+        executionLimits: agentRevisions.executionLimits,
+        instructions: agentRevisions.instructions,
+        model: agentRevisions.model,
+        name: agentRevisions.name,
+        revisedAt: agentRevisions.createdAt,
+      })
+      .from(agents)
+      .innerJoin(agentRevisions, eq(agentRevisions.agentId, agents.agentId))
+      .where(and(eq(agents.agentId, agentId), eq(agentRevisions.revision, revision)))
+      .all()[0];
   }
 
   #agentExists(agentId: string): boolean {
     return (
-      this.#sql
-        .exec<Record<string, SqlStorageValue>>(
-          "SELECT agent_id FROM agents WHERE agent_id = ?",
-          agentId,
-        )
-        .toArray()[0] !== undefined
+      this.#database
+        .select({ agentId: agents.agentId })
+        .from(agents)
+        .where(eq(agents.agentId, agentId))
+        .all()[0] !== undefined
     );
   }
 
-  #currentAgentRow(agentId: string): Record<string, SqlStorageValue> | undefined {
-    return this.#sql
-      .exec<Record<string, SqlStorageValue>>(
-        `SELECT
-             a.agent_id,
-             a.current_revision,
-             a.created_at,
-             r.name,
-             r.model,
-             r.instructions,
-             r.execution_limits,
-             r.capability_grants
-           FROM agents a
-           JOIN agent_revisions r
-             ON r.agent_id = a.agent_id AND r.revision = a.current_revision
-           WHERE a.agent_id = ?`,
-        agentId,
+  #currentAgentRow(agentId: string): StoredAgentRow | undefined {
+    return this.#database
+      .select({
+        agentId: agents.agentId,
+        capabilityGrants: agentRevisions.capabilityGrants,
+        createdAt: agents.createdAt,
+        currentRevision: agents.currentRevision,
+        executionLimits: agentRevisions.executionLimits,
+        instructions: agentRevisions.instructions,
+        model: agentRevisions.model,
+        name: agentRevisions.name,
+      })
+      .from(agents)
+      .innerJoin(
+        agentRevisions,
+        and(
+          eq(agentRevisions.agentId, agents.agentId),
+          eq(agentRevisions.revision, agents.currentRevision),
+        ),
       )
-      .toArray()[0];
+      .where(eq(agents.agentId, agentId))
+      .all()[0];
   }
 
-  #agentSummaryFromRow(row: Record<string, SqlStorageValue>): AgentSummary {
+  #agentSummaryFromRow(row: StoredAgentRow): AgentSummary {
     const agent = this.#agentFromRow(row);
 
     return agentSummarySchema.parse({
@@ -1427,100 +1334,72 @@ export class OwnerControlPlane extends DurableObject {
     });
   }
 
-  #agentRevisionSummaryFromRow(row: Record<string, SqlStorageValue>): AgentRevisionSummary {
-    const createdAt = row["created_at"];
-    const revisedAt = row["revised_at"];
-    const executionLimits = row["execution_limits"];
-    const capabilityGrants = row["capability_grants"];
-
-    if (
-      typeof createdAt !== "number" ||
-      typeof revisedAt !== "number" ||
-      typeof executionLimits !== "string" ||
-      typeof capabilityGrants !== "string"
-    ) {
-      throw new Error("Invalid Agent revision summary storage.");
-    }
-
+  #agentRevisionSummaryFromRow(row: StoredAgentRevisionRow): AgentRevisionSummary {
     return agentRevisionSummarySchema.parse({
-      capabilityGrants: JSON.parse(capabilityGrants),
-      createdAt: new Date(createdAt).toISOString(),
-      executionLimits: JSON.parse(executionLimits),
-      id: row["agent_id"],
-      model: row["model"],
-      name: row["name"],
-      revisedAt: new Date(revisedAt).toISOString(),
-      revision: row["current_revision"],
+      capabilityGrants: row.capabilityGrants,
+      createdAt: new Date(row.createdAt).toISOString(),
+      executionLimits: row.executionLimits,
+      id: row.agentId,
+      model: row.model,
+      name: row.name,
+      revisedAt: new Date(row.revisedAt).toISOString(),
+      revision: row.currentRevision,
     });
   }
 
-  #connectionLinkFromRow(row: Record<string, SqlStorageValue>) {
-    const connectionId = row["connection_id"];
-    const expiresAt = row["expires_at"];
-    const url = row["redirect_url"];
-
-    if (
-      typeof connectionId !== "string" ||
-      typeof expiresAt !== "number" ||
-      typeof url !== "string"
-    ) {
+  #connectionLinkFromRow(row: StoredConnectionLinkRow) {
+    if (row.connectionId === null || row.expiresAt === null || row.redirectUrl === null) {
       throw new Error("Invalid connection-link storage.");
     }
 
     return {
-      connectionId,
-      expiresAt: new Date(expiresAt).toISOString(),
-      url,
+      connectionId: row.connectionId,
+      expiresAt: new Date(row.expiresAt).toISOString(),
+      url: row.redirectUrl,
     };
   }
 
-  #connectionSummaryFromRow(row: Record<string, SqlStorageValue>): ConnectionSummary {
-    const createdAt = row["created_at"];
-
-    if (typeof createdAt !== "number") {
-      throw new Error("Invalid connection summary storage.");
-    }
-
+  #connectionSummaryFromRow(row: StoredConnectionSummaryRow): ConnectionSummary {
     return connectionSummarySchema.parse({
-      authorizationOutcome: row["authorization_outcome"],
-      authConfigId: row["auth_config_id"],
-      connectionId: row["connection_id"],
-      createdAt: new Date(createdAt).toISOString(),
-      status: row["status"],
+      authorizationOutcome: row.authorizationOutcome,
+      authConfigId: row.authConfigId,
+      connectionId: row.connectionId,
+      createdAt: new Date(row.createdAt).toISOString(),
+      status: row.status,
     });
   }
 
-  #countRows(table: "connection_link_requests" | "connections"): number {
-    const count = this.#sql
-      .exec<Record<string, SqlStorageValue>>(`SELECT COUNT(*) AS count FROM ${table}`)
-      .one()["count"];
-
-    if (typeof count !== "number") {
-      throw new Error("Invalid control-plane count.");
-    }
-
-    return count;
-  }
-
-  #expireConnectionLinkRequests(currentTime: number): void {
-    this.#sql.exec(
-      `UPDATE connection_authorization_returns
-       SET status = 'expired'
-       WHERE status = 'pending' AND expires_at <= ?`,
-      currentTime,
-    );
-    this.#sql.exec(
-      `UPDATE connection_link_requests
-       SET status = 'expired', redirect_url = NULL
-       WHERE status = 'completed' AND expires_at <= ?`,
-      currentTime,
-    );
-    this.#sql.exec(
-      `UPDATE connection_link_requests
-       SET status = 'abandoned'
-       WHERE status = 'pending' AND recover_after <= ?`,
-      currentTime,
-    );
+  #expireConnectionLinkRequests(database: ControlPlaneWriter, currentTime: number): void {
+    database
+      .update(connectionAuthorizationReturns)
+      .set({ status: "expired" })
+      .where(
+        and(
+          eq(connectionAuthorizationReturns.status, "pending"),
+          lte(connectionAuthorizationReturns.expiresAt, currentTime),
+        ),
+      )
+      .run();
+    database
+      .update(connectionLinkRequests)
+      .set({ redirectUrl: null, status: "expired" })
+      .where(
+        and(
+          eq(connectionLinkRequests.status, "completed"),
+          lte(connectionLinkRequests.expiresAt, currentTime),
+        ),
+      )
+      .run();
+    database
+      .update(connectionLinkRequests)
+      .set({ status: "abandoned" })
+      .where(
+        and(
+          eq(connectionLinkRequests.status, "pending"),
+          lte(connectionLinkRequests.recoverAfter, currentTime),
+        ),
+      )
+      .run();
   }
 
   async #scheduleConnectionLinkCleanup(cleanupAt: number): Promise<void> {
@@ -1532,6 +1411,10 @@ export class OwnerControlPlane extends DurableObject {
   }
 
   #authorize(authorityInput: unknown, requiredScope: OwnerScope): AuthorityResult {
+    if (!this.#migrationReady) {
+      return { code: "incompatible_schema", ok: false };
+    }
+
     const result = ownerAuthoritySchema.safeParse(authorityInput);
 
     if (!result.success || !this.#objectName) {
@@ -1544,25 +1427,25 @@ export class OwnerControlPlane extends DurableObject {
       return { code: "owner_mismatch", ok: false };
     }
 
-    this.#sql.exec(
-      `INSERT OR IGNORE INTO control_plane (singleton, owner_key, schema_version)
-       VALUES (1, ?, ?)`,
-      authority.ownerKey,
-      CONTROL_PLANE_SCHEMA_VERSION,
-    );
+    this.#database
+      .insert(controlPlane)
+      .values({
+        ownerKey: authority.ownerKey,
+        singleton: 1,
+      })
+      .onConflictDoNothing()
+      .run();
 
-    const row = this.#sql
-      .exec<Record<string, SqlStorageValue>>(
-        "SELECT owner_key, schema_version FROM control_plane WHERE singleton = 1",
-      )
-      .one();
+    const row = this.#database
+      .select({
+        ownerKey: controlPlane.ownerKey,
+      })
+      .from(controlPlane)
+      .where(eq(controlPlane.singleton, 1))
+      .all()[0];
 
-    if (row["owner_key"] !== authority.ownerKey) {
+    if (row?.ownerKey !== authority.ownerKey) {
       return { code: "owner_mismatch", ok: false };
-    }
-
-    if (row["schema_version"] !== CONTROL_PLANE_SCHEMA_VERSION) {
-      return { code: "incompatible_schema", ok: false };
     }
 
     if (!authority.scopes.includes(requiredScope)) {

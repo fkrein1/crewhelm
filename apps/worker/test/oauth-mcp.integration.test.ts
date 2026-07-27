@@ -643,7 +643,7 @@ describe("public OAuth to MCP integration", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(toolResult.content[0].text))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 4,
+        schemaVersion: 1,
         status: "ready",
       },
     });

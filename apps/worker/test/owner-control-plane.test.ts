@@ -22,8 +22,15 @@ import {
 } from "@crewhelm/contracts";
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import { drizzle } from "drizzle-orm/durable-sqlite";
 import { describe, expect, it } from "vitest";
 
+import {
+  applyControlPlaneMigration,
+  applyControlPlaneMigrationSql,
+  runControlPlaneMigrationTransaction,
+} from "../src/control-plane-migrations.js";
+import { controlPlaneSchema } from "../src/control-plane-schema.js";
 import { deriveOwnerKey } from "../src/owner-identity.js";
 
 async function authorityFor(
@@ -174,9 +181,24 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toEqual({
       ok: true,
       status: {
-        schemaVersion: 4,
+        schemaVersion: 1,
         status: "ready",
       },
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) => ({
+        migration: state.storage.sql
+          .exec("SELECT version, name, checksum FROM control_plane_migrations")
+          .one(),
+        owner: state.storage.sql.exec("SELECT owner_key FROM control_plane").one(),
+      })),
+    ).resolves.toEqual({
+      migration: {
+        checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+        name: "0000_wooden_newton_destine",
+        version: 1,
+      },
+      owner: { owner_key: authority.ownerKey },
     });
   });
 
@@ -225,12 +247,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 4, status: "ready" },
+      status: { schemaVersion: 1, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 4, status: "ready" },
+      status: { schemaVersion: 1, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -238,76 +260,113 @@ describe("OwnerControlPlane", () => {
     });
   });
 
-  it("migrates a bound version 1 object atomically before serving requests", async () => {
-    const authority = await authorityFor("109");
+  it("applies a Drizzle table rebuild with populated foreign keys and survives eviction", async () => {
+    const authority = await authorityFor("90133", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+    ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("rebuild-90133"));
 
-    await expect(stub.status(authority)).resolves.toMatchObject({
-      ok: true,
-      status: { schemaVersion: 4 },
-    });
-    await runInDurableObject(stub, (_instance, state) => {
-      state.storage.transactionSync(() => {
-        state.storage.sql.exec("ALTER TABLE control_plane RENAME TO control_plane_v2");
-        state.storage.sql.exec(`
-          CREATE TABLE control_plane (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            owner_key TEXT NOT NULL UNIQUE,
-            schema_version INTEGER NOT NULL CHECK (schema_version = 1)
-          )
-        `);
-        state.storage.sql.exec(`
-          INSERT INTO control_plane (singleton, owner_key, schema_version)
-          SELECT singleton, owner_key, 1 FROM control_plane_v2
-        `);
-        state.storage.sql.exec("DROP TABLE control_plane_v2");
-        state.storage.sql.exec("DROP TABLE agent_updates");
-        state.storage.sql.exec("DROP TABLE agent_creations");
-        state.storage.sql.exec("DROP TABLE agent_revisions");
-        state.storage.sql.exec("DROP TABLE agents");
-        state.storage.sql.exec("DROP TABLE audit_events");
-        state.storage.sql.exec("DROP TABLE connection_authorization_returns");
-        state.storage.sql.exec("DROP TABLE connection_link_requests");
-        state.storage.sql.exec("DROP TABLE connections");
+    if (!created.ok) {
+      throw new Error("Expected Agent creation to succeed.");
+    }
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      const rebuildSql = `PRAGMA foreign_keys=OFF;
+                            --> statement-breakpoint
+                            CREATE TABLE __new_agents (
+                              agent_id text PRIMARY KEY NOT NULL,
+                              current_revision integer NOT NULL,
+                              created_at integer NOT NULL,
+                              CONSTRAINT "agents_current_revision_positive"
+                                CHECK(current_revision > 0),
+                              CONSTRAINT "agents_created_at_positive" CHECK(created_at > 0)
+                            );
+                            --> statement-breakpoint
+                            INSERT INTO __new_agents
+                              (agent_id, current_revision, created_at)
+                              SELECT agent_id, current_revision, created_at FROM agents;
+                            --> statement-breakpoint
+                            DROP TABLE agents;
+                            --> statement-breakpoint
+                            ALTER TABLE __new_agents RENAME TO agents;
+                            --> statement-breakpoint
+                            PRAGMA foreign_keys=ON;`;
+
+      await runControlPlaneMigrationTransaction(state.storage, [rebuildSql], () => {
+        applyControlPlaneMigrationSql(state.storage, rebuildSql);
       });
-    });
-    await evictDurableObject(stub);
-
-    await expect(stub.status(authority)).resolves.toEqual({
-      ok: true,
-      status: {
-        schemaVersion: 4,
-        status: "ready",
-      },
     });
     await expect(
       runInDurableObject(stub, (_instance, state) =>
-        state.storage.sql.exec("SELECT owner_key, schema_version FROM control_plane").toArray(),
+        state.storage.sql.exec("PRAGMA foreign_keys").one(),
       ),
-    ).resolves.toEqual([{ owner_key: authority.ownerKey, schema_version: 4 }]);
+    ).resolves.toEqual({ foreign_keys: 1 });
+    await evictDurableObject(stub);
+
+    await expect(stub.getAgent(authority, { id: created.agent.id })).resolves.toMatchObject({
+      agent: { id: created.agent.id, revision: 1 },
+      ok: true,
+    });
   });
 
-  it("fails closed instead of guessing how to migrate an unknown schema", async () => {
+  it("rolls back migration DDL when its journal write fails", async () => {
+    const authority = await authorityFor("90134", [OWNER_READ_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+
+    await expect(stub.status(authority)).resolves.toMatchObject({ ok: true });
+    await expect(
+      runInDurableObject(stub, async (_instance, state) => {
+        const database = drizzle(state.storage, { schema: controlPlaneSchema });
+        const migrationSql = `PRAGMA foreign_keys=OFF;
+                              --> statement-breakpoint
+                              CREATE TABLE migration_rollback_probe (
+                                id integer PRIMARY KEY
+                              );
+                              --> statement-breakpoint
+                              PRAGMA foreign_keys=ON;`;
+
+        await runControlPlaneMigrationTransaction(state.storage, [migrationSql], () => {
+          applyControlPlaneMigration(database, state.storage, {
+            checksum: "a".repeat(64),
+            name: "rollback_probe",
+            sql: migrationSql,
+            version: 1,
+          });
+        });
+      }),
+    ).rejects.toThrow("UNIQUE constraint failed");
+    await expect(
+      runInDurableObject(stub, (_instance, state) => ({
+        foreignKeys: state.storage.sql.exec("PRAGMA foreign_keys").one(),
+        journal: state.storage.sql
+          .exec("SELECT version FROM control_plane_migrations WHERE name = 'rollback_probe'")
+          .toArray(),
+        table: state.storage.sql
+          .exec(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'migration_rollback_probe'",
+          )
+          .toArray(),
+      })),
+    ).resolves.toEqual({ foreignKeys: { foreign_keys: 1 }, journal: [], table: [] });
+  });
+
+  it("fails closed instead of guessing how to apply an unknown migration", async () => {
     const authority = await authorityFor("110", [OWNER_READ_SCOPE, OWNER_WRITE_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
 
     await expect(stub.status(authority)).resolves.toMatchObject({ ok: true });
     await runInDurableObject(stub, (_instance, state) => {
-      state.storage.transactionSync(() => {
-        state.storage.sql.exec("ALTER TABLE control_plane RENAME TO control_plane_v4");
-        state.storage.sql.exec(`
-          CREATE TABLE control_plane (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            owner_key TEXT NOT NULL UNIQUE,
-            schema_version INTEGER NOT NULL CHECK (schema_version = 5)
-          )
-        `);
-        state.storage.sql.exec(`
-          INSERT INTO control_plane (singleton, owner_key, schema_version)
-          SELECT singleton, owner_key, 5 FROM control_plane_v4
-        `);
-        state.storage.sql.exec("DROP TABLE control_plane_v4");
-      });
+      state.storage.sql.exec(
+        `INSERT INTO control_plane_migrations (version, name, checksum, applied_at)
+         VALUES (?, ?, ?, ?)`,
+        2,
+        "future_migration",
+        "f".repeat(64),
+        Date.now(),
+      );
     });
     await evictDurableObject(stub);
 
@@ -327,159 +386,52 @@ describe("OwnerControlPlane", () => {
     });
   });
 
-  it("migrates version 2 Agent state and creates connection storage atomically", async () => {
-    const authority = await authorityFor("111", [OWNER_READ_SCOPE, OWNER_WRITE_SCOPE]);
+  it("fails closed instead of adopting unjournaled Crewhelm tables", async () => {
+    const authority = await authorityFor("90132", [OWNER_READ_SCOPE, OWNER_WRITE_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
-    const created = await stub.createAgent(authority, agentInput("migration-v2-agent"));
 
-    if (!created.ok) {
-      throw new Error("Expected migration fixture Agent.");
-    }
-
+    await expect(stub.status(authority)).resolves.toMatchObject({ ok: true });
     await runInDurableObject(stub, (_instance, state) => {
-      state.storage.transactionSync(() => {
-        state.storage.sql.exec("DROP TABLE connection_authorization_returns");
-        state.storage.sql.exec("DROP TABLE connection_link_requests");
-        state.storage.sql.exec("DROP TABLE connections");
-        state.storage.sql.exec("ALTER TABLE control_plane RENAME TO control_plane_v3");
-        state.storage.sql.exec(`
-          CREATE TABLE control_plane (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            owner_key TEXT NOT NULL UNIQUE,
-            schema_version INTEGER NOT NULL CHECK (schema_version = 2)
-          )
-        `);
-        state.storage.sql.exec(`
-          INSERT INTO control_plane (singleton, owner_key, schema_version)
-          SELECT singleton, owner_key, 2 FROM control_plane_v3
-        `);
-        state.storage.sql.exec("DROP TABLE control_plane_v3");
-      });
-    });
-    await evictDurableObject(stub);
-
-    await expect(stub.status(authority)).resolves.toMatchObject({
-      ok: true,
-      status: { schemaVersion: 4 },
-    });
-    await expect(stub.listAgents(authority, {})).resolves.toMatchObject({
-      agents: [{ id: created.agent.id }],
-      ok: true,
-    });
-    await expect(
-      runInDurableObject(stub, (_instance, state) =>
-        state.storage.sql
-          .exec(
-            `SELECT name
-             FROM sqlite_master
-             WHERE type = 'table'
-               AND name IN (
-                 'connections',
-                 'connection_authorization_returns',
-                 'connection_link_requests'
-               )
-             ORDER BY name`,
-          )
-          .toArray(),
-      ),
-    ).resolves.toEqual([
-      { name: "connection_authorization_returns" },
-      { name: "connection_link_requests" },
-      { name: "connections" },
-    ]);
-  });
-
-  it("migrates version 3 connection state and reconstructs callback storage atomically", async () => {
-    const authority = await authorityFor("129", [
-      OWNER_READ_SCOPE,
-      CONNECTIONS_READ_SCOPE,
-      CONNECTIONS_WRITE_SCOPE,
-    ]);
-    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
-    const reservation = await stub.reserveConnectionLink(
-      authority,
-      connectionLinkInput("migration-v3-link"),
-    );
-
-    if (!reservation.ok || reservation.state !== "dispatch") {
-      throw new Error("Expected a version 3 migration fixture reservation.");
-    }
-
-    const completion = await stub.completeConnectionLink(authority, {
-      authorizationToken: reservation.authorizationToken,
-      expiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
-      providerConnectionId: "ca_migration_v3",
-      reservationId: reservation.reservationId,
-      url: "https://connect.composio.dev/link/ln_migration_v3",
-    });
-
-    if (!completion.ok) {
-      throw new Error("Expected a version 3 migration fixture connection.");
-    }
-
-    await runInDurableObject(stub, (_instance, state) => {
-      state.storage.transactionSync(() => {
-        state.storage.sql.exec("DROP TABLE connection_authorization_returns");
-        state.storage.sql.exec("ALTER TABLE control_plane RENAME TO control_plane_v4");
-        state.storage.sql.exec(`
-          CREATE TABLE control_plane (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            owner_key TEXT NOT NULL UNIQUE,
-            schema_version INTEGER NOT NULL CHECK (schema_version = 3)
-          )
-        `);
-        state.storage.sql.exec(`
-          INSERT INTO control_plane (singleton, owner_key, schema_version)
-          SELECT singleton, owner_key, 3 FROM control_plane_v4
-        `);
-        state.storage.sql.exec("DROP TABLE control_plane_v4");
-      });
+      state.storage.sql.exec("DROP TABLE control_plane_migrations");
     });
     await evictDurableObject(stub);
 
     await expect(stub.status(authority)).resolves.toEqual({
-      ok: true,
-      status: {
-        schemaVersion: 4,
-        status: "ready",
+      error: {
+        code: "incompatible_schema",
+        message: "Control-plane request denied.",
       },
+      ok: false,
     });
-    await expect(stub.listConnections(authority, {})).resolves.toMatchObject({
-      connections: [
-        {
-          authorizationOutcome: "untracked",
-          connectionId: completion.connectionLink.connectionId,
-          status: "initiated",
-        },
-      ],
-      ok: true,
-    });
+  });
 
-    const newReservation = await stub.reserveConnectionLink(
-      authority,
-      connectionLinkInput("post-migration-v3-link", "ac_linear_managed"),
-    );
+  it("fails closed when the migration journal checksum is invalid", async () => {
+    const authority = await authorityFor("90130", [OWNER_READ_SCOPE, OWNER_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
 
-    expect(newReservation).toMatchObject({
-      authorizationToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
-      ok: true,
-      state: "dispatch",
+    await expect(stub.status(authority)).resolves.toMatchObject({ ok: true });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE control_plane_migrations SET checksum = ? WHERE version = 1",
+        "0".repeat(64),
+      );
     });
-    await expect(
-      runInDurableObject(stub, (_instance, state) =>
-        state.storage.sql
-          .exec("SELECT reservation_id, status FROM connection_authorization_returns")
-          .toArray(),
-      ),
-    ).resolves.toEqual([
-      {
-        reservation_id:
-          newReservation.ok && newReservation.state === "dispatch"
-            ? newReservation.reservationId
-            : "",
-        status: "pending",
+    await evictDurableObject(stub);
+
+    await expect(stub.status(authority)).resolves.toEqual({
+      error: {
+        code: "incompatible_schema",
+        message: "Control-plane request denied.",
       },
-    ]);
+      ok: false,
+    });
+    await expect(stub.createAgent(authority, agentInput("invalid-journal"))).resolves.toEqual({
+      error: {
+        code: "incompatible_schema",
+        message: "Agent request denied.",
+      },
+      ok: false,
+    });
   });
 
   it("reserves, completes, replays, audits, and survives eviction without credentials", async () => {
@@ -1308,65 +1260,6 @@ describe("OwnerControlPlane", () => {
     ]);
   });
 
-  it("migrates an instantiated but unauthorized empty version 2 object", async () => {
-    const authority = await authorityFor("119", [OWNER_READ_SCOPE]);
-    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
-
-    await expect(stub.status(authority)).resolves.toMatchObject({ ok: true });
-    await runInDurableObject(stub, (_instance, state) => {
-      state.storage.transactionSync(() => {
-        state.storage.sql.exec("DROP TABLE connection_authorization_returns");
-        state.storage.sql.exec("DROP TABLE connection_link_requests");
-        state.storage.sql.exec("DROP TABLE connections");
-        state.storage.sql.exec("ALTER TABLE control_plane RENAME TO control_plane_v3");
-        state.storage.sql.exec(`
-          CREATE TABLE control_plane (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            owner_key TEXT NOT NULL UNIQUE,
-            schema_version INTEGER NOT NULL CHECK (schema_version = 2)
-          )
-        `);
-        state.storage.sql.exec("DROP TABLE control_plane_v3");
-      });
-    });
-    await evictDurableObject(stub);
-
-    await expect(stub.status(authority)).resolves.toEqual({
-      ok: true,
-      status: {
-        schemaVersion: 4,
-        status: "ready",
-      },
-    });
-    await expect(
-      runInDurableObject(stub, (_instance, state) => ({
-        controlPlane: state.storage.sql
-          .exec("SELECT owner_key, schema_version FROM control_plane")
-          .toArray(),
-        connectionTables: state.storage.sql
-          .exec(
-            `SELECT name
-             FROM sqlite_master
-             WHERE type = 'table'
-               AND name IN (
-                 'connections',
-                 'connection_authorization_returns',
-                 'connection_link_requests'
-               )
-             ORDER BY name`,
-          )
-          .toArray(),
-      })),
-    ).resolves.toEqual({
-      connectionTables: [
-        { name: "connection_authorization_returns" },
-        { name: "connection_link_requests" },
-        { name: "connections" },
-      ],
-      controlPlane: [{ owner_key: authority.ownerKey, schema_version: 4 }],
-    });
-  });
-
   it("denies malformed, missing, insufficient-scope, and cross-owner Agent reads safely", async () => {
     const first = await authorityFor("212", [
       OWNER_READ_SCOPE,
@@ -1967,7 +1860,7 @@ describe("OwnerControlPlane", () => {
     });
   });
 
-  it("reconstructs additive Agent update storage after eviction", async () => {
+  it("fails closed when an applied schema drifts after eviction", async () => {
     const authority = await authorityFor("219", [
       OWNER_WRITE_SCOPE,
       AGENTS_READ_SCOPE,
@@ -1986,14 +1879,39 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(
       stub.updateAgent(authority, agentUpdate(created.agent, "update-219")),
-    ).resolves.toMatchObject({
-      agent: { revision: 2 },
-      ok: true,
-      updated: true,
+    ).resolves.toEqual({
+      error: {
+        code: "incompatible_schema",
+        message: "Agent request denied.",
+      },
+      ok: false,
     });
-    await expect(stub.status({ ...authority, scopes: [OWNER_READ_SCOPE] })).resolves.toMatchObject({
-      ok: true,
-      status: { schemaVersion: 4 },
+  });
+
+  it("fails closed when a required index keeps its name but changes definition", async () => {
+    const authority = await authorityFor("90135", [OWNER_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("index-drift-90135"));
+
+    if (!created.ok) {
+      throw new Error("Expected Agent creation to succeed.");
+    }
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("DROP INDEX agent_creations_agent_revision");
+      state.storage.sql.exec(
+        `CREATE UNIQUE INDEX agent_creations_agent_revision
+         ON agent_creations (client_id, idempotency_key)`,
+      );
+    });
+    await evictDurableObject(stub);
+
+    await expect(stub.createAgent(authority, agentInput("index-drift-retry"))).resolves.toEqual({
+      error: {
+        code: "incompatible_schema",
+        message: "Agent request denied.",
+      },
+      ok: false,
     });
   });
 

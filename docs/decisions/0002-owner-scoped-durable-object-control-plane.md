@@ -12,6 +12,8 @@ A global coordinator is a shared bottleneck; D1 adds no value to that first owne
 - One SQLite-backed `OwnerControlPlane` Durable Object per authenticated owner.
 - One name-addressed `CrewAgent` Durable Object per logical agent.
 - Typed RPC internally; no global control-plane object.
+- Drizzle is the code-first schema and query layer for control-plane SQLite. Generated migrations
+  are immutable and applied in order through a checksummed runtime journal.
 - Git is the public recipe source. D1 is projection-only and R2 is for large artifacts until
   evidence changes the storage shape.
 
@@ -22,7 +24,9 @@ model input.
 
 Administration is isolated; agents scale and fail independently. Cross-object operations need
 stable IDs, idempotency, expected revisions, and recovery because transactions do not span
-Durable Objects. Search needs a local index or rebuildable projection.
+Durable Objects. Migration-journal drift, missing required tables, and unjournaled Crewhelm tables
+fail closed and require point-in-time recovery or an explicit reviewed migration. Search needs a
+local index or rebuildable projection.
 
 ## Revisit when
 

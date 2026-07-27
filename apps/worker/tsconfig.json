@@ -7,5 +7,5 @@
     "skipLibCheck": true,
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["control-plane-migrations/**/*.ts", "sql.d.ts", "src/**/*.ts"]
 }

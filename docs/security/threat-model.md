@@ -136,6 +136,18 @@ configuration into repeated D1 writes. Scope and access-token lifetime changes r
 migrations of the stored resource row; changing configuration alone intentionally does not
 overwrite it. Scope migrations update only an explicitly recognized prior representation.
 
+## Control-plane persistence integrity
+
+Drizzle owns the SQLite schema and every feature-level control-plane query. Generated migration SQL
+is bundled as immutable Worker input and applied under Durable Object initialization serialization
+before any RPC is served. The runtime verifies contiguous migration versions, names, and SHA-256
+checksums against its journal. Unknown entries, modified migration content, missing tables or
+required indexes, and foreign-key violations make the object incompatible; Crewhelm does not infer
+or reconstruct authoritative state from a partial schema. Recovery blocks admissions and uses a
+reviewed forward migration or Cloudflare SQLite point-in-time recovery. Migration and
+fault-injection tests may use raw SQL to construct hostile states, but production feature paths do
+not.
+
 ## Agent registry authority and residual risk
 
 The owner-named Durable Object generates Agent IDs and stores configurations as immutable

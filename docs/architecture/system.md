@@ -72,6 +72,15 @@ authoritative for OAuth protocol state. See
 [ADR 0002](../decisions/0002-owner-scoped-durable-object-control-plane.md) and
 [ADR 0004](../decisions/0004-better-auth-on-d1.md).
 
+The `OwnerControlPlane` schema is declared once with Drizzle. Runtime reads, writes, and
+transactions use that typed schema; generated SQL is confined to immutable migration artifacts and
+the migration adapter that applies them before RPCs are admitted. A checksummed, ordered journal is
+the only schema-version authority. The owner-binding row contains no duplicate schema version.
+Missing tables or required indexes, unknown journal entries, changed migration content, or an
+existing unjournaled Crewhelm table fail closed as an incompatible schema instead of being guessed
+or repaired. Table-rebuild migrations run atomically with foreign-key enforcement restored after
+the migration and explicit integrity validation before the transaction commits.
+
 ### Durable Object lifecycle and recovery
 
 Declare new SQLite-backed classes with Wrangler's `exports` lifecycle map. After a class has been

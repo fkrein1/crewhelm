@@ -19,6 +19,7 @@ minimumReleaseAgeIgnoreMissingTime: false
 minimumReleaseAgeStrict: true
 nodeVersion: 24.18.0
 overrides:
+  "@esbuild-kit/core-utils>esbuild": "0.25.12"
   "@hono/node-server": 2.0.10
   "partyserver@0.5.8>@cloudflare/workers-types": ">=4.20260424.1 <6"
 savePrefix: ""
