@@ -491,7 +491,7 @@ describe("public OAuth to MCP integration", () => {
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
     expect(consentPage).toContain(
-      "Search the Composio integration catalog. Search terms are sent to Composio.",
+      "Search the Composio integration catalog and inspect exact tool schemas. Search terms are sent to Composio.",
     );
     const consentResponse = await request(workerEnv, "/oauth/consent", {
       body: new URLSearchParams({
@@ -724,7 +724,7 @@ describe("public OAuth to MCP integration", () => {
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
     expect(consentPage).not.toContain(
-      "Search the Composio integration catalog. Search terms are sent to Composio.",
+      "Search the Composio integration catalog and inspect exact tool schemas. Search terms are sent to Composio.",
     );
     const ownerKey = await deriveOwnerKey({
       issuer: "https://github.com",
@@ -793,7 +793,7 @@ describe("public OAuth to MCP integration", () => {
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
     expect(consentPage).not.toContain(
-      "Search the Composio integration catalog. Search terms are sent to Composio.",
+      "Search the Composio integration catalog and inspect exact tool schemas. Search terms are sent to Composio.",
     );
     const createResponse = await callMcp(
       workerEnv,
@@ -854,7 +854,7 @@ describe("public OAuth to MCP integration", () => {
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
     expect(consentPage).toContain(
-      "Search the Composio integration catalog. Search terms are sent to Composio.",
+      "Search the Composio integration catalog and inspect exact tool schemas. Search terms are sent to Composio.",
     );
 
     vi.restoreAllMocks();

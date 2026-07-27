@@ -141,17 +141,19 @@ connection, or grant operation.
 ## Composio catalog authority and residual risk
 
 The `integrations:read` MCP catalog tools send bounded searches, optional exact integration
-filters, and opaque pagination cursors only to Composio's fixed toolkit and tool endpoints.
-`control:read` alone grants no provider egress. Crewhelm always requests `managed_by=all` for
-toolkits, resolves current tool definitions explicitly, excludes deprecated entries, and does not
-maintain a toolkit or tool allowlist. Newly available Composio and project integrations and their
-exact tools therefore remain discoverable without a Crewhelm code change. Catalog discovery
-grants no connection or execution authority.
+filters, opaque pagination cursors, and exact tool/version inspection requests only to Composio's
+fixed toolkit and tool endpoints. `control:read` alone grants no provider egress. Crewhelm always
+requests `managed_by=all` for toolkits, resolves current tool definitions explicitly, excludes
+deprecated entries, and does not maintain a toolkit or tool allowlist. Newly available Composio
+and project integrations and their exact tools therefore remain discoverable without a Crewhelm
+code change. Catalog discovery and inspection grant no connection or execution authority.
 
 The adapter sends the project key only in the fixed request header, rejects redirects, propagates
 request cancellation, limits latency and response bytes, validates provider structure, and returns
-small normalized summaries. Tool input and output schemas are deliberately not returned by search;
-exact schema inspection belongs to the later grant-snapshot boundary.
+small normalized summaries. Search omits input and output schemas; exact inspection requires the
+selected tool slug and concrete toolkit version, rejects provider identity substitution, and
+returns only inert JSON parameter maps bounded by raw bytes, nesting depth, node count, container
+width, key length, and string length. A later grant flow can snapshot that reviewed contract.
 Provider bodies, errors, request IDs, URLs, and the API key never enter MCP failures, logs, D1, or
 Durable Objects. A successful provider payload is also rejected if any normalized output string
 contains the exact project key. Names and descriptions remain untrusted external text even after

@@ -74,10 +74,10 @@ machine-readable reports. HTTP is accepted only for exact loopback hosts during 
 The Worker exposes Streamable HTTP MCP at `/mcp`. OAuth clients dynamically register at
 `/api/auth/oauth2/register` and authenticate the owner through a GitHub OAuth App. Clients request
 `control:read` to inspect control-plane status and Agent summaries, `control:write` to create Agent
-definitions, and `integrations:read` to search Composio's catalog. Registrations default to all
-three scopes; every token keeps the exact approved scope set, so adding a capability never widens
-an issued token. The consent page discloses that integration searches send terms to Composio. The
-app callback URL must be:
+definitions, and `integrations:read` to search Composio's catalog and inspect exact tool schemas.
+Registrations default to all three scopes; every token keeps the exact approved scope set, so
+adding a capability never widens an issued token. The consent page discloses that integration
+searches send terms to Composio. The app callback URL must be:
 
 ```text
 https://YOUR_WORKER_HOST/api/auth/callback/github
@@ -110,6 +110,8 @@ The MCP surface exposes:
   `integrations:read`.
 - `crewhelm_search_integration_tools` — search exact tools and resolved versions across every
   current Composio integration, optionally within one integration; requires `integrations:read`.
+- `crewhelm_inspect_integration_tool` — inspect bounded input and output parameter schemas for one
+  exact tool and toolkit version; requires `integrations:read`.
 - `crewhelm_create_agent` — create an idempotent owner-scoped Agent revision with an explicit
   model, bounded instructions and execution limits, and no capability grants; requires
   `control:write`. Each owner can store at most 100 Agents.
