@@ -301,7 +301,7 @@ describe("public OAuth to MCP integration", () => {
     const consentLocation = new URL(responseLocation(callbackResponse), origin);
 
     expect(callbackResponse.status).toBe(302);
-    expect(githubRequestOptions.map((options) => options?.redirect)).toEqual(["manual", "error"]);
+    expect(githubRequestOptions.map((options) => options?.redirect)).toEqual(["manual", "manual"]);
     expect(githubRequestOptions.every((options) => options?.signal instanceof AbortSignal)).toBe(
       true,
     );
