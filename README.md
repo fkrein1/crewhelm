@@ -55,9 +55,11 @@ Better Auth secret, deploys the packaged Worker and secrets together, and then d
 origin. Bootstrap endpoints must use HTTPS. A retry preserves the D1 database and any secrets on an
 existing Worker. Reusing an existing database requires its exact UUID through `--database-id`;
 bootstrap verifies its table and migration provenance before changing it. Supply all three GitHub
-GitHub settings together to update an existing deployment; omit all three to preserve its current
-OAuth secrets. Supply `CREWHELM_COMPOSIO_API_KEY` to set or rotate the Composio project key; omit it
-on an existing deployment to preserve the current key.
+settings together to update an existing deployment; omit all three to preserve its current OAuth
+secrets. Supply `CREWHELM_COMPOSIO_API_KEY` to set or rotate the Composio project key; omit it on an
+existing deployment to preserve the current key. Before any database change, bootstrap verifies
+that an existing Worker already holds every required secret or that the missing value was supplied
+for the pending deployment.
 
 Diagnose without deploying:
 
