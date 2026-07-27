@@ -1,13 +1,19 @@
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  agentRevisionSchema,
+  agentRevisionSummarySchema,
   agentSchema,
   agentSummarySchema,
   controlPlaneStatusResultSchema,
   createAgentInputSchema,
   createAgentResultSchema,
   getAgentInputSchema,
+  getAgentRevisionInputSchema,
+  getAgentRevisionResultSchema,
   getAgentResultSchema,
+  listAgentRevisionsInputSchema,
+  listAgentRevisionsResultSchema,
   listAgentsInputSchema,
   listAgentsResultSchema,
   MAXIMUM_AGENTS_PER_OWNER,
@@ -18,11 +24,15 @@ import {
   updateAgentInputSchema,
   updateAgentResultSchema,
   type Agent,
+  type AgentRevision,
+  type AgentRevisionSummary,
   type AgentSummary,
   type ControlPlaneStatusResult,
   type CreateAgentInput,
   type CreateAgentResult,
+  type GetAgentRevisionResult,
   type GetAgentResult,
+  type ListAgentRevisionsResult,
   type ListAgentsResult,
   type OwnerAuthority,
   type OwnerScope,
@@ -370,6 +380,87 @@ export class OwnerControlPlane extends DurableObject {
     });
   }
 
+  getAgentRevision(authorityInput: unknown, input: unknown): GetAgentRevisionResult {
+    const authorization = this.#authorize(authorityInput, AGENTS_READ_SCOPE);
+
+    if (!authorization.ok) {
+      return this.#deniedAgent(authorization.code);
+    }
+
+    const request = getAgentRevisionInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return this.#deniedAgent("invalid_request");
+    }
+
+    const row = this.#agentRevisionRow(request.data.id, request.data.revision);
+
+    if (row === undefined) {
+      return this.#deniedAgent("agent_not_found");
+    }
+
+    return getAgentRevisionResultSchema.parse({
+      agent: this.#agentRevisionFromRow(row),
+      ok: true,
+    });
+  }
+
+  listAgentRevisions(authorityInput: unknown, input: unknown): ListAgentRevisionsResult {
+    const authorization = this.#authorize(authorityInput, AGENTS_READ_SCOPE);
+
+    if (!authorization.ok) {
+      return this.#deniedAgent(authorization.code);
+    }
+
+    const request = listAgentRevisionsInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return this.#deniedAgent("invalid_request");
+    }
+
+    const bindings: Array<number | string> = [request.data.id];
+    let cursorClause = "";
+
+    if (request.data.cursor !== undefined) {
+      cursorClause = "AND r.revision < ?";
+      bindings.push(request.data.cursor);
+    }
+
+    bindings.push(request.data.limit + 1);
+    const rows = this.#sql
+      .exec<Record<string, SqlStorageValue>>(
+        `SELECT
+             a.agent_id,
+             r.revision AS current_revision,
+             a.created_at,
+             r.created_at AS revised_at,
+             r.name,
+             r.model,
+             r.execution_limits,
+             r.capability_grants
+           FROM agents a
+           JOIN agent_revisions r ON r.agent_id = a.agent_id
+           WHERE a.agent_id = ?
+             ${cursorClause}
+           ORDER BY r.revision DESC
+           LIMIT ?`,
+        ...bindings,
+      )
+      .toArray();
+
+    if (rows.length === 0 && !this.#agentExists(request.data.id)) {
+      return this.#deniedAgent("agent_not_found");
+    }
+
+    const hasMore = rows.length > request.data.limit;
+    const revisions = rows
+      .slice(0, request.data.limit)
+      .map((row) => this.#agentRevisionSummaryFromRow(row));
+    const nextCursor = hasMore ? (revisions.at(-1)?.revision ?? null) : null;
+
+    return listAgentRevisionsResultSchema.parse({ nextCursor, ok: true, revisions });
+  }
+
   async updateAgent(authorityInput: unknown, input: unknown): Promise<UpdateAgentResult> {
     const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
 
@@ -582,6 +673,55 @@ export class OwnerControlPlane extends DurableObject {
     });
   }
 
+  #agentRevisionFromRow(row: Record<string, SqlStorageValue>): AgentRevision {
+    const revisedAt = row["revised_at"];
+
+    if (typeof revisedAt !== "number") {
+      throw new Error("Invalid Agent revision storage.");
+    }
+
+    return agentRevisionSchema.parse({
+      ...this.#agentFromRow(row),
+      revisedAt: new Date(revisedAt).toISOString(),
+    });
+  }
+
+  #agentRevisionRow(
+    agentId: string,
+    revision: number,
+  ): Record<string, SqlStorageValue> | undefined {
+    return this.#sql
+      .exec<Record<string, SqlStorageValue>>(
+        `SELECT
+             a.agent_id,
+             r.revision AS current_revision,
+             a.created_at,
+             r.created_at AS revised_at,
+             r.name,
+             r.model,
+             r.instructions,
+             r.execution_limits,
+             r.capability_grants
+           FROM agents a
+           JOIN agent_revisions r ON r.agent_id = a.agent_id
+           WHERE a.agent_id = ? AND r.revision = ?`,
+        agentId,
+        revision,
+      )
+      .toArray()[0];
+  }
+
+  #agentExists(agentId: string): boolean {
+    return (
+      this.#sql
+        .exec<Record<string, SqlStorageValue>>(
+          "SELECT agent_id FROM agents WHERE agent_id = ?",
+          agentId,
+        )
+        .toArray()[0] !== undefined
+    );
+  }
+
   #currentAgentRow(agentId: string): Record<string, SqlStorageValue> | undefined {
     return this.#sql
       .exec<Record<string, SqlStorageValue>>(
@@ -614,6 +754,33 @@ export class OwnerControlPlane extends DurableObject {
       model: agent.model,
       name: agent.name,
       revision: agent.revision,
+    });
+  }
+
+  #agentRevisionSummaryFromRow(row: Record<string, SqlStorageValue>): AgentRevisionSummary {
+    const createdAt = row["created_at"];
+    const revisedAt = row["revised_at"];
+    const executionLimits = row["execution_limits"];
+    const capabilityGrants = row["capability_grants"];
+
+    if (
+      typeof createdAt !== "number" ||
+      typeof revisedAt !== "number" ||
+      typeof executionLimits !== "string" ||
+      typeof capabilityGrants !== "string"
+    ) {
+      throw new Error("Invalid Agent revision summary storage.");
+    }
+
+    return agentRevisionSummarySchema.parse({
+      capabilityGrants: JSON.parse(capabilityGrants),
+      createdAt: new Date(createdAt).toISOString(),
+      executionLimits: JSON.parse(executionLimits),
+      id: row["agent_id"],
+      model: row["model"],
+      name: row["name"],
+      revisedAt: new Date(revisedAt).toISOString(),
+      revision: row["current_revision"],
     });
   }
 

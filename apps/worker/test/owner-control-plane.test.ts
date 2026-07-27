@@ -6,7 +6,9 @@ import {
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   agentSchema,
+  getAgentRevisionResultSchema,
   getAgentResultSchema,
+  listAgentRevisionsResultSchema,
   ownerAuthoritySchema,
   type CreateAgentInput,
   type OwnerAuthority,
@@ -388,16 +390,40 @@ describe("OwnerControlPlane", () => {
     await expect(firstStub.getAgent(legacyRead, { id: created.agent.id })).resolves.toEqual(
       fixedAgentFailure("insufficient_scope"),
     );
+    await expect(
+      firstStub.listAgentRevisions(legacyRead, { id: created.agent.id }),
+    ).resolves.toEqual(fixedAgentFailure("insufficient_scope"));
+    await expect(
+      firstStub.getAgentRevision(legacyRead, { id: created.agent.id, revision: 1 }),
+    ).resolves.toEqual(fixedAgentFailure("insufficient_scope"));
     await expect(firstStub.getAgent(second, { id: created.agent.id })).resolves.toEqual(
+      fixedAgentFailure("owner_mismatch"),
+    );
+    await expect(firstStub.listAgentRevisions(second, { id: created.agent.id })).resolves.toEqual(
       fixedAgentFailure("owner_mismatch"),
     );
     await expect(secondStub.getAgent(second, { id: created.agent.id })).resolves.toEqual(
       fixedAgentFailure("agent_not_found"),
     );
     await expect(
+      secondStub.getAgentRevision(second, { id: created.agent.id, revision: 1 }),
+    ).resolves.toEqual(fixedAgentFailure("agent_not_found"));
+    await expect(
+      firstStub.getAgentRevision(first, {
+        id: created.agent.id,
+        revision: MAXIMUM_REVISIONS_PER_AGENT + 1,
+      }),
+    ).resolves.toEqual(fixedAgentFailure("agent_not_found"));
+    await expect(
       firstStub.getAgent(first, {
         id: "credential-like-value-that-must-not-be-reflected",
         unexpected: true,
+      }),
+    ).resolves.toEqual(fixedAgentFailure("invalid_request"));
+    await expect(
+      firstStub.listAgentRevisions(first, {
+        cursor: "credential-like-value-that-must-not-be-reflected",
+        id: created.agent.id,
       }),
     ).resolves.toEqual(fixedAgentFailure("invalid_request"));
   });
@@ -539,6 +565,117 @@ describe("OwnerControlPlane", () => {
     ).resolves.toEqual([
       { action: "agent.created", subject_id: created.agent.id },
       { action: "agent.updated", subject_id: created.agent.id },
+    ]);
+  });
+
+  it("paginates immutable Agent revisions newest first and reads exact history", async () => {
+    const authority = await authorityFor("222", [
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("create-222"));
+
+    if (!created.ok) {
+      throw new Error("Expected Agent creation to succeed.");
+    }
+
+    const firstUpdateInput = agentUpdate(created.agent, "update-222-1", "Inbox coordinator");
+    const firstUpdate = await stub.updateAgent(authority, firstUpdateInput);
+
+    if (!firstUpdate.ok) {
+      throw new Error("Expected first Agent update to succeed.");
+    }
+
+    const secondUpdateInput = agentUpdate(firstUpdate.agent, "update-222-2", "Inbox operator");
+    const secondUpdate = await stub.updateAgent(authority, secondUpdateInput);
+
+    if (!secondUpdate.ok) {
+      throw new Error("Expected second Agent update to succeed.");
+    }
+
+    const firstPage = listAgentRevisionsResultSchema.parse(
+      await stub.listAgentRevisions(authority, { id: created.agent.id, limit: 2 }),
+    );
+
+    expect(firstPage).toMatchObject({
+      nextCursor: 2,
+      ok: true,
+      revisions: [
+        { id: created.agent.id, name: "Inbox operator", revision: 3 },
+        { id: created.agent.id, name: "Inbox coordinator", revision: 2 },
+      ],
+    });
+    expect(JSON.stringify(firstPage)).not.toContain("instructions");
+    const appendedUpdate = await stub.updateAgent(
+      authority,
+      agentUpdate(secondUpdate.agent, "update-222-3", "Inbox supervisor"),
+    );
+
+    expect(appendedUpdate).toMatchObject({
+      agent: { name: "Inbox supervisor", revision: 4 },
+      ok: true,
+      updated: true,
+    });
+    const secondPage = listAgentRevisionsResultSchema.parse(
+      await stub.listAgentRevisions(authority, {
+        cursor: 2,
+        id: created.agent.id,
+        limit: 2,
+      }),
+    );
+
+    expect(secondPage).toEqual({
+      nextCursor: null,
+      ok: true,
+      revisions: [
+        {
+          capabilityGrants: [],
+          createdAt: created.agent.createdAt,
+          executionLimits: created.agent.executionLimits,
+          id: created.agent.id,
+          model: created.agent.model,
+          name: created.agent.name,
+          revisedAt: created.agent.createdAt,
+          revision: 1,
+        },
+      ],
+    });
+    await evictDurableObject(stub);
+    expect(
+      getAgentRevisionResultSchema.parse(
+        await stub.getAgentRevision(authority, { id: created.agent.id, revision: 1 }),
+      ),
+    ).toEqual({
+      agent: {
+        ...created.agent,
+        revisedAt: created.agent.createdAt,
+      },
+      ok: true,
+    });
+    expect(
+      getAgentRevisionResultSchema.parse(
+        await stub.getAgentRevision(authority, { id: created.agent.id, revision: 2 }),
+      ),
+    ).toMatchObject({
+      agent: {
+        id: created.agent.id,
+        instructions: firstUpdateInput.instructions,
+        name: firstUpdateInput.name,
+        revision: 2,
+      },
+      ok: true,
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql.exec("SELECT action FROM audit_events ORDER BY event_id").toArray(),
+      ),
+    ).resolves.toEqual([
+      { action: "agent.created" },
+      { action: "agent.updated" },
+      { action: "agent.updated" },
+      { action: "agent.updated" },
     ]);
   });
 

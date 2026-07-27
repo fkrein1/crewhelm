@@ -7,10 +7,12 @@ import {
   OWNER_WRITE_SCOPE,
   createAgentResultSchema,
   controlPlaneStatusResultSchema,
+  getAgentRevisionResultSchema,
   getAgentResultSchema,
   integrationCatalogSearchResultSchema,
   inspectIntegrationToolResultSchema,
   integrationToolSearchResultSchema,
+  listAgentRevisionsResultSchema,
   listAgentsResultSchema,
   ownerAuthoritySchema,
   updateAgentResultSchema,
@@ -22,7 +24,9 @@ import * as z from "zod";
 import {
   MCP_CREATE_AGENT_TOOL_NAME,
   MCP_GET_AGENT_TOOL_NAME,
+  MCP_GET_AGENT_REVISION_TOOL_NAME,
   MCP_INSPECT_INTEGRATION_TOOL_NAME,
+  MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
   MCP_LIST_AGENTS_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME,
@@ -116,6 +120,11 @@ describe("authenticated MCP handler", () => {
     const updateTool = payload.result.tools.find(
       (tool) => tool.name === MCP_UPDATE_AGENT_TOOL_NAME,
     );
+    const revisionTools = payload.result.tools.filter(
+      (tool) =>
+        tool.name === MCP_GET_AGENT_REVISION_TOOL_NAME ||
+        tool.name === MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
+    );
 
     expect(createTool?.annotations).toMatchObject({
       destructiveHint: false,
@@ -129,6 +138,16 @@ describe("authenticated MCP handler", () => {
       openWorldHint: false,
       readOnlyHint: false,
     });
+    expect(revisionTools).toHaveLength(2);
+    expect(
+      revisionTools.every(
+        (tool) =>
+          !tool.annotations.destructiveHint &&
+          tool.annotations.idempotentHint &&
+          !tool.annotations.openWorldHint &&
+          tool.annotations.readOnlyHint,
+      ),
+    ).toBe(true);
   });
 
   it("returns owner control-plane status through the read-only MCP tool", async () => {
@@ -228,6 +247,12 @@ describe("authenticated MCP handler", () => {
             throw new Error("do-not-reflect-this");
           },
           getAgent: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          getAgentRevision: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          listAgentRevisions: async () => {
             throw new Error("do-not-reflect-this");
           },
           listAgents: async () => {
@@ -413,9 +438,10 @@ describe("authenticated MCP handler", () => {
     const updatePayload: unknown = await updateResponse.json();
     const updateResult = jsonRpcToolResultSchema.parse(updatePayload).result;
     const updateText = updateResult.content[0]?.text;
+    const updated = updateAgentResultSchema.parse(JSON.parse(updateText ?? ""));
 
     expect(updateResult.isError).toBe(false);
-    expect(updateAgentResultSchema.parse(JSON.parse(updateText ?? ""))).toMatchObject({
+    expect(updated).toMatchObject({
       agent: {
         id: created.agent.id,
         name: "Work coordinator",
@@ -423,6 +449,63 @@ describe("authenticated MCP handler", () => {
       },
       ok: true,
       updated: true,
+    });
+    const revisionsResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 14,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { id: created.agent.id },
+            name: MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const revisionsPayload: unknown = await revisionsResponse.json();
+    const revisionsResult = jsonRpcToolResultSchema.parse(revisionsPayload).result;
+    const revisionsText = revisionsResult.content[0]?.text;
+
+    expect(revisionsResult.isError).toBe(false);
+    expect(listAgentRevisionsResultSchema.parse(JSON.parse(revisionsText ?? ""))).toMatchObject({
+      nextCursor: null,
+      ok: true,
+      revisions: [
+        { id: created.agent.id, name: "Work coordinator", revision: 2 },
+        { id: created.agent.id, name: "Work queue", revision: 1 },
+      ],
+    });
+    expect(revisionsText).not.toContain(input.instructions);
+    const revisionResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 15,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { id: created.agent.id, revision: 1 },
+            name: MCP_GET_AGENT_REVISION_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const revisionPayload: unknown = await revisionResponse.json();
+    const revisionResult = jsonRpcToolResultSchema.parse(revisionPayload).result;
+
+    expect(revisionResult.isError).toBe(false);
+    expect(
+      getAgentRevisionResultSchema.parse(JSON.parse(revisionResult.content[0]?.text ?? "")),
+    ).toEqual({
+      agent: {
+        ...created.agent,
+        revisedAt: created.agent.createdAt,
+      },
+      ok: true,
     });
   });
 

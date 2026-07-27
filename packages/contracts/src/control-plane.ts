@@ -121,6 +121,12 @@ export const agentSummarySchema = z.strictObject({
 export const agentSchema = agentSummarySchema.extend({
   instructions: agentInstructionsSchema,
 });
+export const agentRevisionSummarySchema = agentSummarySchema.extend({
+  revisedAt: z.iso.datetime(),
+});
+export const agentRevisionSchema = agentSchema.extend({
+  revisedAt: z.iso.datetime(),
+});
 export const agentMutationIdempotencyKeySchema = z
   .string()
   .min(1)
@@ -137,8 +143,17 @@ export const createAgentInputSchema = z.strictObject({
 export const getAgentInputSchema = z.strictObject({
   id: agentIdSchema,
 });
+export const getAgentRevisionInputSchema = z.strictObject({
+  id: agentIdSchema,
+  revision: agentRevisionNumberSchema,
+});
 export const listAgentsInputSchema = z.strictObject({
   cursor: agentIdSchema.optional(),
+  limit: z.number().int().min(1).max(50).default(25),
+});
+export const listAgentRevisionsInputSchema = z.strictObject({
+  cursor: agentRevisionNumberSchema.optional(),
+  id: agentIdSchema,
   limit: z.number().int().min(1).max(50).default(25),
 });
 export const updateAgentInputSchema = z.strictObject({
@@ -189,11 +204,32 @@ export const getAgentResultSchema = z.discriminatedUnion("ok", [
     ok: z.literal(false),
   }),
 ]);
+export const getAgentRevisionResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    agent: agentRevisionSchema,
+    ok: z.literal(true),
+  }),
+  z.strictObject({
+    error: agentRequestErrorSchema,
+    ok: z.literal(false),
+  }),
+]);
 export const listAgentsResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     agents: z.array(agentSummarySchema).max(50),
     nextCursor: agentIdSchema.nullable(),
     ok: z.literal(true),
+  }),
+  z.strictObject({
+    error: agentRequestErrorSchema,
+    ok: z.literal(false),
+  }),
+]);
+export const listAgentRevisionsResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    nextCursor: agentRevisionNumberSchema.nullable(),
+    ok: z.literal(true),
+    revisions: z.array(agentRevisionSummarySchema).max(50),
   }),
   z.strictObject({
     error: agentRequestErrorSchema,
@@ -214,13 +250,19 @@ export const updateAgentResultSchema = z.discriminatedUnion("ok", [
 
 export type Agent = z.infer<typeof agentSchema>;
 export type AgentExecutionLimits = z.infer<typeof agentExecutionLimitsSchema>;
+export type AgentRevision = z.infer<typeof agentRevisionSchema>;
+export type AgentRevisionSummary = z.infer<typeof agentRevisionSummarySchema>;
 export type AgentSummary = z.infer<typeof agentSummarySchema>;
 export type ControlPlaneStatus = z.infer<typeof controlPlaneStatusSchema>;
 export type ControlPlaneStatusResult = z.infer<typeof controlPlaneStatusResultSchema>;
 export type CreateAgentInput = z.infer<typeof createAgentInputSchema>;
 export type CreateAgentResult = z.infer<typeof createAgentResultSchema>;
 export type GetAgentInput = z.infer<typeof getAgentInputSchema>;
+export type GetAgentRevisionInput = z.infer<typeof getAgentRevisionInputSchema>;
+export type GetAgentRevisionResult = z.infer<typeof getAgentRevisionResultSchema>;
 export type GetAgentResult = z.infer<typeof getAgentResultSchema>;
+export type ListAgentRevisionsInput = z.infer<typeof listAgentRevisionsInputSchema>;
+export type ListAgentRevisionsResult = z.infer<typeof listAgentRevisionsResultSchema>;
 export type ListAgentsInput = z.infer<typeof listAgentsInputSchema>;
 export type ListAgentsResult = z.infer<typeof listAgentsResultSchema>;
 export type OwnerAuthority = z.infer<typeof ownerAuthoritySchema>;

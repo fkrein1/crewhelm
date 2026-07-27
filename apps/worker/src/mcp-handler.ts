@@ -4,6 +4,8 @@ import {
   createAgentInputSchema,
   createAgentResultSchema,
   getAgentInputSchema,
+  getAgentRevisionInputSchema,
+  getAgentRevisionResultSchema,
   getAgentResultSchema,
   integrationCatalogSearchInputSchema,
   integrationCatalogSearchResultSchema,
@@ -11,6 +13,8 @@ import {
   inspectIntegrationToolResultSchema,
   integrationToolSearchInputSchema,
   integrationToolSearchResultSchema,
+  listAgentRevisionsInputSchema,
+  listAgentRevisionsResultSchema,
   listAgentsInputSchema,
   listAgentsResultSchema,
   ownerAuthoritySchema,
@@ -32,6 +36,8 @@ interface McpEnvironment {
     getByName(ownerKey: string): {
       createAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
       getAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
+      getAgentRevision(authorityInput: unknown, input: unknown): Promise<unknown>;
+      listAgentRevisions(authorityInput: unknown, input: unknown): Promise<unknown>;
       listAgents(authorityInput: unknown, input: unknown): Promise<unknown>;
       status(authorityInput: unknown): Promise<unknown>;
       updateAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -83,7 +89,9 @@ const NOT_FOUND_BODY = JSON.stringify({
 
 export const MCP_CREATE_AGENT_TOOL_NAME = "crewhelm_create_agent";
 export const MCP_GET_AGENT_TOOL_NAME = "crewhelm_get_agent";
+export const MCP_GET_AGENT_REVISION_TOOL_NAME = "crewhelm_get_agent_revision";
 export const MCP_INSPECT_INTEGRATION_TOOL_NAME = "crewhelm_inspect_integration_tool";
+export const MCP_LIST_AGENT_REVISIONS_TOOL_NAME = "crewhelm_list_agent_revisions";
 export const MCP_LIST_AGENTS_TOOL_NAME = "crewhelm_list_agents";
 export const MCP_SEARCH_INTEGRATIONS_TOOL_NAME = "crewhelm_search_integrations";
 export const MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME = "crewhelm_search_integration_tools";
@@ -236,6 +244,27 @@ function createMcpServer(
   );
 
   server.registerTool(
+    MCP_GET_AGENT_REVISION_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: true,
+      },
+      description:
+        "Return one exact immutable historical definition of an authenticated-owner Crewhelm Agent.",
+      inputSchema: getAgentRevisionInputSchema,
+      title: "Get Crewhelm agent revision",
+    },
+    async (input) =>
+      controlPlaneToolResult(
+        () => controlPlane.getAgentRevision(authority, input),
+        getAgentRevisionResultSchema,
+      ),
+  );
+
+  server.registerTool(
     MCP_LIST_AGENTS_TOOL_NAME,
     {
       annotations: {
@@ -253,6 +282,27 @@ function createMcpServer(
       controlPlaneToolResult(
         () => controlPlane.listAgents(authority, input),
         listAgentsResultSchema,
+      ),
+  );
+
+  server.registerTool(
+    MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: true,
+      },
+      description:
+        "List bounded immutable revision summaries for one authenticated-owner Crewhelm Agent, newest first.",
+      inputSchema: listAgentRevisionsInputSchema,
+      title: "List Crewhelm agent revisions",
+    },
+    async (input) =>
+      controlPlaneToolResult(
+        () => controlPlane.listAgentRevisions(authority, input),
+        listAgentRevisionsResultSchema,
       ),
   );
 

@@ -108,6 +108,10 @@ The MCP surface exposes:
 - `crewhelm_status` — return control-plane readiness; requires `control:read`.
 - `crewhelm_list_agents` — return bounded Agent summaries; requires `control:read`.
 - `crewhelm_get_agent` — return one Agent's current immutable definition; requires `agents:read`.
+- `crewhelm_list_agent_revisions` — list bounded immutable revision summaries for one Agent,
+  newest first; requires `agents:read`.
+- `crewhelm_get_agent_revision` — return one exact historical immutable Agent definition;
+  requires `agents:read`.
 - `crewhelm_update_agent` — replace an Agent's editable configuration as a new immutable revision;
   requires `agents:write`, the expected current revision, and an idempotency key. Each Agent retains
   at most 1,000 revisions.

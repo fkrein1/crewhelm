@@ -127,11 +127,14 @@ The owner-named Durable Object generates Agent IDs and stores configurations as 
 revisions. Creation requires `control:write`; replacement creates a new revision and requires the
 separately consented `agents:write`; status and bounded summary listing require `control:read`;
 exact current-definition reads require `agents:read`. Exact reads return instructions only after
-validating the owner-generated Agent ID inside the owner-bound Durable Object. Missing, malformed,
-wrong-owner, and insufficient-scope requests use fixed failures, and a read creates no audit
-mutation. Caller input cannot select a Durable Object name, alter capability grants, or start
-execution. Instructions and model identifiers are stored as inert validated data; using them in a
-run requires a separately reviewed runtime authorization boundary.
+validating the owner-generated Agent ID inside the owner-bound Durable Object. The same
+`agents:read` scope permits bounded newest-first revision summaries and one exact historical
+definition; summaries omit instructions, and stable numeric cursors prevent overlap while new
+revisions are appended. Missing, malformed, wrong-owner, and insufficient-scope requests use fixed
+failures, and a read creates no audit mutation. Caller input cannot select a Durable Object name,
+alter capability grants, or start execution. Instructions and model identifiers are stored as
+inert validated data; using them in a run requires a separately reviewed runtime authorization
+boundary.
 
 Every creation and update carries a bounded idempotency key scoped to the authenticated MCP client
 and its operation class. An exact replay returns the original Agent revision without another
