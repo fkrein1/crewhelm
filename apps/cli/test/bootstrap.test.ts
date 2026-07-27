@@ -47,10 +47,12 @@ const REUSE_OPTIONS: BootstrapOptions = {
 const stagedConfigSchema = z.looseObject({
   account_id: z.string(),
   d1_databases: z.tuple([z.looseObject({ database_id: z.uuid() })]),
+  secrets: z.looseObject({ required: z.array(z.string()) }),
   vars: z.looseObject({ PUBLIC_ORIGIN: z.url() }),
 });
 const stagedSecretsSchema = z.looseObject({
   BETTER_AUTH_SECRET: z.string(),
+  COMPOSIO_API_KEY: z.string(),
   GITHUB_CLIENT_SECRET: z.string(),
 });
 
@@ -83,7 +85,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
         authorization_servers: ["https://crewhelm.example/api/auth"],
         bearer_methods_supported: ["header"],
         resource: "https://crewhelm.example/mcp",
-        scopes_supported: ["control:read", "control:write"],
+        scopes_supported: ["control:read", "control:write", "integrations:read"],
       };
     } else {
       payload = {
@@ -97,7 +99,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
         response_modes_supported: ["query"],
         response_types_supported: ["code"],
         revocation_endpoint: "https://crewhelm.example/api/auth/oauth2/revoke",
-        scopes_supported: ["control:read", "control:write"],
+        scopes_supported: ["control:read", "control:write", "integrations:read"],
         token_endpoint: "https://crewhelm.example/api/auth/oauth2/token",
         token_endpoint_auth_methods_supported: ["none"],
       };
@@ -115,6 +117,10 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
   await writeFile(resolve(assets, "index.js.map"), "{}\n");
   await writeFile(resolve(assets, "migrations", "0001_better_auth.sql"), "SELECT 1;\n");
   await writeFile(resolve(assets, "migrations", "0002_control_write_scope.sql"), "SELECT 1;\n");
+  await writeFile(
+    resolve(assets, "migrations", "0003_integration_catalog_scope.sql"),
+    "SELECT 1;\n",
+  );
   await writeFile(
     resolve(assets, "wrangler-template.json"),
     JSON.stringify({
@@ -192,7 +198,11 @@ describe("Cloudflare bootstrap", () => {
 
       if (arguments_[0] === "d1" && arguments_[1] === "execute") {
         return arguments_.includes("SELECT name FROM d1_migrations ORDER BY id")
-          ? queryResult(["0001_better_auth.sql", "0002_control_write_scope.sql"])
+          ? queryResult([
+              "0001_better_auth.sql",
+              "0002_control_write_scope.sql",
+              "0003_integration_catalog_scope.sql",
+            ])
           : queryResult(AUTH_TABLES);
       }
 
@@ -225,6 +235,13 @@ describe("Cloudflare bootstrap", () => {
       expect(report.deployment.action).toBe("updated");
       expect(stagedConfig?.account_id).toBe(ACCOUNT_ID);
       expect(stagedConfig?.d1_databases[0].database_id).toBe(DATABASE_ID);
+      expect(stagedConfig?.secrets.required).toEqual([
+        "BETTER_AUTH_SECRET",
+        "COMPOSIO_API_KEY",
+        "GITHUB_CLIENT_ID",
+        "GITHUB_CLIENT_SECRET",
+        "OWNER_GITHUB_USER_ID",
+      ]);
       expect(stagedConfig?.vars.PUBLIC_ORIGIN).toBe(OPTIONS.origin.origin);
       expect(deployArguments).not.toContain("--secrets-file");
       expect(deployArguments).toContain("--strict");
@@ -318,6 +335,7 @@ describe("Cloudflare bootstrap", () => {
       const report = await bootstrapDeployment(
         OPTIONS,
         createDependencies(fixture.assets, runWrangler, {
+          CREWHELM_COMPOSIO_API_KEY: "composio-project-key",
           CREWHELM_GITHUB_CLIENT_ID: "github-client-id",
           CREWHELM_GITHUB_CLIENT_SECRET: suppliedSecret,
           CREWHELM_OWNER_GITHUB_USER_ID: "123456",
@@ -328,6 +346,7 @@ describe("Cloudflare bootstrap", () => {
       expect(report.deployment.action).toBe("created");
       expect(deployCount).toBe(2);
       expect(uploadedSecrets?.GITHUB_CLIENT_SECRET).toBe(suppliedSecret);
+      expect(uploadedSecrets?.COMPOSIO_API_KEY).toBe("composio-project-key");
       expect(uploadedSecrets?.BETTER_AUTH_SECRET).toMatch(/^[A-Za-z0-9_-]{64}$/);
       expect(deployArguments?.join(" ")).not.toContain(suppliedSecret);
       expect(stagedDirectory).toBeDefined();
@@ -369,6 +388,49 @@ describe("Cloudflare bootstrap", () => {
       await rm(fixture.root, { force: true, recursive: true });
     }
   });
+
+  it.each([
+    ["no", {}],
+    ["an invalid short", { CREWHELM_COMPOSIO_API_KEY: "short" }],
+  ])(
+    "stops before D1 mutation when a new deployment has %s Composio project key",
+    async (_label, composioEnvironment) => {
+      const fixture = await createDeploymentAssets();
+      const runWrangler = vi.fn<RunWrangler>(async (arguments_) => {
+        if (arguments_[0] === "whoami") {
+          return whoami();
+        }
+
+        return {
+          exitCode: 1,
+          outcome: "completed",
+          stderr: "This Worker does not exist. [code: 10007]",
+          stdout: "",
+        };
+      });
+
+      try {
+        await expect(
+          bootstrapDeployment(
+            OPTIONS,
+            createDependencies(fixture.assets, runWrangler, {
+              ...composioEnvironment,
+              CREWHELM_GITHUB_CLIENT_ID: "github-client-id",
+              CREWHELM_GITHUB_CLIENT_SECRET: "github-client-secret",
+              CREWHELM_OWNER_GITHUB_USER_ID: "123456",
+            }),
+          ),
+        ).rejects.toMatchObject({
+          message: "Set CREWHELM_COMPOSIO_API_KEY to a valid Composio project API key.",
+          name: "BootstrapError",
+          stage: "configuration",
+        });
+        expect(runWrangler).toHaveBeenCalledTimes(2);
+      } finally {
+        await rm(fixture.root, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("requires explicit reuse after an ambiguous concurrent database creation", async () => {
     const fixture = await createDeploymentAssets();
@@ -450,7 +512,11 @@ describe("Cloudflare bootstrap", () => {
 
       if (arguments_[0] === "d1" && arguments_[1] === "execute") {
         return arguments_.includes("SELECT name FROM d1_migrations ORDER BY id")
-          ? queryResult(["0001_better_auth.sql", "0002_control_write_scope.sql"])
+          ? queryResult([
+              "0001_better_auth.sql",
+              "0002_control_write_scope.sql",
+              "0003_integration_catalog_scope.sql",
+            ])
           : queryResult(AUTH_TABLES);
       }
 
@@ -535,6 +601,7 @@ describe("Cloudflare bootstrap", () => {
         bootstrapDeployment(
           OPTIONS,
           createDependencies(fixture.assets, runWrangler, {
+            CREWHELM_COMPOSIO_API_KEY: "composio-project-key",
             CREWHELM_GITHUB_CLIENT_ID: "github-client-id",
             CREWHELM_GITHUB_CLIENT_SECRET: "github-client-secret",
             CREWHELM_OWNER_GITHUB_USER_ID: "123456",

@@ -25,7 +25,8 @@ Usage:
 
 The bootstrap command creates or reuses D1, deploys the packaged Worker, and diagnoses it.
 New deployments read GitHub OAuth settings from CREWHELM_GITHUB_CLIENT_ID,
-CREWHELM_GITHUB_CLIENT_SECRET, and CREWHELM_OWNER_GITHUB_USER_ID.
+CREWHELM_GITHUB_CLIENT_SECRET, and CREWHELM_OWNER_GITHUB_USER_ID, plus the Composio project key
+from CREWHELM_COMPOSIO_API_KEY.
 The doctor command validates bounded health and MCP OAuth discovery responses.
 --timeout-ms applies to each diagnostic request.
 Bootstrap requires HTTPS. Doctor permits HTTP only for exact loopback hosts.

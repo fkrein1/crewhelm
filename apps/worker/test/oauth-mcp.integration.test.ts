@@ -1,10 +1,12 @@
 import { createExecutionContext, env, runInDurableObject } from "cloudflare:test";
 import {
+  INTEGRATIONS_READ_SCOPE,
   OWNER_DEFAULT_SCOPE_CLAIM,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   createAgentResultSchema,
   controlPlaneStatusResultSchema,
+  integrationCatalogSearchResultSchema,
   listAgentsResultSchema,
   ownerKeySchema,
   ownerScopeClaimSchema,
@@ -18,6 +20,7 @@ import { handleWorkerRequest } from "../src/index.js";
 import {
   MCP_CREATE_AGENT_TOOL_NAME,
   MCP_LIST_AGENTS_TOOL_NAME,
+  MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_STATUS_TOOL_NAME,
 } from "../src/mcp-handler.js";
 import { deriveOwnerKey } from "../src/owner-identity.js";
@@ -27,7 +30,7 @@ const origin = "https://crewhelm.test";
 const redirectUri = "https://client.example/oauth/callback";
 const ownerGithubUserId = "123456";
 const githubToken = "transient-github-token-must-not-be-stored";
-const reversedOwnerScopeClaim = `${OWNER_WRITE_SCOPE} ${OWNER_READ_SCOPE}`;
+const reversedOwnerScopeClaim = `${INTEGRATIONS_READ_SCOPE} ${OWNER_WRITE_SCOPE} ${OWNER_READ_SCOPE}`;
 const registrationSchema = z.looseObject({
   client_id: z.string().min(1),
   token_endpoint_auth_method: z.literal("none"),
@@ -71,6 +74,7 @@ function integrationEnv(
     AUTH_DB: env.AUTH_DB,
     AUTH_RATE_LIMIT: rateLimit,
     BETTER_AUTH_SECRET: "test-better-auth-secret-that-is-at-least-32-bytes",
+    COMPOSIO_API_KEY: "test-composio-api-key",
     GITHUB_CLIENT_ID: "github-client-id",
     GITHUB_CLIENT_SECRET: "github-client-secret",
     MCP_RATE_LIMIT: rateLimit,
@@ -486,6 +490,9 @@ describe("public OAuth to MCP integration", () => {
     expect(consentPage).toContain(
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
+    expect(consentPage).toContain(
+      "Search the Composio integration catalog. Search terms are sent to Composio.",
+    );
     const consentResponse = await request(workerEnv, "/oauth/consent", {
       body: new URLSearchParams({
         decision: "approve",
@@ -716,6 +723,9 @@ describe("public OAuth to MCP integration", () => {
     expect(consentPage).not.toContain(
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
+    expect(consentPage).not.toContain(
+      "Search the Composio integration catalog. Search terms are sent to Composio.",
+    );
     const ownerKey = await deriveOwnerKey({
       issuer: "https://github.com",
       subject: workerEnv.OWNER_GITHUB_USER_ID,
@@ -782,6 +792,9 @@ describe("public OAuth to MCP integration", () => {
     expect(consentPage).toContain(
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
+    expect(consentPage).not.toContain(
+      "Search the Composio integration catalog. Search terms are sent to Composio.",
+    );
     const createResponse = await callMcp(
       workerEnv,
       token.access_token,
@@ -818,6 +831,69 @@ describe("public OAuth to MCP integration", () => {
       },
       ok: false,
     });
+    const statusResponse = await callMcp(workerEnv, token.access_token);
+    const statusResult = toolResultSchema.parse(await statusResponse.json()).result;
+
+    expect(statusResult.isError).toBe(true);
+    expect(controlPlaneStatusResultSchema.parse(JSON.parse(statusResult.content[0].text))).toEqual({
+      error: {
+        code: "insufficient_scope",
+        message: "Control-plane request denied.",
+      },
+      ok: false,
+    });
+  });
+
+  it("grants Composio catalog search without widening control-plane read", async () => {
+    const workerEnv = integrationEnv(allowRateLimit(), "123459");
+    const { consentPage, token } = await completeOAuthFlow(workerEnv, INTEGRATIONS_READ_SCOPE);
+
+    expect(token.scope).toBe(INTEGRATIONS_READ_SCOPE);
+    expect(consentPage).not.toContain("View control-plane status and Agent summaries.");
+    expect(consentPage).not.toContain(
+      "Create Agent definitions with bounded configuration and no capability grants.",
+    );
+    expect(consentPage).toContain(
+      "Search the Composio integration catalog. Search terms are sent to Composio.",
+    );
+
+    vi.restoreAllMocks();
+    const composioFetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        items: [
+          {
+            auth_schemes: ["OAUTH2"],
+            meta: {
+              description: "Search and scrape the web.",
+              tools_count: 18,
+              version: "20260701_00",
+            },
+            name: "Firecrawl",
+            no_auth: false,
+            slug: "firecrawl",
+          },
+        ],
+        next_cursor: null,
+      }),
+    );
+    const catalogResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
+      { query: "web research" },
+    );
+    const catalogResult = toolResultSchema.parse(await catalogResponse.json()).result;
+
+    expect(composioFetch).toHaveBeenCalledOnce();
+    expect(catalogResult.isError).toBe(false);
+    expect(
+      integrationCatalogSearchResultSchema.parse(JSON.parse(catalogResult.content[0].text)),
+    ).toMatchObject({
+      integrations: [{ slug: "firecrawl" }],
+      nextCursor: null,
+      ok: true,
+    });
+
     const statusResponse = await callMcp(workerEnv, token.access_token);
     const statusResult = toolResultSchema.parse(await statusResponse.json()).result;
 

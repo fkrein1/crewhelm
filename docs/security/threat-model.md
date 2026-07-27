@@ -1,6 +1,6 @@
 # Threat model
 
-Status: authenticated MCP Agent registry
+Status: authenticated MCP control plane
 
 ## Scope
 
@@ -27,11 +27,12 @@ surface.
 2. Crewhelm authorization routes to GitHub's fixed OAuth and user API endpoints
 3. OAuth ingress to the Cloudflare D1 database holding protocol state and signing keys
 4. Authenticated MCP ingress to the owner-named private control plane
-5. Control plane to agent runtime and workflows
-6. Runtime to Composio and external toolkits
-7. Repository recipe to installed, owner-approved configuration
-8. Build and release automation to published packages and deployments
-9. Local bootstrap CLI to the selected Cloudflare account, D1 database, and Worker deployment
+5. Authenticated MCP ingress to Composio's fixed catalog endpoint
+6. Control plane to agent runtime and workflows
+7. Runtime to Composio and external toolkits
+8. Repository recipe to installed, owner-approved configuration
+9. Build and release automation to published packages and deployments
+10. Local bootstrap CLI to the selected Cloudflare account, D1 database, and Worker deployment
 
 ## Primary threats
 
@@ -74,6 +75,8 @@ surface.
 - Default-empty tool inventory, capability IDs, and authority attenuation for child agents
 - Pinned Composio execution with explicit accounts; Sessions, raw proxy, and model connection
   management stay disabled
+- Full Composio catalog discovery through a fixed host, exact read scope, manual redirect handling,
+  bounded time and response size, strict normalization, and provider-independent safe errors
 - Schema, provenance, size, and content validation
 - Idempotency, audit, budgets, rate limits, and a kill switch
 - Versioned migrations, backup, quarantined restore, and rollback procedures
@@ -102,14 +105,14 @@ before its client's lease expires remains valid for at most its independent 15-m
 
 Better Auth owns OAuth 2.1 mechanics, JWT/JWKS handling, GitHub login state, and secure session
 cookies. Crewhelm still owns the stricter authorization boundary: only HTTPS or exact loopback
-redirects, the explicit `control:read` and `control:write` scopes, one exact resource, the
-configured GitHub numeric owner, a 24-hour public-client lease, no refresh grant, no upstream
-scope, and no persisted upstream token. The consent page distinguishes read and create authority;
-the owner control plane independently enforces the required scope for every RPC. Existing
-read-only clients and tokens are never silently widened. Database hooks force every upstream token
-field to null before persistence. Revisit the provider configuration and threat model before
-adding broader mutation classes, multi-owner service, refresh tokens, additional identity
-providers, or longer token lifetimes.
+redirects, the explicit `control:read`, `control:write`, and `integrations:read` scopes, one exact
+resource, the configured GitHub numeric owner, a 24-hour public-client lease, no refresh grant, no
+upstream scope, and no persisted upstream token. The consent page distinguishes control-plane
+read, Agent creation, and Composio catalog egress; each implementation independently enforces its
+required scope. Existing clients and tokens are never silently widened. Database hooks force every
+upstream token field to null before persistence. Revisit the provider configuration and threat
+model before adding broader mutation classes, multi-owner service, refresh tokens, additional
+identity providers, or longer token lifetimes.
 
 The provider seeds the exact MCP resource in insert-only mode so public requests cannot turn
 configuration into repeated D1 writes. Scope and access-token lifetime changes require explicit
@@ -134,6 +137,24 @@ audit, and maximum instruction storage created by this surface; exact retries st
 ceiling, while new creations fail without partial writes. The registry has no edit, delete, run,
 connection, or grant operation.
 
+## Composio catalog authority and residual risk
+
+The `integrations:read` MCP catalog tool sends a bounded search and opaque pagination cursor only
+to Composio's fixed toolkit endpoint. `control:read` alone grants no provider egress. Crewhelm
+always requests `managed_by=all`, excludes deprecated toolkits, and does not maintain a toolkit
+allowlist, so newly available Composio and project integrations remain discoverable without a
+Crewhelm code change. Catalog discovery grants no connection or execution authority.
+
+The adapter sends the project key only in the fixed request header, rejects redirects, propagates
+request cancellation, limits latency and response bytes, validates provider structure, and returns
+a small normalized summary.
+Provider bodies, errors, request IDs, URLs, and the API key never enter MCP failures, logs, D1, or
+Durable Objects. A successful provider payload is also rejected if any normalized output string
+contains the exact project key. Names and descriptions remain untrusted external text even after
+structural validation. A provider outage, schema drift, malformed cursor, missing key, or reflected
+key fails closed as one catalog-unavailable result. Connection setup, exact tool classification,
+grants, and execution remain separate boundaries.
+
 ## Bootstrap and deployment authority
 
 The bootstrap CLI holds the operator's Cloudflare deployment authority. It runs the exact pinned
@@ -150,14 +171,14 @@ operator must confirm its UUID, and Crewhelm checks its table and migration prov
 applying packaged migrations. A new database that appears after an ambiguous create is preserved
 but not trusted automatically.
 
-GitHub OAuth values enter through the parent process environment, are removed from Wrangler's child
-environment, and are passed to Cloudflare only through a mode-0600 file inside the private
-directory. Existing Worker secrets are additive and preserved. The directory is removed after
-Wrangler has exited. Wrangler output is bounded and never reflected to the user. On timeout or
-excess output, the CLI terminates the process with bounded escalation and marks the remote outcome
-unknown. Database creation, migration, and deployment are reconciled through validated Cloudflare
-inventory; an unconfirmed result stops with resources preserved for inspection and an explicit
-retry.
+GitHub OAuth values and the Composio project key enter through the parent process environment, are
+removed from Wrangler's child environment, and are passed to Cloudflare only through a mode-0600
+file inside the private directory. Existing Worker secrets are additive and preserved. The
+directory is removed after Wrangler has exited. Wrangler output is bounded and never reflected to
+the user. On timeout or excess output, the CLI terminates the process with bounded escalation and
+marks the remote outcome unknown. Database creation, migration, and deployment are reconciled
+through validated Cloudflare inventory; an unconfirmed result stops with resources preserved for
+inspection and an explicit retry.
 
 ## Update triggers
 

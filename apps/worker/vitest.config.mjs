@@ -12,6 +12,7 @@ export default defineConfig({
       miniflare: {
         bindings: {
           BETTER_AUTH_SECRET: "test-better-auth-secret-that-is-at-least-32-bytes",
+          COMPOSIO_API_KEY: "test-composio-api-key",
           GITHUB_CLIENT_ID: "test-github-client",
           GITHUB_CLIENT_SECRET: "test-github-secret",
           OWNER_GITHUB_USER_ID: "123456",

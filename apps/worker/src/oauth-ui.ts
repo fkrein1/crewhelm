@@ -1,4 +1,9 @@
-import { OWNER_READ_SCOPE, OWNER_WRITE_SCOPE, ownerScopeClaimSchema } from "@crewhelm/contracts";
+import {
+  INTEGRATIONS_READ_SCOPE,
+  OWNER_READ_SCOPE,
+  OWNER_WRITE_SCOPE,
+  ownerScopeClaimSchema,
+} from "@crewhelm/contracts";
 import type { Context, Hono } from "hono";
 import * as z from "zod";
 
@@ -215,6 +220,9 @@ function consentPage(
       : "",
     requestedScopes.includes(OWNER_WRITE_SCOPE)
       ? "<li>Create Agent definitions with bounded configuration and no capability grants.</li>"
+      : "",
+    requestedScopes.includes(INTEGRATIONS_READ_SCOPE)
+      ? "<li>Search the Composio integration catalog. Search terms are sent to Composio.</li>"
       : "",
   ].join("");
 

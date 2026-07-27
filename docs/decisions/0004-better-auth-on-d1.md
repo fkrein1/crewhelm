@@ -19,9 +19,9 @@ endpoints and the resulting verified owner/client authority.
 - Use Better Auth's OAuth 2.1 Provider and a scope-free GitHub generic OAuth integration behind
   Crewhelm's Hono routes.
 - Persist OAuth protocol state through Better Auth's Drizzle adapter in a dedicated D1 database.
-- Keep Crewhelm's policy outside the library: one exact MCP audience, one read-only scope, S256
-  PKCE, HTTPS or exact-loopback redirects, a 24-hour public-client lease, and the configured GitHub
-  numeric owner ID.
+- Keep Crewhelm's policy outside the library: one exact MCP audience, explicit attenuated scopes,
+  S256 PKCE, HTTPS or exact-loopback redirects, a 24-hour public-client lease, and the configured
+  GitHub numeric owner ID.
 - Request no GitHub scope and force upstream access, refresh, and ID token fields to null in
   database hooks before persistence.
 - Issue non-refreshable 15-minute JWT access tokens and use a D1 denylist of SHA-256 token hashes

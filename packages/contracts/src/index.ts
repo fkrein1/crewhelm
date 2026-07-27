@@ -13,6 +13,7 @@ export {
   controlPlaneStatusResultSchema,
   createAgentInputSchema,
   createAgentResultSchema,
+  INTEGRATIONS_READ_SCOPE,
   listAgentsInputSchema,
   listAgentsResultSchema,
   MAXIMUM_AGENTS_PER_OWNER,
@@ -40,3 +41,13 @@ export {
   type VerifiedOwnerIdentity,
 } from "./control-plane.js";
 export { HEALTH_PATH, healthReportSchema, type HealthReport } from "./health.js";
+export {
+  integrationCatalogCursorSchema,
+  integrationCatalogItemSchema,
+  integrationCatalogSearchInputSchema,
+  integrationCatalogSearchResultSchema,
+  integrationSlugSchema,
+  type IntegrationCatalogItem,
+  type IntegrationCatalogSearchInput,
+  type IntegrationCatalogSearchResult,
+} from "./integrations.js";

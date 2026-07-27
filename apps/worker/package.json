@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@better-auth/oauth-provider": "1.7.0-beta.10",
+    "@crewhelm/composio": "workspace:*",
     "@crewhelm/contracts": "workspace:*",
     "@modelcontextprotocol/sdk": "1.29.0",
     "better-auth": "1.7.0-beta.10",
