@@ -43,6 +43,7 @@ import {
 import { deriveOwnerKey } from "../src/owner-identity.js";
 
 const origin = "https://crewhelm.test";
+const signingSecret = "test-better-auth-secret-that-is-at-least-32-bytes";
 const jsonRpcToolResultSchema = z.looseObject({
   result: z.looseObject({
     content: z.array(
@@ -205,7 +206,7 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         status: "ready",
       },
     });
@@ -269,6 +270,7 @@ describe("authenticated MCP handler", () => {
   it("returns a fixed MCP error when the control plane fails", async () => {
     const authority = await ownerAuthority();
     const failingEnv = {
+      BETTER_AUTH_SECRET: signingSecret,
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
           createAgent: async () => {
@@ -303,6 +305,7 @@ describe("authenticated MCP handler", () => {
           },
         }),
       },
+      PUBLIC_ORIGIN: origin,
     };
     const response = await handleAuthenticatedMcpRequest(
       toolRequest(
@@ -788,6 +791,9 @@ describe("authenticated MCP handler", () => {
 
     expect(JSON.parse(init.body)).toEqual({
       auth_config_id: "ac_github_managed",
+      callback_url: expect.stringMatching(
+        /^https:\/\/crewhelm\.test\/connections\/composio\/callback\/owner_[A-Za-z0-9_-]{43}\/connection_link_[0-9a-f-]{36}\/[1-9][0-9]{12}\/[A-Za-z0-9_-]{43}\/[A-Za-z0-9_-]{43}$/,
+      ),
       experimental: {
         account_type: "PRIVATE",
       },
@@ -833,6 +839,7 @@ describe("authenticated MCP handler", () => {
     expect(listConnectionsResultSchema.parse(JSON.parse(text))).toEqual({
       connections: [
         {
+          authorizationOutcome: "untracked",
           authConfigId: "ac_linear_managed",
           connectionId: "connection_00000000-0000-4000-8000-000000000003",
           createdAt: "1970-01-01T00:00:00.003Z",
@@ -923,7 +930,11 @@ describe("authenticated MCP handler", () => {
           },
         }),
       ),
-      { OWNER_CONTROL_PLANE: env.OWNER_CONTROL_PLANE },
+      {
+        BETTER_AUTH_SECRET: signingSecret,
+        OWNER_CONTROL_PLANE: env.OWNER_CONTROL_PLANE,
+        PUBLIC_ORIGIN: origin,
+      },
       { authority },
     );
     const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
@@ -995,6 +1006,7 @@ describe("authenticated MCP handler", () => {
       CONNECTIONS_WRITE_SCOPE,
     ]);
     const finalizationFailureEnv = {
+      BETTER_AUTH_SECRET: signingSecret,
       COMPOSIO_API_KEY: "test-composio-api-key",
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
@@ -1006,6 +1018,8 @@ describe("authenticated MCP handler", () => {
           listAgents: unavailableControlPlane,
           listConnections: unavailableControlPlane,
           reserveConnectionLink: async () => ({
+            authorizationExpiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+            authorizationToken: "a".repeat(43),
             ok: true,
             reservationId: "connection_link_00000000-0000-4000-8000-000000000000",
             state: "dispatch",
@@ -1014,6 +1028,7 @@ describe("authenticated MCP handler", () => {
           updateAgent: unavailableControlPlane,
         }),
       },
+      PUBLIC_ORIGIN: origin,
     };
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       Response.json(
@@ -1081,6 +1096,7 @@ describe("authenticated MCP handler", () => {
       `);
     });
     const auditFailureEnv = {
+      BETTER_AUTH_SECRET: signingSecret,
       COMPOSIO_API_KEY: "test-composio-api-key",
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
@@ -1102,6 +1118,7 @@ describe("authenticated MCP handler", () => {
           updateAgent: unavailableControlPlane,
         }),
       },
+      PUBLIC_ORIGIN: origin,
     };
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       Response.json(

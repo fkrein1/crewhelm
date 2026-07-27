@@ -1,6 +1,8 @@
 import {
   CONNECTION_LINK_UNKNOWN_RECOVERY_MS,
   composioConnectedAccountIdSchema,
+  connectionAuthorizationAuthenticatorSchema,
+  connectionAuthorizationTokenSchema,
   connectionAuthConfigIdSchema,
   connectionLinkUrlSchema,
   ownerKeySchema,
@@ -20,8 +22,27 @@ const composioLinkTokenSchema = z
   .min(4)
   .max(256)
   .regex(/^ln_[A-Za-z0-9_-]+$/);
+const connectionAuthorizationCallbackUrlSchema = z
+  .url()
+  .max(2_048)
+  .refine((value) => {
+    const url = new URL(value);
+
+    return (
+      url.protocol === "https:" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.search === "" &&
+      url.hash === ""
+    );
+  });
 const composioConnectionLinkInputSchema = z.strictObject({
   authConfigId: connectionAuthConfigIdSchema,
+  callbackSecrets: z.tuple([
+    connectionAuthorizationTokenSchema,
+    connectionAuthorizationAuthenticatorSchema,
+  ]),
+  callbackUrl: connectionAuthorizationCallbackUrlSchema,
   userId: ownerKeySchema,
 });
 const composioConnectionLinkResponseSchema = z.looseObject({
@@ -54,7 +75,12 @@ export type ComposioConnectionLinkResult =
     };
 
 export interface ComposioConnectionLinks {
-  create(input: { authConfigId: string; userId: string }): Promise<ComposioConnectionLinkResult>;
+  create(input: {
+    authConfigId: string;
+    callbackSecrets: [string, string];
+    callbackUrl: string;
+    userId: string;
+  }): Promise<ComposioConnectionLinkResult>;
   isAvailable(): boolean;
 }
 
@@ -105,6 +131,7 @@ export function createComposioConnectionLinks(
         const response = await fetchImplementation(COMPOSIO_CONNECTION_LINK_URL, {
           body: JSON.stringify({
             auth_config_id: request.data.authConfigId,
+            callback_url: request.data.callbackUrl,
             experimental: {
               account_type: "PRIVATE",
             },
@@ -155,7 +182,11 @@ export function createComposioConnectionLinks(
           url: connectionLink.data.redirect_url,
         };
 
-        return JSON.stringify(result).includes(apiKey.data)
+        const serializedResult = JSON.stringify(result);
+
+        return [apiKey.data, ...request.data.callbackSecrets].some((secret) =>
+          serializedResult.includes(secret),
+        )
           ? outcomeUnknown()
           : { connectionLink: result, ok: true };
       } catch {

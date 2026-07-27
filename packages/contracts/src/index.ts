@@ -68,6 +68,9 @@ export {
 } from "./control-plane.js";
 export {
   completeConnectionLinkInputSchema,
+  connectionAuthorizationAuthenticatorSchema,
+  connectionAuthorizationOutcomeSchema,
+  connectionAuthorizationTokenSchema,
   composioConnectedAccountIdSchema,
   connectionAuthConfigIdSchema,
   connectionIdSchema,
@@ -81,16 +84,21 @@ export {
   createConnectionLinkResultSchema,
   listConnectionsInputSchema,
   listConnectionsResultSchema,
+  recordConnectionAuthorizationReturnInputSchema,
+  recordConnectionAuthorizationReturnResultSchema,
   reserveConnectionLinkResultSchema,
   CONNECTION_LINK_UNKNOWN_RECOVERY_MS,
   MAXIMUM_CONNECTION_LINK_REQUESTS_PER_OWNER,
   MAXIMUM_CONNECTIONS_PER_OWNER,
   type CompleteConnectionLinkInput,
+  type ConnectionAuthorizationOutcome,
   type ConnectionSummary,
   type CreateConnectionLinkInput,
   type CreateConnectionLinkResult,
   type ListConnectionsInput,
   type ListConnectionsResult,
+  type RecordConnectionAuthorizationReturnInput,
+  type RecordConnectionAuthorizationReturnResult,
   type ReserveConnectionLinkResult,
 } from "./connections.js";
 export { HEALTH_PATH, healthReportSchema, type HealthReport } from "./health.js";

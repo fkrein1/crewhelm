@@ -17,6 +17,7 @@ import {
   listAgentRevisionsResultSchema,
   listAgentsResultSchema,
   listConnectionsResultSchema,
+  ownerAuthoritySchema,
   ownerKeySchema,
   ownerScopeClaimSchema,
   updateAgentResultSchema,
@@ -26,6 +27,7 @@ import * as z from "zod";
 
 import type { WorkerEnv } from "../src/env.js";
 import { exchangeGithubAuthorizationCode } from "../src/auth.js";
+import { CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX } from "../src/connection-authorization-return.js";
 import { handleWorkerRequest } from "../src/index.js";
 import {
   MCP_CREATE_AGENT_TOOL_NAME,
@@ -640,7 +642,7 @@ describe("public OAuth to MCP integration", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(toolResult.content[0].text))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         status: "ready",
       },
     });
@@ -1263,6 +1265,69 @@ describe("public OAuth to MCP integration", () => {
     });
     expect(JSON.stringify(connection)).not.toContain(workerEnv.COMPOSIO_API_KEY);
 
+    const [, providerRequest] = composioFetch.mock.calls[0] ?? [];
+
+    if (typeof providerRequest?.body !== "string") {
+      throw new TypeError("Expected a serialized Composio connection-link request.");
+    }
+
+    const providerBody = z
+      .strictObject({
+        auth_config_id: z.literal("ac_linear_managed"),
+        callback_url: z.url(),
+        experimental: z.strictObject({
+          account_type: z.literal("PRIVATE"),
+        }),
+        user_id: ownerKeySchema,
+      })
+      .parse(JSON.parse(providerRequest.body));
+    const callbackUrl = new URL(providerBody.callback_url);
+    const callbackSecrets = callbackUrl.pathname.split("/").slice(-2);
+
+    if (callbackSecrets.length !== 2) {
+      throw new TypeError("Expected two callback capability secrets.");
+    }
+
+    expect(callbackUrl.origin).toBe(origin);
+    expect(callbackUrl.pathname).toMatch(
+      /^\/connections\/composio\/callback\/owner_[A-Za-z0-9_-]{43}\/connection_link_[0-9a-f-]{36}\/[1-9][0-9]{12}\/[A-Za-z0-9_-]{43}\/[A-Za-z0-9_-]{43}$/,
+    );
+    for (const callbackSecret of callbackSecrets) {
+      expect(JSON.stringify(connection)).not.toContain(callbackSecret);
+    }
+
+    callbackUrl.searchParams.set("status", "success");
+    callbackUrl.searchParams.set("connected_account_id", "ca_oauth_connection");
+    const callbackResponse = await request(
+      workerEnv,
+      `${callbackUrl.pathname}${callbackUrl.search}`,
+    );
+    const callbackBody = await callbackResponse.text();
+
+    expect(callbackResponse.status).toBe(200);
+    expect(callbackBody).toContain("Authorization returned to Crewhelm");
+    expect(callbackBody).not.toContain("ca_oauth_connection");
+    for (const callbackSecret of callbackSecrets) {
+      expect(callbackBody).not.toContain(callbackSecret);
+    }
+
+    const ownerKey = await deriveOwnerKey({
+      issuer: "https://github.com",
+      subject: workerEnv.OWNER_GITHUB_USER_ID,
+    });
+    const readAuthority = ownerAuthoritySchema.parse({
+      clientId: "oauth-callback-inspection",
+      ownerKey,
+      scopes: [CONNECTIONS_READ_SCOPE],
+    });
+
+    await expect(
+      workerEnv.OWNER_CONTROL_PLANE.getByName(ownerKey).listConnections(readAuthority, {}),
+    ).resolves.toMatchObject({
+      connections: [{ authorizationOutcome: "returned", status: "initiated" }],
+      ok: true,
+    });
+
     const catalogResponse = await callMcp(
       workerEnv,
       token.access_token,
@@ -1332,6 +1397,7 @@ describe("public OAuth to MCP integration", () => {
     expect(listConnectionsResultSchema.parse(JSON.parse(listText))).toEqual({
       connections: [
         {
+          authorizationOutcome: "untracked",
           authConfigId: "ac_github_managed",
           connectionId: "connection_00000000-0000-4000-8000-000000000004",
           createdAt: "1970-01-01T00:00:00.004Z",
@@ -1596,5 +1662,24 @@ describe("public OAuth to MCP integration", () => {
 
     expect(response.status).toBe(expectedStatus);
     expect(body).not.toContain("do-not-reflect-this");
+  });
+
+  it("rate-limits authorization returns without using the callback capability as a key", async () => {
+    const authorizationToken = "a".repeat(43);
+    const limit = vi.fn<RateLimit["limit"]>().mockResolvedValue({ success: false });
+    const callbackPath =
+      `${CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX}owner_${"b".repeat(43)}/` +
+      `connection_link_00000000-0000-4000-8000-000000000000/${authorizationToken}`;
+    const response = await request(integrationEnv({ limit }), callbackPath, {
+      headers: {
+        "cf-connecting-ip": "203.0.113.10",
+      },
+    });
+
+    expect(response.status).toBe(429);
+    expect(limit).toHaveBeenCalledWith({
+      key: `${CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX}:203.0.113.10`,
+    });
+    expect(JSON.stringify(limit.mock.calls)).not.toContain(authorizationToken);
   });
 });

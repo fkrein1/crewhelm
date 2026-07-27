@@ -129,11 +129,14 @@ The MCP surface exposes:
   exact tool and toolkit version; requires `integrations:read`.
 - `crewhelm_list_connections` — list bounded owner-scoped connection summaries in stable opaque-ID
   order; requires `connections:read`. The local `initiated` status means Crewhelm created the
-  connection record; it does not assert that provider consent has completed.
+  connection record. `authorizationOutcome` separately reports whether the hosted browser flow is
+  pending, returned, failed, expired, or untracked for a connection created before return tracking;
+  none of those values asserts that the provider account is active or executable.
 - `crewhelm_create_connection_link` — create an idempotent private Composio Connect Link for any
   exact authentication configuration; requires `connections:write`. Crewhelm stores opaque
   connection, auth-configuration, and account references plus the short-lived hosted link, never
-  provider credentials.
+  provider credentials. The hosted flow returns to a one-time, expiring Crewhelm callback that
+  records a receipt without granting an Agent or tool permission.
 - `crewhelm_create_agent` — create an idempotent owner-scoped Agent revision with an explicit
   model, bounded instructions and execution limits, and no capability grants; requires
   `control:write`. Each owner can store at most 100 Agents.
@@ -143,7 +146,9 @@ preserves access to the underlying Agent framework rather than defining a perman
 facade, while deterministic policy decides which capabilities each Agent may use. Composio
 discovery covers its complete current non-deprecated catalog, including project toolkits, without
 a Crewhelm-maintained integration or tool allowlist. Authentication completes on Composio's hosted
-page, so OAuth tokens and API keys do not pass through Crewhelm or the MCP client.
+page, so OAuth tokens and API keys do not pass through Crewhelm or the MCP client. The browser
+return is not a signed provider assertion: Crewhelm records it as lifecycle information and still
+requires a later deterministic grant and execution check before any tool can use the connection.
 
 Changing `OWNER_GITHUB_USER_ID` or the GitHub client secret blocks new authorization but does not
 revoke an already issued 15-minute access token. For emergency global revocation, create a fresh

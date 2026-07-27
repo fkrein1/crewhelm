@@ -1,8 +1,16 @@
-import { SELF } from "cloudflare:test";
-import { OWNER_SCOPES, healthReportSchema } from "@crewhelm/contracts";
+import { SELF, env } from "cloudflare:test";
+import {
+  CONNECTIONS_READ_SCOPE,
+  CONNECTIONS_WRITE_SCOPE,
+  OWNER_SCOPES,
+  healthReportSchema,
+  ownerAuthoritySchema,
+} from "@crewhelm/contracts";
 import { describe, expect, it, vi } from "vitest";
 
+import { createConnectionAuthorizationCallback } from "../src/connection-authorization-return.js";
 import { createWorker } from "../src/index.js";
+import { deriveOwnerKey } from "../src/owner-identity.js";
 import { registerAuthTestDatabase } from "./auth-testkit.js";
 
 const origin = "https://crewhelm.test";
@@ -12,6 +20,58 @@ registerAuthTestDatabase();
 
 function request(path: string, init?: RequestInit): Promise<Response> | Response {
   return worker.fetch(new Request(`${origin}${path}`, init));
+}
+
+async function connectionAuthorizationFixture(subject: string) {
+  const ownerKey = await deriveOwnerKey({
+    issuer: "https://github.com",
+    subject,
+  });
+  const authority = ownerAuthoritySchema.parse({
+    clientId: `client-${subject}`,
+    ownerKey,
+    scopes: [CONNECTIONS_READ_SCOPE, CONNECTIONS_WRITE_SCOPE],
+  });
+  const controlPlane = env.OWNER_CONTROL_PLANE.getByName(ownerKey);
+  const reservation = await controlPlane.reserveConnectionLink(authority, {
+    authConfigId: "ac_github_managed",
+    idempotencyKey: `callback-${subject}`,
+  });
+
+  if (!reservation.ok || reservation.state !== "dispatch") {
+    throw new Error("Expected a connection authorization reservation.");
+  }
+
+  const providerConnectionId = `ca_callback_${subject}`;
+  const completion = await controlPlane.completeConnectionLink(authority, {
+    authorizationToken: reservation.authorizationToken,
+    expiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+    providerConnectionId,
+    reservationId: reservation.reservationId,
+    url: `https://connect.composio.dev/link/ln_callback_${subject}`,
+  });
+
+  if (!completion.ok) {
+    throw new Error("Expected a completed connection link.");
+  }
+
+  const callback = await createConnectionAuthorizationCallback({
+    authorizationExpiresAt: reservation.authorizationExpiresAt,
+    authorizationToken: reservation.authorizationToken,
+    ownerKey,
+    origin,
+    reservationId: reservation.reservationId,
+    signingSecret: env.BETTER_AUTH_SECRET,
+  });
+
+  return {
+    authority,
+    callbackUrl: callback.callbackUrl,
+    connectionId: completion.connectionLink.connectionId,
+    controlPlane,
+    providerConnectionId,
+    reservation,
+  };
 }
 
 describe("Crewhelm Worker", () => {
@@ -151,5 +211,139 @@ describe("Crewhelm Worker", () => {
     });
     expect(body).not.toContain("do-not-reflect-this");
     expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it("records a successful Composio browser return without claiming activation", async () => {
+    const fixture = await connectionAuthorizationFixture("callback-success");
+    const returnUrl = new URL(fixture.callbackUrl);
+
+    returnUrl.searchParams.set("status", "success");
+    returnUrl.searchParams.set("connected_account_id", fixture.providerConnectionId);
+    const response = await worker.fetch(new Request(returnUrl), env);
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("x-frame-options")).toBe("DENY");
+    expect(body).toContain("Authorization returned to Crewhelm");
+    expect(body).not.toMatch(/active|connected/i);
+    expect(body).not.toContain(fixture.providerConnectionId);
+    expect(body).not.toContain(fixture.reservation.authorizationToken);
+    await expect(fixture.controlPlane.listConnections(fixture.authority, {})).resolves.toEqual({
+      connections: [
+        {
+          authorizationOutcome: "returned",
+          authConfigId: "ac_github_managed",
+          connectionId: fixture.connectionId,
+          createdAt: expect.any(String),
+          status: "initiated",
+        },
+      ],
+      nextCursor: null,
+      ok: true,
+    });
+
+    const replay = await worker.fetch(new Request(returnUrl), env);
+
+    expect(replay.status).toBe(200);
+    await expect(replay.text()).resolves.toBe(body);
+    returnUrl.searchParams.set("status", "failed");
+    const oppositeReturn = await worker.fetch(new Request(returnUrl), env);
+
+    expect(oppositeReturn.status).toBe(400);
+    expect(await oppositeReturn.text()).not.toContain(fixture.providerConnectionId);
+  });
+
+  it("records a failed return and rejects malformed or unsupported callback requests", async () => {
+    const fixture = await connectionAuthorizationFixture("callback-failed");
+    const failedUrl = new URL(fixture.callbackUrl);
+
+    failedUrl.searchParams.set("status", "failed");
+    const failedResponse = await worker.fetch(new Request(failedUrl), env);
+    const failedBody = await failedResponse.text();
+
+    expect(failedResponse.status).toBe(200);
+    expect(failedBody).toContain("Authorization was not completed");
+    expect(failedBody).not.toContain(fixture.reservation.authorizationToken);
+    await expect(
+      fixture.controlPlane.listConnections(fixture.authority, {}),
+    ).resolves.toMatchObject({
+      connections: [{ authorizationOutcome: "failed", status: "initiated" }],
+      ok: true,
+    });
+
+    const malformedUrl = new URL(fixture.callbackUrl);
+
+    malformedUrl.searchParams.append("status", "success");
+    malformedUrl.searchParams.append("status", "success");
+    malformedUrl.searchParams.append("connected_account_id", fixture.providerConnectionId);
+    const malformedResponse = await worker.fetch(new Request(malformedUrl), env);
+
+    expect(malformedResponse.status).toBe(400);
+    expect(await malformedResponse.text()).not.toContain(fixture.providerConnectionId);
+
+    const unknownParameterUrl = new URL(fixture.callbackUrl);
+
+    unknownParameterUrl.searchParams.set("status", "failed");
+    unknownParameterUrl.searchParams.set("credential", "do-not-reflect-this");
+    const unknownParameterResponse = await worker.fetch(new Request(unknownParameterUrl), env);
+    const unknownParameterBody = await unknownParameterResponse.text();
+
+    expect(unknownParameterResponse.status).toBe(400);
+    expect(unknownParameterBody).not.toContain("do-not-reflect-this");
+
+    const headResponse = await worker.fetch(
+      new Request(fixture.callbackUrl, { method: "HEAD" }),
+      env,
+    );
+
+    expect(headResponse.status).toBe(405);
+    expect(headResponse.headers.get("allow")).toBe("GET");
+    await expect(headResponse.text()).resolves.toBe("");
+  });
+
+  it("rejects forged or expired callback authenticators before owner-object dispatch", async () => {
+    const getByName = vi.spyOn(env.OWNER_CONTROL_PLANE, "getByName");
+    const ownerKey = `owner_${"b".repeat(43)}`;
+    const reservationId = "connection_link_00000000-0000-4000-8000-000000000000";
+    const authorizationToken = "a".repeat(43);
+    const signedCallback = await createConnectionAuthorizationCallback({
+      authorizationExpiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+      authorizationToken,
+      ownerKey,
+      origin,
+      reservationId,
+      signingSecret: env.BETTER_AUTH_SECRET,
+    });
+    const forgedUrl = new URL(
+      signedCallback.callbackUrl.replace(ownerKey, `owner_${"c".repeat(43)}`),
+    );
+
+    forgedUrl.searchParams.set("status", "success");
+    forgedUrl.searchParams.set("connected_account_id", "ca_forged_callback");
+    const forgedResponse = await worker.fetch(new Request(forgedUrl), env);
+
+    expect(forgedResponse.status).toBe(400);
+    expect(getByName).not.toHaveBeenCalled();
+
+    const expiredCallback = await createConnectionAuthorizationCallback({
+      authorizationExpiresAt: new Date(Date.now() - 1_000).toISOString(),
+      authorizationToken,
+      ownerKey,
+      origin,
+      reservationId,
+      signingSecret: env.BETTER_AUTH_SECRET,
+    });
+    const expiredUrl = new URL(expiredCallback.callbackUrl);
+
+    expiredUrl.searchParams.set("status", "failed");
+    const expiredResponse = await worker.fetch(new Request(expiredUrl), env);
+
+    expect(expiredResponse.status).toBe(400);
+    expect(getByName).not.toHaveBeenCalled();
+    getByName.mockRestore();
   });
 });

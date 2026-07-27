@@ -10,6 +10,7 @@ import {
   agentSummarySchema,
   controlPlaneStatusResultSchema,
   completeConnectionLinkInputSchema,
+  connectionAuthorizationTokenSchema,
   connectionSummarySchema,
   createAgentInputSchema,
   createAgentResultSchema,
@@ -32,6 +33,8 @@ import {
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   ownerAuthoritySchema,
+  recordConnectionAuthorizationReturnInputSchema,
+  recordConnectionAuthorizationReturnResultSchema,
   reserveConnectionLinkResultSchema,
   updateAgentInputSchema,
   updateAgentResultSchema,
@@ -52,13 +55,14 @@ import {
   type ListConnectionsResult,
   type OwnerAuthority,
   type OwnerScope,
+  type RecordConnectionAuthorizationReturnResult,
   type ReserveConnectionLinkResult,
   type UpdateAgentInput,
   type UpdateAgentResult,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
 
-const CONTROL_PLANE_SCHEMA_VERSION = 3;
+const CONTROL_PLANE_SCHEMA_VERSION = 4;
 const COMPOSIO_CONNECT_ORIGIN = "https://connect.composio.dev";
 type AuthorityErrorCode =
   | "incompatible_schema"
@@ -88,6 +92,10 @@ type ConnectionLinkRequestErrorCode =
 type ConnectionLinkRequestFailure = Extract<CreateConnectionLinkResult, { ok: false }>;
 type ConnectionReadRequestErrorCode = AuthorityErrorCode | "invalid_request";
 type ConnectionReadRequestFailure = Extract<ListConnectionsResult, { ok: false }>;
+type ConnectionAuthorizationReturnFailure = Extract<
+  RecordConnectionAuthorizationReturnResult,
+  { ok: false }
+>;
 type AuthorityResult =
   | { authority: OwnerAuthority; ok: true }
   | { code: AuthorityErrorCode; ok: false };
@@ -106,6 +114,12 @@ async function digestCanonicalRequest(canonicalRequest: string): Promise<string>
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalRequest));
 
   return encodeBase64Url(new Uint8Array(digest));
+}
+
+function createConnectionAuthorizationToken(): string {
+  return connectionAuthorizationTokenSchema.parse(
+    encodeBase64Url(crypto.getRandomValues(new Uint8Array(32))),
+  );
 }
 
 async function digestAgentCreation(input: CreateAgentInput): Promise<string> {
@@ -177,7 +191,7 @@ export class OwnerControlPlane extends DurableObject {
         CREATE TABLE IF NOT EXISTS control_plane (
           singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
           owner_key TEXT NOT NULL UNIQUE,
-          schema_version INTEGER NOT NULL CHECK (schema_version = 1)
+          schema_version INTEGER NOT NULL CHECK (schema_version = 4)
         )
       `);
       const controlPlane = this.#sql
@@ -194,27 +208,32 @@ export class OwnerControlPlane extends DurableObject {
       const isEmptyMigratableTable =
         typeof controlPlaneDefinition === "string" &&
         (controlPlaneDefinition.includes("schema_version = 1") ||
-          controlPlaneDefinition.includes("schema_version = 2"));
+          controlPlaneDefinition.includes("schema_version = 2") ||
+          controlPlaneDefinition.includes("schema_version = 3"));
 
       if (
         (controlPlane === undefined && isEmptyMigratableTable) ||
         controlPlane?.["schema_version"] === 1 ||
-        controlPlane?.["schema_version"] === 2
+        controlPlane?.["schema_version"] === 2 ||
+        controlPlane?.["schema_version"] === 3
       ) {
         this.#sql.exec("ALTER TABLE control_plane RENAME TO control_plane_previous");
         this.#sql.exec(`
           CREATE TABLE control_plane (
             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
             owner_key TEXT NOT NULL UNIQUE,
-            schema_version INTEGER NOT NULL CHECK (schema_version = 3)
+            schema_version INTEGER NOT NULL CHECK (schema_version = 4)
           )
         `);
         this.#sql.exec(`
           INSERT INTO control_plane (singleton, owner_key, schema_version)
-          SELECT singleton, owner_key, 3 FROM control_plane_previous
+          SELECT singleton, owner_key, 4 FROM control_plane_previous
         `);
         this.#sql.exec("DROP TABLE control_plane_previous");
-      } else if (controlPlane?.["schema_version"] !== CONTROL_PLANE_SCHEMA_VERSION) {
+      } else if (
+        controlPlane !== undefined &&
+        controlPlane["schema_version"] !== CONTROL_PLANE_SCHEMA_VERSION
+      ) {
         return;
       }
       this.#sql.exec(`
@@ -325,6 +344,33 @@ export class OwnerControlPlane extends DurableObject {
         CREATE INDEX IF NOT EXISTS connection_link_requests_pending_auth_config
         ON connection_link_requests (auth_config_id, recover_after)
         WHERE status = 'pending'
+      `);
+      this.#sql.exec(`
+        CREATE TABLE IF NOT EXISTS connection_authorization_returns (
+          reservation_id TEXT PRIMARY KEY,
+          token_digest TEXT NOT NULL UNIQUE CHECK (length(token_digest) = 43),
+          status TEXT NOT NULL CHECK (status IN ('pending', 'returned', 'failed', 'expired')),
+          connection_id TEXT,
+          expires_at INTEGER NOT NULL CHECK (expires_at > 0),
+          created_at INTEGER NOT NULL CHECK (created_at > 0),
+          completed_at INTEGER,
+          FOREIGN KEY (reservation_id)
+            REFERENCES connection_link_requests(reservation_id) ON DELETE RESTRICT,
+          FOREIGN KEY (connection_id) REFERENCES connections(connection_id) ON DELETE RESTRICT,
+          CHECK (
+            (status = 'pending' AND completed_at IS NULL)
+            OR
+            (status IN ('returned', 'failed')
+              AND connection_id IS NOT NULL
+              AND completed_at IS NOT NULL)
+            OR
+            (status = 'expired' AND completed_at IS NULL)
+          )
+        )
+      `);
+      this.#sql.exec(`
+        CREATE INDEX IF NOT EXISTS connection_authorization_returns_connection
+        ON connection_authorization_returns (connection_id, created_at DESC)
       `);
     });
   }
@@ -477,6 +523,8 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     const requestDigest = await digestConnectionLink(request.data);
+    const authorizationToken = createConnectionAuthorizationToken();
+    const authorizationTokenDigest = await digestCanonicalRequest(authorizationToken);
     const currentTime = Date.now();
     const recoverAfter = currentTime + CONNECTION_LINK_UNKNOWN_RECOVERY_MS;
 
@@ -581,6 +629,15 @@ export class OwnerControlPlane extends DurableObject {
         currentTime,
       );
       this.#sql.exec(
+        `INSERT INTO connection_authorization_returns
+           (reservation_id, token_digest, status, expires_at, created_at)
+         VALUES (?, ?, 'pending', ?, ?)`,
+        reservationId,
+        authorizationTokenDigest,
+        recoverAfter,
+        currentTime,
+      );
+      this.#sql.exec(
         `INSERT INTO audit_events (occurred_at, client_id, action, subject_id)
          VALUES (?, ?, 'connection.link_reserved', ?)`,
         currentTime,
@@ -589,6 +646,8 @@ export class OwnerControlPlane extends DurableObject {
       );
 
       return reserveConnectionLinkResultSchema.parse({
+        authorizationExpiresAt: new Date(recoverAfter).toISOString(),
+        authorizationToken,
         ok: true,
         reservationId,
         state: "dispatch",
@@ -616,6 +675,7 @@ export class OwnerControlPlane extends DurableObject {
       return this.#deniedConnectionLink("invalid_request");
     }
 
+    const authorizationTokenDigest = await digestCanonicalRequest(request.data.authorizationToken);
     const result = this.#storage.transactionSync(() => {
       const currentTime = Date.now();
 
@@ -630,8 +690,12 @@ export class OwnerControlPlane extends DurableObject {
              r.redirect_url,
              r.expires_at,
              r.auth_config_id,
-             c.provider_connection_id
+             c.provider_connection_id,
+             a.status AS authorization_status,
+             a.token_digest AS authorization_token_digest
            FROM connection_link_requests r
+           LEFT JOIN connection_authorization_returns a
+             ON a.reservation_id = r.reservation_id
            LEFT JOIN connections c ON c.connection_id = r.connection_id
            WHERE r.client_id = ? AND r.reservation_id = ?`,
           authorization.authority.clientId,
@@ -639,7 +703,7 @@ export class OwnerControlPlane extends DurableObject {
         )
         .toArray()[0];
 
-      if (row === undefined) {
+      if (row === undefined || row["authorization_token_digest"] !== authorizationTokenDigest) {
         return this.#deniedConnectionLink("invalid_request");
       }
 
@@ -668,6 +732,7 @@ export class OwnerControlPlane extends DurableObject {
 
       if (
         row["status"] !== "pending" ||
+        row["authorization_status"] !== "pending" ||
         typeof recoverAfter !== "number" ||
         currentTime >= recoverAfter ||
         expiresAt <= currentTime ||
@@ -733,6 +798,15 @@ export class OwnerControlPlane extends DurableObject {
         request.data.reservationId,
       );
       this.#sql.exec(
+        `UPDATE connection_authorization_returns
+         SET connection_id = ?, expires_at = ?
+         WHERE reservation_id = ? AND token_digest = ? AND status = 'pending'`,
+        connectionId,
+        expiresAt,
+        request.data.reservationId,
+        authorizationTokenDigest,
+      );
+      this.#sql.exec(
         `INSERT INTO audit_events (occurred_at, client_id, action, subject_id)
          VALUES (?, ?, 'connection.link_created', ?)`,
         currentTime,
@@ -756,6 +830,115 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     return result;
+  }
+
+  async recordConnectionAuthorizationReturn(
+    input: unknown,
+  ): Promise<RecordConnectionAuthorizationReturnResult> {
+    const request = recordConnectionAuthorizationReturnInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return this.#deniedConnectionAuthorizationReturn();
+    }
+
+    const tokenDigest = await digestCanonicalRequest(request.data.authorizationToken);
+
+    return this.#storage.transactionSync(() => {
+      const currentTime = Date.now();
+
+      this.#expireConnectionLinkRequests(currentTime);
+
+      const row = this.#sql
+        .exec<Record<string, SqlStorageValue>>(
+          `SELECT
+             a.status AS authorization_status,
+             a.expires_at AS authorization_expires_at,
+             a.connection_id,
+             r.status AS request_status,
+             r.client_id,
+             c.provider_connection_id
+           FROM connection_authorization_returns a
+           JOIN connection_link_requests r ON r.reservation_id = a.reservation_id
+           LEFT JOIN connections c ON c.connection_id = a.connection_id
+           WHERE a.reservation_id = ? AND a.token_digest = ?`,
+          request.data.reservationId,
+          tokenDigest,
+        )
+        .toArray()[0];
+
+      if (row === undefined) {
+        return this.#deniedConnectionAuthorizationReturn();
+      }
+
+      const desiredOutcome = request.data.status === "success" ? "returned" : "failed";
+      const currentOutcome = row["authorization_status"];
+      const storedProviderConnectionId = row["provider_connection_id"];
+
+      if (currentOutcome === "returned" || currentOutcome === "failed") {
+        if (
+          currentOutcome !== desiredOutcome ||
+          typeof storedProviderConnectionId !== "string" ||
+          (request.data.providerConnectionId !== undefined &&
+            request.data.providerConnectionId !== storedProviderConnectionId) ||
+          (desiredOutcome === "returned" &&
+            request.data.providerConnectionId !== storedProviderConnectionId)
+        ) {
+          return this.#deniedConnectionAuthorizationReturn();
+        }
+
+        return recordConnectionAuthorizationReturnResultSchema.parse({
+          ok: true,
+          outcome: desiredOutcome,
+          recorded: false,
+        });
+      }
+
+      const authorizationExpiresAt = row["authorization_expires_at"];
+      const connectionId = row["connection_id"];
+      const clientId = row["client_id"];
+
+      if (
+        currentOutcome !== "pending" ||
+        row["request_status"] !== "completed" ||
+        typeof authorizationExpiresAt !== "number" ||
+        authorizationExpiresAt <= currentTime ||
+        typeof connectionId !== "string" ||
+        typeof clientId !== "string" ||
+        typeof storedProviderConnectionId !== "string" ||
+        (request.data.providerConnectionId !== undefined &&
+          request.data.providerConnectionId !== storedProviderConnectionId) ||
+        (desiredOutcome === "returned" &&
+          request.data.providerConnectionId !== storedProviderConnectionId)
+      ) {
+        return this.#deniedConnectionAuthorizationReturn();
+      }
+
+      this.#sql.exec(
+        `UPDATE connection_authorization_returns
+         SET status = ?, completed_at = ?
+         WHERE reservation_id = ? AND token_digest = ? AND status = 'pending'`,
+        desiredOutcome,
+        currentTime,
+        request.data.reservationId,
+        tokenDigest,
+      );
+      this.#sql.exec(
+        `INSERT INTO audit_events (occurred_at, client_id, action, subject_id)
+         VALUES (?, ?, ?, ?)`,
+        currentTime,
+        clientId,
+        desiredOutcome === "returned"
+          ? "connection.authorization_returned"
+          : "connection.authorization_failed",
+        connectionId,
+      );
+
+      return recordConnectionAuthorizationReturnResultSchema.parse({
+        ok: true,
+        outcome: desiredOutcome,
+        recorded: true,
+      });
+    });
   }
 
   override async alarm(): Promise<void> {
@@ -1097,17 +1280,31 @@ export class OwnerControlPlane extends DurableObject {
     let cursorClause = "";
 
     if (request.data.cursor !== undefined) {
-      cursorClause = "WHERE connection_id > ?";
+      cursorClause = "WHERE c.connection_id > ?";
       bindings.push(request.data.cursor);
     }
 
     bindings.push(request.data.limit + 1);
     const rows = this.#sql
       .exec<Record<string, SqlStorageValue>>(
-        `SELECT connection_id, auth_config_id, status, created_at
-         FROM connections
+        `SELECT
+           c.connection_id,
+           c.auth_config_id,
+           c.status,
+           c.created_at,
+           COALESCE(
+             (
+               SELECT a.status
+               FROM connection_authorization_returns a
+               WHERE a.connection_id = c.connection_id
+               ORDER BY a.created_at DESC, a.rowid DESC
+               LIMIT 1
+             ),
+             'untracked'
+           ) AS authorization_outcome
+         FROM connections c
          ${cursorClause}
-         ORDER BY connection_id
+         ORDER BY c.connection_id
          LIMIT ?`,
         ...bindings,
       )
@@ -1285,6 +1482,7 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     return connectionSummarySchema.parse({
+      authorizationOutcome: row["authorization_outcome"],
       authConfigId: row["auth_config_id"],
       connectionId: row["connection_id"],
       createdAt: new Date(createdAt).toISOString(),
@@ -1305,6 +1503,12 @@ export class OwnerControlPlane extends DurableObject {
   }
 
   #expireConnectionLinkRequests(currentTime: number): void {
+    this.#sql.exec(
+      `UPDATE connection_authorization_returns
+       SET status = 'expired'
+       WHERE status = 'pending' AND expires_at <= ?`,
+      currentTime,
+    );
     this.#sql.exec(
       `UPDATE connection_link_requests
        SET status = 'expired', redirect_url = NULL
@@ -1403,6 +1607,16 @@ export class OwnerControlPlane extends DurableObject {
       error: {
         code,
         message: "Connection request denied.",
+      },
+      ok: false,
+    };
+  }
+
+  #deniedConnectionAuthorizationReturn(): ConnectionAuthorizationReturnFailure {
+    return {
+      error: {
+        code: "invalid_return",
+        message: "Connection authorization return denied.",
       },
       ok: false,
     };
