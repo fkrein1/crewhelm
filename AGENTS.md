@@ -16,7 +16,14 @@ Before making any change intended for commit, read and follow
 - Keep every commit green, bisectable, and independently revertible.
 - Preserve unrelated user changes and avoid drive-by cleanup.
 - Do not introduce placeholder authentication, allow-all policy, unrestricted egress, raw secret
-  access, ignored errors, disabled checks, or “secure later” TODOs.
+  access, ignored errors, or “secure later” TODOs.
+- Do not introduce disabled checks. The sole declaration-check exception is `skipLibCheck` in a
+  leaf-package tsconfig when a no-skip run proves every suppressed diagnostic originates in
+  exact-pinned third-party declaration files and none in Crewhelm source; Crewhelm source still
+  typechecks; audit and license review pass; and focused runtime integration tests cover the
+  affected import seams. Never enable it in a root or shared config. Record the packages,
+  diagnostic classes, evidence, and removal trigger in the relevant ADR. On any affected
+  dependency or TypeScript upgrade, rerun without the exception and remove it when clean.
 - Treat prompts, recipes, model output, retrieved content, tool metadata, and provider responses as
   untrusted input.
 - Keep authorization and capability decisions deterministic and outside the model.

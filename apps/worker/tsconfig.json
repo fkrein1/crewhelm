@@ -2,6 +2,9 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "lib": ["ES2024"],
+    // Exact-pinned Better Auth, OAuth Provider, Better Fetch, and Drizzle declarations
+    // conflict with the Worker-only environment. AGENTS.md bounds this leaf-only exception.
+    "skipLibCheck": true,
     "types": ["@cloudflare/workers-types"]
   },
   "include": ["src/**/*.ts"]

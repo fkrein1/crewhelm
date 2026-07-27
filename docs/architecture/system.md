@@ -12,6 +12,7 @@ Ownership and trust boundaries are strict; libraries and package layout may chan
 flowchart LR
     CLI["Bootstrap CLI"] --> Deploy["Cloudflare deployment"]
     MCP["Authorized MCP client"] --> Ingress["OAuth MCP Worker"]
+    Ingress --> Auth["Auth D1"]
     Ingress --> CP["OwnerControlPlane DO"]
     Catalog["Git recipe catalog"] --> CP
     CP --> Agent["CrewAgent DO / Think"]
@@ -40,22 +41,25 @@ another catalog tool without changing Crewhelm core.
 | Owner               | Authoritative facts                                                                                                                                                   |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | MCP Worker          | Authenticated request context only                                                                                                                                    |
+| Auth D1             | OAuth clients and leases, login sessions, authorization codes and consent, signing keys, and token revocations                                                        |
 | `OwnerControlPlane` | Agent and recipe revisions, connection references, grants, `ScheduleSpec`, `RunAdmission`, budgets, approval policy, administrative lifecycle, idempotency, and audit |
 | `CrewAgent`         | Think sessions, workspace, materialized schedules, `TurnExecution`, transcript, tool records, and agent-action approval waits/evidence                                |
 | Workflow            | Its `WorkflowExecution`, checkpoints, retries, waits, and approval evidence                                                                                           |
 | Composio            | Connected-account credentials and refresh                                                                                                                             |
 | Git                 | Public recipe source before installation                                                                                                                              |
 | R2 bucket           | Large artifacts                                                                                                                                                       |
-| Future D1           | Rebuildable search, marketplace, or analytics projections—not authority                                                                                               |
+| Future domain D1    | Rebuildable search, marketplace, or analytics projections—not domain authority                                                                                        |
 
 The control plane owns admission and administration, the agent owns turns, and a Workflow owns its
 steps. Any control-plane runtime status is a timestamped projection, never a second source of
 truth. Cross-object work is idempotent because Durable Objects do not share transactions.
 
 Use one SQLite-backed control-plane object per owner and one name-addressed agent object per
-logical agent. Never use a global control-plane object. D1 is not an authoritative store in the
-individual release. See
-[ADR 0002](../decisions/0002-owner-scoped-durable-object-control-plane.md).
+logical agent. Never use a global control-plane object. D1 is not an authoritative store for
+control-plane or agent domain state in the individual release; the auth D1 database is narrowly
+authoritative for OAuth protocol state. See
+[ADR 0002](../decisions/0002-owner-scoped-durable-object-control-plane.md) and
+[ADR 0004](../decisions/0004-better-auth-on-d1.md).
 
 ### Durable Object lifecycle and recovery
 
@@ -200,9 +204,10 @@ caches. Completed provider effects cannot be recalled; record and reconcile them
 The Worker is an OAuth 2.1 resource server over Streamable HTTP. Validate token authenticity
 through either a signature or an active opaque-token lookup, bind the authorization server or
 issuer, and validate audience/resource, subject, expiry, client ID, and operation scopes. The
-individual release uses hashed active-token records in its bound OAuth KV namespace, with an exact
-`/mcp` resource and encrypted authority props. Deny missing context and never forward bearer
-tokens.
+individual release uses Better Auth's OAuth provider with signing keys and protocol state in D1.
+It issues 15-minute JWTs for the exact `/mcp` resource and checks a D1 denylist of token hashes for
+immediate explicit revocation. The authenticated subject is an opaque owner key derived only from
+the configured, GitHub-verified numeric ID. Deny missing context and never forward bearer tokens.
 
 Create a fresh MCP server, handler, and transport per request. Never share a module-global instance
 across clients.

@@ -3,6 +3,15 @@
   "name": "crewhelm",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-22",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "AUTH_DB",
+      "database_name": "crewhelm-development-auth",
+      "database_id": "c58217fd-fe09-447b-b79c-5d63ed1cedc0",
+      "migrations_dir": "migrations",
+    },
+  ],
   "durable_objects": {
     "bindings": [
       {
@@ -17,12 +26,6 @@
       "storage": "sqlite",
     },
   },
-  "kv_namespaces": [
-    {
-      "binding": "OAUTH_KV",
-      "id": "691f2876a86542129c939f00e2f8a2a7",
-    },
-  ],
   "ratelimits": [
     {
       "name": "AUTH_RATE_LIMIT",
@@ -41,6 +44,9 @@
       },
     },
   ],
+  "vars": {
+    "PUBLIC_ORIGIN": "https://crewhelm.fkrein.workers.dev",
+  },
   "triggers": {
     "crons": ["17 * * * *"],
   },
