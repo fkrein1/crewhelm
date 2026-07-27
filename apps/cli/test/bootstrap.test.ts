@@ -34,6 +34,16 @@ const AUTH_TABLES = [
   "user",
   "verification",
 ] as const;
+const WORKER_SECRET_NAMES = [
+  "BETTER_AUTH_SECRET",
+  "COMPOSIO_API_KEY",
+  "GITHUB_CLIENT_ID",
+  "GITHUB_CLIENT_SECRET",
+  "OWNER_GITHUB_USER_ID",
+] as const;
+const WORKER_SECRET_NAMES_WITHOUT_COMPOSIO = WORKER_SECRET_NAMES.filter(
+  (name) => name !== "COMPOSIO_API_KEY",
+);
 const OPTIONS: BootstrapOptions = {
   databaseName: "crewhelm-auth",
   origin: new URL("https://crewhelm.example"),
@@ -71,6 +81,10 @@ function whoami(): WranglerResult {
 
 function queryResult(names: readonly string[]): WranglerResult {
   return success(JSON.stringify([{ results: names.map((name) => ({ name })), success: true }]));
+}
+
+function secretList(names: readonly string[]): WranglerResult {
+  return success(JSON.stringify(names.map((name) => ({ name, type: "secret_text" }))));
 }
 
 function healthyDeploymentFetch(): typeof globalThis.fetch {
@@ -198,6 +212,197 @@ function createDependencies(
 }
 
 describe("Cloudflare bootstrap", () => {
+  it("stops before D1 mutation when an existing Worker is missing a required secret", async () => {
+    const fixture = await createDeploymentAssets();
+    const runWrangler = vi.fn<RunWrangler>(async (arguments_) => {
+      if (arguments_[0] === "whoami") {
+        return whoami();
+      }
+
+      if (arguments_[0] === "deployments") {
+        return success("[]");
+      }
+
+      if (arguments_[0] === "secret") {
+        return secretList(WORKER_SECRET_NAMES_WITHOUT_COMPOSIO);
+      }
+
+      throw new Error("D1 mutation must not run with an incomplete Worker secret set.");
+    });
+
+    try {
+      await expect(
+        bootstrapDeployment(REUSE_OPTIONS, createDependencies(fixture.assets, runWrangler)),
+      ).rejects.toMatchObject({
+        message:
+          "Existing Worker is missing required secret: COMPOSIO_API_KEY. Set CREWHELM_COMPOSIO_API_KEY before retrying.",
+        name: "BootstrapError",
+        stage: "configuration",
+      });
+      expect(
+        runWrangler.mock.calls.find(([arguments_]) => arguments_[0] === "secret")?.[0],
+      ).toEqual([
+        "secret",
+        "list",
+        "--name",
+        OPTIONS.workerName,
+        "--format",
+        "json",
+        "--config",
+        expect.stringMatching(/account\.json$/u),
+      ]);
+      expect(runWrangler.mock.calls.some(([arguments_]) => arguments_[0] === "d1")).toBe(false);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("counts a supplied secret toward an existing Worker's pending secret set", async () => {
+    const fixture = await createDeploymentAssets();
+    const suppliedComposioKey = "replacement-composio-key";
+    let uploadedSecrets: Record<string, string> | undefined;
+    const runWrangler = vi.fn<RunWrangler>(async (arguments_) => {
+      if (arguments_[0] === "whoami") {
+        return whoami();
+      }
+
+      if (arguments_[0] === "deployments") {
+        return success("[]");
+      }
+
+      if (arguments_[0] === "secret") {
+        return secretList(WORKER_SECRET_NAMES_WITHOUT_COMPOSIO);
+      }
+
+      if (arguments_[0] === "d1" && arguments_[1] === "list") {
+        return success(JSON.stringify([{ name: OPTIONS.databaseName, uuid: DATABASE_ID }]));
+      }
+
+      if (arguments_[0] === "d1" && arguments_[1] === "execute") {
+        return arguments_.includes("SELECT name FROM d1_migrations ORDER BY id")
+          ? queryResult([
+              "0001_better_auth.sql",
+              "0002_control_write_scope.sql",
+              "0003_integration_catalog_scope.sql",
+              "0004_agent_definition_read_scope.sql",
+              "0005_agent_update_scope.sql",
+              "0006_connection_write_scope.sql",
+            ])
+          : queryResult(AUTH_TABLES);
+      }
+
+      if (arguments_[0] === "deploy") {
+        const secretsIndex = arguments_.indexOf("--secrets-file");
+        const secretsPath = secretsIndex === -1 ? undefined : arguments_[secretsIndex + 1];
+
+        if (!secretsPath) {
+          throw new Error("Expected replacement secret file.");
+        }
+
+        uploadedSecrets = z
+          .record(z.string(), z.string())
+          .parse(JSON.parse(await readFile(secretsPath, "utf8")));
+      }
+
+      return success();
+    });
+
+    try {
+      const report = await bootstrapDeployment(
+        REUSE_OPTIONS,
+        createDependencies(fixture.assets, runWrangler, {
+          CREWHELM_COMPOSIO_API_KEY: suppliedComposioKey,
+        }),
+      );
+
+      expect(report.ok).toBe(true);
+      expect(uploadedSecrets).toEqual({ COMPOSIO_API_KEY: suppliedComposioKey });
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("stops before D1 mutation when Worker secret inventory is malformed", async () => {
+    const fixture = await createDeploymentAssets();
+    const runWrangler = vi.fn<RunWrangler>(async (arguments_) => {
+      if (arguments_[0] === "whoami") {
+        return whoami();
+      }
+
+      if (arguments_[0] === "deployments") {
+        return success("[]");
+      }
+
+      if (arguments_[0] === "secret") {
+        return success(JSON.stringify([{ type: "secret_text" }]));
+      }
+
+      throw new Error("D1 mutation must not run after malformed Worker inventory.");
+    });
+
+    try {
+      await expect(
+        bootstrapDeployment(REUSE_OPTIONS, createDependencies(fixture.assets, runWrangler)),
+      ).rejects.toMatchObject({
+        message: "Worker secret inventory returned an invalid response.",
+        name: "BootstrapError",
+        stage: "worker",
+      });
+      expect(runWrangler.mock.calls.some(([arguments_]) => arguments_[0] === "d1")).toBe(false);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("stops before D1 mutation when Worker secret inventory has an unknown outcome", async () => {
+    const fixture = await createDeploymentAssets();
+    const providerOutput = "provider-secret-like-output";
+    const runWrangler = vi.fn<RunWrangler>(async (arguments_) => {
+      if (arguments_[0] === "whoami") {
+        return whoami();
+      }
+
+      if (arguments_[0] === "deployments") {
+        return success("[]");
+      }
+
+      if (arguments_[0] === "secret") {
+        return {
+          exitCode: 1,
+          outcome: "unknown",
+          stderr: providerOutput,
+          stdout: providerOutput,
+        };
+      }
+
+      throw new Error("D1 mutation must not run after unknown Worker inventory.");
+    });
+
+    try {
+      let failure: unknown;
+
+      try {
+        await bootstrapDeployment(REUSE_OPTIONS, createDependencies(fixture.assets, runWrangler));
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure).toMatchObject({
+        message: "Worker secret inventory outcome could not be confirmed.",
+        name: "BootstrapError",
+        stage: "worker",
+      });
+      expect(String(failure)).not.toContain(providerOutput);
+      expect(
+        runWrangler.mock.calls.some(
+          ([arguments_]) => arguments_[0] === "d1" || arguments_[0] === "deploy",
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
   it("reuses existing resources without requiring or replacing secrets", async () => {
     const fixture = await createDeploymentAssets();
     let stagedDirectory: string | undefined;
@@ -210,6 +415,10 @@ describe("Cloudflare bootstrap", () => {
 
       if (arguments_[0] === "deployments") {
         return success("[]");
+      }
+
+      if (arguments_[0] === "secret") {
+        return secretList(WORKER_SECRET_NAMES);
       }
 
       if (arguments_[0] === "d1" && arguments_[1] === "list") {
@@ -463,6 +672,10 @@ describe("Cloudflare bootstrap", () => {
         return arguments_[0] === "whoami" ? whoami() : success("[]");
       }
 
+      if (arguments_[0] === "secret") {
+        return secretList(WORKER_SECRET_NAMES);
+      }
+
       if (arguments_[0] === "d1" && arguments_[1] === "list") {
         listCount += 1;
         return success(
@@ -527,6 +740,10 @@ describe("Cloudflare bootstrap", () => {
         }
 
         return success("[]");
+      }
+
+      if (arguments_[0] === "secret") {
+        return secretList(WORKER_SECRET_NAMES);
       }
 
       if (arguments_[0] === "d1" && arguments_[1] === "list") {

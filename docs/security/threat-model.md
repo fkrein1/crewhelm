@@ -220,12 +220,15 @@ but not trusted automatically.
 
 GitHub OAuth values and the Composio project key enter through the parent process environment, are
 removed from Wrangler's child environment, and are passed to Cloudflare only through a mode-0600
-file inside the private directory. Existing Worker secrets are additive and preserved. The
-directory is removed after Wrangler has exited. Wrangler output is bounded and never reflected to
-the user. On timeout or excess output, the CLI terminates the process with bounded escalation and
-marks the remote outcome unknown. Database creation, migration, and deployment are reconciled
-through validated Cloudflare inventory; an unconfirmed result stops with resources preserved for
-inspection and an explicit retry.
+file inside the private directory. Existing Worker secrets are additive and preserved. Bootstrap
+reads only their names, validates the inventory as hostile input, and rejects an incomplete
+point-in-time snapshot before any D1 creation or migration. Another operator can delete a secret
+after that snapshot; strict deployment revalidates the required names and fails with the migrated D1
+database preserved for a safe retry. The directory is removed after Wrangler has exited. Wrangler
+output is bounded and never reflected to the user. On timeout or excess output, the CLI terminates
+the process with bounded escalation and marks the remote outcome unknown. Database creation,
+migration, and deployment are reconciled through validated Cloudflare inventory; an unconfirmed
+result stops with resources preserved for inspection and an explicit retry.
 
 ## Update triggers
 

@@ -20,11 +20,18 @@ const REQUIRED_SECRET_NAMES = [
   "GITHUB_CLIENT_SECRET",
   "OWNER_GITHUB_USER_ID",
 ] as const;
+type RequiredSecretName = (typeof REQUIRED_SECRET_NAMES)[number];
 const COMPOSIO_API_KEY_ENVIRONMENT = "CREWHELM_COMPOSIO_API_KEY";
 const GITHUB_SECRET_ENVIRONMENT = {
   clientId: "CREWHELM_GITHUB_CLIENT_ID",
   clientSecret: "CREWHELM_GITHUB_CLIENT_SECRET",
   ownerUserId: "CREWHELM_OWNER_GITHUB_USER_ID",
+} as const;
+const SECRET_ENVIRONMENT_BY_NAME: Partial<Record<RequiredSecretName, string>> = {
+  COMPOSIO_API_KEY: COMPOSIO_API_KEY_ENVIRONMENT,
+  GITHUB_CLIENT_ID: GITHUB_SECRET_ENVIRONMENT.clientId,
+  GITHUB_CLIENT_SECRET: GITHUB_SECRET_ENVIRONMENT.clientSecret,
+  OWNER_GITHUB_USER_ID: GITHUB_SECRET_ENVIRONMENT.ownerUserId,
 } as const;
 const EXPECTED_DEPLOYMENT_FILES = [
   "index.js",
@@ -96,6 +103,14 @@ const deploymentSchema = z.looseObject({
   id: z.uuid(),
 });
 const deploymentListSchema = z.array(deploymentSchema).max(100);
+const workerSecretListSchema = z
+  .array(
+    z.looseObject({
+      name: z.string().min(1).max(255),
+      type: z.literal("secret_text"),
+    }),
+  )
+  .max(1_000);
 const queryResultSchema = z.tuple([
   z.looseObject({
     results: z.array(z.looseObject({ name: z.string() })).max(100),
@@ -442,6 +457,37 @@ async function readWorkerInventory(
   }
 }
 
+async function readWorkerSecretNames(
+  workerName: string,
+  context: CloudflareContext,
+): Promise<readonly string[]> {
+  const result = await runCloudflare(
+    context,
+    [
+      "secret",
+      "list",
+      "--name",
+      workerName,
+      "--format",
+      "json",
+      "--config",
+      context.accountConfigPath,
+    ],
+    "worker",
+  );
+  requireCompleted(result, "worker", "Worker secret inventory outcome could not be confirmed.");
+
+  if (result.exitCode !== 0) {
+    throw commandFailed("worker", "Worker secret inventory could not be read.");
+  }
+
+  try {
+    return workerSecretListSchema.parse(JSON.parse(result.stdout)).map((secret) => secret.name);
+  } catch {
+    throw commandFailed("worker", "Worker secret inventory returned an invalid response.");
+  }
+}
+
 function readGitHubSecrets(
   workerExists: boolean,
   dependencies: BootstrapDependencies,
@@ -493,6 +539,54 @@ function readComposioApiKey(
   }
 
   return parsed.data;
+}
+
+function requireCompleteSecretSet(
+  existingSecretNames: readonly string[],
+  githubSecrets: GitHubSecrets | undefined,
+  composioApiKey: string | undefined,
+): void {
+  const available = new Set(existingSecretNames);
+
+  if (githubSecrets) {
+    available.add("GITHUB_CLIENT_ID");
+    available.add("GITHUB_CLIENT_SECRET");
+    available.add("OWNER_GITHUB_USER_ID");
+  }
+
+  if (composioApiKey) {
+    available.add("COMPOSIO_API_KEY");
+  }
+
+  const missing = REQUIRED_SECRET_NAMES.filter((name) => !available.has(name));
+
+  if (missing.length === 0) {
+    return;
+  }
+
+  const suppliedEnvironmentNames = missing.flatMap((name) => {
+    const environmentName = SECRET_ENVIRONMENT_BY_NAME[name];
+    return environmentName ? [environmentName] : [];
+  });
+  const restoreInCloudflare = missing.filter(
+    (name) => SECRET_ENVIRONMENT_BY_NAME[name] === undefined,
+  );
+  const guidance = [
+    suppliedEnvironmentNames.length > 0
+      ? `Set ${suppliedEnvironmentNames.join(", ")} before retrying.`
+      : undefined,
+    restoreInCloudflare.length > 0
+      ? `Restore ${restoreInCloudflare.join(", ")} in Cloudflare before retrying.`
+      : undefined,
+  ]
+    .filter((message) => message !== undefined)
+    .join(" ");
+  const noun = missing.length === 1 ? "secret" : "secrets";
+
+  throw commandFailed(
+    "configuration",
+    `Existing Worker is missing required ${noun}: ${missing.join(", ")}. ${guidance}`,
+  );
 }
 
 async function listDatabases(context: CloudflareContext) {
@@ -803,6 +897,12 @@ export async function bootstrapDeployment(
     const workerInventory = await readWorkerInventory(options.workerName, context);
     const githubSecrets = readGitHubSecrets(workerInventory.exists, dependencies);
     const composioApiKey = readComposioApiKey(workerInventory.exists, dependencies);
+
+    if (workerInventory.exists) {
+      const existingSecretNames = await readWorkerSecretNames(options.workerName, context);
+      requireCompleteSecretSet(existingSecretNames, githubSecrets, composioApiKey);
+    }
+
     const { action: databaseAction, database } = await ensureDatabase(
       options,
       assets.migrations,
