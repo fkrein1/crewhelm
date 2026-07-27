@@ -570,6 +570,7 @@ describe("repository foundation", () => {
 
     expect(dependencyReviewInputs).toMatchObject({
       "allow-dependencies-licenses": [
+        "pkg:npm/json-schema-typed@8.0.2",
         "pkg:npm/@img/sharp-libvips-darwin-arm64@1.3.1",
         "pkg:npm/@img/sharp-libvips-darwin-x64@1.3.1",
         "pkg:npm/@img/sharp-libvips-linux-arm64@1.3.1",
