@@ -1,7 +1,7 @@
 import * as z from "zod";
 
 import {
-  checkWorkerHealth,
+  diagnoseDeployment,
   DoctorInputError,
   parseDeploymentOrigin,
   type DoctorDependencies,
@@ -14,7 +14,8 @@ Usage:
   crewhelm doctor --endpoint <origin> [--timeout-ms <milliseconds>] [--json]
   crewhelm --help
 
-The doctor command performs a bounded read of <origin>/health.
+The doctor command validates bounded health and MCP OAuth discovery responses.
+--timeout-ms applies to each request.
 HTTPS is required except for exact loopback hosts.
 `;
 
@@ -135,9 +136,12 @@ export interface CliDependencies extends DoctorDependencies {
 }
 
 function formatHumanReport(report: DoctorReport): string {
-  const check = report.checks[0];
-  const prefix = check.status === "pass" ? "PASS" : "FAIL";
-  return `${prefix} worker-health ${check.endpoint}\n${check.message}\n`;
+  return report.checks
+    .map((check) => {
+      const prefix = check.status === "pass" ? "PASS" : "FAIL";
+      return `${prefix} ${check.name} ${check.endpoint}\n${check.message}\n`;
+    })
+    .join("");
 }
 
 export async function runCli(
@@ -162,7 +166,7 @@ export async function runCli(
     return 0;
   }
 
-  const report = await checkWorkerHealth(command, dependencies);
+  const report = await diagnoseDeployment(command, dependencies);
   dependencies.writeOutput(
     command.json ? `${JSON.stringify(report)}\n` : formatHumanReport(report),
   );

@@ -1,32 +1,35 @@
-import { HEALTH_PATH, healthReportSchema } from "@crewhelm/contracts";
+import { HEALTH_PATH, healthReportSchema, OWNER_READ_SCOPE } from "@crewhelm/contracts";
 import * as z from "zod";
 
-const MAX_HEALTH_RESPONSE_BYTES = 4_096;
+const MAX_DIAGNOSTIC_RESPONSE_BYTES = 4_096;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
+const PROTECTED_RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource";
+const AUTHORIZATION_SERVER_METADATA_PATH = "/.well-known/oauth-authorization-server/api/auth";
+const AUTH_BASE_PATH = "/api/auth";
+const MCP_PATH = "/mcp";
 
 const deploymentOriginInputSchema = z.string().trim().min(1).max(2_048);
+const doctorCheckSchema = z.strictObject({
+  code: z.enum([
+    "valid",
+    "timeout",
+    "request_failed",
+    "response_too_large",
+    "http_status",
+    "content_type",
+    "invalid_json",
+    "invalid_payload",
+  ]),
+  endpoint: z.url(),
+  message: z.string(),
+  name: z.enum(["worker-health", "mcp-protected-resource", "oauth-authorization-server"]),
+  status: z.enum(["pass", "fail"]),
+});
 
 export const doctorReportSchema = z.strictObject({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   ok: z.boolean(),
-  checks: z.tuple([
-    z.strictObject({
-      code: z.enum([
-        "healthy",
-        "timeout",
-        "request_failed",
-        "response_too_large",
-        "http_status",
-        "content_type",
-        "invalid_json",
-        "invalid_payload",
-      ]),
-      endpoint: z.url(),
-      message: z.string(),
-      name: z.literal("worker-health"),
-      status: z.enum(["pass", "fail"]),
-    }),
-  ]),
+  checks: z.tuple([doctorCheckSchema, doctorCheckSchema, doctorCheckSchema]),
 });
 
 export type DoctorReport = z.infer<typeof doctorReportSchema>;
@@ -74,23 +77,33 @@ export function parseDeploymentOrigin(input: string): URL {
   return new URL(origin.origin);
 }
 
-type DoctorCheckCode = DoctorReport["checks"][0]["code"];
+type DoctorCheck = DoctorReport["checks"][number];
+type DoctorCheckCode = DoctorCheck["code"];
+type DoctorCheckName = DoctorCheck["name"];
 
-function createReport(endpoint: URL, code: DoctorCheckCode, message: string): DoctorReport {
-  const passed = code === "healthy";
+interface CheckDefinition {
+  invalidPayloadMessage: string;
+  name: DoctorCheckName;
+  path: string;
+  schema: z.ZodType;
+  subject: string;
+  validMessage: string;
+}
 
-  return doctorReportSchema.parse({
-    schemaVersion: 1,
-    ok: passed,
-    checks: [
-      {
-        code,
-        endpoint: endpoint.href,
-        message,
-        name: "worker-health",
-        status: passed ? "pass" : "fail",
-      },
-    ],
+function createCheck(
+  definition: CheckDefinition,
+  endpoint: URL,
+  code: DoctorCheckCode,
+  message: string,
+): DoctorCheck {
+  const passed = code === "valid";
+
+  return doctorCheckSchema.parse({
+    code,
+    endpoint: endpoint.href,
+    message,
+    name: definition.name,
+    status: passed ? "pass" : "fail",
   });
 }
 
@@ -112,7 +125,7 @@ async function readBoundedBody(response: Response): Promise<string> {
 
     byteLength += result.value.byteLength;
 
-    if (byteLength > MAX_HEALTH_RESPONSE_BYTES) {
+    if (byteLength > MAX_DIAGNOSTIC_RESPONSE_BYTES) {
       await reader.cancel();
       throw new ResponseTooLargeError();
     }
@@ -135,20 +148,71 @@ function isTimeout(error: unknown): boolean {
   return error instanceof Error && error.name === "TimeoutError";
 }
 
-export interface DoctorDependencies {
-  fetch: typeof globalThis.fetch;
+function stringArrayContaining(value: string): z.ZodType {
+  return z
+    .array(z.string().min(1).max(128))
+    .min(1)
+    .max(32)
+    .refine((values) => values.includes(value));
 }
 
-export interface DoctorOptions {
-  origin: URL;
-  timeoutMs: number;
+function checkDefinitions(origin: URL): [CheckDefinition, CheckDefinition, CheckDefinition] {
+  const authBaseUrl = `${origin.origin}${AUTH_BASE_PATH}`;
+
+  return [
+    {
+      invalidPayloadMessage: "Health endpoint returned an invalid Crewhelm health report.",
+      name: "worker-health",
+      path: HEALTH_PATH,
+      schema: healthReportSchema,
+      subject: "Health",
+      validMessage: "Worker health contract is valid.",
+    },
+    {
+      invalidPayloadMessage: "Protected-resource endpoint returned invalid Crewhelm MCP metadata.",
+      name: "mcp-protected-resource",
+      path: PROTECTED_RESOURCE_METADATA_PATH,
+      schema: z.strictObject({
+        authorization_servers: z.tuple([z.literal(authBaseUrl)]),
+        bearer_methods_supported: z.tuple([z.literal("header")]),
+        resource: z.literal(`${origin.origin}${MCP_PATH}`),
+        scopes_supported: z.tuple([z.literal(OWNER_READ_SCOPE)]),
+      }),
+      subject: "Protected-resource",
+      validMessage: "MCP protected-resource metadata is valid.",
+    },
+    {
+      invalidPayloadMessage:
+        "Authorization-server endpoint returned invalid Crewhelm OAuth metadata.",
+      name: "oauth-authorization-server",
+      path: AUTHORIZATION_SERVER_METADATA_PATH,
+      schema: z.looseObject({
+        authorization_endpoint: z.literal(`${authBaseUrl}/oauth2/authorize`),
+        authorization_response_iss_parameter_supported: z.literal(true),
+        code_challenge_methods_supported: z.tuple([z.literal("S256")]),
+        grant_types_supported: z.tuple([z.literal("authorization_code")]),
+        issuer: z.literal(authBaseUrl),
+        jwks_uri: z.literal(`${authBaseUrl}/jwks`),
+        registration_endpoint: z.literal(`${authBaseUrl}/oauth2/register`),
+        response_modes_supported: stringArrayContaining("query"),
+        response_types_supported: z.tuple([z.literal("code")]),
+        revocation_endpoint: z.literal(`${authBaseUrl}/oauth2/revoke`),
+        scopes_supported: z.tuple([z.literal(OWNER_READ_SCOPE)]),
+        token_endpoint: z.literal(`${authBaseUrl}/oauth2/token`),
+        token_endpoint_auth_methods_supported: stringArrayContaining("none"),
+      }),
+      subject: "Authorization-server",
+      validMessage: "OAuth authorization-server metadata is valid.",
+    },
+  ];
 }
 
-export async function checkWorkerHealth(
+async function runCheck(
   options: DoctorOptions,
   dependencies: DoctorDependencies,
-): Promise<DoctorReport> {
-  const endpoint = new URL(HEALTH_PATH, options.origin);
+  definition: CheckDefinition,
+): Promise<DoctorCheck> {
+  const endpoint = new URL(definition.path, options.origin);
   let response: Response;
   let body: string;
 
@@ -158,38 +222,50 @@ export async function checkWorkerHealth(
         accept: "application/json",
       },
       method: "GET",
-      redirect: "error",
+      redirect: "manual",
       signal: AbortSignal.timeout(options.timeoutMs),
     });
     body = await readBoundedBody(response);
   } catch (error) {
     if (error instanceof ResponseTooLargeError) {
-      return createReport(
+      return createCheck(
+        definition,
         endpoint,
         "response_too_large",
-        `Health response exceeded ${MAX_HEALTH_RESPONSE_BYTES} bytes.`,
+        `${definition.subject} response exceeded ${MAX_DIAGNOSTIC_RESPONSE_BYTES} bytes.`,
       );
     }
 
-    return createReport(
+    const timedOut = isTimeout(error);
+
+    return createCheck(
+      definition,
       endpoint,
-      isTimeout(error) ? "timeout" : "request_failed",
-      isTimeout(error) ? "Health request timed out." : "Health request failed.",
+      timedOut ? "timeout" : "request_failed",
+      timedOut
+        ? `${definition.subject} request timed out.`
+        : `${definition.subject} request failed.`,
     );
   }
 
   if (response.status !== 200) {
-    return createReport(
+    return createCheck(
+      definition,
       endpoint,
       "http_status",
-      "Health endpoint returned an unexpected HTTP status.",
+      `${definition.subject} endpoint returned an unexpected HTTP status.`,
     );
   }
 
   const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
 
   if (contentType !== "application/json") {
-    return createReport(endpoint, "content_type", "Health endpoint did not return JSON.");
+    return createCheck(
+      definition,
+      endpoint,
+      "content_type",
+      `${definition.subject} endpoint did not return JSON.`,
+    );
   }
 
   let payload: unknown;
@@ -197,16 +273,43 @@ export async function checkWorkerHealth(
   try {
     payload = JSON.parse(body);
   } catch {
-    return createReport(endpoint, "invalid_json", "Health endpoint returned invalid JSON.");
-  }
-
-  if (!healthReportSchema.safeParse(payload).success) {
-    return createReport(
+    return createCheck(
+      definition,
       endpoint,
-      "invalid_payload",
-      "Health endpoint returned an invalid Crewhelm health report.",
+      "invalid_json",
+      `${definition.subject} endpoint returned invalid JSON.`,
     );
   }
 
-  return createReport(endpoint, "healthy", "Worker health contract is valid.");
+  if (!definition.schema.safeParse(payload).success) {
+    return createCheck(definition, endpoint, "invalid_payload", definition.invalidPayloadMessage);
+  }
+
+  return createCheck(definition, endpoint, "valid", definition.validMessage);
+}
+
+export interface DoctorDependencies {
+  fetch: typeof globalThis.fetch;
+}
+
+export interface DoctorOptions {
+  origin: URL;
+  timeoutMs: number;
+}
+
+export async function diagnoseDeployment(
+  options: DoctorOptions,
+  dependencies: DoctorDependencies,
+): Promise<DoctorReport> {
+  const definitions = checkDefinitions(options.origin);
+  const health = await runCheck(options, dependencies, definitions[0]);
+  const protectedResource = await runCheck(options, dependencies, definitions[1]);
+  const authorizationServer = await runCheck(options, dependencies, definitions[2]);
+  const checks: DoctorReport["checks"] = [health, protectedResource, authorizationServer];
+
+  return doctorReportSchema.parse({
+    schemaVersion: 2,
+    ok: checks.every((check) => check.status === "pass"),
+    checks,
+  });
 }

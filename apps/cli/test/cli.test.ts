@@ -1,12 +1,61 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { CLI_HELP, runCli, type CliDependencies } from "../src/cli.js";
+import { doctorReportSchema } from "../src/doctor.js";
 
-function createHarness(response: Response = new Response(null, { status: 503 })) {
+function requestPath(input: RequestInfo | URL): string {
+  if (input instanceof URL) {
+    return input.pathname;
+  }
+
+  return new URL(typeof input === "string" ? input : input.url).pathname;
+}
+
+function healthyDeploymentFetch(): typeof globalThis.fetch {
+  return vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
+    const path = requestPath(input);
+    let payload: unknown;
+
+    if (path === "/health") {
+      payload = { service: "crewhelm", status: "ok" };
+    } else if (path === "/.well-known/oauth-protected-resource") {
+      payload = {
+        authorization_servers: ["https://crewhelm.example/api/auth"],
+        bearer_methods_supported: ["header"],
+        resource: "https://crewhelm.example/mcp",
+        scopes_supported: ["control:read"],
+      };
+    } else {
+      payload = {
+        authorization_endpoint: "https://crewhelm.example/api/auth/oauth2/authorize",
+        authorization_response_iss_parameter_supported: true,
+        code_challenge_methods_supported: ["S256"],
+        grant_types_supported: ["authorization_code"],
+        issuer: "https://crewhelm.example/api/auth",
+        jwks_uri: "https://crewhelm.example/api/auth/jwks",
+        registration_endpoint: "https://crewhelm.example/api/auth/oauth2/register",
+        response_modes_supported: ["query"],
+        response_types_supported: ["code"],
+        revocation_endpoint: "https://crewhelm.example/api/auth/oauth2/revoke",
+        scopes_supported: ["control:read"],
+        token_endpoint: "https://crewhelm.example/api/auth/oauth2/token",
+        token_endpoint_auth_methods_supported: ["none"],
+      };
+    }
+
+    return Response.json(payload);
+  });
+}
+
+function createHarness(
+  fetch: typeof globalThis.fetch = vi
+    .fn<typeof globalThis.fetch>()
+    .mockResolvedValue(new Response(null, { status: 503 })),
+) {
   const output: string[] = [];
   const errors: string[] = [];
   const dependencies: CliDependencies = {
-    fetch: vi.fn<typeof globalThis.fetch>().mockResolvedValue(response),
+    fetch,
     writeError: (text) => errors.push(text),
     writeOutput: (text) => output.push(text),
   };
@@ -24,24 +73,28 @@ describe("Crewhelm CLI", () => {
   });
 
   it("reports a healthy Worker in human-readable form", async () => {
-    const harness = createHarness(
-      new Response('{"service":"crewhelm","status":"ok"}', {
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const harness = createHarness(healthyDeploymentFetch());
 
     await expect(
       runCli(["doctor", "--endpoint", "https://crewhelm.example"], harness.dependencies),
     ).resolves.toBe(0);
     expect(harness.output.join("")).toContain("PASS worker-health https://crewhelm.example/health");
+    expect(harness.output.join("")).toContain(
+      "PASS mcp-protected-resource https://crewhelm.example/.well-known/oauth-protected-resource",
+    );
+    expect(harness.output.join("")).toContain(
+      "PASS oauth-authorization-server https://crewhelm.example/.well-known/oauth-authorization-server/api/auth",
+    );
     expect(harness.errors).toEqual([]);
   });
 
   it("emits a stable JSON failure without reflecting the response body", async () => {
     const harness = createHarness(
-      new Response("secret-provider-diagnostic", {
-        headers: { "content-type": "text/plain" },
-        status: 503,
+      vi.fn<typeof globalThis.fetch>().mockImplementation(async () => {
+        return new Response("secret-provider-diagnostic", {
+          headers: { "content-type": "text/plain" },
+          status: 503,
+        });
       }),
     );
 
@@ -49,11 +102,13 @@ describe("Crewhelm CLI", () => {
       runCli(["doctor", "--endpoint", "https://crewhelm.example", "--json"], harness.dependencies),
     ).resolves.toBe(1);
 
-    const report: unknown = JSON.parse(harness.output.join(""));
-    expect(report).toMatchObject({
-      ok: false,
-      checks: [{ code: "http_status", status: "fail" }],
-    });
+    const report = doctorReportSchema.parse(JSON.parse(harness.output.join("")));
+    expect(report.ok).toBe(false);
+    expect(report.checks.map((check) => check.code)).toEqual([
+      "http_status",
+      "http_status",
+      "http_status",
+    ]);
     expect(harness.output.join("")).not.toContain("secret-provider-diagnostic");
   });
 

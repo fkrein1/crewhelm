@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { checkWorkerHealth, parseDeploymentOrigin } from "../src/doctor.js";
+import { diagnoseDeployment, parseDeploymentOrigin } from "../src/doctor.js";
 
-function healthyResponse(): Response {
-  return new Response(`${JSON.stringify({ service: "crewhelm", status: "ok" })}\n`, {
+const origin = "https://crewhelm.example";
+
+function jsonResponse(payload: unknown): Response {
+  return new Response(`${JSON.stringify(payload)}\n`, {
     headers: {
       "content-type": "application/json; charset=utf-8",
     },
@@ -11,40 +13,115 @@ function healthyResponse(): Response {
   });
 }
 
-describe("Worker health diagnosis", () => {
-  it("normalizes an HTTPS origin and validates the health contract", async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(healthyResponse());
-    const report = await checkWorkerHealth(
+function healthyResponse(): Response {
+  return jsonResponse({ service: "crewhelm", status: "ok" });
+}
+
+function protectedResourceResponse(): Response {
+  return jsonResponse({
+    authorization_servers: [`${origin}/api/auth`],
+    bearer_methods_supported: ["header"],
+    resource: `${origin}/mcp`,
+    scopes_supported: ["control:read"],
+  });
+}
+
+function authorizationServerResponse(overrides: Record<string, unknown> = {}): Response {
+  return jsonResponse({
+    authorization_endpoint: `${origin}/api/auth/oauth2/authorize`,
+    authorization_response_iss_parameter_supported: true,
+    code_challenge_methods_supported: ["S256"],
+    grant_types_supported: ["authorization_code"],
+    issuer: `${origin}/api/auth`,
+    jwks_uri: `${origin}/api/auth/jwks`,
+    registration_endpoint: `${origin}/api/auth/oauth2/register`,
+    response_modes_supported: ["query"],
+    response_types_supported: ["code"],
+    revocation_endpoint: `${origin}/api/auth/oauth2/revoke`,
+    scopes_supported: ["control:read"],
+    token_endpoint: `${origin}/api/auth/oauth2/token`,
+    token_endpoint_auth_methods_supported: ["none", "client_secret_basic"],
+    ...overrides,
+  });
+}
+
+function requestUrl(input: RequestInfo | URL): URL {
+  if (input instanceof URL) {
+    return input;
+  }
+
+  return new URL(typeof input === "string" ? input : input.url);
+}
+
+function deploymentFetch(
+  responseForPath: (path: string) => Response = (path) => {
+    if (path === "/health") {
+      return healthyResponse();
+    }
+
+    if (path === "/.well-known/oauth-protected-resource") {
+      return protectedResourceResponse();
+    }
+
+    return authorizationServerResponse();
+  },
+): typeof globalThis.fetch {
+  return vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
+    return responseForPath(requestUrl(input).pathname);
+  });
+}
+
+describe("deployment diagnosis", () => {
+  it("validates health and the MCP OAuth discovery contract", async () => {
+    const fetch = deploymentFetch();
+    const report = await diagnoseDeployment(
       {
-        origin: parseDeploymentOrigin("https://Example.com:443"),
+        origin: parseDeploymentOrigin("https://Crewhelm.Example:443"),
         timeoutMs: 1_000,
       },
       { fetch },
     );
 
     expect(report).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       ok: true,
       checks: [
         {
-          code: "healthy",
-          endpoint: "https://example.com/health",
+          code: "valid",
+          endpoint: `${origin}/health`,
           message: "Worker health contract is valid.",
           name: "worker-health",
           status: "pass",
         },
+        {
+          code: "valid",
+          endpoint: `${origin}/.well-known/oauth-protected-resource`,
+          message: "MCP protected-resource metadata is valid.",
+          name: "mcp-protected-resource",
+          status: "pass",
+        },
+        {
+          code: "valid",
+          endpoint: `${origin}/.well-known/oauth-authorization-server/api/auth`,
+          message: "OAuth authorization-server metadata is valid.",
+          name: "oauth-authorization-server",
+          status: "pass",
+        },
       ],
     });
-    expect(fetch).toHaveBeenCalledWith(
-      new URL("https://example.com/health"),
-      expect.objectContaining({
-        headers: {
-          accept: "application/json",
-        },
-        method: "GET",
-        redirect: "error",
-      }),
-    );
+    expect(fetch).toHaveBeenCalledTimes(3);
+
+    for (const call of vi.mocked(fetch).mock.calls) {
+      expect(call[1]).toEqual(
+        expect.objectContaining({
+          headers: {
+            accept: "application/json",
+          },
+          method: "GET",
+          redirect: "manual",
+        }),
+      );
+    }
   });
 
   it.each([
@@ -83,61 +160,114 @@ describe("Worker health diagnosis", () => {
     },
   );
 
-  it("bounds the response body before parsing it", async () => {
-    const report = await checkWorkerHealth(
+  it("bounds every response body before parsing it", async () => {
+    const report = await diagnoseDeployment(
       {
-        origin: parseDeploymentOrigin("https://crewhelm.example"),
+        origin: parseDeploymentOrigin(origin),
         timeoutMs: 1_000,
       },
       {
-        fetch: vi.fn<typeof globalThis.fetch>().mockResolvedValue(
-          new Response("x".repeat(4_097), {
-            headers: {
-              "content-type": "application/json",
-            },
-          }),
+        fetch: deploymentFetch((path) =>
+          path === "/.well-known/oauth-protected-resource"
+            ? new Response("x".repeat(4_097), {
+                headers: {
+                  "content-type": "application/json",
+                },
+              })
+            : path === "/health"
+              ? healthyResponse()
+              : authorizationServerResponse(),
         ),
       },
     );
 
     expect(report.ok).toBe(false);
-    expect(report.checks[0].code).toBe("response_too_large");
+    expect(report.checks.map((check) => check.code)).toEqual([
+      "valid",
+      "response_too_large",
+      "valid",
+    ]);
   });
 
-  it("rejects malformed or widened health payloads", async () => {
-    const malformed = await checkWorkerHealth(
+  it("rejects malformed or widened health payloads without hiding valid discovery", async () => {
+    const report = await diagnoseDeployment(
       {
-        origin: parseDeploymentOrigin("https://crewhelm.example"),
+        origin: parseDeploymentOrigin(origin),
         timeoutMs: 1_000,
       },
       {
-        fetch: vi.fn<typeof globalThis.fetch>().mockResolvedValue(
-          new Response('{"service":"crewhelm","status":"ok","secret":"no"}', {
-            headers: { "content-type": "application/json" },
-          }),
+        fetch: deploymentFetch((path) =>
+          path === "/health"
+            ? jsonResponse({ service: "crewhelm", status: "ok", secret: "no" })
+            : path === "/.well-known/oauth-protected-resource"
+              ? protectedResourceResponse()
+              : authorizationServerResponse(),
         ),
       },
     );
 
-    expect(malformed.ok).toBe(false);
-    expect(malformed.checks[0].code).toBe("invalid_payload");
+    expect(report.ok).toBe(false);
+    expect(report.checks.map((check) => check.code)).toEqual(["invalid_payload", "valid", "valid"]);
   });
 
-  it("does not reflect a network exception", async () => {
-    const report = await checkWorkerHealth(
+  it("rejects cross-origin OAuth endpoints", async () => {
+    const report = await diagnoseDeployment(
       {
-        origin: parseDeploymentOrigin("https://crewhelm.example"),
+        origin: parseDeploymentOrigin(origin),
         timeoutMs: 1_000,
       },
       {
-        fetch: vi
-          .fn<typeof globalThis.fetch>()
-          .mockRejectedValue(new Error("secret-provider-diagnostic")),
+        fetch: deploymentFetch((path) =>
+          path === "/health"
+            ? healthyResponse()
+            : path === "/.well-known/oauth-protected-resource"
+              ? protectedResourceResponse()
+              : authorizationServerResponse({
+                  token_endpoint: "https://attacker.example/token",
+                }),
+        ),
       },
     );
 
     expect(report.ok).toBe(false);
-    expect(report.checks[0].code).toBe("request_failed");
+    expect(report.checks.map((check) => check.code)).toEqual(["valid", "valid", "invalid_payload"]);
+    expect(JSON.stringify(report)).not.toContain("attacker.example");
+  });
+
+  it("does not reflect network exceptions", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockRejectedValue(new Error("secret-provider-diagnostic"));
+    const report = await diagnoseDeployment(
+      {
+        origin: parseDeploymentOrigin(origin),
+        timeoutMs: 1_000,
+      },
+      { fetch },
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.checks.map((check) => check.code)).toEqual([
+      "request_failed",
+      "request_failed",
+      "request_failed",
+    ]);
     expect(JSON.stringify(report)).not.toContain("secret-provider-diagnostic");
+  });
+
+  it("classifies timeouts without reflecting their message", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockRejectedValue(new DOMException("secret-timeout-detail", "TimeoutError"));
+    const report = await diagnoseDeployment(
+      {
+        origin: parseDeploymentOrigin(origin),
+        timeoutMs: 1_000,
+      },
+      { fetch },
+    );
+
+    expect(report.checks.map((check) => check.code)).toEqual(["timeout", "timeout", "timeout"]);
+    expect(JSON.stringify(report)).not.toContain("secret-timeout-detail");
   });
 });
