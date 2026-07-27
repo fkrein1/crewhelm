@@ -1,4 +1,23 @@
 export {
+  COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
+  capabilityEffectSchema,
+  capabilityGrantIdSchema,
+  classifiedComposioToolActionSchema,
+  composioToolCapabilityGrantSchema,
+  composioToolGateInputSchema,
+  runIdSchema,
+  sha256DigestSchema,
+  toolCallIdSchema,
+  toolGateDecisionSchema,
+  toolGatePolicySnapshotSchema,
+  type CapabilityEffect,
+  type ClassifiedComposioToolAction,
+  type ComposioToolCapabilityGrant,
+  type ComposioToolGateInput,
+  type ToolGateDecision,
+  type ToolGatePolicySnapshot,
+} from "./capabilities.js";
+export {
   AGENTS_WRITE_SCOPE,
   AGENTS_READ_SCOPE,
   agentCapabilityGrantsSchema,

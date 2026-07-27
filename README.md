@@ -6,8 +6,8 @@ shareable agent recipes. Composio supplies the broad app and web integration pla
 toolkits such as Firecrawl.
 
 The implemented surface includes a deployable Worker, an authenticated MCP control plane with an
-owner-scoped Agent registry, and local bootstrap and diagnostic commands. Agent execution is
-outside this surface.
+owner-scoped Agent registry, a pure ToolGate policy module for classified Composio actions, and
+local bootstrap and diagnostic commands. Agent execution is outside this surface.
 
 ## Principles
 
@@ -155,6 +155,12 @@ a Crewhelm-maintained integration or tool allowlist. Authentication completes on
 page, so OAuth tokens and API keys do not pass through Crewhelm or the MCP client. The browser
 return is not a signed provider assertion: Crewhelm records it as lifecycle information and still
 requires a later deterministic grant and execution check before any tool can use the connection.
+The ToolGate policy accepts any valid exact Composio toolkit, tool, and pinned version rather than
+a curated catalog subset. It evaluates only an immutable capability grant, a classified action
+containing digests instead of raw arguments or targets, and a current policy and budget snapshot.
+An allow decision is local policy evidence, not a cross-object execution permit and not permission
+to call Composio; runtime admission, atomic budget reservation, verified permits, approval
+evidence, and connector execution remain separate boundaries.
 
 Changing `OWNER_GITHUB_USER_ID` or the GitHub client secret blocks new authorization but does not
 revoke an already issued 15-minute access token. For emergency global revocation, create a fresh

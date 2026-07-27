@@ -107,6 +107,12 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
 
+  packages/core:
+    dependencies:
+      '@crewhelm/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+
 packages:
 
   '@better-auth/core@1.7.0-beta.10':
