@@ -30,7 +30,7 @@ const EXPECTED_DEPLOYMENT_FILES = [
   "migrations",
   "wrangler-template.json",
 ] as const;
-const EXPECTED_MIGRATIONS = ["0001_better_auth.sql"] as const;
+const EXPECTED_MIGRATIONS = ["0001_better_auth.sql", "0002_control_write_scope.sql"] as const;
 const MAX_ASSET_BYTES = 10 * 1_048_576;
 const MAX_MIGRATION_BYTES = 1_048_576;
 const WORKER_NOT_FOUND_CODE = /\[code:\s*10007\]/u;

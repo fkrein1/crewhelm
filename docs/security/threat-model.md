@@ -1,12 +1,13 @@
 # Threat model
 
-Status: authenticated MCP ingress foundation
+Status: authenticated MCP Agent registry
 
 ## Scope
 
-Crewhelm will expose a remote MCP administration surface, a private control plane, isolated agent
-runtimes, and provider connectors. This document records the minimum threats that architecture and
-implementation must address as those components are introduced.
+Crewhelm's security boundary covers remote MCP administration, a private control plane, isolated
+agent runtimes, and provider connectors. This document records the minimum threats and controls for
+that architecture, including boundaries whose runtime adapters are outside the implemented
+surface.
 
 ## Assets
 
@@ -59,8 +60,8 @@ implementation must address as those components are introduced.
 ## Required control families
 
 - Exact `/mcp` OAuth resource binding, S256 PKCE, short-lived signed audience-bound access tokens,
-  disabled refresh tokens, token-time owner/scope checks, and immediate hash-based explicit
-  revocation
+  disabled refresh tokens, token-time owner/scope checks, method-level read/write enforcement, and
+  immediate hash-based explicit revocation
 - GitHub numeric-ID allowlisting with an empty upstream scope; the transient GitHub token is
   discarded before Crewhelm creates a grant
 - HTTPS or loopback-only dynamic client redirects, explicit consent that shows the return origin,
@@ -101,16 +102,37 @@ before its client's lease expires remains valid for at most its independent 15-m
 
 Better Auth owns OAuth 2.1 mechanics, JWT/JWKS handling, GitHub login state, and secure session
 cookies. Crewhelm still owns the stricter authorization boundary: only HTTPS or exact loopback
-redirects, one read-only scope, one exact resource, the configured GitHub numeric owner, a
-24-hour public-client lease, no refresh grant, no upstream scope, and no persisted upstream token.
-Database hooks force every upstream token field to null before persistence. Revisit the provider
-configuration and threat model before adding mutation scopes, multi-owner service, refresh tokens,
-additional identity providers, or longer token lifetimes.
+redirects, the explicit `control:read` and `control:write` scopes, one exact resource, the
+configured GitHub numeric owner, a 24-hour public-client lease, no refresh grant, no upstream
+scope, and no persisted upstream token. The consent page distinguishes read and create authority;
+the owner control plane independently enforces the required scope for every RPC. Existing
+read-only clients and tokens are never silently widened. Database hooks force every upstream token
+field to null before persistence. Revisit the provider configuration and threat model before
+adding broader mutation classes, multi-owner service, refresh tokens, additional identity
+providers, or longer token lifetimes.
 
 The provider seeds the exact MCP resource in insert-only mode so public requests cannot turn
-configuration into repeated D1 writes. A future scope or access-token lifetime change requires an
-explicit migration of the stored resource row; changing configuration alone intentionally does not
-overwrite it.
+configuration into repeated D1 writes. Scope and access-token lifetime changes require explicit
+migrations of the stored resource row; changing configuration alone intentionally does not
+overwrite it. Scope migrations update only an explicitly recognized prior representation.
+
+## Agent registry authority and residual risk
+
+The owner-named Durable Object generates Agent IDs and stores each initial configuration as
+immutable revision 1. Creation requires `control:write`; status and bounded summary listing require
+`control:read`. Caller input cannot select a Durable Object name, add a capability grant, or start
+execution. Instructions and model identifiers are stored as inert validated data; using them in a
+run requires a separately reviewed runtime authorization boundary.
+
+Every creation carries a bounded idempotency key scoped to the authenticated MCP client. An exact
+replay returns the original Agent, while key reuse by that client with different normalized input
+fails closed. The record stores only a digest of the normalized request. The Agent, revision,
+idempotency record, and minimal audit event commit in one synchronous SQLite transaction. Listing
+omits instructions and uses bounded pages so a large or hostile configuration cannot amplify MCP
+output. A transactional ceiling of 100 Agents per owner bounds the Agent, revision, idempotency,
+audit, and maximum instruction storage created by this surface; exact retries still succeed at the
+ceiling, while new creations fail without partial writes. The registry has no edit, delete, run,
+connection, or grant operation.
 
 ## Bootstrap and deployment authority
 

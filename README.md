@@ -5,9 +5,9 @@ Cloudflare. It is designed to be administered through MCP, with a bootstrap CLI 
 shareable agent recipes. Composio supplies the broad app and web integration plane, including
 toolkits such as Firecrawl.
 
-The repository is implementing its first Cloudflare runtime slices. A deployable health Worker,
-authenticated read-only MCP status tool, and local diagnostic CLI are available, but no usable
-agent runtime has been released yet.
+The implemented surface includes a deployable Worker, an authenticated MCP control plane with an
+owner-scoped Agent registry, and local bootstrap and diagnostic commands. Agent execution is
+outside this surface.
 
 ## Principles
 
@@ -66,11 +66,14 @@ Both commands finish by validating the health response, MCP protected-resource m
 authorization server discovery through bounded, no-redirect reads. Use `--json` for versioned
 machine-readable reports. HTTP is accepted only for exact loopback hosts during local development.
 
-## Development Worker authentication
+## Worker authentication
 
 The Worker exposes Streamable HTTP MCP at `/mcp`. OAuth clients dynamically register at
-`/api/auth/oauth2/register`, request the single `control:read` scope, and authenticate the owner
-through a GitHub OAuth App. The app callback URL must be:
+`/api/auth/oauth2/register` and authenticate the owner through a GitHub OAuth App. Clients request
+`control:read` to inspect control-plane status and Agent summaries, `control:write` to create Agent
+definitions, or both. Registrations default to both scopes; every token keeps the exact approved
+scope set, so widening the resource configuration never widens an issued read-only token. The
+consent page shows each requested permission. The app callback URL must be:
 
 ```text
 https://YOUR_WORKER_HOST/api/auth/callback/github
@@ -91,8 +94,18 @@ authorization codes, consent, non-refreshing 10-minute login sessions, signing k
 explicitly revoked access tokens. It never stores the GitHub token or GitHub client secret. MCP
 access tokens are audience-bound JWTs that last 15 minutes, refresh tokens are disabled, and
 expired protocol records are purged hourly. Authorization endpoints allow at most 10 requests per
-minute per Cloudflare client address, and MCP allows 60. The current `crewhelm_status` MCP tool
-returns the authenticated owner's control-plane readiness.
+minute per Cloudflare client address, and MCP allows 60.
+
+The MCP surface exposes:
+
+- `crewhelm_status` — return control-plane readiness; requires `control:read`.
+- `crewhelm_list_agents` — return bounded Agent summaries; requires `control:read`.
+- `crewhelm_create_agent` — create an idempotent owner-scoped Agent revision with an explicit
+  model, bounded instructions and execution limits, and no capability grants; requires
+  `control:write`. Each owner can store at most 100 Agents.
+
+Agent execution, tools, connections, recipe installation, edits, and deletion are outside this
+surface.
 
 Changing `OWNER_GITHUB_USER_ID` or the GitHub client secret blocks new authorization but does not
 revoke an already issued 15-minute access token. For emergency global revocation, create a fresh

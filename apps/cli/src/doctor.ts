@@ -1,4 +1,4 @@
-import { HEALTH_PATH, healthReportSchema, OWNER_READ_SCOPE } from "@crewhelm/contracts";
+import { HEALTH_PATH, healthReportSchema, OWNER_SCOPES } from "@crewhelm/contracts";
 import * as z from "zod";
 
 const MAX_DIAGNOSTIC_RESPONSE_BYTES = 4_096;
@@ -176,7 +176,7 @@ function checkDefinitions(origin: URL): [CheckDefinition, CheckDefinition, Check
         authorization_servers: z.tuple([z.literal(authBaseUrl)]),
         bearer_methods_supported: z.tuple([z.literal("header")]),
         resource: z.literal(`${origin.origin}${MCP_PATH}`),
-        scopes_supported: z.tuple([z.literal(OWNER_READ_SCOPE)]),
+        scopes_supported: z.tuple([z.literal(OWNER_SCOPES[0]), z.literal(OWNER_SCOPES[1])]),
       }),
       subject: "Protected-resource",
       validMessage: "MCP protected-resource metadata is valid.",
@@ -197,7 +197,7 @@ function checkDefinitions(origin: URL): [CheckDefinition, CheckDefinition, Check
         response_modes_supported: stringArrayContaining("query"),
         response_types_supported: z.tuple([z.literal("code")]),
         revocation_endpoint: z.literal(`${authBaseUrl}/oauth2/revoke`),
-        scopes_supported: z.tuple([z.literal(OWNER_READ_SCOPE)]),
+        scopes_supported: z.tuple([z.literal(OWNER_SCOPES[0]), z.literal(OWNER_SCOPES[1])]),
         token_endpoint: z.literal(`${authBaseUrl}/oauth2/token`),
         token_endpoint_auth_methods_supported: stringArrayContaining("none"),
       }),

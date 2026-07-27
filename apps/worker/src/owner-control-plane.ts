@@ -1,39 +1,399 @@
 import {
+  agentSchema,
+  agentSummarySchema,
   controlPlaneStatusResultSchema,
+  createAgentInputSchema,
+  createAgentResultSchema,
+  listAgentsInputSchema,
+  listAgentsResultSchema,
+  MAXIMUM_AGENTS_PER_OWNER,
+  OWNER_READ_SCOPE,
+  OWNER_WRITE_SCOPE,
   ownerAuthoritySchema,
+  type Agent,
+  type AgentSummary,
   type ControlPlaneStatusResult,
+  type CreateAgentInput,
+  type CreateAgentResult,
+  type ListAgentsResult,
   type OwnerAuthority,
+  type OwnerScope,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
 
-const CONTROL_PLANE_SCHEMA_VERSION = 1;
+const CONTROL_PLANE_SCHEMA_VERSION = 2;
+type AuthorityErrorCode =
+  | "incompatible_schema"
+  | "insufficient_scope"
+  | "invalid_authority"
+  | "owner_mismatch";
+type AgentRequestErrorCode =
+  | AuthorityErrorCode
+  | "agent_limit_exceeded"
+  | "idempotency_conflict"
+  | "invalid_request";
+type AgentRequestFailure = Extract<CreateAgentResult, { ok: false }>;
+type AuthorityResult =
+  | { authority: OwnerAuthority; ok: true }
+  | { code: AuthorityErrorCode; ok: false };
+
+function encodeBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+async function digestAgentCreation(input: CreateAgentInput): Promise<string> {
+  const canonicalRequest = JSON.stringify({
+    executionLimits: {
+      maxDurationSeconds: input.executionLimits.maxDurationSeconds,
+      maxModelTokens: input.executionLimits.maxModelTokens,
+      maxToolCalls: input.executionLimits.maxToolCalls,
+      maxTurns: input.executionLimits.maxTurns,
+    },
+    instructions: input.instructions,
+    model: input.model,
+    name: input.name,
+  });
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalRequest));
+
+  return encodeBase64Url(new Uint8Array(digest));
+}
 
 export class OwnerControlPlane extends DurableObject {
   readonly #objectName: string | undefined;
   readonly #sql: SqlStorage;
+  readonly #storage: DurableObjectStorage;
 
   constructor(state: DurableObjectState, environment: Cloudflare.Env) {
     super(state, environment);
     this.#objectName = state.id.name;
     this.#sql = state.storage.sql;
-    this.#sql.exec(`
-      CREATE TABLE IF NOT EXISTS control_plane (
-        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-        owner_key TEXT NOT NULL UNIQUE,
-        schema_version INTEGER NOT NULL CHECK (schema_version = 1)
-      )
-    `);
+    this.#storage = state.storage;
+    this.#sql.exec("PRAGMA foreign_keys = ON");
+    this.#storage.transactionSync(() => {
+      this.#sql.exec(`
+        CREATE TABLE IF NOT EXISTS control_plane (
+          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+          owner_key TEXT NOT NULL UNIQUE,
+          schema_version INTEGER NOT NULL CHECK (schema_version = 1)
+        )
+      `);
+      const controlPlane = this.#sql
+        .exec<Record<string, SqlStorageValue>>(
+          "SELECT schema_version FROM control_plane WHERE singleton = 1",
+        )
+        .toArray()[0];
+      const controlPlaneTable = this.#sql
+        .exec<Record<string, SqlStorageValue>>(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'control_plane'",
+        )
+        .one();
+      const controlPlaneDefinition = controlPlaneTable["sql"];
+      const isVersionOneTable =
+        typeof controlPlaneDefinition === "string" &&
+        controlPlaneDefinition.includes("schema_version = 1");
+
+      if (
+        (controlPlane === undefined && isVersionOneTable) ||
+        controlPlane?.["schema_version"] === CONTROL_PLANE_SCHEMA_VERSION - 1
+      ) {
+        this.#sql.exec("ALTER TABLE control_plane RENAME TO control_plane_v1");
+        this.#sql.exec(`
+          CREATE TABLE control_plane (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            owner_key TEXT NOT NULL UNIQUE,
+            schema_version INTEGER NOT NULL CHECK (schema_version = 2)
+          )
+        `);
+        this.#sql.exec(`
+          INSERT INTO control_plane (singleton, owner_key, schema_version)
+          SELECT singleton, owner_key, 2 FROM control_plane_v1
+        `);
+        this.#sql.exec("DROP TABLE control_plane_v1");
+      } else if (controlPlane?.["schema_version"] !== CONTROL_PLANE_SCHEMA_VERSION) {
+        return;
+      }
+      this.#sql.exec(`
+        CREATE TABLE IF NOT EXISTS agents (
+          agent_id TEXT PRIMARY KEY,
+          current_revision INTEGER NOT NULL CHECK (current_revision > 0),
+          created_at INTEGER NOT NULL CHECK (created_at > 0)
+        )
+      `);
+      this.#sql.exec(`
+        CREATE TABLE IF NOT EXISTS agent_revisions (
+          agent_id TEXT NOT NULL,
+          revision INTEGER NOT NULL CHECK (revision > 0),
+          name TEXT NOT NULL,
+          model TEXT NOT NULL,
+          instructions TEXT NOT NULL,
+          execution_limits TEXT NOT NULL,
+          capability_grants TEXT NOT NULL CHECK (capability_grants = '[]'),
+          created_at INTEGER NOT NULL CHECK (created_at > 0),
+          PRIMARY KEY (agent_id, revision),
+          FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE RESTRICT
+        )
+      `);
+      this.#sql.exec(`
+        CREATE TABLE IF NOT EXISTS agent_creations (
+          client_id TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          request_digest TEXT NOT NULL CHECK (length(request_digest) = 43),
+          agent_id TEXT NOT NULL,
+          revision INTEGER NOT NULL CHECK (revision > 0),
+          PRIMARY KEY (client_id, idempotency_key),
+          UNIQUE (agent_id, revision),
+          FOREIGN KEY (agent_id, revision)
+            REFERENCES agent_revisions(agent_id, revision) ON DELETE RESTRICT
+        )
+      `);
+      this.#sql.exec(`
+        CREATE TABLE IF NOT EXISTS audit_events (
+          event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          occurred_at INTEGER NOT NULL CHECK (occurred_at > 0),
+          client_id TEXT NOT NULL,
+          action TEXT NOT NULL,
+          subject_id TEXT NOT NULL
+        )
+      `);
+    });
   }
 
   status(authorityInput: unknown): ControlPlaneStatusResult {
-    const authority = this.#parseAuthority(authorityInput);
+    const authorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
 
-    if (!authority || !this.#objectName) {
-      return this.#denied("invalid_authority");
+    if (!authorization.ok) {
+      return this.#deniedStatus(authorization.code);
     }
 
+    return controlPlaneStatusResultSchema.parse({
+      ok: true,
+      status: {
+        schemaVersion: CONTROL_PLANE_SCHEMA_VERSION,
+        status: "ready",
+      },
+    });
+  }
+
+  async createAgent(authorityInput: unknown, input: unknown): Promise<CreateAgentResult> {
+    const authorization = this.#authorize(authorityInput, OWNER_WRITE_SCOPE);
+
+    if (!authorization.ok) {
+      return this.#deniedAgent(authorization.code);
+    }
+
+    const request = createAgentInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return this.#deniedAgent("invalid_request");
+    }
+
+    const requestDigest = await digestAgentCreation(request.data);
+
+    return this.#storage.transactionSync(() => {
+      const existingRow = this.#sql
+        .exec<Record<string, SqlStorageValue>>(
+          `SELECT
+               a.agent_id,
+               c.revision AS current_revision,
+               c.request_digest,
+               a.created_at,
+               r.name,
+               r.model,
+               r.instructions,
+               r.execution_limits,
+               r.capability_grants
+             FROM agent_creations c
+             JOIN agents a ON a.agent_id = c.agent_id
+             JOIN agent_revisions r
+               ON r.agent_id = c.agent_id AND r.revision = c.revision
+             WHERE c.client_id = ? AND c.idempotency_key = ?`,
+          authorization.authority.clientId,
+          request.data.idempotencyKey,
+        )
+        .toArray()[0];
+
+      if (existingRow !== undefined) {
+        if (existingRow["request_digest"] !== requestDigest) {
+          return this.#deniedAgent("idempotency_conflict");
+        }
+
+        return createAgentResultSchema.parse({
+          agent: this.#agentFromRow(existingRow),
+          created: false,
+          ok: true,
+        });
+      }
+
+      const agentCount = this.#sql
+        .exec<Record<string, SqlStorageValue>>("SELECT COUNT(*) AS count FROM agents")
+        .one()["count"];
+
+      if (typeof agentCount !== "number") {
+        throw new Error("Invalid Agent count.");
+      }
+
+      if (agentCount >= MAXIMUM_AGENTS_PER_OWNER) {
+        return this.#deniedAgent("agent_limit_exceeded");
+      }
+
+      const agentId = `agent_${crypto.randomUUID()}`;
+      const createdAt = Date.now();
+      const executionLimits = JSON.stringify(request.data.executionLimits);
+
+      this.#sql.exec(
+        `INSERT INTO agents (agent_id, current_revision, created_at) VALUES (?, 1, ?)`,
+        agentId,
+        createdAt,
+      );
+      this.#sql.exec(
+        `INSERT INTO agent_revisions
+             (agent_id, revision, name, model, instructions, execution_limits,
+              capability_grants, created_at)
+           VALUES (?, 1, ?, ?, ?, ?, '[]', ?)`,
+        agentId,
+        request.data.name,
+        request.data.model,
+        request.data.instructions,
+        executionLimits,
+        createdAt,
+      );
+      this.#sql.exec(
+        `INSERT INTO agent_creations
+             (client_id, idempotency_key, request_digest, agent_id, revision)
+           VALUES (?, ?, ?, ?, 1)`,
+        authorization.authority.clientId,
+        request.data.idempotencyKey,
+        requestDigest,
+        agentId,
+      );
+      this.#sql.exec(
+        `INSERT INTO audit_events (occurred_at, client_id, action, subject_id)
+           VALUES (?, ?, 'agent.created', ?)`,
+        createdAt,
+        authorization.authority.clientId,
+        agentId,
+      );
+
+      const agent = agentSchema.parse({
+        capabilityGrants: [],
+        createdAt: new Date(createdAt).toISOString(),
+        executionLimits: request.data.executionLimits,
+        id: agentId,
+        instructions: request.data.instructions,
+        model: request.data.model,
+        name: request.data.name,
+        revision: 1,
+      });
+
+      return createAgentResultSchema.parse({ agent, created: true, ok: true });
+    });
+  }
+
+  listAgents(authorityInput: unknown, input: unknown): ListAgentsResult {
+    const authorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
+
+    if (!authorization.ok) {
+      return this.#deniedAgent(authorization.code);
+    }
+
+    const request = listAgentsInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return this.#deniedAgent("invalid_request");
+    }
+
+    const bindings: Array<number | string> = [];
+    let cursorClause = "";
+
+    if (request.data.cursor !== undefined) {
+      cursorClause = "WHERE a.agent_id > ?";
+      bindings.push(request.data.cursor);
+    }
+
+    bindings.push(request.data.limit + 1);
+    const rows = this.#sql
+      .exec<Record<string, SqlStorageValue>>(
+        `SELECT
+             a.agent_id,
+             a.current_revision,
+             a.created_at,
+             r.name,
+             r.model,
+             r.instructions,
+             r.execution_limits,
+             r.capability_grants
+           FROM agents a
+           JOIN agent_revisions r
+             ON r.agent_id = a.agent_id AND r.revision = a.current_revision
+           ${cursorClause}
+           ORDER BY a.agent_id
+         LIMIT ?`,
+        ...bindings,
+      )
+      .toArray();
+    const hasMore = rows.length > request.data.limit;
+    const agents = rows.slice(0, request.data.limit).map((row) => this.#agentSummaryFromRow(row));
+    const nextCursor = hasMore ? (agents.at(-1)?.id ?? null) : null;
+
+    return listAgentsResultSchema.parse({ agents, nextCursor, ok: true });
+  }
+
+  #agentFromRow(row: Record<string, SqlStorageValue>): Agent {
+    const createdAt = row["created_at"];
+    const executionLimits = row["execution_limits"];
+    const capabilityGrants = row["capability_grants"];
+
+    if (
+      typeof createdAt !== "number" ||
+      typeof executionLimits !== "string" ||
+      typeof capabilityGrants !== "string"
+    ) {
+      throw new Error("Invalid agent storage.");
+    }
+
+    return agentSchema.parse({
+      capabilityGrants: JSON.parse(capabilityGrants),
+      createdAt: new Date(createdAt).toISOString(),
+      executionLimits: JSON.parse(executionLimits),
+      id: row["agent_id"],
+      instructions: row["instructions"] ?? "",
+      model: row["model"],
+      name: row["name"],
+      revision: row["current_revision"],
+    });
+  }
+
+  #agentSummaryFromRow(row: Record<string, SqlStorageValue>): AgentSummary {
+    const agent = this.#agentFromRow(row);
+
+    return agentSummarySchema.parse({
+      capabilityGrants: agent.capabilityGrants,
+      createdAt: agent.createdAt,
+      executionLimits: agent.executionLimits,
+      id: agent.id,
+      model: agent.model,
+      name: agent.name,
+      revision: agent.revision,
+    });
+  }
+
+  #authorize(authorityInput: unknown, requiredScope: OwnerScope): AuthorityResult {
+    const result = ownerAuthoritySchema.safeParse(authorityInput);
+
+    if (!result.success || !this.#objectName) {
+      return { code: "invalid_authority", ok: false };
+    }
+
+    const authority = result.data;
+
     if (authority.ownerKey !== this.#objectName) {
-      return this.#denied("owner_mismatch");
+      return { code: "owner_mismatch", ok: false };
     }
 
     this.#sql.exec(
@@ -50,25 +410,21 @@ export class OwnerControlPlane extends DurableObject {
       .one();
 
     if (row["owner_key"] !== authority.ownerKey) {
-      return this.#denied("owner_mismatch");
+      return { code: "owner_mismatch", ok: false };
     }
 
     if (row["schema_version"] !== CONTROL_PLANE_SCHEMA_VERSION) {
-      return this.#denied("incompatible_schema");
+      return { code: "incompatible_schema", ok: false };
     }
 
-    return controlPlaneStatusResultSchema.parse({
-      ok: true,
-      status: {
-        schemaVersion: CONTROL_PLANE_SCHEMA_VERSION,
-        status: "ready",
-      },
-    });
+    if (!authority.scopes.includes(requiredScope)) {
+      return { code: "insufficient_scope", ok: false };
+    }
+
+    return { authority, ok: true };
   }
 
-  #denied(
-    code: "incompatible_schema" | "invalid_authority" | "owner_mismatch",
-  ): ControlPlaneStatusResult {
+  #deniedStatus(code: AuthorityErrorCode): ControlPlaneStatusResult {
     return controlPlaneStatusResultSchema.parse({
       error: {
         code,
@@ -78,13 +434,13 @@ export class OwnerControlPlane extends DurableObject {
     });
   }
 
-  #parseAuthority(authorityInput: unknown): OwnerAuthority | undefined {
-    const result = ownerAuthoritySchema.safeParse(authorityInput);
-
-    if (!result.success) {
-      return undefined;
-    }
-
-    return result.data;
+  #deniedAgent(code: AgentRequestErrorCode): AgentRequestFailure {
+    return {
+      error: {
+        code,
+        message: "Agent request denied.",
+      },
+      ok: false,
+    };
   }
 }

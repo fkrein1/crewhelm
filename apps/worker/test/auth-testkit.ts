@@ -9,9 +9,12 @@ const testMigrationsSchema = z.array(
   }),
 );
 
+export function readAuthTestMigrations(): z.infer<typeof testMigrationsSchema> {
+  return testMigrationsSchema.parse(Reflect.get(env, "TEST_MIGRATIONS"));
+}
+
 export function registerAuthTestDatabase(): void {
   beforeAll(async () => {
-    const migrations = testMigrationsSchema.parse(Reflect.get(env, "TEST_MIGRATIONS"));
-    await applyD1Migrations(env.AUTH_DB, migrations);
+    await applyD1Migrations(env.AUTH_DB, readAuthTestMigrations());
   });
 }

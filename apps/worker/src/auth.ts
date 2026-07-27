@@ -1,4 +1,9 @@
-import { OWNER_READ_SCOPE, ownerKeySchema } from "@crewhelm/contracts";
+import {
+  OWNER_SCOPES,
+  ownerKeySchema,
+  ownerScopeClaimSchema,
+  ownerScopesSchema,
+} from "@crewhelm/contracts";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import type { BetterAuthPlugin } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -63,7 +68,7 @@ const storedAccountSchema = z.looseObject({
 const accessTokenClaimsSchema = z.looseObject({
   azp: z.string().min(1).max(2_048),
   exp: z.number().int().positive(),
-  scope: z.literal(OWNER_READ_SCOPE),
+  scope: ownerScopeClaimSchema,
   sub: ownerKeySchema,
 });
 
@@ -428,8 +433,8 @@ export function createCrewhelmAuth(env: WorkerEnv, origin: string) {
           allowDynamicClientRegistration: true,
           allowPublicClientPrelogin: true,
           allowUnauthenticatedClientRegistration: true,
-          clientRegistrationAllowedScopes: [OWNER_READ_SCOPE],
-          clientRegistrationDefaultScopes: [OWNER_READ_SCOPE],
+          clientRegistrationAllowedScopes: [...OWNER_SCOPES],
+          clientRegistrationDefaultScopes: [...OWNER_SCOPES],
           codeExpiresIn: 10 * 60,
           consentPage: "/oauth/consent",
           customAccessTokenClaims: async ({ resources, scopes, user }) => {
@@ -442,8 +447,7 @@ export function createCrewhelmAuth(env: WorkerEnv, origin: string) {
               user?.id !== expectedOwnerKey ||
               resources?.length !== 1 ||
               resources[0] !== mcpResourceUrl(origin) ||
-              scopes.length !== 1 ||
-              scopes[0] !== OWNER_READ_SCOPE
+              !ownerScopesSchema.safeParse(scopes).success
             ) {
               throw new Error("Access token authority denied.");
             }
@@ -455,13 +459,13 @@ export function createCrewhelmAuth(env: WorkerEnv, origin: string) {
           resources: [
             {
               accessTokenTtl: 15 * 60,
-              allowedScopes: [OWNER_READ_SCOPE],
+              allowedScopes: [...OWNER_SCOPES],
               identifier: mcpResourceUrl(origin),
               name: "Crewhelm MCP",
             },
           ],
           resourceSeedMode: "insertOnly",
-          scopes: [OWNER_READ_SCOPE],
+          scopes: [...OWNER_SCOPES],
           silenceWarnings: {
             oauthAuthServerConfig: true,
           },

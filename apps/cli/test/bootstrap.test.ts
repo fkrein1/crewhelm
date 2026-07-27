@@ -83,7 +83,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
         authorization_servers: ["https://crewhelm.example/api/auth"],
         bearer_methods_supported: ["header"],
         resource: "https://crewhelm.example/mcp",
-        scopes_supported: ["control:read"],
+        scopes_supported: ["control:read", "control:write"],
       };
     } else {
       payload = {
@@ -97,7 +97,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
         response_modes_supported: ["query"],
         response_types_supported: ["code"],
         revocation_endpoint: "https://crewhelm.example/api/auth/oauth2/revoke",
-        scopes_supported: ["control:read"],
+        scopes_supported: ["control:read", "control:write"],
         token_endpoint: "https://crewhelm.example/api/auth/oauth2/token",
         token_endpoint_auth_methods_supported: ["none"],
       };
@@ -114,6 +114,7 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
   await writeFile(resolve(assets, "index.js"), "export default {};\n");
   await writeFile(resolve(assets, "index.js.map"), "{}\n");
   await writeFile(resolve(assets, "migrations", "0001_better_auth.sql"), "SELECT 1;\n");
+  await writeFile(resolve(assets, "migrations", "0002_control_write_scope.sql"), "SELECT 1;\n");
   await writeFile(
     resolve(assets, "wrangler-template.json"),
     JSON.stringify({
@@ -191,7 +192,7 @@ describe("Cloudflare bootstrap", () => {
 
       if (arguments_[0] === "d1" && arguments_[1] === "execute") {
         return arguments_.includes("SELECT name FROM d1_migrations ORDER BY id")
-          ? queryResult(["0001_better_auth.sql"])
+          ? queryResult(["0001_better_auth.sql", "0002_control_write_scope.sql"])
           : queryResult(AUTH_TABLES);
       }
 
@@ -449,7 +450,7 @@ describe("Cloudflare bootstrap", () => {
 
       if (arguments_[0] === "d1" && arguments_[1] === "execute") {
         return arguments_.includes("SELECT name FROM d1_migrations ORDER BY id")
-          ? queryResult(["0001_better_auth.sql"])
+          ? queryResult(["0001_better_auth.sql", "0002_control_write_scope.sql"])
           : queryResult(AUTH_TABLES);
       }
 

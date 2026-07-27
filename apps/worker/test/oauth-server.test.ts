@@ -1,12 +1,12 @@
 import { env } from "cloudflare:test";
-import { OWNER_READ_SCOPE } from "@crewhelm/contracts";
+import { OWNER_READ_SCOPE, OWNER_SCOPES } from "@crewhelm/contracts";
 import { describe, expect, it } from "vitest";
 import * as z from "zod";
 
 import type { WorkerEnv } from "../src/env.js";
 import { createWorker } from "../src/index.js";
 import { hasActiveClientRegistration, purgeExpiredAuthRecords } from "../src/oauth-server.js";
-import { registerAuthTestDatabase } from "./auth-testkit.js";
+import { readAuthTestMigrations, registerAuthTestDatabase } from "./auth-testkit.js";
 
 const origin = "https://crewhelm.test";
 const registrationSchema = z.looseObject({
@@ -61,6 +61,44 @@ describe("OAuth server boundary", () => {
       .bind(registration.client_id)
       .all();
     expect(resources.results).toEqual([{ resourceId: `${origin}/mcp` }]);
+    const resource = await workerEnv()
+      .AUTH_DB.prepare(`SELECT "allowedScopes" FROM "oauthResource" WHERE "identifier" = ?`)
+      .bind(`${origin}/mcp`)
+      .first();
+    expect(resource).not.toBeNull();
+    expect(JSON.parse(JSON.parse(String(resource?.allowedScopes)))).toEqual([...OWNER_SCOPES]);
+  });
+
+  it("widens the seeded MCP resource through an idempotent D1 migration", async () => {
+    await register(["https://migration-client.example/callback"]);
+    const oldStoredScopes = JSON.stringify(JSON.stringify([OWNER_READ_SCOPE]));
+
+    await workerEnv()
+      .AUTH_DB.prepare(
+        `UPDATE "oauthResource"
+         SET "allowedScopes" = ?
+         WHERE "identifier" = ?`,
+      )
+      .bind(oldStoredScopes, `${origin}/mcp`)
+      .run();
+    const migration = readAuthTestMigrations().find(
+      (candidate) => candidate.name === "0002_control_write_scope.sql",
+    );
+
+    expect(migration).toBeDefined();
+    for (const query of migration?.queries ?? []) {
+      await workerEnv().AUTH_DB.prepare(query).run();
+    }
+    for (const query of migration?.queries ?? []) {
+      await workerEnv().AUTH_DB.prepare(query).run();
+    }
+
+    const resource = await workerEnv()
+      .AUTH_DB.prepare(`SELECT "allowedScopes" FROM "oauthResource" WHERE "identifier" = ?`)
+      .bind(`${origin}/mcp`)
+      .first();
+
+    expect(JSON.parse(JSON.parse(String(resource?.allowedScopes)))).toEqual([...OWNER_SCOPES]);
   });
 
   it.each([
@@ -147,7 +185,7 @@ describe("OAuth server boundary", () => {
       grant_types_supported: ["authorization_code"],
       issuer: `${origin}/api/auth`,
       registration_endpoint: `${origin}/api/auth/oauth2/register`,
-      scopes_supported: [OWNER_READ_SCOPE],
+      scopes_supported: [...OWNER_SCOPES],
       token_endpoint: `${origin}/api/auth/oauth2/token`,
     });
   });

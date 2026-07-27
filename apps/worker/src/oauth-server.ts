@@ -1,4 +1,4 @@
-import { OWNER_READ_SCOPE } from "@crewhelm/contracts";
+import { OWNER_SCOPES, ownerScopeClaimSchema } from "@crewhelm/contracts";
 import { APIError } from "better-auth/api";
 import type { Context, Hono } from "hono";
 import {
@@ -56,7 +56,7 @@ const registrationRequestSchema = z.strictObject({
   require_pkce: z.literal(true).optional(),
   resources: z.array(z.url().max(2_048)).max(1).optional(),
   response_types: z.tuple([z.literal("code")]).optional(),
-  scope: z.literal(OWNER_READ_SCOPE).optional(),
+  scope: ownerScopeClaimSchema.optional(),
   token_endpoint_auth_method: z.literal("none").optional(),
 });
 const tokenClientSchema = z.string().min(1).max(2_048);
@@ -66,7 +66,7 @@ const authorizationRequestSchema = z.strictObject({
   codeChallengeMethod: z.literal("S256"),
   resource: z.url().max(2_048),
   responseType: z.literal("code"),
-  scope: z.literal(OWNER_READ_SCOPE),
+  scope: ownerScopeClaimSchema,
 });
 const tokenRequestSchema = z.strictObject({
   clientId: tokenClientSchema,
@@ -526,7 +526,7 @@ export function protectedResourceMetadata(origin: string): Response {
       authorization_servers: [`${origin}${AUTH_BASE_PATH}`],
       bearer_methods_supported: ["header"],
       resource: `${origin}/mcp`,
-      scopes_supported: [OWNER_READ_SCOPE],
+      scopes_supported: [...OWNER_SCOPES],
     },
     200,
   );
