@@ -1,6 +1,7 @@
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   MAXIMUM_AGENTS_PER_OWNER,
   MAXIMUM_REVISIONS_PER_AGENT,
@@ -10,6 +11,7 @@ import {
   getAgentRevisionResultSchema,
   getAgentResultSchema,
   listAgentRevisionsResultSchema,
+  listConnectionsResultSchema,
   ownerAuthoritySchema,
   type CreateAgentInput,
   type CreateConnectionLinkInput,
@@ -99,6 +101,16 @@ function fixedConnectionLinkFailure(code: string) {
     error: {
       code,
       message: "Connection link request denied.",
+    },
+    ok: false,
+  };
+}
+
+function fixedConnectionReadFailure(code: string) {
+  return {
+    error: {
+      code,
+      message: "Connection request denied.",
     },
     ok: false,
   };
@@ -472,6 +484,84 @@ describe("OwnerControlPlane", () => {
     await expect(stub.completeConnectionLink(authority, completion)).resolves.toEqual(
       fixedConnectionLinkFailure("connection_link_expired"),
     );
+  });
+
+  it("lists only bounded owner connection summaries across pagination and eviction", async () => {
+    const authority = await authorityFor("122", [CONNECTIONS_READ_SCOPE]);
+    const other = await authorityFor("123", [CONNECTIONS_READ_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(`
+        INSERT INTO connections
+          (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
+        VALUES
+          ('connection_00000000-0000-4000-8000-000000000001',
+           'composio', 'ca_private_1', 'ac_github_managed', 'initiated', 1),
+          ('connection_00000000-0000-4000-8000-000000000002',
+           'composio', 'ca_private_2', 'ac_slack_managed', 'initiated', 2)
+      `);
+    });
+
+    const firstPage = listConnectionsResultSchema.parse(
+      await stub.listConnections(authority, { limit: 1 }),
+    );
+
+    expect(firstPage).toEqual({
+      connections: [
+        {
+          authConfigId: "ac_github_managed",
+          connectionId: "connection_00000000-0000-4000-8000-000000000001",
+          createdAt: "1970-01-01T00:00:00.001Z",
+          status: "initiated",
+        },
+      ],
+      nextCursor: "connection_00000000-0000-4000-8000-000000000001",
+      ok: true,
+    });
+    expect(JSON.stringify(firstPage)).not.toContain("ca_private");
+
+    await evictDurableObject(stub);
+    await expect(
+      stub.listConnections(authority, {
+        cursor: firstPage.ok ? (firstPage.nextCursor ?? undefined) : undefined,
+        limit: 1,
+      }),
+    ).resolves.toEqual({
+      connections: [
+        {
+          authConfigId: "ac_slack_managed",
+          connectionId: "connection_00000000-0000-4000-8000-000000000002",
+          createdAt: "1970-01-01T00:00:00.002Z",
+          status: "initiated",
+        },
+      ],
+      nextCursor: null,
+      ok: true,
+    });
+    await expect(
+      env.OWNER_CONTROL_PLANE.getByName(other.ownerKey).listConnections(other, {}),
+    ).resolves.toEqual({ connections: [], nextCursor: null, ok: true });
+  });
+
+  it("rejects unauthorized, cross-owner, and malformed connection listings", async () => {
+    const authority = await authorityFor("124", [CONNECTIONS_READ_SCOPE]);
+    const insufficient = await authorityFor("124", [CONNECTIONS_WRITE_SCOPE]);
+    const other = await authorityFor("125", [CONNECTIONS_READ_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+
+    await expect(stub.listConnections(insufficient, {})).resolves.toEqual(
+      fixedConnectionReadFailure("insufficient_scope"),
+    );
+    await expect(stub.listConnections(other, {})).resolves.toEqual(
+      fixedConnectionReadFailure("owner_mismatch"),
+    );
+    await expect(
+      stub.listConnections(authority, { cursor: "connection_not-an-opaque-id" }),
+    ).resolves.toEqual(fixedConnectionReadFailure("invalid_request"));
+    await expect(
+      stub.listConnections(authority, { credential: "must-not-reflect" }),
+    ).resolves.toEqual(fixedConnectionReadFailure("invalid_request"));
   });
 
   it("rolls back a connection-link reservation when audit persistence fails", async () => {

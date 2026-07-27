@@ -1,6 +1,7 @@
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   CONNECTION_LINK_UNKNOWN_RECOVERY_MS,
   agentRevisionSchema,
@@ -9,6 +10,7 @@ import {
   agentSummarySchema,
   controlPlaneStatusResultSchema,
   completeConnectionLinkInputSchema,
+  connectionSummarySchema,
   createAgentInputSchema,
   createAgentResultSchema,
   createConnectionLinkInputSchema,
@@ -21,6 +23,8 @@ import {
   listAgentRevisionsResultSchema,
   listAgentsInputSchema,
   listAgentsResultSchema,
+  listConnectionsInputSchema,
+  listConnectionsResultSchema,
   MAXIMUM_CONNECTION_LINK_REQUESTS_PER_OWNER,
   MAXIMUM_CONNECTIONS_PER_OWNER,
   MAXIMUM_AGENTS_PER_OWNER,
@@ -40,10 +44,12 @@ import {
   type CreateAgentResult,
   type CreateConnectionLinkInput,
   type CreateConnectionLinkResult,
+  type ConnectionSummary,
   type GetAgentRevisionResult,
   type GetAgentResult,
   type ListAgentRevisionsResult,
   type ListAgentsResult,
+  type ListConnectionsResult,
   type OwnerAuthority,
   type OwnerScope,
   type ReserveConnectionLinkResult,
@@ -80,6 +86,8 @@ type ConnectionLinkRequestErrorCode =
   | "idempotency_conflict"
   | "invalid_request";
 type ConnectionLinkRequestFailure = Extract<CreateConnectionLinkResult, { ok: false }>;
+type ConnectionReadRequestErrorCode = AuthorityErrorCode | "invalid_request";
+type ConnectionReadRequestFailure = Extract<ListConnectionsResult, { ok: false }>;
 type AuthorityResult =
   | { authority: OwnerAuthority; ok: true }
   | { code: AuthorityErrorCode; ok: false };
@@ -1072,6 +1080,47 @@ export class OwnerControlPlane extends DurableObject {
     return listAgentsResultSchema.parse({ agents, nextCursor, ok: true });
   }
 
+  listConnections(authorityInput: unknown, input: unknown): ListConnectionsResult {
+    const authorization = this.#authorize(authorityInput, CONNECTIONS_READ_SCOPE);
+
+    if (!authorization.ok) {
+      return this.#deniedConnectionRead(authorization.code);
+    }
+
+    const request = listConnectionsInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return this.#deniedConnectionRead("invalid_request");
+    }
+
+    const bindings: Array<number | string> = [];
+    let cursorClause = "";
+
+    if (request.data.cursor !== undefined) {
+      cursorClause = "WHERE connection_id > ?";
+      bindings.push(request.data.cursor);
+    }
+
+    bindings.push(request.data.limit + 1);
+    const rows = this.#sql
+      .exec<Record<string, SqlStorageValue>>(
+        `SELECT connection_id, auth_config_id, status, created_at
+         FROM connections
+         ${cursorClause}
+         ORDER BY connection_id
+         LIMIT ?`,
+        ...bindings,
+      )
+      .toArray();
+    const hasMore = rows.length > request.data.limit;
+    const connections = rows
+      .slice(0, request.data.limit)
+      .map((row) => this.#connectionSummaryFromRow(row));
+    const nextCursor = hasMore ? (connections.at(-1)?.connectionId ?? null) : null;
+
+    return listConnectionsResultSchema.parse({ connections, nextCursor, ok: true });
+  }
+
   #agentFromRow(row: Record<string, SqlStorageValue>): Agent {
     const createdAt = row["created_at"];
     const executionLimits = row["execution_limits"];
@@ -1228,6 +1277,21 @@ export class OwnerControlPlane extends DurableObject {
     };
   }
 
+  #connectionSummaryFromRow(row: Record<string, SqlStorageValue>): ConnectionSummary {
+    const createdAt = row["created_at"];
+
+    if (typeof createdAt !== "number") {
+      throw new Error("Invalid connection summary storage.");
+    }
+
+    return connectionSummarySchema.parse({
+      authConfigId: row["auth_config_id"],
+      connectionId: row["connection_id"],
+      createdAt: new Date(createdAt).toISOString(),
+      status: row["status"],
+    });
+  }
+
   #countRows(table: "connection_link_requests" | "connections"): number {
     const count = this.#sql
       .exec<Record<string, SqlStorageValue>>(`SELECT COUNT(*) AS count FROM ${table}`)
@@ -1329,6 +1393,16 @@ export class OwnerControlPlane extends DurableObject {
       error: {
         code,
         message: "Connection link request denied.",
+      },
+      ok: false,
+    };
+  }
+
+  #deniedConnectionRead(code: ConnectionReadRequestErrorCode): ConnectionReadRequestFailure {
+    return {
+      error: {
+        code,
+        message: "Connection request denied.",
       },
       ok: false,
     };

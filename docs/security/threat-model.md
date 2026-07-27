@@ -110,15 +110,15 @@ before its client's lease expires remains valid for at most its independent 15-m
 Better Auth owns OAuth 2.1 mechanics, JWT/JWKS handling, GitHub login state, and secure session
 cookies. Crewhelm still owns the stricter authorization boundary: only HTTPS or exact loopback
 redirects, the explicit `control:read`, `control:write`, `agents:read`, `agents:write`,
-`connections:write`, and `integrations:read` scopes, one exact resource, the configured GitHub
-numeric owner, a 24-hour public-client lease, no refresh grant, no upstream scope, and no persisted
-upstream token. The consent page distinguishes control-plane summary read, full Agent-definition
-read, Agent creation, Agent revision updates, Composio catalog egress, and private connection-link
-creation; each implementation independently enforces its required scope. Existing clients and
-tokens are never silently widened. Database hooks force every upstream token field to null before
-persistence. Revisit the provider configuration and threat model before adding broader mutation
-classes, multi-owner service, refresh tokens, additional identity providers, or longer token
-lifetimes.
+`connections:read`, `connections:write`, and `integrations:read` scopes, one exact resource, the
+configured GitHub numeric owner, a 24-hour public-client lease, no refresh grant, no upstream scope,
+and no persisted upstream token. The consent page distinguishes control-plane summary read, full
+Agent-definition read, Agent creation, Agent revision updates, local connection-summary read,
+Composio catalog egress, and private connection-link creation; each implementation independently
+enforces its required scope. Existing clients and tokens are never silently widened. Database hooks
+force every upstream token field to null before persistence. Revisit the provider configuration and
+threat model before adding broader mutation classes, multi-owner service, refresh tokens,
+additional identity providers, or longer token lifetimes.
 
 The provider seeds the exact MCP resource in insert-only mode so public requests cannot turn
 configuration into repeated D1 writes. Scope and access-token lifetime changes require explicit
@@ -179,6 +179,13 @@ key fails closed as one catalog-unavailable result. Connection setup, exact tool
 grants, and execution remain separate boundaries.
 
 ## Composio connection-link authority and residual risk
+
+The `connections:read` MCP tool queries only the authenticated owner's Durable Object and requires
+its dedicated scope at that boundary. It returns at most 50 Crewhelm connection IDs,
+auth-configuration references, local statuses, and creation timestamps in stable ID order. It
+never performs Composio egress and excludes connected-account IDs, hosted links, provider state,
+and credentials. The current `initiated` status records only successful local link finalization; it
+is not evidence that human provider consent completed.
 
 The `connections:write` MCP tool accepts any structurally valid Composio auth-config ID; it has no
 toolkit allowlist and grants no Agent or execution authority. The owner Durable Object first binds

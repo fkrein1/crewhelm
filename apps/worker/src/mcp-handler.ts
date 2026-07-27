@@ -21,6 +21,8 @@ import {
   listAgentRevisionsResultSchema,
   listAgentsInputSchema,
   listAgentsResultSchema,
+  listConnectionsInputSchema,
+  listConnectionsResultSchema,
   ownerAuthoritySchema,
   reserveConnectionLinkResultSchema,
   updateAgentInputSchema,
@@ -49,6 +51,7 @@ interface McpEnvironment {
       getAgentRevision(authorityInput: unknown, input: unknown): Promise<unknown>;
       listAgentRevisions(authorityInput: unknown, input: unknown): Promise<unknown>;
       listAgents(authorityInput: unknown, input: unknown): Promise<unknown>;
+      listConnections(authorityInput: unknown, input: unknown): Promise<unknown>;
       reserveConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;
       status(authorityInput: unknown): Promise<unknown>;
       updateAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -105,6 +108,7 @@ export const MCP_GET_AGENT_REVISION_TOOL_NAME = "crewhelm_get_agent_revision";
 export const MCP_INSPECT_INTEGRATION_TOOL_NAME = "crewhelm_inspect_integration_tool";
 export const MCP_LIST_AGENT_REVISIONS_TOOL_NAME = "crewhelm_list_agent_revisions";
 export const MCP_LIST_AGENTS_TOOL_NAME = "crewhelm_list_agents";
+export const MCP_LIST_CONNECTIONS_TOOL_NAME = "crewhelm_list_connections";
 export const MCP_SEARCH_INTEGRATIONS_TOOL_NAME = "crewhelm_search_integrations";
 export const MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME = "crewhelm_search_integration_tools";
 export const MCP_STATUS_TOOL_NAME = "crewhelm_status";
@@ -441,6 +445,27 @@ function createMcpServer(
       controlPlaneToolResult(
         () => controlPlane.listAgentRevisions(authority, input),
         listAgentRevisionsResultSchema,
+      ),
+  );
+
+  server.registerTool(
+    MCP_LIST_CONNECTIONS_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: true,
+      },
+      description:
+        "List bounded owner-scoped Crewhelm connection summaries without provider account IDs or credentials.",
+      inputSchema: listConnectionsInputSchema,
+      title: "List integration connections",
+    },
+    async (input) =>
+      controlPlaneToolResult(
+        () => controlPlane.listConnections(authority, input),
+        listConnectionsResultSchema,
       ),
   );
 

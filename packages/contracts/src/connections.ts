@@ -46,6 +46,17 @@ export const connectionLinkSchema = z.strictObject({
   expiresAt: z.iso.datetime(),
   url: connectionLinkUrlSchema,
 });
+export const connectionStatusSchema = z.enum(["initiated"]);
+export const connectionSummarySchema = z.strictObject({
+  authConfigId: connectionAuthConfigIdSchema,
+  connectionId: connectionIdSchema,
+  createdAt: z.iso.datetime(),
+  status: connectionStatusSchema,
+});
+export const listConnectionsInputSchema = z.strictObject({
+  cursor: connectionIdSchema.optional(),
+  limit: z.number().int().min(1).max(50).default(25),
+});
 
 const connectionLinkRequestErrorSchema = z.strictObject({
   code: z.enum([
@@ -63,6 +74,16 @@ const connectionLinkRequestErrorSchema = z.strictObject({
     "owner_mismatch",
   ]),
   message: z.literal("Connection link request denied."),
+});
+const connectionReadRequestErrorSchema = z.strictObject({
+  code: z.enum([
+    "incompatible_schema",
+    "insufficient_scope",
+    "invalid_authority",
+    "invalid_request",
+    "owner_mismatch",
+  ]),
+  message: z.literal("Connection request denied."),
 });
 
 export const createConnectionLinkResultSchema = z.discriminatedUnion("ok", [
@@ -100,8 +121,22 @@ export const completeConnectionLinkInputSchema = z.strictObject({
   reservationId: connectionLinkReservationIdSchema,
   url: connectionLinkUrlSchema,
 });
+export const listConnectionsResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    connections: z.array(connectionSummarySchema).max(50),
+    nextCursor: connectionIdSchema.nullable(),
+    ok: z.literal(true),
+  }),
+  z.strictObject({
+    error: connectionReadRequestErrorSchema,
+    ok: z.literal(false),
+  }),
+]);
 
 export type CompleteConnectionLinkInput = z.infer<typeof completeConnectionLinkInputSchema>;
+export type ConnectionSummary = z.infer<typeof connectionSummarySchema>;
 export type CreateConnectionLinkInput = z.infer<typeof createConnectionLinkInputSchema>;
 export type CreateConnectionLinkResult = z.infer<typeof createConnectionLinkResultSchema>;
+export type ListConnectionsInput = z.infer<typeof listConnectionsInputSchema>;
+export type ListConnectionsResult = z.infer<typeof listConnectionsResultSchema>;
 export type ReserveConnectionLinkResult = z.infer<typeof reserveConnectionLinkResultSchema>;

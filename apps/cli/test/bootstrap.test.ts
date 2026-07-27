@@ -104,6 +104,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "control:write",
           "agents:read",
           "agents:write",
+          "connections:read",
           "connections:write",
           "integrations:read",
         ],
@@ -125,6 +126,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "control:write",
           "agents:read",
           "agents:write",
+          "connections:read",
           "connections:write",
           "integrations:read",
         ],
@@ -155,6 +157,7 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
   );
   await writeFile(resolve(assets, "migrations", "0005_agent_update_scope.sql"), "SELECT 1;\n");
   await writeFile(resolve(assets, "migrations", "0006_connection_write_scope.sql"), "SELECT 1;\n");
+  await writeFile(resolve(assets, "migrations", "0007_connection_read_scope.sql"), "SELECT 1;\n");
   await writeFile(
     resolve(assets, "wrangler-template.json"),
     JSON.stringify({
@@ -287,6 +290,7 @@ describe("Cloudflare bootstrap", () => {
               "0004_agent_definition_read_scope.sql",
               "0005_agent_update_scope.sql",
               "0006_connection_write_scope.sql",
+              "0007_connection_read_scope.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
@@ -434,6 +438,7 @@ describe("Cloudflare bootstrap", () => {
               "0004_agent_definition_read_scope.sql",
               "0005_agent_update_scope.sql",
               "0006_connection_write_scope.sql",
+              "0007_connection_read_scope.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
@@ -759,6 +764,7 @@ describe("Cloudflare bootstrap", () => {
               "0004_agent_definition_read_scope.sql",
               "0005_agent_update_scope.sql",
               "0006_connection_write_scope.sql",
+              "0007_connection_read_scope.sql",
             ])
           : queryResult(AUTH_TABLES);
       }

@@ -46,6 +46,7 @@ const EXPECTED_MIGRATIONS = [
   "0004_agent_definition_read_scope.sql",
   "0005_agent_update_scope.sql",
   "0006_connection_write_scope.sql",
+  "0007_connection_read_scope.sql",
 ] as const;
 const MAX_ASSET_BYTES = 10 * 1_048_576;
 const MAX_MIGRATION_BYTES = 1_048_576;

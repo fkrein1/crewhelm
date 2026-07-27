@@ -1,6 +1,7 @@
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
   OWNER_READ_SCOPE,
@@ -229,6 +230,9 @@ function consentPage(
       : "",
     requestedScopes.includes(AGENTS_WRITE_SCOPE)
       ? "<li>Update Agent definitions by creating immutable revisions.</li>"
+      : "",
+    requestedScopes.includes(CONNECTIONS_READ_SCOPE)
+      ? "<li>View bounded Crewhelm connection summaries. Provider account identifiers and credentials are not returned.</li>"
       : "",
     requestedScopes.includes(CONNECTIONS_WRITE_SCOPE)
       ? "<li>Create private, short-lived Composio Connect Links. The selected auth configuration and an opaque owner key are sent to Composio; provider credentials stay with Composio.</li>"

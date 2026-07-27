@@ -2,6 +2,7 @@ import { createExecutionContext, env, runInDurableObject } from "cloudflare:test
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
   OWNER_DEFAULT_SCOPE_CLAIM,
@@ -15,6 +16,7 @@ import {
   integrationCatalogSearchResultSchema,
   listAgentRevisionsResultSchema,
   listAgentsResultSchema,
+  listConnectionsResultSchema,
   ownerKeySchema,
   ownerScopeClaimSchema,
   updateAgentResultSchema,
@@ -32,6 +34,7 @@ import {
   MCP_GET_AGENT_REVISION_TOOL_NAME,
   MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
   MCP_LIST_AGENTS_TOOL_NAME,
+  MCP_LIST_CONNECTIONS_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_STATUS_TOOL_NAME,
   MCP_UPDATE_AGENT_TOOL_NAME,
@@ -43,7 +46,7 @@ const origin = "https://crewhelm.test";
 const redirectUri = "https://client.example/oauth/callback";
 const ownerGithubUserId = "123456";
 const githubToken = "transient-github-token-must-not-be-stored";
-const reversedOwnerScopeClaim = `${INTEGRATIONS_READ_SCOPE} ${CONNECTIONS_WRITE_SCOPE} ${AGENTS_WRITE_SCOPE} ${AGENTS_READ_SCOPE} ${OWNER_WRITE_SCOPE} ${OWNER_READ_SCOPE}`;
+const reversedOwnerScopeClaim = `${INTEGRATIONS_READ_SCOPE} ${CONNECTIONS_WRITE_SCOPE} ${CONNECTIONS_READ_SCOPE} ${AGENTS_WRITE_SCOPE} ${AGENTS_READ_SCOPE} ${OWNER_WRITE_SCOPE} ${OWNER_READ_SCOPE}`;
 const registrationSchema = z.looseObject({
   client_id: z.string().min(1),
   token_endpoint_auth_method: z.literal("none"),
@@ -1287,6 +1290,82 @@ describe("public OAuth to MCP integration", () => {
       error: { code: "insufficient_scope" },
       ok: false,
     });
+  });
+
+  it("grants local connection listing without widening connection mutation", async () => {
+    const workerEnv = integrationEnv(allowRateLimit(), "123461");
+    const { consentPage, token } = await completeOAuthFlow(workerEnv, CONNECTIONS_READ_SCOPE);
+
+    expect(token.scope).toBe(CONNECTIONS_READ_SCOPE);
+    expect(consentPage).toContain(
+      "View bounded Crewhelm connection summaries. Provider account identifiers and credentials are not returned.",
+    );
+    expect(consentPage).not.toContain("Create private, short-lived Composio Connect Links.");
+
+    vi.restoreAllMocks();
+    const ownerKey = await deriveOwnerKey({
+      issuer: "https://github.com",
+      subject: workerEnv.OWNER_GITHUB_USER_ID,
+    });
+
+    await runInDurableObject(
+      workerEnv.OWNER_CONTROL_PLANE.getByName(ownerKey),
+      (_instance, state) => {
+        state.storage.sql.exec(`
+          INSERT INTO connections
+            (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
+          VALUES
+            ('connection_00000000-0000-4000-8000-000000000004',
+             'composio', 'ca_private_oauth', 'ac_github_managed', 'initiated', 4)
+        `);
+      },
+    );
+    const listResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_LIST_CONNECTIONS_TOOL_NAME,
+    );
+    const listResult = toolResultSchema.parse(await listResponse.json()).result;
+    const listText = listResult.content[0].text;
+
+    expect(listResult.isError).toBe(false);
+    expect(listConnectionsResultSchema.parse(JSON.parse(listText))).toEqual({
+      connections: [
+        {
+          authConfigId: "ac_github_managed",
+          connectionId: "connection_00000000-0000-4000-8000-000000000004",
+          createdAt: "1970-01-01T00:00:00.004Z",
+          status: "initiated",
+        },
+      ],
+      nextCursor: null,
+      ok: true,
+    });
+    expect(listText).not.toContain("ca_private_oauth");
+
+    const composioFetch = vi.spyOn(globalThis, "fetch");
+    const mutationResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
+      {
+        authConfigId: "ac_github_managed",
+        idempotencyKey: "read-scope-must-not-mutate",
+      },
+    );
+    const mutationResult = toolResultSchema.parse(await mutationResponse.json()).result;
+
+    expect(mutationResult.isError).toBe(true);
+    expect(
+      createConnectionLinkResultSchema.parse(JSON.parse(mutationResult.content[0].text)),
+    ).toEqual({
+      error: {
+        code: "insufficient_scope",
+        message: "Connection link request denied.",
+      },
+      ok: false,
+    });
+    expect(composioFetch).not.toHaveBeenCalled();
   });
 
   it("logs only a fixed stage for a secret-bearing GitHub token error", async () => {
