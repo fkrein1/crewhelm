@@ -35,12 +35,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Development tooling
+## Cloudflare tooling
 
-Wrangler's development-only Miniflare and Sharp dependency chain downloads platform-specific
-libvips binaries from the `@img/sharp-libvips-*` packages at version 1.3.1. Those packages are
-licensed under `LGPL-3.0-or-later`. They are used to test and build the Cloudflare Worker and are not
-included in its deployment bundle.
+The CLI and development environment use the exact Wrangler version in the lockfile. Wrangler's
+Miniflare and Sharp dependency chain downloads platform-specific libvips binaries from the
+`@img/sharp-libvips-*` packages at version 1.3.1. Those packages are licensed under
+`LGPL-3.0-or-later`. They are not included in the deployed Worker bundle.
 
 The dependency-review workflow permits only the exact package names and version represented in the
 lockfile. Any upgrade requires a new license and supply-chain review.

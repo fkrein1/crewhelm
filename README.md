@@ -31,16 +31,40 @@ pnpm verify
 
 ## Bootstrap CLI
 
-Build the local CLI and diagnose a deployed Worker origin:
+Build the local CLI, then deploy Crewhelm to a Cloudflare account already authenticated with
+Wrangler:
 
 ```sh
 pnpm --filter @crewhelm/cli build
+node apps/cli/dist/crewhelm.js bootstrap \
+  --endpoint https://YOUR_WORKER_HOST \
+  --worker-name crewhelm \
+  --database-name crewhelm-auth
+```
+
+Bootstrap selects the only Cloudflare account available to the authenticated Wrangler identity. If
+that identity can access more than one account, select the intended account with `--account-id`.
+Before a new deployment, provide `CREWHELM_GITHUB_CLIENT_ID`,
+`CREWHELM_GITHUB_CLIENT_SECRET`, and `CREWHELM_OWNER_GITHUB_USER_ID` through the process
+environment. The last value is the stable numeric GitHub user ID, not a login or email. Avoid
+putting the client secret directly in shell history.
+
+Bootstrap creates or reuses the exact D1 database name, applies packaged migrations, generates the
+Better Auth secret, deploys the packaged Worker and secrets together, and then diagnoses the public
+origin. Bootstrap endpoints must use HTTPS. A retry preserves the D1 database and any secrets on an
+existing Worker. Reusing an existing database requires its exact UUID through `--database-id`;
+bootstrap verifies its table and migration provenance before changing it. Supply all three GitHub
+settings together to update an existing deployment; omit all three to preserve its current secrets.
+
+Diagnose without deploying:
+
+```sh
 node apps/cli/dist/crewhelm.js doctor --endpoint https://your-worker.example
 ```
 
-The command validates the health response, MCP protected-resource metadata, and OAuth authorization
-server discovery through bounded, no-redirect reads. Use `--json` for the versioned machine-readable
-report. HTTP is accepted only for exact loopback hosts during local development.
+Both commands finish by validating the health response, MCP protected-resource metadata, and OAuth
+authorization server discovery through bounded, no-redirect reads. Use `--json` for versioned
+machine-readable reports. HTTP is accepted only for exact loopback hosts during local development.
 
 ## Development Worker authentication
 
@@ -52,25 +76,10 @@ through a GitHub OAuth App. The app callback URL must be:
 https://YOUR_WORKER_HOST/api/auth/callback/github
 ```
 
-Before the first deployment, create a dedicated auth database:
-
-```sh
-pnpm --filter @crewhelm/worker exec wrangler d1 create YOUR_AUTH_DB_NAME
-```
-
-Replace the development `database_name` and `database_id` checked into
-`apps/worker/wrangler.jsonc` with the values returned for your database. Set `PUBLIC_ORIGIN` in
-that file to the exact HTTPS origin users will visit, with no path or trailing slash. Then apply
-the checked-in migrations before deploying:
-
-```sh
-pnpm --filter @crewhelm/worker exec wrangler d1 migrations apply AUTH_DB --remote
-```
-
-Configure these Worker values with `wrangler secret put` so account-specific identity and OAuth
+The bootstrap CLI configures these Worker secrets so account-specific identity and OAuth
 configuration do not enter source control:
 
-- `BETTER_AUTH_SECRET` — at least 32 random bytes, unique to the deployment
+- `BETTER_AUTH_SECRET` — generated as 48 random bytes for a new deployment
 - `GITHUB_CLIENT_ID`
 - `GITHUB_CLIENT_SECRET`
 - `OWNER_GITHUB_USER_ID` — the stable numeric GitHub user ID, not a login or email
