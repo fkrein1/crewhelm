@@ -1,4 +1,4 @@
-import { OWNER_READ_SCOPE } from "@crewhelm/contracts";
+import { OWNER_READ_SCOPE, OWNER_WRITE_SCOPE, ownerScopeClaimSchema } from "@crewhelm/contracts";
 import type { Context, Hono } from "hono";
 import * as z from "zod";
 
@@ -19,7 +19,7 @@ const consentFormSchema = z.strictObject({
 const consentQuerySchema = z.looseObject({
   client_id: z.string().min(1).max(2_048),
   redirect_uri: z.url().max(2_048),
-  scope: z.literal(OWNER_READ_SCOPE),
+  scope: ownerScopeClaimSchema,
 });
 const publicClientSchema = z.looseObject({
   client_id: z.string().min(1).max(2_048),
@@ -206,7 +206,18 @@ function consentPage(
   query: string,
   client: { id: string; name: string },
   redirectOrigin: string,
+  scope: z.infer<typeof ownerScopeClaimSchema>,
 ): string {
+  const requestedScopes = scope.split(" ");
+  const permissions = [
+    requestedScopes.includes(OWNER_READ_SCOPE)
+      ? "<li>View control-plane status and Agent summaries.</li>"
+      : "",
+    requestedScopes.includes(OWNER_WRITE_SCOPE)
+      ? "<li>Create Agent definitions with bounded configuration and no capability grants.</li>"
+      : "",
+  ].join("");
+
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -217,7 +228,8 @@ function consentPage(
   <body>
     <main>
       <h1>Authorize Crewhelm</h1>
-      <p><strong>${escapeHtml(client.name)}</strong> is requesting read-only access to your Crewhelm control-plane status.</p>
+      <p><strong>${escapeHtml(client.name)}</strong> is requesting these permissions:</p>
+      <ul>${permissions}</ul>
       <p>Client: <code>${escapeHtml(client.id)}</code></p>
       <p>After authorization, Crewhelm will return you to <code>${escapeHtml(redirectOrigin)}</code>.</p>
       <form method="post" action="/oauth/consent">
@@ -310,6 +322,7 @@ async function showConsent(context: WorkerContext, createAuth: AuthFactory): Pro
           name: client.data.client_name ?? "An MCP client",
         },
         new URL(parsedQuery.data.redirect_uri).origin,
+        parsedQuery.data.scope,
       ),
     );
   } catch {
@@ -325,6 +338,15 @@ async function submitConsent(context: WorkerContext, createAuth: AuthFactory): P
     return authorizationDenied();
   }
 
+  const scopeValues = new URLSearchParams(form.data.oauth_query).getAll("scope");
+  const requestedScope = ownerScopeClaimSchema.safeParse(
+    scopeValues.length === 1 ? scopeValues[0] : undefined,
+  );
+
+  if (!requestedScope.success) {
+    return authorizationDenied();
+  }
+
   try {
     return navigationResponse(
       await createAuth(context).handler(
@@ -332,7 +354,7 @@ async function submitConsent(context: WorkerContext, createAuth: AuthFactory): P
           body: JSON.stringify({
             accept: form.data.decision === "approve",
             oauth_query: form.data.oauth_query,
-            scope: OWNER_READ_SCOPE,
+            scope: requestedScope.data,
           }),
           headers: navigationHeaders(context.req.raw),
           method: "POST",

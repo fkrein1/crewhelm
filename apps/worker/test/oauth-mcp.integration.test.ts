@@ -1,8 +1,13 @@
-import { createExecutionContext, env } from "cloudflare:test";
+import { createExecutionContext, env, runInDurableObject } from "cloudflare:test";
 import {
+  OWNER_DEFAULT_SCOPE_CLAIM,
   OWNER_READ_SCOPE,
+  OWNER_WRITE_SCOPE,
+  createAgentResultSchema,
   controlPlaneStatusResultSchema,
+  listAgentsResultSchema,
   ownerKeySchema,
+  ownerScopeClaimSchema,
 } from "@crewhelm/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as z from "zod";
@@ -10,7 +15,11 @@ import * as z from "zod";
 import type { WorkerEnv } from "../src/env.js";
 import { exchangeGithubAuthorizationCode } from "../src/auth.js";
 import { handleWorkerRequest } from "../src/index.js";
-import { MCP_STATUS_TOOL_NAME } from "../src/mcp-handler.js";
+import {
+  MCP_CREATE_AGENT_TOOL_NAME,
+  MCP_LIST_AGENTS_TOOL_NAME,
+  MCP_STATUS_TOOL_NAME,
+} from "../src/mcp-handler.js";
 import { deriveOwnerKey } from "../src/owner-identity.js";
 import { registerAuthTestDatabase } from "./auth-testkit.js";
 
@@ -18,6 +27,7 @@ const origin = "https://crewhelm.test";
 const redirectUri = "https://client.example/oauth/callback";
 const ownerGithubUserId = "123456";
 const githubToken = "transient-github-token-must-not-be-stored";
+const reversedOwnerScopeClaim = `${OWNER_WRITE_SCOPE} ${OWNER_READ_SCOPE}`;
 const registrationSchema = z.looseObject({
   client_id: z.string().min(1),
   token_endpoint_auth_method: z.literal("none"),
@@ -25,7 +35,7 @@ const registrationSchema = z.looseObject({
 const tokenSchema = z.looseObject({
   access_token: z.string().min(1),
   expires_in: z.literal(15 * 60),
-  scope: z.literal(OWNER_READ_SCOPE),
+  scope: ownerScopeClaimSchema,
   token_type: z.literal("Bearer"),
 });
 const toolResultSchema = z.looseObject({
@@ -75,15 +85,20 @@ function request(workerEnv: WorkerEnv, path: string, init?: RequestInit): Promis
   );
 }
 
-function callMcp(workerEnv: WorkerEnv, token: string): Promise<Response> {
+function callMcp(
+  workerEnv: WorkerEnv,
+  token: string,
+  name = MCP_STATUS_TOOL_NAME,
+  arguments_: Record<string, unknown> = {},
+): Promise<Response> {
   return request(workerEnv, "/mcp", {
     body: JSON.stringify({
       id: 1,
       jsonrpc: "2.0",
       method: "tools/call",
       params: {
-        arguments: {},
-        name: MCP_STATUS_TOOL_NAME,
+        arguments: arguments_,
+        name,
       },
     }),
     headers: {
@@ -193,6 +208,132 @@ async function fetchUrl(input: RequestInfo | URL): Promise<string> {
   return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 }
 
+async function completeOAuthFlow(
+  workerEnv: WorkerEnv,
+  scope: string,
+): Promise<{
+  consentPage: string;
+  token: z.infer<typeof tokenSchema>;
+}> {
+  const cookies = new CookieJar();
+  const registrationResponse = await request(workerEnv, "/api/auth/oauth2/register", {
+    body: JSON.stringify({
+      client_name: "Scoped integration client",
+      grant_types: ["authorization_code"],
+      redirect_uris: [redirectUri],
+      require_pkce: true,
+      response_types: ["code"],
+      scope,
+      token_endpoint_auth_method: "none",
+    }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  });
+  const registration = registrationSchema.parse(await registrationResponse.json());
+  const verifier = "crewhelm-scoped-verifier-0123456789abcdef0123456789";
+  const authorize = new URL(`${origin}/api/auth/oauth2/authorize`);
+
+  authorize.searchParams.set("client_id", registration.client_id);
+  authorize.searchParams.set("code_challenge", await codeChallenge(verifier));
+  authorize.searchParams.set("code_challenge_method", "S256");
+  authorize.searchParams.set("redirect_uri", redirectUri);
+  authorize.searchParams.set("resource", `${origin}/mcp`);
+  authorize.searchParams.set("response_type", "code");
+  authorize.searchParams.set("scope", scope);
+  authorize.searchParams.set("state", "scoped-integration-state");
+  const authorizeResponse = await request(workerEnv, `${authorize.pathname}${authorize.search}`, {
+    headers: { accept: "text/html" },
+  });
+  const loginLocation = new URL(responseLocation(authorizeResponse), origin);
+  const loginPage = await (
+    await request(workerEnv, `${loginLocation.pathname}${loginLocation.search}`)
+  ).text();
+  const loginResponse = await request(workerEnv, "/oauth/login", {
+    body: new URLSearchParams({
+      oauth_query: htmlAttribute(loginPage, "oauth_query"),
+    }),
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      origin,
+      "sec-fetch-mode": "navigate",
+    },
+    method: "POST",
+  });
+
+  cookies.capture(loginResponse);
+  const githubState = new URL(responseLocation(loginResponse), origin).searchParams.get("state");
+
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = await fetchUrl(input);
+
+    if (url.startsWith("https://github.com/login/oauth/access_token")) {
+      return Response.json({
+        access_token: githubToken,
+        scope: "",
+        token_type: "bearer",
+      });
+    }
+
+    if (url === "https://api.github.com/user") {
+      return Response.json({ id: Number(ownerGithubUserId) });
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`);
+  });
+  const callbackResponse = await request(
+    workerEnv,
+    `/api/auth/callback/github?code=github-code&state=${githubState ?? ""}`,
+    {
+      headers: {
+        accept: "text/html",
+        cookie: cookies.header(),
+        "sec-fetch-mode": "navigate",
+      },
+    },
+  );
+
+  cookies.capture(callbackResponse);
+  const consentLocation = new URL(responseLocation(callbackResponse), origin);
+  const consentPage = await (
+    await request(workerEnv, `${consentLocation.pathname}${consentLocation.search}`, {
+      headers: { cookie: cookies.header() },
+    })
+  ).text();
+  const consentResponse = await request(workerEnv, "/oauth/consent", {
+    body: new URLSearchParams({
+      decision: "approve",
+      oauth_query: htmlAttribute(consentPage, "oauth_query"),
+    }),
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      cookie: cookies.header(),
+      origin,
+      "sec-fetch-mode": "navigate",
+    },
+    method: "POST",
+  });
+  const authorizationCode = new URL(responseLocation(consentResponse), origin).searchParams.get(
+    "code",
+  );
+  const tokenResponse = await request(workerEnv, "/api/auth/oauth2/token", {
+    body: new URLSearchParams({
+      client_id: registration.client_id,
+      code: authorizationCode ?? "",
+      code_verifier: verifier,
+      grant_type: "authorization_code",
+      redirect_uri: redirectUri,
+      resource: `${origin}/mcp`,
+    }),
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    method: "POST",
+  });
+
+  return {
+    consentPage,
+    token: tokenSchema.parse(await tokenResponse.json()),
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -208,7 +349,7 @@ describe("public OAuth to MCP integration", () => {
         redirect_uris: [redirectUri],
         require_pkce: true,
         response_types: ["code"],
-        scope: OWNER_READ_SCOPE,
+        scope: reversedOwnerScopeClaim,
         token_endpoint_auth_method: "none",
       }),
       headers: {
@@ -227,7 +368,7 @@ describe("public OAuth to MCP integration", () => {
     authorize.searchParams.set("redirect_uri", redirectUri);
     authorize.searchParams.set("resource", `${origin}/mcp`);
     authorize.searchParams.set("response_type", "code");
-    authorize.searchParams.set("scope", OWNER_READ_SCOPE);
+    authorize.searchParams.set("scope", reversedOwnerScopeClaim);
     authorize.searchParams.set("state", "integration-client-state");
     const authorizeResponse = await request(workerEnv, `${authorize.pathname}${authorize.search}`, {
       headers: {
@@ -338,7 +479,10 @@ describe("public OAuth to MCP integration", () => {
     expect(consentPageResponse.status).toBe(200);
     expect(consentPage).toContain("&lt;script&gt;Integration MCP client&lt;/script&gt;");
     expect(consentPage).not.toContain("<script>Integration MCP client</script>");
-    expect(consentPage).toContain("read-only access");
+    expect(consentPage).toContain("View control-plane status and Agent summaries.");
+    expect(consentPage).toContain(
+      "Create Agent definitions with bounded configuration and no capability grants.",
+    );
     const consentResponse = await request(workerEnv, "/oauth/consent", {
       body: new URLSearchParams({
         decision: "approve",
@@ -401,6 +545,7 @@ describe("public OAuth to MCP integration", () => {
     const token = tokenSchema.parse(rawToken);
 
     expect(tokenResponse.status).toBe(200);
+    expect(token.scope).toBe(OWNER_DEFAULT_SCOPE_CLAIM);
     expect(typeof rawToken === "object" && rawToken !== null && "refresh_token" in rawToken).toBe(
       false,
     );
@@ -464,9 +609,41 @@ describe("public OAuth to MCP integration", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(toolResult.content[0].text))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         status: "ready",
       },
+    });
+    const createMcpResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_CREATE_AGENT_TOOL_NAME,
+      {
+        executionLimits: {
+          maxDurationSeconds: 180,
+          maxModelTokens: 12_000,
+          maxToolCalls: 0,
+          maxTurns: 3,
+        },
+        idempotencyKey: "oauth-integration-create-agent",
+        instructions: "Maintain a concise authenticated work queue.",
+        model: "anthropic/claude-sonnet-4",
+        name: "Authenticated work queue",
+      },
+    );
+    const createToolResult = toolResultSchema.parse(await createMcpResponse.json()).result;
+
+    expect(createMcpResponse.status).toBe(200);
+    expect(createToolResult.isError).toBe(false);
+    expect(
+      createAgentResultSchema.parse(JSON.parse(createToolResult.content[0].text)),
+    ).toMatchObject({
+      agent: {
+        capabilityGrants: [],
+        name: "Authenticated work queue",
+        revision: 1,
+      },
+      created: true,
+      ok: true,
     });
     const otherRegistration = registrationSchema.parse(
       await (
@@ -525,6 +702,130 @@ describe("public OAuth to MCP integration", () => {
 
     expect(revocations.results).toHaveLength(1);
     expect(JSON.stringify(revocations.results)).not.toContain(token.access_token);
+  });
+
+  it("keeps a signed read-only token unable to create or persist an Agent", async () => {
+    const workerEnv = integrationEnv();
+    const { consentPage, token } = await completeOAuthFlow(workerEnv, OWNER_READ_SCOPE);
+
+    expect(token.scope).toBe(OWNER_READ_SCOPE);
+    expect(consentPage).toContain("View control-plane status and Agent summaries.");
+    expect(consentPage).not.toContain(
+      "Create Agent definitions with bounded configuration and no capability grants.",
+    );
+    const ownerKey = await deriveOwnerKey({
+      issuer: "https://github.com",
+      subject: ownerGithubUserId,
+    });
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(ownerKey);
+    const auditCount = () =>
+      runInDurableObject(controlPlane, (_instance, state) =>
+        state.storage.sql.exec("SELECT COUNT(*) AS event_count FROM audit_events").one(),
+      );
+    const listBeforeResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_LIST_AGENTS_TOOL_NAME,
+    );
+    const listBeforeResult = toolResultSchema.parse(await listBeforeResponse.json()).result;
+    const agentsBefore = listAgentsResultSchema.parse(JSON.parse(listBeforeResult.content[0].text));
+    const auditBefore = await auditCount();
+
+    expect(listBeforeResult.isError).toBe(false);
+    expect(agentsBefore.ok).toBe(true);
+    const createResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_CREATE_AGENT_TOOL_NAME,
+      {
+        executionLimits: {
+          maxDurationSeconds: 180,
+          maxModelTokens: 12_000,
+          maxToolCalls: 0,
+          maxTurns: 3,
+        },
+        idempotencyKey: "read-only-create-agent",
+        instructions: "This signed read-only token must not persist an Agent.",
+        model: "@cf/meta/llama-4-scout-17b-16e-instruct",
+        name: "Denied read-only Agent",
+      },
+    );
+    const createResult = toolResultSchema.parse(await createResponse.json()).result;
+
+    expect(createResult.isError).toBe(true);
+    expect(createAgentResultSchema.parse(JSON.parse(createResult.content[0].text))).toEqual({
+      error: {
+        code: "insufficient_scope",
+        message: "Agent request denied.",
+      },
+      ok: false,
+    });
+    const listResponse = await callMcp(workerEnv, token.access_token, MCP_LIST_AGENTS_TOOL_NAME);
+    const listResult = toolResultSchema.parse(await listResponse.json()).result;
+
+    expect(listResult.isError).toBe(false);
+    expect(listAgentsResultSchema.parse(JSON.parse(listResult.content[0].text))).toEqual(
+      agentsBefore,
+    );
+    await expect(auditCount()).resolves.toEqual(auditBefore);
+  });
+
+  it("keeps a signed write-only token unable to read owner state", async () => {
+    const workerEnv = integrationEnv();
+    const { consentPage, token } = await completeOAuthFlow(workerEnv, OWNER_WRITE_SCOPE);
+
+    expect(token.scope).toBe(OWNER_WRITE_SCOPE);
+    expect(consentPage).not.toContain("View control-plane status and Agent summaries.");
+    expect(consentPage).toContain(
+      "Create Agent definitions with bounded configuration and no capability grants.",
+    );
+    const createResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_CREATE_AGENT_TOOL_NAME,
+      {
+        executionLimits: {
+          maxDurationSeconds: 180,
+          maxModelTokens: 12_000,
+          maxToolCalls: 0,
+          maxTurns: 3,
+        },
+        idempotencyKey: "write-only-create-agent",
+        instructions: "Create through a signed write-only token.",
+        model: "@cf/meta/llama-4-scout-17b-16e-instruct",
+        name: "Write-only Agent",
+      },
+    );
+    const createResult = toolResultSchema.parse(await createResponse.json()).result;
+
+    expect(createResult.isError).toBe(false);
+    expect(createAgentResultSchema.parse(JSON.parse(createResult.content[0].text))).toMatchObject({
+      agent: { name: "Write-only Agent" },
+      created: true,
+      ok: true,
+    });
+    const listResponse = await callMcp(workerEnv, token.access_token, MCP_LIST_AGENTS_TOOL_NAME);
+    const listResult = toolResultSchema.parse(await listResponse.json()).result;
+
+    expect(listResult.isError).toBe(true);
+    expect(listAgentsResultSchema.parse(JSON.parse(listResult.content[0].text))).toEqual({
+      error: {
+        code: "insufficient_scope",
+        message: "Agent request denied.",
+      },
+      ok: false,
+    });
+    const statusResponse = await callMcp(workerEnv, token.access_token);
+    const statusResult = toolResultSchema.parse(await statusResponse.json()).result;
+
+    expect(statusResult.isError).toBe(true);
+    expect(controlPlaneStatusResultSchema.parse(JSON.parse(statusResult.content[0].text))).toEqual({
+      error: {
+        code: "insufficient_scope",
+        message: "Control-plane request denied.",
+      },
+      ok: false,
+    });
   });
 
   it("logs only a fixed stage for a secret-bearing GitHub token error", async () => {

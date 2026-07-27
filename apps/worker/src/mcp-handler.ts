@@ -1,5 +1,9 @@
 import {
   controlPlaneStatusResultSchema,
+  createAgentInputSchema,
+  createAgentResultSchema,
+  listAgentsInputSchema,
+  listAgentsResultSchema,
   ownerAuthoritySchema,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
@@ -13,6 +17,8 @@ import { readBoundedPostRequest } from "./request-body.js";
 interface McpEnvironment {
   OWNER_CONTROL_PLANE: {
     getByName(ownerKey: string): {
+      createAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
+      listAgents(authorityInput: unknown, input: unknown): Promise<unknown>;
       status(authorityInput: unknown): Promise<unknown>;
     };
   };
@@ -60,6 +66,8 @@ const NOT_FOUND_BODY = JSON.stringify({
   },
 });
 
+export const MCP_CREATE_AGENT_TOOL_NAME = "crewhelm_create_agent";
+export const MCP_LIST_AGENTS_TOOL_NAME = "crewhelm_list_agents";
 export const MCP_STATUS_TOOL_NAME = "crewhelm_status";
 
 export const mcpAuthPropsSchema = z.strictObject({
@@ -97,8 +105,82 @@ function hasValidOrigin(request: Request): boolean {
   }
 }
 
+async function controlPlaneToolResult<Result extends { ok: boolean }>(
+  operation: () => Promise<unknown>,
+  schema: z.ZodType<Result>,
+) {
+  let result: Result;
+
+  try {
+    result = schema.parse(await operation());
+  } catch {
+    return {
+      content: [
+        {
+          text: CONTROL_PLANE_UNAVAILABLE_BODY,
+          type: "text" as const,
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  return {
+    content: [
+      {
+        text: JSON.stringify(result),
+        type: "text" as const,
+      },
+    ],
+    isError: !result.ok,
+  };
+}
+
 function createMcpServer(env: McpEnvironment, authority: OwnerAuthority): McpServer {
   const server = new McpServer(MCP_SERVER_INFO);
+  const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+
+  server.registerTool(
+    MCP_CREATE_AGENT_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: false,
+      },
+      description:
+        "Create an owner-scoped Crewhelm Agent with an immutable initial revision and no capability grants.",
+      inputSchema: createAgentInputSchema,
+      title: "Create Crewhelm agent",
+    },
+    async (input) =>
+      controlPlaneToolResult(
+        () => controlPlane.createAgent(authority, input),
+        createAgentResultSchema,
+      ),
+  );
+
+  server.registerTool(
+    MCP_LIST_AGENTS_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: true,
+      },
+      description:
+        "List bounded summaries of the authenticated owner's Crewhelm Agents in stable opaque-ID order.",
+      inputSchema: listAgentsInputSchema,
+      title: "List Crewhelm agents",
+    },
+    async (input) =>
+      controlPlaneToolResult(
+        () => controlPlane.listAgents(authority, input),
+        listAgentsResultSchema,
+      ),
+  );
 
   server.registerTool(
     MCP_STATUS_TOOL_NAME,
@@ -113,36 +195,8 @@ function createMcpServer(env: McpEnvironment, authority: OwnerAuthority): McpSer
       inputSchema: z.strictObject({}),
       title: "Crewhelm status",
     },
-    async () => {
-      let result: z.infer<typeof controlPlaneStatusResultSchema>;
-
-      try {
-        const rawResult = await env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey).status(
-          authority,
-        );
-        result = controlPlaneStatusResultSchema.parse(rawResult);
-      } catch {
-        return {
-          content: [
-            {
-              text: CONTROL_PLANE_UNAVAILABLE_BODY,
-              type: "text" as const,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      return {
-        content: [
-          {
-            text: JSON.stringify(result),
-            type: "text" as const,
-          },
-        ],
-        isError: !result.ok,
-      };
-    },
+    async () =>
+      controlPlaneToolResult(() => controlPlane.status(authority), controlPlaneStatusResultSchema),
   );
 
   return server;

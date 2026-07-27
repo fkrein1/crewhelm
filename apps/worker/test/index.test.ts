@@ -1,5 +1,5 @@
 import { SELF } from "cloudflare:test";
-import { OWNER_READ_SCOPE, healthReportSchema } from "@crewhelm/contracts";
+import { OWNER_SCOPES, healthReportSchema } from "@crewhelm/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { createWorker } from "../src/index.js";
@@ -39,7 +39,7 @@ describe("Crewhelm Worker", () => {
         authorization_servers: [`${origin}/api/auth`],
         bearer_methods_supported: ["header"],
         resource: `${origin}/mcp`,
-        scopes_supported: [OWNER_READ_SCOPE],
+        scopes_supported: [...OWNER_SCOPES],
       });
     },
   );

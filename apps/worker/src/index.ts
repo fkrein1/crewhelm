@@ -1,4 +1,4 @@
-import { healthReportSchema, OWNER_READ_SCOPE, ownerAuthoritySchema } from "@crewhelm/contracts";
+import { healthReportSchema, ownerAuthoritySchema } from "@crewhelm/contracts";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { Hono, type Context } from "hono";
 import * as z from "zod";
@@ -140,7 +140,7 @@ async function handleMcpRequest(request: Request, env: WorkerEnv): Promise<Respo
   const authority = ownerAuthoritySchema.safeParse({
     clientId: claims.azp,
     ownerKey: claims.sub,
-    scopes: [OWNER_READ_SCOPE],
+    scopes: claims.scope.split(" "),
   });
 
   if (!authority.success) {

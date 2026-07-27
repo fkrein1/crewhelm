@@ -27,7 +27,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
         authorization_servers: ["https://crewhelm.example/api/auth"],
         bearer_methods_supported: ["header"],
         resource: "https://crewhelm.example/mcp",
-        scopes_supported: ["control:read"],
+        scopes_supported: ["control:read", "control:write"],
       };
     } else {
       payload = {
@@ -41,7 +41,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
         response_modes_supported: ["query"],
         response_types_supported: ["code"],
         revocation_endpoint: "https://crewhelm.example/api/auth/oauth2/revoke",
-        scopes_supported: ["control:read"],
+        scopes_supported: ["control:read", "control:write"],
         token_endpoint: "https://crewhelm.example/api/auth/oauth2/token",
         token_endpoint_auth_methods_supported: ["none"],
       };
@@ -135,6 +135,10 @@ describe("Crewhelm CLI", () => {
     await writeFile(resolve(directory, "index.js"), "export default {};\n");
     await writeFile(resolve(directory, "index.js.map"), "{}\n");
     await writeFile(resolve(directory, "migrations", "0001_better_auth.sql"), "SELECT 1;\n");
+    await writeFile(
+      resolve(directory, "migrations", "0002_control_write_scope.sql"),
+      "SELECT 1;\n",
+    );
     await writeFile(
       resolve(directory, "wrangler-template.json"),
       JSON.stringify({
