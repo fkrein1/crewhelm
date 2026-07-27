@@ -13,7 +13,8 @@ outside this surface.
 
 - Personal ownership and simple self-hosting
 - Cloudflare-native durable agents
-- Composio-backed app and web tools instead of hand-built integrations
+- Full Agents/Think framework reach through policy-enforced Crewhelm adapters
+- The full Composio app and web integration catalog instead of hand-built or curated subsets
 - MCP as the primary administration interface
 - Deterministic, deny-by-default capability policy
 - Declarative recipes without secrets or executable code

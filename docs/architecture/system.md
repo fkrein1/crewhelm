@@ -108,9 +108,20 @@ new revision and never inherits wider authority without owner consent.
 One generic `CrewAgent` class executes every recipe on Think. Think stays behind Crewhelm-owned
 contracts.
 
+Crewhelm adapters preserve the useful semantics of the underlying Agents/Think framework and make
+its lifecycle administrable through MCP. The adapter boundary centralizes authority, recovery, and
+compatibility; it is not a permanently reduced substitute for the framework. Framework features
+can remain unavailable only until an equivalent deterministic policy and recovery path exists.
+
 Crewhelm builds a default-empty effective tool registry. Each executable path has one stable
 capability ID independent of its model-visible name; duplicate or overriding names fail startup.
 After Think merges tools, the runtime enumerates the final set and rejects any unmapped path.
+
+Composio catalog discovery is not restricted by a Crewhelm-maintained toolkit allowlist. Any
+catalog integration may be connected and granted by the owner through its exact toolkit, tool,
+version, and connected-account identity. Sessions, raw proxy calls, and model-managed connections
+remain outside the execution path because they bypass that exact grant boundary, not because their
+underlying integrations are unsupported.
 
 Harden Think explicitly:
 
