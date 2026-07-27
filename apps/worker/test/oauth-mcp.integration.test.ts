@@ -527,7 +527,7 @@ describe("public OAuth to MCP integration", () => {
     expect(JSON.stringify(revocations.results)).not.toContain(token.access_token);
   });
 
-  it("does not log or reflect a secret-bearing GitHub token error", async () => {
+  it("logs only a fixed stage for a secret-bearing GitHub token error", async () => {
     const providerSecret = "provider-secret-that-must-never-be-logged";
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -552,7 +552,10 @@ describe("public OAuth to MCP integration", () => {
         },
       ),
     ).rejects.toThrow("GitHub OAuth token exchange failed.");
-    expect(consoleError).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledWith("crewhelm.authorization_unavailable", {
+      stage: "github_token_response",
+    });
     expect(JSON.stringify(consoleError.mock.calls)).not.toContain(providerSecret);
   });
 
@@ -659,6 +662,7 @@ describe("public OAuth to MCP integration", () => {
   });
 
   it("fails closed when GitHub authenticates a different numeric account", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const workerEnv = {
       ...integrationEnv(),
       OWNER_GITHUB_USER_ID: "999999",
@@ -719,6 +723,12 @@ describe("public OAuth to MCP integration", () => {
 
     expect(callbackResponse.status).toBe(302);
     expect(new URL(responseLocation(callbackResponse), origin).pathname).toBe("/oauth/error");
+    expect(consoleError.mock.calls).toContainEqual([
+      "crewhelm.authorization_unavailable",
+      { stage: "github_owner_mismatch" },
+    ]);
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(ownerGithubUserId);
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(workerEnv.OWNER_GITHUB_USER_ID);
     const usersAfter = await workerEnv.AUTH_DB.prepare(`SELECT "id" FROM "user"`).all();
     expect(usersAfter.results).toHaveLength(usersBefore.results.length);
   });
