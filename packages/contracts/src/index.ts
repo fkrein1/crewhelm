@@ -1,4 +1,5 @@
 export {
+  AGENTS_READ_SCOPE,
   agentCapabilityGrantsSchema,
   agentCreationIdempotencyKeySchema,
   agentExecutionLimitsSchema,
@@ -13,6 +14,8 @@ export {
   controlPlaneStatusResultSchema,
   createAgentInputSchema,
   createAgentResultSchema,
+  getAgentInputSchema,
+  getAgentResultSchema,
   INTEGRATIONS_READ_SCOPE,
   listAgentsInputSchema,
   listAgentsResultSchema,
@@ -34,6 +37,8 @@ export {
   type ControlPlaneStatusResult,
   type CreateAgentInput,
   type CreateAgentResult,
+  type GetAgentInput,
+  type GetAgentResult,
   type ListAgentsInput,
   type ListAgentsResult,
   type OwnerAuthority,

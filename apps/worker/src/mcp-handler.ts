@@ -3,6 +3,8 @@ import {
   controlPlaneStatusResultSchema,
   createAgentInputSchema,
   createAgentResultSchema,
+  getAgentInputSchema,
+  getAgentResultSchema,
   integrationCatalogSearchInputSchema,
   integrationCatalogSearchResultSchema,
   inspectIntegrationToolInputSchema,
@@ -27,6 +29,7 @@ interface McpEnvironment {
   OWNER_CONTROL_PLANE: {
     getByName(ownerKey: string): {
       createAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
+      getAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
       listAgents(authorityInput: unknown, input: unknown): Promise<unknown>;
       status(authorityInput: unknown): Promise<unknown>;
     };
@@ -76,6 +79,7 @@ const NOT_FOUND_BODY = JSON.stringify({
 });
 
 export const MCP_CREATE_AGENT_TOOL_NAME = "crewhelm_create_agent";
+export const MCP_GET_AGENT_TOOL_NAME = "crewhelm_get_agent";
 export const MCP_INSPECT_INTEGRATION_TOOL_NAME = "crewhelm_inspect_integration_tool";
 export const MCP_LIST_AGENTS_TOOL_NAME = "crewhelm_list_agents";
 export const MCP_SEARCH_INTEGRATIONS_TOOL_NAME = "crewhelm_search_integrations";
@@ -207,6 +211,24 @@ function createMcpServer(
         () => controlPlane.createAgent(authority, input),
         createAgentResultSchema,
       ),
+  );
+
+  server.registerTool(
+    MCP_GET_AGENT_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: true,
+      },
+      description:
+        "Return the current immutable definition of one authenticated-owner Crewhelm Agent.",
+      inputSchema: getAgentInputSchema,
+      title: "Get Crewhelm agent",
+    },
+    async (input) =>
+      controlPlaneToolResult(() => controlPlane.getAgent(authority, input), getAgentResultSchema),
   );
 
   server.registerTool(

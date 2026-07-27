@@ -1,10 +1,12 @@
 import { env } from "cloudflare:test";
 import {
+  AGENTS_READ_SCOPE,
   INTEGRATIONS_READ_SCOPE,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   createAgentResultSchema,
   controlPlaneStatusResultSchema,
+  getAgentResultSchema,
   integrationCatalogSearchResultSchema,
   inspectIntegrationToolResultSchema,
   integrationToolSearchResultSchema,
@@ -17,6 +19,7 @@ import * as z from "zod";
 
 import {
   MCP_CREATE_AGENT_TOOL_NAME,
+  MCP_GET_AGENT_TOOL_NAME,
   MCP_INSPECT_INTEGRATION_TOOL_NAME,
   MCP_LIST_AGENTS_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
@@ -160,6 +163,9 @@ describe("authenticated MCP handler", () => {
           createAgent: async () => {
             throw new Error("do-not-reflect-this");
           },
+          getAgent: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           listAgents: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -216,6 +222,7 @@ describe("authenticated MCP handler", () => {
     const authority = await ownerAuthority("mcp-agent-owner", [
       OWNER_READ_SCOPE,
       OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
     ]);
     const input = {
       executionLimits: {
@@ -283,6 +290,35 @@ describe("authenticated MCP handler", () => {
       ok: true,
     });
     expect(listText).not.toContain(input.instructions);
+
+    if (!created.ok) {
+      throw new Error("Expected Agent creation to succeed.");
+    }
+
+    const getResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 12,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { id: created.agent.id },
+            name: MCP_GET_AGENT_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const getPayload: unknown = await getResponse.json();
+    const getResult = jsonRpcToolResultSchema.parse(getPayload).result;
+    const getText = getResult.content[0]?.text;
+
+    expect(getResult.isError).toBe(false);
+    expect(getAgentResultSchema.parse(JSON.parse(getText ?? ""))).toEqual({
+      agent: created.agent,
+      ok: true,
+    });
   });
 
   it("returns a fixed insufficient-scope result for read-only Agent creation", async () => {
@@ -319,6 +355,37 @@ describe("authenticated MCP handler", () => {
 
     expect(response.status).toBe(200);
     expect(createAgentResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
+      error: {
+        code: "insufficient_scope",
+        message: "Agent request denied.",
+      },
+      ok: false,
+    });
+  });
+
+  it("does not widen legacy control read into full Agent-definition access", async () => {
+    const authority = await ownerAuthority("mcp-legacy-control-read-owner", [OWNER_READ_SCOPE]);
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 13,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { id: "agent_00000000-0000-4000-8000-000000000000" },
+            name: MCP_GET_AGENT_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload: unknown = await response.json();
+    const result = jsonRpcToolResultSchema.parse(payload).result;
+    const text = result.content[0]?.text;
+
+    expect(result.isError).toBe(true);
+    expect(getAgentResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
       error: {
         code: "insufficient_scope",
         message: "Agent request denied.",

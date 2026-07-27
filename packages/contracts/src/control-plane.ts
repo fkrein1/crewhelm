@@ -1,18 +1,32 @@
 import * as z from "zod";
 
+export const AGENTS_READ_SCOPE = "agents:read";
 export const INTEGRATIONS_READ_SCOPE = "integrations:read";
 export const OWNER_READ_SCOPE = "control:read";
 export const OWNER_WRITE_SCOPE = "control:write";
-export const OWNER_SCOPES = [OWNER_READ_SCOPE, OWNER_WRITE_SCOPE, INTEGRATIONS_READ_SCOPE] as const;
-export const OWNER_DEFAULT_SCOPE_CLAIM = "control:read control:write integrations:read";
+export const OWNER_SCOPES = [
+  OWNER_READ_SCOPE,
+  OWNER_WRITE_SCOPE,
+  AGENTS_READ_SCOPE,
+  INTEGRATIONS_READ_SCOPE,
+] as const;
+export const OWNER_DEFAULT_SCOPE_CLAIM = "control:read control:write agents:read integrations:read";
 const OWNER_SCOPE_CLAIMS = [
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
+  AGENTS_READ_SCOPE,
   INTEGRATIONS_READ_SCOPE,
   `${OWNER_READ_SCOPE} ${OWNER_WRITE_SCOPE}`,
+  `${OWNER_READ_SCOPE} ${AGENTS_READ_SCOPE}`,
   `${OWNER_READ_SCOPE} ${INTEGRATIONS_READ_SCOPE}`,
+  `${OWNER_WRITE_SCOPE} ${AGENTS_READ_SCOPE}`,
   `${OWNER_WRITE_SCOPE} ${INTEGRATIONS_READ_SCOPE}`,
+  `${AGENTS_READ_SCOPE} ${INTEGRATIONS_READ_SCOPE}`,
+  `${OWNER_READ_SCOPE} ${OWNER_WRITE_SCOPE} ${AGENTS_READ_SCOPE}`,
   OWNER_DEFAULT_SCOPE_CLAIM,
+  `${OWNER_READ_SCOPE} ${OWNER_WRITE_SCOPE} ${INTEGRATIONS_READ_SCOPE}`,
+  `${OWNER_READ_SCOPE} ${AGENTS_READ_SCOPE} ${INTEGRATIONS_READ_SCOPE}`,
+  `${OWNER_WRITE_SCOPE} ${AGENTS_READ_SCOPE} ${INTEGRATIONS_READ_SCOPE}`,
 ] as const;
 
 export const ownerScopeSchema = z.enum(OWNER_SCOPES);
@@ -133,6 +147,9 @@ export const createAgentInputSchema = z.strictObject({
   model: agentModelSchema,
   name: agentNameSchema,
 });
+export const getAgentInputSchema = z.strictObject({
+  id: agentIdSchema,
+});
 export const listAgentsInputSchema = z.strictObject({
   cursor: agentIdSchema.optional(),
   limit: z.number().int().min(1).max(50).default(25),
@@ -141,6 +158,7 @@ export const listAgentsInputSchema = z.strictObject({
 const agentRequestErrorSchema = z.strictObject({
   code: z.enum([
     "agent_limit_exceeded",
+    "agent_not_found",
     "idempotency_conflict",
     "incompatible_schema",
     "insufficient_scope",
@@ -155,6 +173,16 @@ export const createAgentResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     agent: agentSchema,
     created: z.boolean(),
+    ok: z.literal(true),
+  }),
+  z.strictObject({
+    error: agentRequestErrorSchema,
+    ok: z.literal(false),
+  }),
+]);
+export const getAgentResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    agent: agentSchema,
     ok: z.literal(true),
   }),
   z.strictObject({
@@ -181,6 +209,8 @@ export type ControlPlaneStatus = z.infer<typeof controlPlaneStatusSchema>;
 export type ControlPlaneStatusResult = z.infer<typeof controlPlaneStatusResultSchema>;
 export type CreateAgentInput = z.infer<typeof createAgentInputSchema>;
 export type CreateAgentResult = z.infer<typeof createAgentResultSchema>;
+export type GetAgentInput = z.infer<typeof getAgentInputSchema>;
+export type GetAgentResult = z.infer<typeof getAgentResultSchema>;
 export type ListAgentsInput = z.infer<typeof listAgentsInputSchema>;
 export type ListAgentsResult = z.infer<typeof listAgentsResultSchema>;
 export type OwnerAuthority = z.infer<typeof ownerAuthoritySchema>;

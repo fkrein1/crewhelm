@@ -85,7 +85,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
         authorization_servers: ["https://crewhelm.example/api/auth"],
         bearer_methods_supported: ["header"],
         resource: "https://crewhelm.example/mcp",
-        scopes_supported: ["control:read", "control:write", "integrations:read"],
+        scopes_supported: ["control:read", "control:write", "agents:read", "integrations:read"],
       };
     } else {
       payload = {
@@ -99,7 +99,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
         response_modes_supported: ["query"],
         response_types_supported: ["code"],
         revocation_endpoint: "https://crewhelm.example/api/auth/oauth2/revoke",
-        scopes_supported: ["control:read", "control:write", "integrations:read"],
+        scopes_supported: ["control:read", "control:write", "agents:read", "integrations:read"],
         token_endpoint: "https://crewhelm.example/api/auth/oauth2/token",
         token_endpoint_auth_methods_supported: ["none"],
       };
@@ -119,6 +119,10 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
   await writeFile(resolve(assets, "migrations", "0002_control_write_scope.sql"), "SELECT 1;\n");
   await writeFile(
     resolve(assets, "migrations", "0003_integration_catalog_scope.sql"),
+    "SELECT 1;\n",
+  );
+  await writeFile(
+    resolve(assets, "migrations", "0004_agent_definition_read_scope.sql"),
     "SELECT 1;\n",
   );
   await writeFile(
@@ -202,6 +206,7 @@ describe("Cloudflare bootstrap", () => {
               "0001_better_auth.sql",
               "0002_control_write_scope.sql",
               "0003_integration_catalog_scope.sql",
+              "0004_agent_definition_read_scope.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
@@ -516,6 +521,7 @@ describe("Cloudflare bootstrap", () => {
               "0001_better_auth.sql",
               "0002_control_write_scope.sql",
               "0003_integration_catalog_scope.sql",
+              "0004_agent_definition_read_scope.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
