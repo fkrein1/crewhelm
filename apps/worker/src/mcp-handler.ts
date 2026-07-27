@@ -14,6 +14,8 @@ import {
   listAgentsInputSchema,
   listAgentsResultSchema,
   ownerAuthoritySchema,
+  updateAgentInputSchema,
+  updateAgentResultSchema,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
 import { createComposioCatalog } from "@crewhelm/composio";
@@ -32,6 +34,7 @@ interface McpEnvironment {
       getAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
       listAgents(authorityInput: unknown, input: unknown): Promise<unknown>;
       status(authorityInput: unknown): Promise<unknown>;
+      updateAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
     };
   };
 }
@@ -85,6 +88,7 @@ export const MCP_LIST_AGENTS_TOOL_NAME = "crewhelm_list_agents";
 export const MCP_SEARCH_INTEGRATIONS_TOOL_NAME = "crewhelm_search_integrations";
 export const MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME = "crewhelm_search_integration_tools";
 export const MCP_STATUS_TOOL_NAME = "crewhelm_status";
+export const MCP_UPDATE_AGENT_TOOL_NAME = "crewhelm_update_agent";
 
 export const mcpAuthPropsSchema = z.strictObject({
   authority: ownerAuthoritySchema,
@@ -249,6 +253,27 @@ function createMcpServer(
       controlPlaneToolResult(
         () => controlPlane.listAgents(authority, input),
         listAgentsResultSchema,
+      ),
+  );
+
+  server.registerTool(
+    MCP_UPDATE_AGENT_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: false,
+      },
+      description:
+        "Replace an owner-scoped Crewhelm Agent definition by creating a new immutable revision.",
+      inputSchema: updateAgentInputSchema,
+      title: "Update Crewhelm agent",
+    },
+    async (input) =>
+      controlPlaneToolResult(
+        () => controlPlane.updateAgent(authority, input),
+        updateAgentResultSchema,
       ),
   );
 

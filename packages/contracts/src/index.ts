@@ -1,7 +1,9 @@
 export {
+  AGENTS_WRITE_SCOPE,
   AGENTS_READ_SCOPE,
   agentCapabilityGrantsSchema,
   agentCreationIdempotencyKeySchema,
+  agentMutationIdempotencyKeySchema,
   agentExecutionLimitsSchema,
   agentIdSchema,
   agentInstructionsSchema,
@@ -19,7 +21,10 @@ export {
   INTEGRATIONS_READ_SCOPE,
   listAgentsInputSchema,
   listAgentsResultSchema,
+  updateAgentInputSchema,
+  updateAgentResultSchema,
   MAXIMUM_AGENTS_PER_OWNER,
+  MAXIMUM_REVISIONS_PER_AGENT,
   OWNER_DEFAULT_SCOPE_CLAIM,
   OWNER_READ_SCOPE,
   OWNER_SCOPES,
@@ -43,6 +48,8 @@ export {
   type ListAgentsResult,
   type OwnerAuthority,
   type OwnerScope,
+  type UpdateAgentInput,
+  type UpdateAgentResult,
   type VerifiedOwnerIdentity,
 } from "./control-plane.js";
 export { HEALTH_PATH, healthReportSchema, type HealthReport } from "./health.js";

@@ -1,6 +1,7 @@
 import { createExecutionContext, env, runInDurableObject } from "cloudflare:test";
 import {
   AGENTS_READ_SCOPE,
+  AGENTS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
   OWNER_DEFAULT_SCOPE_CLAIM,
   OWNER_READ_SCOPE,
@@ -12,6 +13,7 @@ import {
   listAgentsResultSchema,
   ownerKeySchema,
   ownerScopeClaimSchema,
+  updateAgentResultSchema,
 } from "@crewhelm/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as z from "zod";
@@ -25,6 +27,7 @@ import {
   MCP_LIST_AGENTS_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_STATUS_TOOL_NAME,
+  MCP_UPDATE_AGENT_TOOL_NAME,
 } from "../src/mcp-handler.js";
 import { deriveOwnerKey } from "../src/owner-identity.js";
 import { registerAuthTestDatabase } from "./auth-testkit.js";
@@ -33,7 +36,7 @@ const origin = "https://crewhelm.test";
 const redirectUri = "https://client.example/oauth/callback";
 const ownerGithubUserId = "123456";
 const githubToken = "transient-github-token-must-not-be-stored";
-const reversedOwnerScopeClaim = `${INTEGRATIONS_READ_SCOPE} ${AGENTS_READ_SCOPE} ${OWNER_WRITE_SCOPE} ${OWNER_READ_SCOPE}`;
+const reversedOwnerScopeClaim = `${INTEGRATIONS_READ_SCOPE} ${AGENTS_WRITE_SCOPE} ${AGENTS_READ_SCOPE} ${OWNER_WRITE_SCOPE} ${OWNER_READ_SCOPE}`;
 const registrationSchema = z.looseObject({
   client_id: z.string().min(1),
   token_endpoint_auth_method: z.literal("none"),
@@ -491,6 +494,7 @@ describe("public OAuth to MCP integration", () => {
     expect(consentPage).not.toContain("<script>Integration MCP client</script>");
     expect(consentPage).toContain("View control-plane status and Agent summaries.");
     expect(consentPage).toContain("View full Agent definitions, including instructions.");
+    expect(consentPage).toContain("Update Agent definitions by creating immutable revisions.");
     expect(consentPage).toContain(
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
@@ -675,6 +679,34 @@ describe("public OAuth to MCP integration", () => {
       agent: createdAgent.agent,
       ok: true,
     });
+    const updateMcpResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_UPDATE_AGENT_TOOL_NAME,
+      {
+        executionLimits: createdAgent.agent.executionLimits,
+        expectedRevision: 1,
+        id: createdAgent.agent.id,
+        idempotencyKey: "oauth-integration-update-agent",
+        instructions: "Maintain and coordinate a concise authenticated work queue.",
+        model: createdAgent.agent.model,
+        name: "Authenticated work coordinator",
+      },
+    );
+    const updateToolResult = toolResultSchema.parse(await updateMcpResponse.json()).result;
+
+    expect(updateToolResult.isError).toBe(false);
+    expect(
+      updateAgentResultSchema.parse(JSON.parse(updateToolResult.content[0].text)),
+    ).toMatchObject({
+      agent: {
+        id: createdAgent.agent.id,
+        name: "Authenticated work coordinator",
+        revision: 2,
+      },
+      ok: true,
+      updated: true,
+    });
     const otherRegistration = registrationSchema.parse(
       await (
         await request(workerEnv, "/api/auth/oauth2/register", {
@@ -741,6 +773,7 @@ describe("public OAuth to MCP integration", () => {
     expect(token.scope).toBe(OWNER_READ_SCOPE);
     expect(consentPage).toContain("View control-plane status and Agent summaries.");
     expect(consentPage).not.toContain("View full Agent definitions, including instructions.");
+    expect(consentPage).not.toContain("Update Agent definitions by creating immutable revisions.");
     expect(consentPage).not.toContain(
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
@@ -855,6 +888,7 @@ describe("public OAuth to MCP integration", () => {
     expect(token.scope).toBe(AGENTS_READ_SCOPE);
     expect(consentPage).not.toContain("View control-plane status and Agent summaries.");
     expect(consentPage).toContain("View full Agent definitions, including instructions.");
+    expect(consentPage).not.toContain("Update Agent definitions by creating immutable revisions.");
     if (!created.ok) {
       throw new Error("Expected test Agent creation to succeed.");
     }
@@ -871,6 +905,106 @@ describe("public OAuth to MCP integration", () => {
     });
   });
 
+  it("grants Agent revisions without widening creation or read authority", async () => {
+    const workerEnv = integrationEnv(allowRateLimit(), "123461");
+    const { consentPage, token } = await completeOAuthFlow(workerEnv, AGENTS_WRITE_SCOPE);
+    const ownerKey = await deriveOwnerKey({
+      issuer: "https://github.com",
+      subject: workerEnv.OWNER_GITHUB_USER_ID,
+    });
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(ownerKey);
+    const created = await controlPlane.createAgent(
+      {
+        clientId: "test-seed-client",
+        ownerKey,
+        scopes: [OWNER_WRITE_SCOPE],
+      },
+      {
+        executionLimits: {
+          maxDurationSeconds: 180,
+          maxModelTokens: 12_000,
+          maxToolCalls: 0,
+          maxTurns: 3,
+        },
+        idempotencyKey: "agent-update-scope-seed",
+        instructions: "Seed an Agent for an update-only OAuth grant.",
+        model: "anthropic/claude-sonnet-4",
+        name: "Update scope Agent",
+      },
+    );
+
+    expect(token.scope).toBe(AGENTS_WRITE_SCOPE);
+    expect(consentPage).toContain("Update Agent definitions by creating immutable revisions.");
+    expect(consentPage).not.toContain("View control-plane status and Agent summaries.");
+    expect(consentPage).not.toContain("View full Agent definitions, including instructions.");
+    expect(consentPage).not.toContain(
+      "Create Agent definitions with bounded configuration and no capability grants.",
+    );
+    if (!created.ok) {
+      throw new Error("Expected test Agent creation to succeed.");
+    }
+
+    const updateResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_UPDATE_AGENT_TOOL_NAME,
+      {
+        executionLimits: created.agent.executionLimits,
+        expectedRevision: 1,
+        id: created.agent.id,
+        idempotencyKey: "agent-update-scope-update",
+        instructions: "Update the Agent with an explicit update-only OAuth grant.",
+        model: created.agent.model,
+        name: "Updated scope Agent",
+      },
+    );
+    const updateResult = toolResultSchema.parse(await updateResponse.json()).result;
+
+    expect(updateResult.isError).toBe(false);
+    expect(updateAgentResultSchema.parse(JSON.parse(updateResult.content[0].text))).toMatchObject({
+      agent: { id: created.agent.id, name: "Updated scope Agent", revision: 2 },
+      ok: true,
+      updated: true,
+    });
+    const createResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_CREATE_AGENT_TOOL_NAME,
+      {
+        executionLimits: created.agent.executionLimits,
+        idempotencyKey: "agent-update-scope-create",
+        instructions: "An update-only grant must not create this Agent.",
+        model: created.agent.model,
+        name: "Denied Agent",
+      },
+    );
+    const createResult = toolResultSchema.parse(await createResponse.json()).result;
+
+    expect(createResult.isError).toBe(true);
+    expect(createAgentResultSchema.parse(JSON.parse(createResult.content[0].text))).toEqual({
+      error: { code: "insufficient_scope", message: "Agent request denied." },
+      ok: false,
+    });
+    const listResponse = await callMcp(workerEnv, token.access_token, MCP_LIST_AGENTS_TOOL_NAME);
+    const listResult = toolResultSchema.parse(await listResponse.json()).result;
+
+    expect(listResult.isError).toBe(true);
+    expect(listAgentsResultSchema.parse(JSON.parse(listResult.content[0].text))).toEqual({
+      error: { code: "insufficient_scope", message: "Agent request denied." },
+      ok: false,
+    });
+    const getResponse = await callMcp(workerEnv, token.access_token, MCP_GET_AGENT_TOOL_NAME, {
+      id: created.agent.id,
+    });
+    const getResult = toolResultSchema.parse(await getResponse.json()).result;
+
+    expect(getResult.isError).toBe(true);
+    expect(getAgentResultSchema.parse(JSON.parse(getResult.content[0].text))).toEqual({
+      error: { code: "insufficient_scope", message: "Agent request denied." },
+      ok: false,
+    });
+  });
+
   it("keeps a signed write-only token unable to read owner state", async () => {
     const workerEnv = integrationEnv(allowRateLimit(), "123458");
     const { consentPage, token } = await completeOAuthFlow(workerEnv, OWNER_WRITE_SCOPE);
@@ -878,6 +1012,7 @@ describe("public OAuth to MCP integration", () => {
     expect(token.scope).toBe(OWNER_WRITE_SCOPE);
     expect(consentPage).not.toContain("View control-plane status and Agent summaries.");
     expect(consentPage).not.toContain("View full Agent definitions, including instructions.");
+    expect(consentPage).not.toContain("Update Agent definitions by creating immutable revisions.");
     expect(consentPage).toContain(
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
@@ -904,10 +1039,36 @@ describe("public OAuth to MCP integration", () => {
     const createResult = toolResultSchema.parse(await createResponse.json()).result;
 
     expect(createResult.isError).toBe(false);
-    expect(createAgentResultSchema.parse(JSON.parse(createResult.content[0].text))).toMatchObject({
+    const createdAgent = createAgentResultSchema.parse(JSON.parse(createResult.content[0].text));
+
+    expect(createdAgent).toMatchObject({
       agent: { name: "Write-only Agent" },
       created: true,
       ok: true,
+    });
+    if (!createdAgent.ok) {
+      throw new Error("Expected write-only Agent creation to succeed.");
+    }
+    const updateResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_UPDATE_AGENT_TOOL_NAME,
+      {
+        executionLimits: createdAgent.agent.executionLimits,
+        expectedRevision: 1,
+        id: createdAgent.agent.id,
+        idempotencyKey: "write-only-update-agent",
+        instructions: "A legacy creation grant must not update this Agent.",
+        model: createdAgent.agent.model,
+        name: "Denied update",
+      },
+    );
+    const updateResult = toolResultSchema.parse(await updateResponse.json()).result;
+
+    expect(updateResult.isError).toBe(true);
+    expect(updateAgentResultSchema.parse(JSON.parse(updateResult.content[0].text))).toEqual({
+      error: { code: "insufficient_scope", message: "Agent request denied." },
+      ok: false,
     });
     const listResponse = await callMcp(workerEnv, token.access_token, MCP_LIST_AGENTS_TOOL_NAME);
     const listResult = toolResultSchema.parse(await listResponse.json()).result;

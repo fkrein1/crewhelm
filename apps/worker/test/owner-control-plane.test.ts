@@ -1,6 +1,8 @@
 import {
   AGENTS_READ_SCOPE,
+  AGENTS_WRITE_SCOPE,
   MAXIMUM_AGENTS_PER_OWNER,
+  MAXIMUM_REVISIONS_PER_AGENT,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   agentSchema,
@@ -9,6 +11,7 @@ import {
   type CreateAgentInput,
   type OwnerAuthority,
   type OwnerScope,
+  type UpdateAgentInput,
 } from "@crewhelm/contracts";
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -41,6 +44,27 @@ function agentInput(idempotencyKey: string, name = "Inbox triage"): CreateAgentI
     },
     idempotencyKey,
     instructions: "Sort new work into a concise priority list.",
+    model: "@cf/meta/llama-4-scout-17b-16e-instruct",
+    name,
+  };
+}
+
+function agentUpdate(
+  agent: { id: string; revision: number },
+  idempotencyKey: string,
+  name = "Inbox coordinator",
+): UpdateAgentInput {
+  return {
+    executionLimits: {
+      maxDurationSeconds: 600,
+      maxModelTokens: 40_000,
+      maxToolCalls: 8,
+      maxTurns: 8,
+    },
+    expectedRevision: agent.revision,
+    id: agent.id,
+    idempotencyKey,
+    instructions: "Coordinate the inbox with the owner's approved tools.",
     model: "@cf/meta/llama-4-scout-17b-16e-instruct",
     name,
   };
@@ -190,6 +214,7 @@ describe("OwnerControlPlane", () => {
           SELECT singleton, owner_key, 1 FROM control_plane_v2
         `);
         state.storage.sql.exec("DROP TABLE control_plane_v2");
+        state.storage.sql.exec("DROP TABLE agent_updates");
         state.storage.sql.exec("DROP TABLE agent_creations");
         state.storage.sql.exec("DROP TABLE agent_revisions");
         state.storage.sql.exec("DROP TABLE agents");
@@ -444,6 +469,399 @@ describe("OwnerControlPlane", () => {
     expect(
       listed.agents.map((agent) => agent.name).toSorted((left, right) => left.localeCompare(right)),
     ).toEqual(["First client Agent", "Second client Agent"]);
+  });
+
+  it("creates immutable Agent revisions with exact replay and durable audit", async () => {
+    const authority = await authorityFor("214", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("create-214"));
+
+    if (!created.ok) {
+      throw new Error("Expected Agent creation to succeed.");
+    }
+
+    const input = agentUpdate(created.agent, "update-214");
+    const first = await stub.updateAgent(authority, input);
+    const replay = await stub.updateAgent(authority, input);
+
+    expect(first).toMatchObject({
+      agent: {
+        capabilityGrants: [],
+        createdAt: created.agent.createdAt,
+        executionLimits: input.executionLimits,
+        id: created.agent.id,
+        instructions: input.instructions,
+        name: input.name,
+        revision: 2,
+      },
+      ok: true,
+      updated: true,
+    });
+    if (!first.ok) {
+      throw new Error("Expected Agent update to succeed.");
+    }
+    expect(replay).toEqual({ ...first, updated: false });
+    await evictDurableObject(stub);
+    await expect(stub.getAgent(authority, { id: created.agent.id })).resolves.toEqual({
+      agent: first.agent,
+      ok: true,
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec(
+            `SELECT
+               revision,
+               capability_grants,
+               name
+             FROM agent_revisions
+             WHERE agent_id = ?
+             ORDER BY revision`,
+            created.agent.id,
+          )
+          .toArray(),
+      ),
+    ).resolves.toEqual([
+      { capability_grants: "[]", name: created.agent.name, revision: 1 },
+      { capability_grants: "[]", name: input.name, revision: 2 },
+    ]);
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec("SELECT action, subject_id FROM audit_events ORDER BY event_id")
+          .toArray(),
+      ),
+    ).resolves.toEqual([
+      { action: "agent.created", subject_id: created.agent.id },
+      { action: "agent.updated", subject_id: created.agent.id },
+    ]);
+  });
+
+  it("rejects conflicting retries, stale revisions, no-ops, and unauthorized updates", async () => {
+    const authority = await authorityFor("215", [
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+    ]);
+    const legacyAuthority = await authorityFor("215", [OWNER_WRITE_SCOPE]);
+    const otherOwner = await authorityFor("216", [AGENTS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const otherStub = env.OWNER_CONTROL_PLANE.getByName(otherOwner.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("create-215"));
+
+    if (!created.ok) {
+      throw new Error("Expected Agent creation to succeed.");
+    }
+
+    const update = agentUpdate(created.agent, "update-215");
+    await expect(stub.updateAgent(authority, update)).resolves.toMatchObject({
+      ok: true,
+      updated: true,
+    });
+    await expect(
+      stub.updateAgent(authority, { ...update, name: "Conflicting retry" }),
+    ).resolves.toEqual(fixedAgentFailure("idempotency_conflict"));
+    await expect(
+      stub.updateAgent(authority, { ...update, idempotencyKey: "stale-215" }),
+    ).resolves.toEqual(fixedAgentFailure("revision_conflict"));
+    await expect(
+      stub.updateAgent(authority, {
+        ...update,
+        expectedRevision: 2,
+        idempotencyKey: "noop-215",
+      }),
+    ).resolves.toEqual(fixedAgentFailure("no_changes"));
+    await expect(stub.updateAgent(legacyAuthority, update)).resolves.toEqual(
+      fixedAgentFailure("insufficient_scope"),
+    );
+    await expect(stub.updateAgent(otherOwner, update)).resolves.toEqual(
+      fixedAgentFailure("owner_mismatch"),
+    );
+    await expect(otherStub.updateAgent(otherOwner, update)).resolves.toEqual(
+      fixedAgentFailure("agent_not_found"),
+    );
+    await expect(
+      stub.updateAgent(authority, { ...update, unexpected: "credential-like-value" }),
+    ).resolves.toEqual(fixedAgentFailure("invalid_request"));
+    await expect(
+      stub.updateAgent(authority, {
+        ...update,
+        id: "agent_00000000-0000-4000-8000-000000000000",
+        idempotencyKey: "missing-215",
+      }),
+    ).resolves.toEqual(fixedAgentFailure("agent_not_found"));
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec(
+            `SELECT
+               (SELECT COUNT(*) FROM agent_revisions) AS revisions,
+               (SELECT COUNT(*) FROM agent_updates) AS updates,
+               (SELECT COUNT(*) FROM audit_events) AS audit_events`,
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({ audit_events: 2, revisions: 2, updates: 1 });
+  });
+
+  it("scopes update idempotency to the authenticated MCP client", async () => {
+    const first = await authorityFor(
+      "217",
+      [OWNER_WRITE_SCOPE, AGENTS_WRITE_SCOPE],
+      "first-client",
+    );
+    const second = await authorityFor(
+      "217",
+      [OWNER_WRITE_SCOPE, AGENTS_WRITE_SCOPE],
+      "second-client",
+    );
+    const stub = env.OWNER_CONTROL_PLANE.getByName(first.ownerKey);
+    const created = await stub.createAgent(first, agentInput("create-217"));
+
+    if (!created.ok) {
+      throw new Error("Expected Agent creation to succeed.");
+    }
+
+    const key = "shared-update-key";
+    const firstUpdate = await stub.updateAgent(
+      first,
+      agentUpdate(created.agent, key, "Revision 2"),
+    );
+
+    if (!firstUpdate.ok) {
+      throw new Error("Expected first update to succeed.");
+    }
+
+    await expect(
+      stub.updateAgent(second, agentUpdate(firstUpdate.agent, key, "Revision 3")),
+    ).resolves.toMatchObject({
+      agent: { name: "Revision 3", revision: 3 },
+      ok: true,
+      updated: true,
+    });
+    await expect(
+      stub.updateAgent(first, agentUpdate(created.agent, key, "Revision 2")),
+    ).resolves.toEqual({ ...firstUpdate, updated: false });
+  });
+
+  it("serializes concurrent Agent revisions with optimistic concurrency", async () => {
+    const authority = await authorityFor("218", [OWNER_WRITE_SCOPE, AGENTS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("create-218"));
+
+    if (!created.ok) {
+      throw new Error("Expected Agent creation to succeed.");
+    }
+
+    const attempts = await Promise.all([
+      stub.updateAgent(authority, agentUpdate(created.agent, "update-218-a", "Concurrent A")),
+      stub.updateAgent(authority, agentUpdate(created.agent, "update-218-b", "Concurrent B")),
+    ]);
+
+    expect(attempts.filter((attempt) => attempt.ok)).toHaveLength(1);
+    expect(attempts.filter((attempt) => !attempt.ok)).toEqual([
+      fixedAgentFailure("revision_conflict"),
+    ]);
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec(
+            `SELECT
+               (SELECT COUNT(*) FROM agent_revisions) AS revisions,
+               (SELECT COUNT(*) FROM agent_updates) AS updates,
+               (SELECT COUNT(*) FROM audit_events) AS audit_events`,
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({ audit_events: 2, revisions: 2, updates: 1 });
+  });
+
+  it("bounds Agent revision storage while preserving exact retries at the ceiling", async () => {
+    const authority = await authorityFor("220", [OWNER_WRITE_SCOPE, AGENTS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("create-220"));
+
+    if (!created.ok) {
+      throw new Error("Expected Agent creation to succeed.");
+    }
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.transactionSync(() => {
+        state.storage.sql.exec(
+          `WITH RECURSIVE revision_numbers(revision) AS (
+             SELECT 2
+             UNION ALL
+             SELECT revision + 1
+             FROM revision_numbers
+             WHERE revision < ?
+           )
+           INSERT INTO agent_revisions
+             (agent_id, revision, name, model, instructions, execution_limits,
+              capability_grants, created_at)
+           SELECT
+             source.agent_id,
+             revision_numbers.revision,
+             source.name,
+             source.model,
+             source.instructions,
+             source.execution_limits,
+             source.capability_grants,
+             source.created_at
+           FROM agent_revisions source
+           CROSS JOIN revision_numbers
+           WHERE source.agent_id = ? AND source.revision = 1`,
+          MAXIMUM_REVISIONS_PER_AGENT - 1,
+          created.agent.id,
+        );
+        state.storage.sql.exec(
+          "UPDATE agents SET current_revision = ? WHERE agent_id = ?",
+          MAXIMUM_REVISIONS_PER_AGENT - 1,
+          created.agent.id,
+        );
+      });
+    });
+
+    const finalInput = agentUpdate(
+      { id: created.agent.id, revision: MAXIMUM_REVISIONS_PER_AGENT - 1 },
+      "update-220-final",
+      "Final allowed revision",
+    );
+    const finalUpdate = await stub.updateAgent(authority, finalInput);
+
+    expect(finalUpdate).toMatchObject({
+      agent: { revision: MAXIMUM_REVISIONS_PER_AGENT },
+      ok: true,
+      updated: true,
+    });
+    await expect(stub.updateAgent(authority, finalInput)).resolves.toEqual({
+      ...finalUpdate,
+      updated: false,
+    });
+    await expect(
+      Promise.all([
+        stub.updateAgent(
+          authority,
+          agentUpdate(
+            { id: created.agent.id, revision: MAXIMUM_REVISIONS_PER_AGENT },
+            "update-220-over-a",
+            "Over ceiling A",
+          ),
+        ),
+        stub.updateAgent(
+          authority,
+          agentUpdate(
+            { id: created.agent.id, revision: MAXIMUM_REVISIONS_PER_AGENT },
+            "update-220-over-b",
+            "Over ceiling B",
+          ),
+        ),
+      ]),
+    ).resolves.toEqual([
+      fixedAgentFailure("agent_revision_limit_exceeded"),
+      fixedAgentFailure("agent_revision_limit_exceeded"),
+    ]);
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec(
+            `SELECT
+               (SELECT current_revision FROM agents WHERE agent_id = ?) AS current_revision,
+               (SELECT COUNT(*) FROM agent_revisions) AS revisions,
+               (SELECT COUNT(*) FROM agent_updates) AS updates,
+               (SELECT COUNT(*) FROM audit_events) AS audit_events`,
+            created.agent.id,
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({
+      audit_events: 2,
+      current_revision: MAXIMUM_REVISIONS_PER_AGENT,
+      revisions: MAXIMUM_REVISIONS_PER_AGENT,
+      updates: 1,
+    });
+  });
+
+  it("rolls back the complete Agent revision when audit persistence fails", async () => {
+    const authority = await authorityFor("221", [OWNER_WRITE_SCOPE, AGENTS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("create-221"));
+
+    if (!created.ok) {
+      throw new Error("Expected Agent creation to succeed.");
+    }
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(`
+        CREATE TRIGGER reject_agent_update_audit
+        BEFORE INSERT ON audit_events
+        WHEN NEW.action = 'agent.updated'
+        BEGIN
+          SELECT RAISE(ABORT, 'forced audit failure');
+        END
+      `);
+    });
+    const input = agentUpdate(created.agent, "update-221");
+
+    await expect(
+      runInDurableObject(stub, (instance) => instance.updateAgent(authority, input)),
+    ).rejects.toThrow("forced audit failure");
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec(
+            `SELECT
+               (SELECT current_revision FROM agents WHERE agent_id = ?) AS current_revision,
+               (SELECT COUNT(*) FROM agent_revisions) AS revisions,
+               (SELECT COUNT(*) FROM agent_updates) AS updates,
+               (SELECT COUNT(*) FROM audit_events) AS audit_events`,
+            created.agent.id,
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({ audit_events: 1, current_revision: 1, revisions: 1, updates: 0 });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("DROP TRIGGER reject_agent_update_audit");
+    });
+    await expect(stub.updateAgent(authority, input)).resolves.toMatchObject({
+      agent: { revision: 2 },
+      ok: true,
+      updated: true,
+    });
+  });
+
+  it("reconstructs additive Agent update storage after eviction", async () => {
+    const authority = await authorityFor("219", [
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("create-219"));
+
+    if (!created.ok) {
+      throw new Error("Expected Agent creation to succeed.");
+    }
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("DROP TABLE agent_updates");
+    });
+    await evictDurableObject(stub);
+    await expect(
+      stub.updateAgent(authority, agentUpdate(created.agent, "update-219")),
+    ).resolves.toMatchObject({
+      agent: { revision: 2 },
+      ok: true,
+      updated: true,
+    });
+    await expect(stub.status({ ...authority, scopes: [OWNER_READ_SCOPE] })).resolves.toMatchObject({
+      ok: true,
+      status: { schemaVersion: 2 },
+    });
   });
 
   it("bounds persistent Agent state and serializes concurrent creation at the ceiling", async () => {

@@ -22,7 +22,13 @@ function protectedResourceResponse(): Response {
     authorization_servers: [`${origin}/api/auth`],
     bearer_methods_supported: ["header"],
     resource: `${origin}/mcp`,
-    scopes_supported: ["control:read", "control:write", "agents:read", "integrations:read"],
+    scopes_supported: [
+      "control:read",
+      "control:write",
+      "agents:read",
+      "agents:write",
+      "integrations:read",
+    ],
   });
 }
 
@@ -38,7 +44,13 @@ function authorizationServerResponse(overrides: Record<string, unknown> = {}): R
     response_modes_supported: ["query"],
     response_types_supported: ["code"],
     revocation_endpoint: `${origin}/api/auth/oauth2/revoke`,
-    scopes_supported: ["control:read", "control:write", "agents:read", "integrations:read"],
+    scopes_supported: [
+      "control:read",
+      "control:write",
+      "agents:read",
+      "agents:write",
+      "integrations:read",
+    ],
     token_endpoint: `${origin}/api/auth/oauth2/token`,
     token_endpoint_auth_methods_supported: ["none", "client_secret_basic"],
     ...overrides,
