@@ -38,8 +38,9 @@ pnpm --filter @crewhelm/cli build
 node apps/cli/dist/crewhelm.js doctor --endpoint https://your-worker.example
 ```
 
-Use `--json` for machine-readable output. HTTP is accepted only for exact loopback hosts during
-local development.
+The command validates the health response, MCP protected-resource metadata, and OAuth authorization
+server discovery through bounded, no-redirect reads. Use `--json` for the versioned machine-readable
+report. HTTP is accepted only for exact loopback hosts during local development.
 
 ## Development Worker authentication
 
