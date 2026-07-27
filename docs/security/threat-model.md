@@ -120,6 +120,17 @@ force every upstream token field to null before persistence. Revisit the provide
 threat model before adding broader mutation classes, multi-owner service, refresh tokens,
 additional identity providers, or longer token lifetimes.
 
+Dynamic registration accepts only bounded public-client metadata. It recognizes the standard
+`native` and `web` application types, requires HTTPS redirects for an explicit web client, and
+continues to allow only HTTPS or exact-loopback HTTP redirects overall. Crewhelm records and returns
+the validated application type. A client may advertise `refresh_token` alongside
+`authorization_code` for interoperability, but Crewhelm normalizes the stored registration to
+authorization-code-only before Better Auth sees it. Missing PKCE at authorization and every
+refresh-token exchange still fail at the Crewhelm boundary. Duplicate raw JSON object members,
+duplicate or additional grant types, unsupported application types, and understood authority-bearing
+provider fields fail closed before forwarding. Harmless unknown extension fields are ignored and
+dropped when Crewhelm reconstructs the provider request.
+
 The provider seeds the exact MCP resource in insert-only mode so public requests cannot turn
 configuration into repeated D1 writes. Scope and access-token lifetime changes require explicit
 migrations of the stored resource row; changing configuration alone intentionally does not
