@@ -1,6 +1,7 @@
 import * as z from "zod";
 
 export const AGENTS_READ_SCOPE = "agents:read";
+export const AGENTS_WRITE_SCOPE = "agents:write";
 export const INTEGRATIONS_READ_SCOPE = "integrations:read";
 export const OWNER_READ_SCOPE = "control:read";
 export const OWNER_WRITE_SCOPE = "control:write";
@@ -8,26 +9,11 @@ export const OWNER_SCOPES = [
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   AGENTS_READ_SCOPE,
+  AGENTS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
 ] as const;
-export const OWNER_DEFAULT_SCOPE_CLAIM = "control:read control:write agents:read integrations:read";
-const OWNER_SCOPE_CLAIMS = [
-  OWNER_READ_SCOPE,
-  OWNER_WRITE_SCOPE,
-  AGENTS_READ_SCOPE,
-  INTEGRATIONS_READ_SCOPE,
-  `${OWNER_READ_SCOPE} ${OWNER_WRITE_SCOPE}`,
-  `${OWNER_READ_SCOPE} ${AGENTS_READ_SCOPE}`,
-  `${OWNER_READ_SCOPE} ${INTEGRATIONS_READ_SCOPE}`,
-  `${OWNER_WRITE_SCOPE} ${AGENTS_READ_SCOPE}`,
-  `${OWNER_WRITE_SCOPE} ${INTEGRATIONS_READ_SCOPE}`,
-  `${AGENTS_READ_SCOPE} ${INTEGRATIONS_READ_SCOPE}`,
-  `${OWNER_READ_SCOPE} ${OWNER_WRITE_SCOPE} ${AGENTS_READ_SCOPE}`,
-  OWNER_DEFAULT_SCOPE_CLAIM,
-  `${OWNER_READ_SCOPE} ${OWNER_WRITE_SCOPE} ${INTEGRATIONS_READ_SCOPE}`,
-  `${OWNER_READ_SCOPE} ${AGENTS_READ_SCOPE} ${INTEGRATIONS_READ_SCOPE}`,
-  `${OWNER_WRITE_SCOPE} ${AGENTS_READ_SCOPE} ${INTEGRATIONS_READ_SCOPE}`,
-] as const;
+export const OWNER_DEFAULT_SCOPE_CLAIM =
+  "control:read control:write agents:read agents:write integrations:read";
 
 export const ownerScopeSchema = z.enum(OWNER_SCOPES);
 export const ownerScopesSchema = z
@@ -51,8 +37,7 @@ export const ownerScopeClaimSchema = z
     }
 
     return OWNER_SCOPES.filter((scope) => parsedScopes.data.includes(scope)).join(" ");
-  })
-  .pipe(z.enum(OWNER_SCOPE_CLAIMS));
+  });
 
 export const ownerKeySchema = z
   .string()
@@ -101,6 +86,7 @@ export const agentIdSchema = z
     "Expected an opaque Crewhelm agent ID.",
   );
 export const MAXIMUM_AGENTS_PER_OWNER = 100;
+export const MAXIMUM_REVISIONS_PER_AGENT = 1_000;
 export const agentNameSchema = z.string().trim().min(1).max(80);
 export const agentModelSchema = z
   .string()
@@ -135,11 +121,12 @@ export const agentSummarySchema = z.strictObject({
 export const agentSchema = agentSummarySchema.extend({
   instructions: agentInstructionsSchema,
 });
-export const agentCreationIdempotencyKeySchema = z
+export const agentMutationIdempotencyKeySchema = z
   .string()
   .min(1)
   .max(128)
   .regex(/^[A-Za-z0-9._~-]+$/, "Expected an opaque idempotency key.");
+export const agentCreationIdempotencyKeySchema = agentMutationIdempotencyKeySchema;
 export const createAgentInputSchema = z.strictObject({
   executionLimits: agentExecutionLimitsSchema,
   idempotencyKey: agentCreationIdempotencyKeySchema,
@@ -154,17 +141,29 @@ export const listAgentsInputSchema = z.strictObject({
   cursor: agentIdSchema.optional(),
   limit: z.number().int().min(1).max(50).default(25),
 });
+export const updateAgentInputSchema = z.strictObject({
+  executionLimits: agentExecutionLimitsSchema,
+  expectedRevision: agentRevisionNumberSchema,
+  id: agentIdSchema,
+  idempotencyKey: agentMutationIdempotencyKeySchema,
+  instructions: agentInstructionsSchema,
+  model: agentModelSchema,
+  name: agentNameSchema,
+});
 
 const agentRequestErrorSchema = z.strictObject({
   code: z.enum([
     "agent_limit_exceeded",
     "agent_not_found",
+    "agent_revision_limit_exceeded",
     "idempotency_conflict",
     "incompatible_schema",
     "insufficient_scope",
     "invalid_authority",
     "invalid_request",
+    "no_changes",
     "owner_mismatch",
+    "revision_conflict",
   ]),
   message: z.literal("Agent request denied."),
 });
@@ -201,6 +200,17 @@ export const listAgentsResultSchema = z.discriminatedUnion("ok", [
     ok: z.literal(false),
   }),
 ]);
+export const updateAgentResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    agent: agentSchema,
+    ok: z.literal(true),
+    updated: z.boolean(),
+  }),
+  z.strictObject({
+    error: agentRequestErrorSchema,
+    ok: z.literal(false),
+  }),
+]);
 
 export type Agent = z.infer<typeof agentSchema>;
 export type AgentExecutionLimits = z.infer<typeof agentExecutionLimitsSchema>;
@@ -215,4 +225,6 @@ export type ListAgentsInput = z.infer<typeof listAgentsInputSchema>;
 export type ListAgentsResult = z.infer<typeof listAgentsResultSchema>;
 export type OwnerAuthority = z.infer<typeof ownerAuthoritySchema>;
 export type OwnerScope = z.infer<typeof ownerScopeSchema>;
+export type UpdateAgentInput = z.infer<typeof updateAgentInputSchema>;
+export type UpdateAgentResult = z.infer<typeof updateAgentResultSchema>;
 export type VerifiedOwnerIdentity = z.infer<typeof verifiedOwnerIdentitySchema>;

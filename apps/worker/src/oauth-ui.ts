@@ -1,5 +1,6 @@
 import {
   AGENTS_READ_SCOPE,
+  AGENTS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
@@ -224,6 +225,9 @@ function consentPage(
       : "",
     requestedScopes.includes(AGENTS_READ_SCOPE)
       ? "<li>View full Agent definitions, including instructions.</li>"
+      : "",
+    requestedScopes.includes(AGENTS_WRITE_SCOPE)
+      ? "<li>Update Agent definitions by creating immutable revisions.</li>"
       : "",
     requestedScopes.includes(INTEGRATIONS_READ_SCOPE)
       ? "<li>Search the Composio integration catalog and inspect exact tool schemas. Search terms are sent to Composio.</li>"

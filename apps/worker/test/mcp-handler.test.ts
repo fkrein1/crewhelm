@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import {
   AGENTS_READ_SCOPE,
+  AGENTS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
@@ -12,6 +13,7 @@ import {
   integrationToolSearchResultSchema,
   listAgentsResultSchema,
   ownerAuthoritySchema,
+  updateAgentResultSchema,
   type OwnerScope,
 } from "@crewhelm/contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -25,6 +27,7 @@ import {
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME,
   MCP_STATUS_TOOL_NAME,
+  MCP_UPDATE_AGENT_TOOL_NAME,
   handleAuthenticatedMcpRequest,
 } from "../src/mcp-handler.js";
 import { deriveOwnerKey } from "../src/owner-identity.js";
@@ -39,6 +42,21 @@ const jsonRpcToolResultSchema = z.looseObject({
       }),
     ),
     isError: z.boolean(),
+  }),
+});
+const jsonRpcToolListSchema = z.looseObject({
+  result: z.looseObject({
+    tools: z.array(
+      z.looseObject({
+        annotations: z.looseObject({
+          destructiveHint: z.boolean(),
+          idempotentHint: z.boolean(),
+          openWorldHint: z.boolean(),
+          readOnlyHint: z.boolean(),
+        }),
+        name: z.string(),
+      }),
+    ),
   }),
 });
 
@@ -66,7 +84,53 @@ function toolRequest(body: string, additionalHeaders?: HeadersInit): Request {
   });
 }
 
+function fixedAgentFailure(code: string) {
+  return {
+    error: {
+      code,
+      message: "Agent request denied.",
+    },
+    ok: false,
+  };
+}
+
 describe("authenticated MCP handler", () => {
+  it("marks Agent replacement as destructive while keeping creation additive", async () => {
+    const authority = await ownerAuthority();
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 1,
+          jsonrpc: "2.0",
+          method: "tools/list",
+          params: {},
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload = jsonRpcToolListSchema.parse(await response.json());
+    const createTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_CREATE_AGENT_TOOL_NAME,
+    );
+    const updateTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_UPDATE_AGENT_TOOL_NAME,
+    );
+
+    expect(createTool?.annotations).toMatchObject({
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+      readOnlyHint: false,
+    });
+    expect(updateTool?.annotations).toMatchObject({
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+      readOnlyHint: false,
+    });
+  });
+
   it("returns owner control-plane status through the read-only MCP tool", async () => {
     const authority = await ownerAuthority();
     const response = await handleAuthenticatedMcpRequest(
@@ -172,6 +236,9 @@ describe("authenticated MCP handler", () => {
           status: async () => {
             throw new Error("do-not-reflect-this");
           },
+          updateAgent: async () => {
+            throw new Error("do-not-reflect-this");
+          },
         }),
       },
     };
@@ -223,6 +290,7 @@ describe("authenticated MCP handler", () => {
       OWNER_READ_SCOPE,
       OWNER_WRITE_SCOPE,
       AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
     ]);
     const input = {
       executionLimits: {
@@ -319,6 +387,43 @@ describe("authenticated MCP handler", () => {
       agent: created.agent,
       ok: true,
     });
+
+    const updateResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 13,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              ...input,
+              expectedRevision: 1,
+              id: created.agent.id,
+              idempotencyKey: "mcp-update-agent-1",
+              instructions: "Keep a concise work queue and coordinate approved tools.",
+              name: "Work coordinator",
+            },
+            name: MCP_UPDATE_AGENT_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const updatePayload: unknown = await updateResponse.json();
+    const updateResult = jsonRpcToolResultSchema.parse(updatePayload).result;
+    const updateText = updateResult.content[0]?.text;
+
+    expect(updateResult.isError).toBe(false);
+    expect(updateAgentResultSchema.parse(JSON.parse(updateText ?? ""))).toMatchObject({
+      agent: {
+        id: created.agent.id,
+        name: "Work coordinator",
+        revision: 2,
+      },
+      ok: true,
+      updated: true,
+    });
   });
 
   it("returns a fixed insufficient-scope result for read-only Agent creation", async () => {
@@ -392,6 +497,46 @@ describe("authenticated MCP handler", () => {
       },
       ok: false,
     });
+  });
+
+  it("does not widen legacy control write into Agent revision access", async () => {
+    const authority = await ownerAuthority("mcp-legacy-control-write-owner", [OWNER_WRITE_SCOPE]);
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 14,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              executionLimits: {
+                maxDurationSeconds: 120,
+                maxModelTokens: 8_000,
+                maxToolCalls: 0,
+                maxTurns: 3,
+              },
+              expectedRevision: 1,
+              id: "agent_00000000-0000-4000-8000-000000000000",
+              idempotencyKey: "mcp-legacy-update",
+              instructions: "This request must not update state.",
+              model: "anthropic/claude-sonnet-4",
+              name: "Denied update",
+            },
+            name: MCP_UPDATE_AGENT_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload: unknown = await response.json();
+    const result = jsonRpcToolResultSchema.parse(payload).result;
+    const text = result.content[0]?.text;
+
+    expect(result.isError).toBe(true);
+    expect(updateAgentResultSchema.parse(JSON.parse(text ?? ""))).toEqual(
+      fixedAgentFailure("insufficient_scope"),
+    );
   });
 
   it("searches the complete Composio integration catalog with read scope", async () => {

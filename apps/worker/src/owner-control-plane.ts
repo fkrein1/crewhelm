@@ -1,5 +1,6 @@
 import {
   AGENTS_READ_SCOPE,
+  AGENTS_WRITE_SCOPE,
   agentSchema,
   agentSummarySchema,
   controlPlaneStatusResultSchema,
@@ -10,9 +11,12 @@ import {
   listAgentsInputSchema,
   listAgentsResultSchema,
   MAXIMUM_AGENTS_PER_OWNER,
+  MAXIMUM_REVISIONS_PER_AGENT,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   ownerAuthoritySchema,
+  updateAgentInputSchema,
+  updateAgentResultSchema,
   type Agent,
   type AgentSummary,
   type ControlPlaneStatusResult,
@@ -22,6 +26,8 @@ import {
   type ListAgentsResult,
   type OwnerAuthority,
   type OwnerScope,
+  type UpdateAgentInput,
+  type UpdateAgentResult,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
 
@@ -35,8 +41,11 @@ type AgentRequestErrorCode =
   | AuthorityErrorCode
   | "agent_limit_exceeded"
   | "agent_not_found"
+  | "agent_revision_limit_exceeded"
   | "idempotency_conflict"
-  | "invalid_request";
+  | "invalid_request"
+  | "no_changes"
+  | "revision_conflict";
 type AgentRequestFailure = Extract<CreateAgentResult, { ok: false }>;
 type AuthorityResult =
   | { authority: OwnerAuthority; ok: true }
@@ -52,21 +61,44 @@ function encodeBase64Url(bytes: Uint8Array): string {
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 
-async function digestAgentCreation(input: CreateAgentInput): Promise<string> {
-  const canonicalRequest = JSON.stringify({
-    executionLimits: {
-      maxDurationSeconds: input.executionLimits.maxDurationSeconds,
-      maxModelTokens: input.executionLimits.maxModelTokens,
-      maxToolCalls: input.executionLimits.maxToolCalls,
-      maxTurns: input.executionLimits.maxTurns,
-    },
-    instructions: input.instructions,
-    model: input.model,
-    name: input.name,
-  });
+async function digestCanonicalRequest(canonicalRequest: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalRequest));
 
   return encodeBase64Url(new Uint8Array(digest));
+}
+
+async function digestAgentCreation(input: CreateAgentInput): Promise<string> {
+  return digestCanonicalRequest(
+    JSON.stringify({
+      executionLimits: {
+        maxDurationSeconds: input.executionLimits.maxDurationSeconds,
+        maxModelTokens: input.executionLimits.maxModelTokens,
+        maxToolCalls: input.executionLimits.maxToolCalls,
+        maxTurns: input.executionLimits.maxTurns,
+      },
+      instructions: input.instructions,
+      model: input.model,
+      name: input.name,
+    }),
+  );
+}
+
+async function digestAgentUpdate(input: UpdateAgentInput): Promise<string> {
+  return digestCanonicalRequest(
+    JSON.stringify({
+      id: input.id,
+      expectedRevision: input.expectedRevision,
+      executionLimits: {
+        maxDurationSeconds: input.executionLimits.maxDurationSeconds,
+        maxModelTokens: input.executionLimits.maxModelTokens,
+        maxToolCalls: input.executionLimits.maxToolCalls,
+        maxTurns: input.executionLimits.maxTurns,
+      },
+      instructions: input.instructions,
+      model: input.model,
+      name: input.name,
+    }),
+  );
 }
 
 export class OwnerControlPlane extends DurableObject {
@@ -151,6 +183,19 @@ export class OwnerControlPlane extends DurableObject {
           request_digest TEXT NOT NULL CHECK (length(request_digest) = 43),
           agent_id TEXT NOT NULL,
           revision INTEGER NOT NULL CHECK (revision > 0),
+          PRIMARY KEY (client_id, idempotency_key),
+          UNIQUE (agent_id, revision),
+          FOREIGN KEY (agent_id, revision)
+            REFERENCES agent_revisions(agent_id, revision) ON DELETE RESTRICT
+        )
+      `);
+      this.#sql.exec(`
+        CREATE TABLE IF NOT EXISTS agent_updates (
+          client_id TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          request_digest TEXT NOT NULL CHECK (length(request_digest) = 43),
+          agent_id TEXT NOT NULL,
+          revision INTEGER NOT NULL CHECK (revision > 1),
           PRIMARY KEY (client_id, idempotency_key),
           UNIQUE (agent_id, revision),
           FOREIGN KEY (agent_id, revision)
@@ -313,24 +358,7 @@ export class OwnerControlPlane extends DurableObject {
       return this.#deniedAgent("invalid_request");
     }
 
-    const row = this.#sql
-      .exec<Record<string, SqlStorageValue>>(
-        `SELECT
-             a.agent_id,
-             a.current_revision,
-             a.created_at,
-             r.name,
-             r.model,
-             r.instructions,
-             r.execution_limits,
-             r.capability_grants
-           FROM agents a
-           JOIN agent_revisions r
-             ON r.agent_id = a.agent_id AND r.revision = a.current_revision
-           WHERE a.agent_id = ?`,
-        request.data.id,
-      )
-      .toArray()[0];
+    const row = this.#currentAgentRow(request.data.id);
 
     if (row === undefined) {
       return this.#deniedAgent("agent_not_found");
@@ -339,6 +367,144 @@ export class OwnerControlPlane extends DurableObject {
     return getAgentResultSchema.parse({
       agent: this.#agentFromRow(row),
       ok: true,
+    });
+  }
+
+  async updateAgent(authorityInput: unknown, input: unknown): Promise<UpdateAgentResult> {
+    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+
+    if (!authorization.ok) {
+      return this.#deniedAgent(authorization.code);
+    }
+
+    const request = updateAgentInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return this.#deniedAgent("invalid_request");
+    }
+
+    const requestDigest = await digestAgentUpdate(request.data);
+
+    return this.#storage.transactionSync(() => {
+      const existingUpdate = this.#sql
+        .exec<Record<string, SqlStorageValue>>(
+          `SELECT
+               a.agent_id,
+               u.revision AS current_revision,
+               u.request_digest,
+               a.created_at,
+               r.name,
+               r.model,
+               r.instructions,
+               r.execution_limits,
+               r.capability_grants
+             FROM agent_updates u
+             JOIN agents a ON a.agent_id = u.agent_id
+             JOIN agent_revisions r
+               ON r.agent_id = u.agent_id AND r.revision = u.revision
+             WHERE u.client_id = ? AND u.idempotency_key = ?`,
+          authorization.authority.clientId,
+          request.data.idempotencyKey,
+        )
+        .toArray()[0];
+
+      if (existingUpdate !== undefined) {
+        if (existingUpdate["request_digest"] !== requestDigest) {
+          return this.#deniedAgent("idempotency_conflict");
+        }
+
+        return updateAgentResultSchema.parse({
+          agent: this.#agentFromRow(existingUpdate),
+          ok: true,
+          updated: false,
+        });
+      }
+
+      const currentRow = this.#currentAgentRow(request.data.id);
+
+      if (currentRow === undefined) {
+        return this.#deniedAgent("agent_not_found");
+      }
+
+      const currentAgent = this.#agentFromRow(currentRow);
+
+      if (currentAgent.revision !== request.data.expectedRevision) {
+        return this.#deniedAgent("revision_conflict");
+      }
+
+      if (
+        currentAgent.name === request.data.name &&
+        currentAgent.model === request.data.model &&
+        currentAgent.instructions === request.data.instructions &&
+        JSON.stringify(currentAgent.executionLimits) ===
+          JSON.stringify(request.data.executionLimits)
+      ) {
+        return this.#deniedAgent("no_changes");
+      }
+
+      if (currentAgent.revision >= MAXIMUM_REVISIONS_PER_AGENT) {
+        return this.#deniedAgent("agent_revision_limit_exceeded");
+      }
+
+      const capabilityGrants = currentRow["capability_grants"];
+      const updatedAt = Date.now();
+      const revision = currentAgent.revision + 1;
+
+      if (typeof capabilityGrants !== "string") {
+        throw new Error("Invalid Agent capability grants.");
+      }
+
+      this.#sql.exec(
+        `INSERT INTO agent_revisions
+             (agent_id, revision, name, model, instructions, execution_limits,
+              capability_grants, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        currentAgent.id,
+        revision,
+        request.data.name,
+        request.data.model,
+        request.data.instructions,
+        JSON.stringify(request.data.executionLimits),
+        capabilityGrants,
+        updatedAt,
+      );
+      this.#sql.exec(
+        "UPDATE agents SET current_revision = ? WHERE agent_id = ?",
+        revision,
+        currentAgent.id,
+      );
+      this.#sql.exec(
+        `INSERT INTO agent_updates
+             (client_id, idempotency_key, request_digest, agent_id, revision)
+           VALUES (?, ?, ?, ?, ?)`,
+        authorization.authority.clientId,
+        request.data.idempotencyKey,
+        requestDigest,
+        currentAgent.id,
+        revision,
+      );
+      this.#sql.exec(
+        `INSERT INTO audit_events (occurred_at, client_id, action, subject_id)
+           VALUES (?, ?, 'agent.updated', ?)`,
+        updatedAt,
+        authorization.authority.clientId,
+        currentAgent.id,
+      );
+
+      return updateAgentResultSchema.parse({
+        agent: {
+          capabilityGrants: currentAgent.capabilityGrants,
+          createdAt: currentAgent.createdAt,
+          executionLimits: request.data.executionLimits,
+          id: currentAgent.id,
+          instructions: request.data.instructions,
+          model: request.data.model,
+          name: request.data.name,
+          revision,
+        },
+        ok: true,
+        updated: true,
+      });
     });
   }
 
@@ -414,6 +580,27 @@ export class OwnerControlPlane extends DurableObject {
       name: row["name"],
       revision: row["current_revision"],
     });
+  }
+
+  #currentAgentRow(agentId: string): Record<string, SqlStorageValue> | undefined {
+    return this.#sql
+      .exec<Record<string, SqlStorageValue>>(
+        `SELECT
+             a.agent_id,
+             a.current_revision,
+             a.created_at,
+             r.name,
+             r.model,
+             r.instructions,
+             r.execution_limits,
+             r.capability_grants
+           FROM agents a
+           JOIN agent_revisions r
+             ON r.agent_id = a.agent_id AND r.revision = a.current_revision
+           WHERE a.agent_id = ?`,
+        agentId,
+      )
+      .toArray()[0];
   }
 
   #agentSummaryFromRow(row: Record<string, SqlStorageValue>): AgentSummary {

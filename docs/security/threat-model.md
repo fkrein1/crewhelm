@@ -106,15 +106,15 @@ before its client's lease expires remains valid for at most its independent 15-m
 
 Better Auth owns OAuth 2.1 mechanics, JWT/JWKS handling, GitHub login state, and secure session
 cookies. Crewhelm still owns the stricter authorization boundary: only HTTPS or exact loopback
-redirects, the explicit `control:read`, `control:write`, `agents:read`, and `integrations:read`
-scopes, one exact resource, the configured GitHub numeric owner, a 24-hour public-client lease, no
-refresh grant, no upstream scope, and no persisted upstream token. The consent page distinguishes
-control-plane summary read, full Agent-definition read, Agent creation, and Composio catalog
-egress; each implementation independently enforces its required scope. Existing clients and tokens
-are never silently widened. Database hooks force every upstream token field to null before
-persistence. Revisit the provider configuration and threat model before adding broader mutation
-classes, multi-owner service, refresh tokens, additional identity providers, or longer token
-lifetimes.
+redirects, the explicit `control:read`, `control:write`, `agents:read`, `agents:write`, and
+`integrations:read` scopes, one exact resource, the configured GitHub numeric owner, a 24-hour
+public-client lease, no refresh grant, no upstream scope, and no persisted upstream token. The
+consent page distinguishes control-plane summary read, full Agent-definition read, Agent creation,
+Agent revision updates, and Composio catalog egress; each implementation independently enforces its
+required scope. Existing clients and tokens are never silently widened. Database hooks force every
+upstream token field to null before persistence. Revisit the provider configuration and threat
+model before adding broader mutation classes, multi-owner service, refresh tokens, additional
+identity providers, or longer token lifetimes.
 
 The provider seeds the exact MCP resource in insert-only mode so public requests cannot turn
 configuration into repeated D1 writes. Scope and access-token lifetime changes require explicit
@@ -123,25 +123,29 @@ overwrite it. Scope migrations update only an explicitly recognized prior repres
 
 ## Agent registry authority and residual risk
 
-The owner-named Durable Object generates Agent IDs and stores each initial configuration as
-immutable revision 1. Creation requires `control:write`; status and bounded summary listing require
-`control:read`; exact current-definition reads require the separately consented `agents:read`
-scope. Exact reads return instructions only after validating the owner-generated Agent ID inside
-the owner-bound Durable Object. Missing, malformed, wrong-owner, and insufficient-scope reads use
-fixed failures, and a read creates no audit mutation. Caller input cannot select a Durable Object
-name, add a capability grant, or start execution. Instructions and model identifiers are stored as
-inert validated data; using them in a run requires a separately reviewed runtime authorization
-boundary.
+The owner-named Durable Object generates Agent IDs and stores configurations as immutable
+revisions. Creation requires `control:write`; replacement creates a new revision and requires the
+separately consented `agents:write`; status and bounded summary listing require `control:read`;
+exact current-definition reads require `agents:read`. Exact reads return instructions only after
+validating the owner-generated Agent ID inside the owner-bound Durable Object. Missing, malformed,
+wrong-owner, and insufficient-scope requests use fixed failures, and a read creates no audit
+mutation. Caller input cannot select a Durable Object name, alter capability grants, or start
+execution. Instructions and model identifiers are stored as inert validated data; using them in a
+run requires a separately reviewed runtime authorization boundary.
 
-Every creation carries a bounded idempotency key scoped to the authenticated MCP client. An exact
-replay returns the original Agent, while key reuse by that client with different normalized input
-fails closed. The record stores only a digest of the normalized request. The Agent, revision,
-idempotency record, and minimal audit event commit in one synchronous SQLite transaction. Listing
-omits instructions and uses bounded pages so a large or hostile configuration cannot amplify MCP
-output. A transactional ceiling of 100 Agents per owner bounds the Agent, revision, idempotency,
-audit, and maximum instruction storage created by this surface; exact retries still succeed at the
-ceiling, while new creations fail without partial writes. The registry has no edit, delete, run,
-connection, or grant operation.
+Every creation and update carries a bounded idempotency key scoped to the authenticated MCP client
+and its operation class. An exact replay returns the original Agent revision without another
+mutation, while key reuse by that client with different normalized input fails closed. Records
+store only request digests. Updates are full configuration replacements, require the expected
+current revision, reject no-ops and stale writes, and preserve capability grants. The Agent
+revision, current pointer, idempotency record, and one minimal audit event commit in one synchronous
+SQLite transaction. Durable Object serialization admits only one of two concurrent writes against
+the same revision. Listing omits instructions and uses bounded pages so a large or hostile
+configuration cannot amplify MCP output. A transactional ceiling of 100 Agents per owner bounds
+initial Agent storage; exact creation retries still succeed at the ceiling, while new creations
+fail without partial writes. Each Agent retains at most 1,000 immutable revisions; the final
+allowed update and its exact retries succeed, while a distinct update at the ceiling fails without
+partial writes. The registry has no delete, run, connection, or grant operation.
 
 ## Composio catalog authority and residual risk
 
