@@ -197,9 +197,12 @@ caches. Completed provider effects cannot be recalled; record and reconcile them
 
 ## MCP command path
 
-The Worker is an OAuth 2.1 resource server over Streamable HTTP. Validate signature, issuer,
-audience/resource, subject, time claims, client ID, and operation scopes; deny missing context and
-never forward bearer tokens.
+The Worker is an OAuth 2.1 resource server over Streamable HTTP. Validate token authenticity
+through either a signature or an active opaque-token lookup, bind the authorization server or
+issuer, and validate audience/resource, subject, expiry, client ID, and operation scopes. The
+individual release uses hashed active-token records in its bound OAuth KV namespace, with an exact
+`/mcp` resource and encrypted authority props. Deny missing context and never forward bearer
+tokens.
 
 Create a fresh MCP server, handler, and transport per request. Never share a module-global instance
 across clients.

@@ -5,8 +5,9 @@ Cloudflare. It is designed to be administered through MCP, with a bootstrap CLI 
 shareable agent recipes. Composio supplies the broad app and web integration plane, including
 toolkits such as Firecrawl.
 
-The repository is implementing its first Cloudflare runtime slices. A deployable health Worker and
-local diagnostic CLI are available, but no usable agent runtime has been released yet.
+The repository is implementing its first Cloudflare runtime slices. A deployable health Worker,
+authenticated read-only MCP status tool, and local diagnostic CLI are available, but no usable
+agent runtime has been released yet.
 
 ## Principles
 
@@ -39,6 +40,40 @@ node apps/cli/dist/crewhelm.js doctor --endpoint https://your-worker.example
 
 Use `--json` for machine-readable output. HTTP is accepted only for exact loopback hosts during
 local development.
+
+## Development Worker authentication
+
+The Worker exposes Streamable HTTP MCP at `/mcp`. OAuth clients dynamically register at
+`/oauth/register`, request the single `control:read` scope, and authenticate the owner through a
+GitHub OAuth App. The app callback URL must be:
+
+```text
+https://YOUR_WORKER_HOST/oauth/github/callback
+```
+
+Configure these Worker values with `wrangler secret put` so account-specific identity and OAuth
+configuration do not enter source control:
+
+- `GITHUB_CLIENT_ID`
+- `GITHUB_CLIENT_SECRET`
+- `OWNER_GITHUB_USER_ID` — the stable numeric GitHub user ID, not a login or email
+
+The GitHub token is used only to read that numeric ID during authorization and is then discarded.
+OAuth KV stores dynamically registered client metadata for at most 24 hours, authorization grants,
+and hashed tokens with wrapped encrypted props. It never stores the GitHub token or GitHub client
+secret. Access tokens last 15 minutes, refresh tokens are disabled, expired OAuth records are
+purged hourly, authorization endpoints allow at most 10 requests per minute per Cloudflare client
+address, and MCP allows 60. The hourly pass also removes grants whose 24-hour client registration
+has expired; because KV is eventually consistent, an authorization completed immediately before a
+purge can rarely require reauthorization. The current `crewhelm_status` MCP tool returns the
+authenticated owner's control-plane readiness.
+
+Changing `OWNER_GITHUB_USER_ID` or the GitHub client secret blocks new authorization but does not
+revoke an already issued 15-minute access token. For emergency global revocation, create a fresh
+OAuth KV namespace, replace the `OAUTH_KV` binding ID, and deploy. Retain the old namespace for
+forensics or rollback rather than deleting it. Then rotate the GitHub OAuth secret and reauthorize
+clients. This deliberately invalidates every client, grant, and token without changing durable
+owner control-plane state.
 
 Read [AGENTS.md](AGENTS.md) before using an AI coding agent in this repository. Human contribution
 guidance lives in [CONTRIBUTING.md](CONTRIBUTING.md). Shared language is defined in
