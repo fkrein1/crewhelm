@@ -74,10 +74,11 @@ machine-readable reports. HTTP is accepted only for exact loopback hosts during 
 The Worker exposes Streamable HTTP MCP at `/mcp`. OAuth clients dynamically register at
 `/api/auth/oauth2/register` and authenticate the owner through a GitHub OAuth App. Clients request
 `control:read` to inspect control-plane status and Agent summaries, `control:write` to create Agent
-definitions, and `integrations:read` to search Composio's catalog and inspect exact tool schemas.
-Registrations default to all three scopes; every token keeps the exact approved scope set, so
-adding a capability never widens an issued token. The consent page discloses that integration
-searches send terms to Composio. The app callback URL must be:
+definitions, `agents:read` to inspect full Agent definitions including instructions, and
+`integrations:read` to search Composio's catalog and inspect exact tool schemas. Registrations
+default to all four scopes; every token keeps the exact approved scope set, so adding a capability
+never widens an issued token. The consent page discloses that integration searches send terms to
+Composio. The app callback URL must be:
 
 ```text
 https://YOUR_WORKER_HOST/api/auth/callback/github
@@ -105,6 +106,7 @@ The MCP surface exposes:
 
 - `crewhelm_status` — return control-plane readiness; requires `control:read`.
 - `crewhelm_list_agents` — return bounded Agent summaries; requires `control:read`.
+- `crewhelm_get_agent` — return one Agent's current immutable definition; requires `agents:read`.
 - `crewhelm_search_integrations` — search and paginate the complete non-deprecated Composio
   integration catalog, including Composio-managed and project toolkits; requires
   `integrations:read`.
@@ -115,9 +117,6 @@ The MCP surface exposes:
 - `crewhelm_create_agent` — create an idempotent owner-scoped Agent revision with an explicit
   model, bounded instructions and execution limits, and no capability grants; requires
   `control:write`. Each owner can store at most 100 Agents.
-
-Agent execution, tools, connections, recipe installation, edits, and deletion are outside this
-surface.
 
 Changing `OWNER_GITHUB_USER_ID` or the GitHub client secret blocks new authorization but does not
 revoke an already issued 15-minute access token. For emergency global revocation, create a fresh

@@ -1,9 +1,12 @@
 import {
+  AGENTS_READ_SCOPE,
   agentSchema,
   agentSummarySchema,
   controlPlaneStatusResultSchema,
   createAgentInputSchema,
   createAgentResultSchema,
+  getAgentInputSchema,
+  getAgentResultSchema,
   listAgentsInputSchema,
   listAgentsResultSchema,
   MAXIMUM_AGENTS_PER_OWNER,
@@ -15,6 +18,7 @@ import {
   type ControlPlaneStatusResult,
   type CreateAgentInput,
   type CreateAgentResult,
+  type GetAgentResult,
   type ListAgentsResult,
   type OwnerAuthority,
   type OwnerScope,
@@ -30,6 +34,7 @@ type AuthorityErrorCode =
 type AgentRequestErrorCode =
   | AuthorityErrorCode
   | "agent_limit_exceeded"
+  | "agent_not_found"
   | "idempotency_conflict"
   | "invalid_request";
 type AgentRequestFailure = Extract<CreateAgentResult, { ok: false }>;
@@ -292,6 +297,48 @@ export class OwnerControlPlane extends DurableObject {
       });
 
       return createAgentResultSchema.parse({ agent, created: true, ok: true });
+    });
+  }
+
+  getAgent(authorityInput: unknown, input: unknown): GetAgentResult {
+    const authorization = this.#authorize(authorityInput, AGENTS_READ_SCOPE);
+
+    if (!authorization.ok) {
+      return this.#deniedAgent(authorization.code);
+    }
+
+    const request = getAgentInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return this.#deniedAgent("invalid_request");
+    }
+
+    const row = this.#sql
+      .exec<Record<string, SqlStorageValue>>(
+        `SELECT
+             a.agent_id,
+             a.current_revision,
+             a.created_at,
+             r.name,
+             r.model,
+             r.instructions,
+             r.execution_limits,
+             r.capability_grants
+           FROM agents a
+           JOIN agent_revisions r
+             ON r.agent_id = a.agent_id AND r.revision = a.current_revision
+           WHERE a.agent_id = ?`,
+        request.data.id,
+      )
+      .toArray()[0];
+
+    if (row === undefined) {
+      return this.#deniedAgent("agent_not_found");
+    }
+
+    return getAgentResultSchema.parse({
+      agent: this.#agentFromRow(row),
+      ok: true,
     });
   }
 

@@ -84,12 +84,14 @@ describe("OAuth server boundary", () => {
     const migrations = readAuthTestMigrations().filter(
       (candidate) =>
         candidate.name === "0002_control_write_scope.sql" ||
-        candidate.name === "0003_integration_catalog_scope.sql",
+        candidate.name === "0003_integration_catalog_scope.sql" ||
+        candidate.name === "0004_agent_definition_read_scope.sql",
     );
 
     expect(migrations.map((migration) => migration.name)).toEqual([
       "0002_control_write_scope.sql",
       "0003_integration_catalog_scope.sql",
+      "0004_agent_definition_read_scope.sql",
     ]);
     for (const migration of migrations) {
       for (const query of migration.queries) {

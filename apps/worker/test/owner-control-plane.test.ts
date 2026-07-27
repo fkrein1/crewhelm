@@ -1,8 +1,10 @@
 import {
+  AGENTS_READ_SCOPE,
   MAXIMUM_AGENTS_PER_OWNER,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   agentSchema,
+  getAgentResultSchema,
   ownerAuthoritySchema,
   type CreateAgentInput,
   type OwnerAuthority,
@@ -41,6 +43,16 @@ function agentInput(idempotencyKey: string, name = "Inbox triage"): CreateAgentI
     instructions: "Sort new work into a concise priority list.",
     model: "@cf/meta/llama-4-scout-17b-16e-instruct",
     name,
+  };
+}
+
+function fixedAgentFailure(code: string) {
+  return {
+    error: {
+      code,
+      message: "Agent request denied.",
+    },
+    ok: false,
   };
 }
 
@@ -253,7 +265,11 @@ describe("OwnerControlPlane", () => {
   });
 
   it("creates an immutable initial Agent revision and lists only a bounded summary", async () => {
-    const authority = await authorityFor("201", [OWNER_READ_SCOPE, OWNER_WRITE_SCOPE]);
+    const authority = await authorityFor("201", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+    ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const input = agentInput("create-201");
     const created = await stub.createAgent(authority, input);
@@ -290,6 +306,75 @@ describe("OwnerControlPlane", () => {
       nextCursor: null,
       ok: true,
     });
+    await expect(stub.getAgent(authority, { id: created.agent.id })).resolves.toEqual({
+      agent: created.agent,
+      ok: true,
+    });
+  });
+
+  it("reads the current Agent definition durably without creating an audit side effect", async () => {
+    const authority = await authorityFor("211", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("create-211"));
+
+    if (!created.ok) {
+      throw new Error("Expected Agent creation to succeed.");
+    }
+
+    await evictDurableObject(stub);
+    const result = await stub.getAgent(authority, { id: created.agent.id });
+
+    expect(getAgentResultSchema.parse(result)).toEqual({
+      agent: created.agent,
+      ok: true,
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql.exec("SELECT action, subject_id FROM audit_events").toArray(),
+      ),
+    ).resolves.toEqual([
+      {
+        action: "agent.created",
+        subject_id: created.agent.id,
+      },
+    ]);
+  });
+
+  it("denies malformed, missing, insufficient-scope, and cross-owner Agent reads safely", async () => {
+    const first = await authorityFor("212", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+    ]);
+    const second = await authorityFor("213", [AGENTS_READ_SCOPE]);
+    const legacyRead = await authorityFor("212", [OWNER_READ_SCOPE]);
+    const firstStub = env.OWNER_CONTROL_PLANE.getByName(first.ownerKey);
+    const secondStub = env.OWNER_CONTROL_PLANE.getByName(second.ownerKey);
+    const created = await firstStub.createAgent(first, agentInput("create-212"));
+
+    if (!created.ok) {
+      throw new Error("Expected Agent creation to succeed.");
+    }
+
+    await expect(firstStub.getAgent(legacyRead, { id: created.agent.id })).resolves.toEqual(
+      fixedAgentFailure("insufficient_scope"),
+    );
+    await expect(firstStub.getAgent(second, { id: created.agent.id })).resolves.toEqual(
+      fixedAgentFailure("owner_mismatch"),
+    );
+    await expect(secondStub.getAgent(second, { id: created.agent.id })).resolves.toEqual(
+      fixedAgentFailure("agent_not_found"),
+    );
+    await expect(
+      firstStub.getAgent(first, {
+        id: "credential-like-value-that-must-not-be-reflected",
+        unexpected: true,
+      }),
+    ).resolves.toEqual(fixedAgentFailure("invalid_request"));
   });
 
   it("replays exact creation retries and rejects conflicting reuse without duplicate audit", async () => {
