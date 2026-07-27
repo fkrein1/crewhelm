@@ -166,6 +166,38 @@ allowed update and its exact retries succeed, while a distinct update at the cei
 partial writes. Agent registry methods have no delete, run, connection-grant, or execution
 operation; connection onboarding is a separate scope and state machine.
 
+## ToolGate policy authority and residual risk
+
+The pure ToolGate policy module accepts only closed, bounded Crewhelm contracts. It intersects an
+immutable capability grant, a trusted adapter's classified action, and an authoritative current
+policy and budget snapshot. Exact owner, Agent revision, capability, grant, Crewhelm connection,
+Composio integration, tool, pinned toolkit version, effect, and target-digest bindings must match.
+The policy denies inactive or stale Agents, grants, and connections; kill-switch activation;
+expired grants; exhausted call, concurrency, duration, output, or cost budgets; and unknown cost.
+Write and destructive effects return `requires_approval` rather than allow. Valid catalog slugs
+are schema-bounded but not curated, so project toolkits and newly discovered Composio integrations
+remain eligible without becoming authorized.
+
+Every status and budget snapshot identifies its exact owner, Agent revision, run, grant,
+capability, and connection. ToolGate rejects the snapshot before consuming any authority when
+those bindings do not match both the grant and classified action, preventing one object's active
+status or unused budget from authorizing another object.
+
+The evaluator uses its own current time rather than accepting the snapshot timestamp as current.
+It rejects future-dated and more than five-second-old snapshots, checks grant expiry against that
+trusted time, and never extends local decision evidence beyond 30 seconds from either evaluation
+or snapshot creation.
+
+Raw tool arguments, target values, provider responses, credentials, and secrets do not enter the
+policy contract. Input and target digests are authority only when produced by a trusted, versioned
+adapter; ToolGate derives the complete canonical action digest. Model output and Composio tags
+cannot classify their own effect, targets, or cost. The current allow result is local policy
+evidence only. It is not signed, reserves no budget, cannot cross a Durable Object boundary, and no
+connector accepts it. Runtime integration remains denied until the execution owner can reserve
+budget atomically, rerun the gate against current revocation and kill-switch state, and issue a
+short-lived verified permit. Approval-required effects remain unavailable until a distinct
+owner-authenticated approval channel exists.
+
 ## Composio catalog authority and residual risk
 
 The `integrations:read` MCP catalog tools send bounded searches, optional exact integration

@@ -167,6 +167,25 @@ egress, and cost; propagates cancellation; normalizes untrusted results; and emi
 Telemetry contains only allowlisted metadata and correlation IDs—never raw provider bodies,
 headers, URLs, credentials, or exceptions.
 
+The pure policy layer evaluates one classified Composio action against one immutable exact grant
+and an authoritative current policy and budget snapshot. Raw tool arguments and target values do
+not enter this layer; trusted adapters supply canonical input and target digests plus an explicit
+effect and known cost. The snapshot is itself bound to the exact owner, Agent revision, run, grant,
+capability, and connection before its status or budget values are used. ToolGate derives the
+complete canonical action digest. The decision binds owner, Agent revision, run, tool call,
+capability, connection, exact toolkit/tool/version, effect, targets, and the tightest time, output,
+and cost limits. Snapshot freshness and grant expiry are checked against the evaluator's trusted
+current time; future-dated or more than five-second-old snapshots fail closed, and decision expiry
+is bounded from both current time and snapshot creation. It also fails closed on malformed input,
+inactive policy, cross-object mismatches, unknown cost, and exhausted budgets. Write and
+destructive effects require distinct owner approval.
+
+An in-process allow decision is deliberately not a verified execution permit, does not reserve a
+budget, and cannot authorize a connector or cross an object boundary. The execution owner must
+atomically reserve current budget, rerun policy immediately before the effect, and issue the
+short-lived verified permit described above. Until that seam exists, no decision reaches a
+provider.
+
 ### Composio
 
 Composio is the default path to third-party apps. Crewhelm maps its opaque owner key to a stable

@@ -253,6 +253,7 @@ describe("repository foundation", () => {
     const cliManifest = parseJsonObject(await read("apps/cli/package.json"));
     const composioManifest = parseJsonObject(await read("packages/composio/package.json"));
     const contractsManifest = parseJsonObject(await read("packages/contracts/package.json"));
+    const coreManifest = parseJsonObject(await read("packages/core/package.json"));
 
     expect(cliManifest).toMatchObject({
       name: "@crewhelm/cli",
@@ -285,6 +286,16 @@ describe("repository foundation", () => {
       private: true,
       dependencies: {
         zod: "4.4.3",
+      },
+      exports: {
+        ".": "./src/index.ts",
+      },
+    });
+    expect(coreManifest).toMatchObject({
+      name: "@crewhelm/core",
+      private: true,
+      dependencies: {
+        "@crewhelm/contracts": "workspace:*",
       },
       exports: {
         ".": "./src/index.ts",
