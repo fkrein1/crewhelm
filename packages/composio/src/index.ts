@@ -1,14 +1,22 @@
 import {
   integrationCatalogSearchInputSchema,
   integrationCatalogSearchResultSchema,
+  integrationToolkitVersionSchema,
+  integrationToolSearchInputSchema,
+  integrationToolSearchResultSchema,
   type IntegrationCatalogItem,
   type IntegrationCatalogSearchInput,
   type IntegrationCatalogSearchResult,
+  type IntegrationToolCatalogItem,
+  type IntegrationToolSearchInput,
+  type IntegrationToolSearchResult,
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
 const COMPOSIO_TOOLKITS_URL = "https://backend.composio.dev/api/v3/toolkits";
-const MAXIMUM_CATALOG_RESPONSE_BYTES = 256 * 1_024;
+const COMPOSIO_TOOLS_URL = "https://backend.composio.dev/api/v3.1/tools";
+const MAXIMUM_TOOLKIT_RESPONSE_BYTES = 256 * 1_024;
+const MAXIMUM_TOOL_RESPONSE_BYTES = 1_024 * 1_024;
 const CATALOG_TIMEOUT_MS = 5_000;
 
 const composioApiKeySchema = z.string().min(16).max(4_096).regex(/^\S+$/);
@@ -17,7 +25,7 @@ const composioToolkitSchema = z.looseObject({
   meta: z.looseObject({
     description: z.string().max(2_000).nullish(),
     tools_count: z.number().int().min(0).max(1_000_000),
-    version: z.string().min(1).max(128),
+    version: integrationToolkitVersionSchema,
   }),
   name: z.string().min(1).max(160),
   no_auth: z.boolean().optional(),
@@ -27,9 +35,28 @@ const composioCatalogResponseSchema = z.looseObject({
   items: z.array(composioToolkitSchema).max(50),
   next_cursor: z.string().min(1).max(2_048).nullish(),
 });
+const composioToolSchema = z.looseObject({
+  description: z.string().max(2_000).nullish(),
+  is_deprecated: z.literal(false).optional(),
+  name: z.string().min(1).max(160),
+  no_auth: z.boolean().optional(),
+  scopes: z.array(z.string().min(1).max(512)).max(32).nullish(),
+  slug: z.string().min(1).max(256),
+  tags: z.array(z.string().min(1).max(64)).max(32).nullish(),
+  toolkit: z.looseObject({
+    name: z.string().min(1).max(160),
+    slug: z.string().min(1).max(128),
+  }),
+  version: integrationToolkitVersionSchema,
+});
+const composioToolCatalogResponseSchema = z.looseObject({
+  items: z.array(composioToolSchema).max(20),
+  next_cursor: z.string().min(1).max(2_048).nullish(),
+});
 
 export interface ComposioCatalog {
   search(input: IntegrationCatalogSearchInput): Promise<IntegrationCatalogSearchResult>;
+  searchTools(input: IntegrationToolSearchInput): Promise<IntegrationToolSearchResult>;
 }
 
 export interface ComposioCatalogOptions {
@@ -38,7 +65,7 @@ export interface ComposioCatalogOptions {
   signal?: AbortSignal;
 }
 
-async function readBoundedJson(response: Response): Promise<unknown> {
+async function readBoundedJson(response: Response, maximumBytes: number): Promise<unknown> {
   if (!response.body) {
     return null;
   }
@@ -56,7 +83,7 @@ async function readBoundedJson(response: Response): Promise<unknown> {
 
     byteLength += result.value.byteLength;
 
-    if (byteLength > MAXIMUM_CATALOG_RESPONSE_BYTES) {
+    if (byteLength > maximumBytes) {
       await reader.cancel();
       throw new Error("Composio catalog response exceeded the bounded reader.");
     }
@@ -75,13 +102,13 @@ async function readBoundedJson(response: Response): Promise<unknown> {
   return JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(body));
 }
 
-function unavailable(): IntegrationCatalogSearchResult {
+function unavailable() {
   return {
     error: {
-      code: "integration_catalog_unavailable",
-      message: "Integration catalog request denied.",
+      code: "integration_catalog_unavailable" as const,
+      message: "Integration catalog request denied." as const,
     },
-    ok: false,
+    ok: false as const,
   };
 }
 
@@ -113,9 +140,53 @@ function normalizeToolkit(toolkit: z.infer<typeof composioToolkitSchema>): Integ
   };
 }
 
+function normalizeTool(tool: z.infer<typeof composioToolSchema>): IntegrationToolCatalogItem {
+  return {
+    description: tool.description ?? null,
+    integration: {
+      name: tool.toolkit.name,
+      slug: tool.toolkit.slug,
+    },
+    name: tool.name,
+    noAuth: tool.no_auth ?? null,
+    requiredScopes: tool.scopes ?? null,
+    slug: tool.slug,
+    tags: tool.tags ?? [],
+    version: tool.version,
+  };
+}
+
 export function createComposioCatalog(options: ComposioCatalogOptions): ComposioCatalog {
   const apiKey = composioApiKeySchema.safeParse(options.apiKey);
   const fetchImplementation = options.fetch ?? globalThis.fetch;
+
+  async function fetchCatalog(endpoint: URL, maximumBytes: number): Promise<unknown> {
+    if (!apiKey.success) {
+      throw new Error("Composio catalog is unavailable.");
+    }
+
+    const response = await fetchImplementation(endpoint, {
+      headers: {
+        accept: "application/json",
+        "x-api-key": apiKey.data,
+      },
+      method: "GET",
+      redirect: "manual",
+      signal:
+        options.signal === undefined
+          ? AbortSignal.timeout(CATALOG_TIMEOUT_MS)
+          : AbortSignal.any([options.signal, AbortSignal.timeout(CATALOG_TIMEOUT_MS)]),
+    });
+
+    if (
+      response.status !== 200 ||
+      !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
+    ) {
+      throw new Error("Composio catalog is unavailable.");
+    }
+
+    return readBoundedJson(response, maximumBytes);
+  }
 
   return {
     async search(input) {
@@ -140,27 +211,9 @@ export function createComposioCatalog(options: ComposioCatalogOptions): Composio
       }
 
       try {
-        const response = await fetchImplementation(endpoint, {
-          headers: {
-            accept: "application/json",
-            "x-api-key": apiKey.data,
-          },
-          method: "GET",
-          redirect: "manual",
-          signal:
-            options.signal === undefined
-              ? AbortSignal.timeout(CATALOG_TIMEOUT_MS)
-              : AbortSignal.any([options.signal, AbortSignal.timeout(CATALOG_TIMEOUT_MS)]),
-        });
-
-        if (
-          response.status !== 200 ||
-          !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
-        ) {
-          return unavailable();
-        }
-
-        const catalog = composioCatalogResponseSchema.safeParse(await readBoundedJson(response));
+        const catalog = composioCatalogResponseSchema.safeParse(
+          await fetchCatalog(endpoint, MAXIMUM_TOOLKIT_RESPONSE_BYTES),
+        );
 
         if (!catalog.success) {
           return unavailable();
@@ -170,6 +223,50 @@ export function createComposioCatalog(options: ComposioCatalogOptions): Composio
           integrations: catalog.data.items.map(normalizeToolkit),
           nextCursor: catalog.data.next_cursor ?? null,
           ok: true,
+        });
+
+        return containsSecret(result, apiKey.data) ? unavailable() : result;
+      } catch {
+        return unavailable();
+      }
+    },
+    async searchTools(input) {
+      const request = integrationToolSearchInputSchema.safeParse(input);
+
+      if (!apiKey.success || !request.success) {
+        return unavailable();
+      }
+
+      const endpoint = new URL(COMPOSIO_TOOLS_URL);
+      endpoint.searchParams.set("include_deprecated", "false");
+      endpoint.searchParams.set("limit", String(request.data.limit));
+      endpoint.searchParams.set("toolkit_versions", "latest");
+
+      if (request.data.cursor !== undefined) {
+        endpoint.searchParams.set("cursor", request.data.cursor);
+      }
+
+      if (request.data.integrationSlug !== undefined) {
+        endpoint.searchParams.set("toolkit_slug", request.data.integrationSlug);
+      }
+
+      if (request.data.query !== undefined) {
+        endpoint.searchParams.set("query", request.data.query);
+      }
+
+      try {
+        const catalog = composioToolCatalogResponseSchema.safeParse(
+          await fetchCatalog(endpoint, MAXIMUM_TOOL_RESPONSE_BYTES),
+        );
+
+        if (!catalog.success) {
+          return unavailable();
+        }
+
+        const result = integrationToolSearchResultSchema.parse({
+          nextCursor: catalog.data.next_cursor ?? null,
+          ok: true,
+          tools: catalog.data.items.map(normalizeTool),
         });
 
         return containsSecret(result, apiKey.data) ? unavailable() : result;

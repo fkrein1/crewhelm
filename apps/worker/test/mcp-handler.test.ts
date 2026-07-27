@@ -6,6 +6,7 @@ import {
   createAgentResultSchema,
   controlPlaneStatusResultSchema,
   integrationCatalogSearchResultSchema,
+  integrationToolSearchResultSchema,
   listAgentsResultSchema,
   ownerAuthoritySchema,
   type OwnerScope,
@@ -17,6 +18,7 @@ import {
   MCP_CREATE_AGENT_TOOL_NAME,
   MCP_LIST_AGENTS_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
+  MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME,
   MCP_STATUS_TOOL_NAME,
   handleAuthenticatedMcpRequest,
 } from "../src/mcp-handler.js";
@@ -415,6 +417,109 @@ describe("authenticated MCP handler", () => {
     });
   });
 
+  it("discovers exact Composio tools with integration read scope", async () => {
+    const authority = await ownerAuthority("mcp-tool-catalog-owner", [INTEGRATIONS_READ_SCOPE]);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        items: [
+          {
+            description: "Crawl a URL.",
+            is_deprecated: false,
+            name: "Scrape",
+            no_auth: false,
+            scopes: [],
+            slug: "FIRECRAWL_SCRAPE",
+            tags: ["web"],
+            toolkit: {
+              name: "Firecrawl",
+              slug: "firecrawl",
+            },
+            version: "20260701_00",
+          },
+        ],
+        next_cursor: null,
+      }),
+    );
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 15,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              integrationSlug: "firecrawl",
+              query: "crawl web",
+            },
+            name: MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload: unknown = await response.json();
+    const result = jsonRpcToolResultSchema.parse(payload).result;
+    const text = result.content[0]?.text;
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(result.isError).toBe(false);
+    expect(integrationToolSearchResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
+      nextCursor: null,
+      ok: true,
+      tools: [
+        {
+          description: "Crawl a URL.",
+          integration: {
+            name: "Firecrawl",
+            slug: "firecrawl",
+          },
+          name: "Scrape",
+          noAuth: false,
+          requiredScopes: [],
+          slug: "FIRECRAWL_SCRAPE",
+          tags: ["web"],
+          version: "20260701_00",
+        },
+      ],
+    });
+  });
+
+  it("does not widen control read into integration tool egress", async () => {
+    const authority = await ownerAuthority("mcp-control-read-tool-catalog-owner", [
+      OWNER_READ_SCOPE,
+    ]);
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 16,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { integrationSlug: "github" },
+            name: MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload: unknown = await response.json();
+    const result = jsonRpcToolResultSchema.parse(payload).result;
+    const text = result.content[0]?.text;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.isError).toBe(true);
+    expect(integrationToolSearchResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
+      error: {
+        code: "insufficient_scope",
+        message: "Integration catalog request denied.",
+      },
+      ok: false,
+    });
+  });
+
   it("rejects a too-short integration search before provider egress", async () => {
     const authority = await ownerAuthority("mcp-short-catalog-query-owner", [
       INTEGRATIONS_READ_SCOPE,
@@ -423,7 +528,7 @@ describe("authenticated MCP handler", () => {
     const response = await handleAuthenticatedMcpRequest(
       toolRequest(
         JSON.stringify({
-          id: 15,
+          id: 17,
           jsonrpc: "2.0",
           method: "tools/call",
           params: {

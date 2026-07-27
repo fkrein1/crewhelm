@@ -108,6 +108,8 @@ The MCP surface exposes:
 - `crewhelm_search_integrations` — search and paginate the complete non-deprecated Composio
   integration catalog, including Composio-managed and project toolkits; requires
   `integrations:read`.
+- `crewhelm_search_integration_tools` — search exact tools and resolved versions across every
+  current Composio integration, optionally within one integration; requires `integrations:read`.
 - `crewhelm_create_agent` — create an idempotent owner-scoped Agent revision with an explicit
   model, bounded instructions and execution limits, and no capability grants; requires
   `control:write`. Each owner can store at most 100 Agents.
