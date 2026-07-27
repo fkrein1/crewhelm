@@ -10,9 +10,14 @@ to reach.
   connections, recipes, policy, and runs.
 - **Cloudflare runs the system.** Workers, Durable Objects, Think, Workflows, and platform storage
   provide the durable control and execution plane.
+- **Framework power stays reachable.** MCP should administer the complete useful Agent lifecycle,
+  and Crewhelm adapters should preserve the underlying Agents/Think capabilities instead of
+  replacing them with a permanently reduced abstraction. Capabilities ship behind deterministic
+  policy and recovery contracts, not by bypassing them.
 - **Composio is the integration and web plane.** Its 1,000+ toolkits provide discovery,
   authentication, and execution for apps and web providers such as Firecrawl. Crewhelm should not
-  rebuild those adapters.
+  rebuild those adapters or maintain a curated toolkit subset. Every catalog integration is
+  eligible for owner connection and grant when it can satisfy Crewhelm's execution contract.
 - **Recipes are the sharing unit.** A recipe declares an agent's job, model needs, Composio tools,
   connections, and limits. It contains no code, credential, or private history.
 - **Safety is product quality.** Authority, secret isolation, data integrity, recovery, and clear
@@ -66,15 +71,17 @@ Publishing is explicit. Installation shows the effective authority requested and
 source. Updates never silently widen grants. Make this Git loop excellent before building a hosted
 marketplace.
 
-## Current no-gos
+## Scope boundaries
 
 - hosted multi-tenancy, organization roles, billing, or a graphical control center;
 - arbitrary executable recipes;
 - custom integrations already served well by Composio;
-- every model, edge case, or connector on day one; and
+- simultaneous support for every model or edge case; and
 - a centralized marketplace backend.
 
-These bound the current bet; evidence may change them.
+These bound product investment, not underlying capability reach. Framework features, models, and
+integrations can land incrementally while preserving a path to the full Agent framework and
+Composio catalog.
 
 ## Influences
 
