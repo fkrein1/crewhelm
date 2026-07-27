@@ -70,7 +70,9 @@ describe("OAuth server boundary", () => {
   });
 
   it("widens the seeded MCP resource through idempotent D1 scope migrations", async () => {
-    await register(["https://migration-client.example/callback"]);
+    const registration = registrationSchema.parse(
+      await (await register(["https://migration-client.example/callback"])).json(),
+    );
     const oldStoredScopes = JSON.stringify(JSON.stringify([OWNER_READ_SCOPE]));
 
     await workerEnv()
@@ -87,7 +89,8 @@ describe("OAuth server boundary", () => {
         candidate.name === "0003_integration_catalog_scope.sql" ||
         candidate.name === "0004_agent_definition_read_scope.sql" ||
         candidate.name === "0005_agent_update_scope.sql" ||
-        candidate.name === "0006_connection_write_scope.sql",
+        candidate.name === "0006_connection_write_scope.sql" ||
+        candidate.name === "0007_connection_read_scope.sql",
     );
 
     expect(migrations.map((migration) => migration.name)).toEqual([
@@ -96,6 +99,7 @@ describe("OAuth server boundary", () => {
       "0004_agent_definition_read_scope.sql",
       "0005_agent_update_scope.sql",
       "0006_connection_write_scope.sql",
+      "0007_connection_read_scope.sql",
     ]);
     for (const migration of migrations) {
       for (const query of migration.queries) {
@@ -110,8 +114,13 @@ describe("OAuth server boundary", () => {
       .AUTH_DB.prepare(`SELECT "allowedScopes" FROM "oauthResource" WHERE "identifier" = ?`)
       .bind(`${origin}/mcp`)
       .first();
+    const client = await workerEnv()
+      .AUTH_DB.prepare(`SELECT "scopes" FROM "oauthClient" WHERE "clientId" = ?`)
+      .bind(registration.client_id)
+      .first();
 
     expect(JSON.parse(JSON.parse(String(resource?.allowedScopes)))).toEqual([...OWNER_SCOPES]);
+    expect(JSON.parse(JSON.parse(String(client?.scopes)))).toEqual([OWNER_READ_SCOPE]);
   });
 
   it.each([

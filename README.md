@@ -77,9 +77,10 @@ The Worker exposes Streamable HTTP MCP at `/mcp`. OAuth clients dynamically regi
 `/api/auth/oauth2/register` and authenticate the owner through a GitHub OAuth App. Clients request
 `control:read` to inspect control-plane status and Agent summaries, `control:write` to create Agent
 definitions, `agents:read` to inspect full Agent definitions including instructions,
-`agents:write` to replace Agent configuration through immutable revisions, `connections:write` to
-create private hosted connection links, and `integrations:read` to search Composio's catalog and
-inspect exact tool schemas. Registrations default to all six
+`agents:write` to replace Agent configuration through immutable revisions, `connections:read` to
+list bounded connection summaries, `connections:write` to create private hosted connection links,
+and `integrations:read` to search Composio's catalog and inspect exact tool schemas. Registrations
+default to all seven
 scopes; every token keeps the exact approved scope set, so adding a capability never widens an
 issued token. The consent page discloses that integration searches send terms to Composio. The app
 callback URL must be:
@@ -126,6 +127,9 @@ The MCP surface exposes:
   current Composio integration, optionally within one integration; requires `integrations:read`.
 - `crewhelm_inspect_integration_tool` — inspect bounded input and output parameter schemas for one
   exact tool and toolkit version; requires `integrations:read`.
+- `crewhelm_list_connections` — list bounded owner-scoped connection summaries in stable opaque-ID
+  order; requires `connections:read`. The local `initiated` status means Crewhelm created the
+  connection record; it does not assert that provider consent has completed.
 - `crewhelm_create_connection_link` — create an idempotent private Composio Connect Link for any
   exact authentication configuration; requires `connections:write`. Crewhelm stores opaque
   connection, auth-configuration, and account references plus the short-lived hosted link, never

@@ -2,6 +2,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
   OWNER_READ_SCOPE,
@@ -16,6 +17,7 @@ import {
   integrationToolSearchResultSchema,
   listAgentRevisionsResultSchema,
   listAgentsResultSchema,
+  listConnectionsResultSchema,
   ownerAuthoritySchema,
   updateAgentResultSchema,
   type OwnerScope,
@@ -31,6 +33,7 @@ import {
   MCP_INSPECT_INTEGRATION_TOOL_NAME,
   MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
   MCP_LIST_AGENTS_TOOL_NAME,
+  MCP_LIST_CONNECTIONS_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME,
   MCP_STATUS_TOOL_NAME,
@@ -130,6 +133,9 @@ describe("authenticated MCP handler", () => {
     const connectionLinkTool = payload.result.tools.find(
       (tool) => tool.name === MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
     );
+    const connectionListTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_LIST_CONNECTIONS_TOOL_NAME,
+    );
     const revisionTools = payload.result.tools.filter(
       (tool) =>
         tool.name === MCP_GET_AGENT_REVISION_TOOL_NAME ||
@@ -153,6 +159,12 @@ describe("authenticated MCP handler", () => {
       idempotentHint: true,
       openWorldHint: true,
       readOnlyHint: false,
+    });
+    expect(connectionListTool?.annotations).toMatchObject({
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+      readOnlyHint: true,
     });
     expect(revisionTools).toHaveLength(2);
     expect(
@@ -275,6 +287,9 @@ describe("authenticated MCP handler", () => {
             throw new Error("do-not-reflect-this");
           },
           listAgents: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          listConnections: async () => {
             throw new Error("do-not-reflect-this");
           },
           reserveConnectionLink: async () => {
@@ -780,6 +795,74 @@ describe("authenticated MCP handler", () => {
     });
   });
 
+  it("lists only local connection summaries with the dedicated read scope", async () => {
+    const authority = await ownerAuthority("mcp-list-connections-owner", [CONNECTIONS_READ_SCOPE]);
+    const insufficient = await ownerAuthority("mcp-list-connections-owner", [
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+
+    await runInDurableObject(
+      env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+      (_instance, state) => {
+        state.storage.sql.exec(`
+          INSERT INTO connections
+            (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
+          VALUES
+            ('connection_00000000-0000-4000-8000-000000000003',
+             'composio', 'ca_private_mcp', 'ac_linear_managed', 'initiated', 3)
+        `);
+      },
+    );
+    const requestBody = JSON.stringify({
+      id: 145,
+      jsonrpc: "2.0",
+      method: "tools/call",
+      params: {
+        arguments: {},
+        name: MCP_LIST_CONNECTIONS_TOOL_NAME,
+      },
+    });
+    const response = await handleAuthenticatedMcpRequest(toolRequest(requestBody), env, {
+      authority,
+    });
+    const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+    const text = payload.content[0]?.text ?? "";
+
+    expect(payload.isError).toBe(false);
+    expect(listConnectionsResultSchema.parse(JSON.parse(text))).toEqual({
+      connections: [
+        {
+          authConfigId: "ac_linear_managed",
+          connectionId: "connection_00000000-0000-4000-8000-000000000003",
+          createdAt: "1970-01-01T00:00:00.003Z",
+          status: "initiated",
+        },
+      ],
+      nextCursor: null,
+      ok: true,
+    });
+    expect(text).not.toContain("ca_private_mcp");
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const deniedResponse = await handleAuthenticatedMcpRequest(toolRequest(requestBody), env, {
+      authority: insufficient,
+    });
+    const deniedPayload = jsonRpcToolResultSchema.parse(await deniedResponse.json()).result;
+
+    expect(deniedPayload.isError).toBe(true);
+    expect(
+      listConnectionsResultSchema.parse(JSON.parse(deniedPayload.content[0]?.text ?? "")),
+    ).toEqual({
+      error: {
+        code: "insufficient_scope",
+        message: "Connection request denied.",
+      },
+      ok: false,
+    });
+    fetchMock.mockRestore();
+  });
+
   it("does not widen catalog or control reads into connection-link mutation", async () => {
     const scopeSets: OwnerScope[][] = [[OWNER_READ_SCOPE], [INTEGRATIONS_READ_SCOPE]];
 
@@ -921,6 +1004,7 @@ describe("authenticated MCP handler", () => {
           getAgentRevision: unavailableControlPlane,
           listAgentRevisions: unavailableControlPlane,
           listAgents: unavailableControlPlane,
+          listConnections: unavailableControlPlane,
           reserveConnectionLink: async () => ({
             ok: true,
             reservationId: "connection_link_00000000-0000-4000-8000-000000000000",
@@ -1009,6 +1093,7 @@ describe("authenticated MCP handler", () => {
           getAgentRevision: unavailableControlPlane,
           listAgentRevisions: unavailableControlPlane,
           listAgents: unavailableControlPlane,
+          listConnections: unavailableControlPlane,
           reserveConnectionLink: (authorityInput: unknown, input: unknown) =>
             runInDurableObject(stub, (instance) =>
               instance.reserveConnectionLink(authorityInput, input),
