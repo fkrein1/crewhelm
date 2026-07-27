@@ -1,19 +1,17 @@
-import { healthReportSchema, OWNER_READ_SCOPE } from "@crewhelm/contracts";
-import {
-  OAuthError,
-  OAuthProvider,
-  type ClientRegistrationCallbackOptions,
-  type ClientRegistrationCallbackResult,
-  type TokenExchangeCallbackOptions,
-  type TokenExchangeCallbackResult,
-} from "@cloudflare/workers-oauth-provider";
+import { healthReportSchema, OWNER_READ_SCOPE, ownerAuthoritySchema } from "@crewhelm/contracts";
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
+import * as z from "zod";
 
+import { createCrewhelmAuth, verifyMcpAccessToken } from "./auth.js";
 import type { WorkerEnv } from "./env.js";
-import { registerGithubAuthorizationRoutes } from "./github-authorization.js";
-import { mcpApiHandler, mcpAuthPropsSchema } from "./mcp-handler.js";
-import { readBoundedPostRequest } from "./request-body.js";
+import { handleAuthenticatedMcpRequest } from "./mcp-handler.js";
+import {
+  protectedResourceMetadata,
+  purgeExpiredAuthRecords,
+  registerAuthServerRoutes,
+} from "./oauth-server.js";
+import { registerOAuthUiRoutes } from "./oauth-ui.js";
 
 export { OwnerControlPlane } from "./owner-control-plane.js";
 
@@ -40,6 +38,31 @@ const INTERNAL_ERROR_BODY = `${JSON.stringify({
     message: "Internal server error.",
   },
 })}\n`;
+const RATE_LIMITED_BODY = `${JSON.stringify({
+  error: {
+    code: "rate_limited",
+    message: "Request denied.",
+  },
+})}\n`;
+const INVALID_AUTH_BODY = `${JSON.stringify({
+  error: {
+    code: "invalid_token",
+    message: "Authentication required.",
+  },
+})}\n`;
+const MISDIRECTED_BODY = `${JSON.stringify({
+  error: {
+    code: "misdirected_request",
+    message: "Request denied.",
+  },
+})}\n`;
+const publicOriginSchema = z
+  .url()
+  .max(2_048)
+  .refine((value) => {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.origin === value;
+  });
 
 function jsonResponse(
   body: string | null,
@@ -64,116 +87,77 @@ const HEALTH_BODY_LENGTH = byteLength(HEALTH_BODY);
 const METHOD_NOT_ALLOWED_BODY_LENGTH = byteLength(METHOD_NOT_ALLOWED_BODY);
 const NOT_FOUND_BODY_LENGTH = byteLength(NOT_FOUND_BODY);
 const INTERNAL_ERROR_BODY_LENGTH = byteLength(INTERNAL_ERROR_BODY);
-const MAX_CLIENT_REGISTRATION_BYTES = 8 * 1024;
-const RATE_LIMITED_BODY = `${JSON.stringify({
-  error: {
-    code: "rate_limited",
-    message: "OAuth request denied.",
-  },
-})}\n`;
-const OAUTH_REQUEST_TOO_LARGE_BODY = `${JSON.stringify({
-  error: {
-    code: "request_too_large",
-    message: "OAuth request denied.",
-  },
-})}\n`;
 const RATE_LIMITED_BODY_LENGTH = byteLength(RATE_LIMITED_BODY);
-const OAUTH_REQUEST_TOO_LARGE_BODY_LENGTH = byteLength(OAUTH_REQUEST_TOO_LARGE_BODY);
+const INVALID_AUTH_BODY_LENGTH = byteLength(INVALID_AUTH_BODY);
+const MISDIRECTED_BODY_LENGTH = byteLength(MISDIRECTED_BODY);
 
-function isLoopbackHostname(hostname: string): boolean {
-  if (hostname === "localhost" || hostname === "::1" || hostname === "[::1]") {
-    return true;
-  }
-
-  const octets = hostname.split(".");
-  return (
-    octets.length === 4 &&
-    octets[0] === "127" &&
-    octets.every((octet) => /^[0-9]{1,3}$/.test(octet) && Number(octet) <= 255)
-  );
+function publicOrigin(env: Pick<WorkerEnv, "PUBLIC_ORIGIN">): string {
+  return publicOriginSchema.parse(env.PUBLIC_ORIGIN);
 }
 
-function isAllowedClientRedirect(value: unknown): boolean {
-  if (typeof value !== "string" || value.length > 2_048) {
-    return false;
+function resourceMetadataUrl(origin: string): string {
+  return `${origin}/.well-known/oauth-protected-resource`;
+}
+
+function readBearerToken(request: Request): string | null {
+  const header = request.headers.get("authorization");
+
+  if (header === null || header.length > 8_192) {
+    return null;
   }
+
+  const match = /^Bearer ([A-Za-z0-9._~-]+)$/.exec(header);
+  return match?.[1] ?? null;
+}
+
+function invalidTokenResponse(origin: string): Response {
+  return jsonResponse(INVALID_AUTH_BODY, INVALID_AUTH_BODY_LENGTH, 401, {
+    "www-authenticate": `Bearer resource_metadata="${resourceMetadataUrl(origin)}"`,
+  });
+}
+
+async function handleMcpRequest(request: Request, env: WorkerEnv): Promise<Response> {
+  const origin = publicOrigin(env);
+  const token = readBearerToken(request);
+
+  if (token === null) {
+    return invalidTokenResponse(origin);
+  }
+
+  let claims: Awaited<ReturnType<typeof verifyMcpAccessToken>>;
 
   try {
-    const url = new URL(value);
-    const hasForbiddenComponents = url.username !== "" || url.password !== "" || url.hash !== "";
-
-    if (hasForbiddenComponents) {
-      return false;
-    }
-
-    return (
-      url.protocol === "https:" || (url.protocol === "http:" && isLoopbackHostname(url.hostname))
-    );
+    const auth = createCrewhelmAuth(env, origin);
+    claims = await verifyMcpAccessToken(env, auth, origin, token);
   } catch {
-    return false;
-  }
-}
-
-export function validateClientRegistration(
-  options: ClientRegistrationCallbackOptions,
-): ClientRegistrationCallbackResult | undefined {
-  const declaredLength = Number(options.request.headers.get("content-length") ?? "0");
-  const redirectUris = options.clientMetadata.redirect_uris;
-  const validLength =
-    Number.isSafeInteger(declaredLength) &&
-    declaredLength >= 0 &&
-    declaredLength <= MAX_CLIENT_REGISTRATION_BYTES;
-  const validRedirects =
-    Array.isArray(redirectUris) &&
-    redirectUris.length >= 1 &&
-    redirectUris.length <= 8 &&
-    redirectUris.every(isAllowedClientRedirect);
-
-  if (!validLength || !validRedirects) {
-    return {
-      code: "invalid_client_metadata",
-      description: "Client registration denied.",
-      status: 400,
-    };
+    return invalidTokenResponse(origin);
   }
 
-  return undefined;
-}
-
-export function bindAccessTokenAuthority(
-  options: TokenExchangeCallbackOptions,
-): TokenExchangeCallbackResult {
-  const props = mcpAuthPropsSchema.safeParse(options.props);
-  const hasReadScope =
-    options.requestedScope.length === 1 && options.requestedScope[0] === OWNER_READ_SCOPE;
-
-  if (
-    !props.success ||
-    !hasReadScope ||
-    props.data.authority.clientId !== options.clientId ||
-    props.data.authority.ownerKey !== options.userId
-  ) {
-    throw new OAuthError("invalid_scope", {
-      description: "Requested scope denied.",
-    });
+  if (claims === null) {
+    return invalidTokenResponse(origin);
   }
 
-  return {
-    accessTokenProps: {
-      authority: {
-        ...props.data.authority,
-        scopes: [OWNER_READ_SCOPE],
-      },
-    },
-    accessTokenScope: [OWNER_READ_SCOPE],
-    refreshTokenTTL: 0,
-  };
+  const authority = ownerAuthoritySchema.safeParse({
+    clientId: claims.azp,
+    ownerKey: claims.sub,
+    scopes: [OWNER_READ_SCOPE],
+  });
+
+  if (!authority.success) {
+    return invalidTokenResponse(origin);
+  }
+
+  return handleAuthenticatedMcpRequest(request, env, {
+    authority: authority.data,
+  });
 }
 
 export function createWorker(): Hono<{ Bindings: WorkerEnv }> {
   const worker = new Hono<{ Bindings: WorkerEnv }>({
     getPath: (request) => new URL(request.url).pathname,
   });
+  const createAuth = (context: Context<{ Bindings: WorkerEnv }>) =>
+    createCrewhelmAuth(context.env, publicOrigin(context.env));
 
   worker.onError((_error, context) =>
     jsonResponse(
@@ -193,7 +177,22 @@ export function createWorker(): Hono<{ Bindings: WorkerEnv }> {
     }),
   );
 
-  registerGithubAuthorizationRoutes(worker);
+  worker.on(["GET", "HEAD"], "/.well-known/oauth-protected-resource", (context) => {
+    const response = protectedResourceMetadata(publicOrigin(context.env));
+    return context.req.method === "HEAD"
+      ? new Response(null, { headers: response.headers, status: response.status })
+      : response;
+  });
+  worker.on(["GET", "HEAD"], "/.well-known/oauth-protected-resource/mcp", (context) => {
+    const response = protectedResourceMetadata(publicOrigin(context.env));
+    return context.req.method === "HEAD"
+      ? new Response(null, { headers: response.headers, status: response.status })
+      : response;
+  });
+
+  registerOAuthUiRoutes(worker, createAuth);
+  registerAuthServerRoutes(worker, createAuth);
+  worker.all("/mcp", (context) => handleMcpRequest(context.req.raw, context.env));
 
   worker.notFound((context) =>
     jsonResponse(context.req.method === "HEAD" ? null : NOT_FOUND_BODY, NOT_FOUND_BODY_LENGTH, 404),
@@ -203,61 +202,50 @@ export function createWorker(): Hono<{ Bindings: WorkerEnv }> {
 }
 
 const defaultApp = createWorker();
-const defaultHandler = {
-  fetch(request, env, context) {
-    return defaultApp.fetch(request, env, context);
-  },
-} satisfies ExportedHandler<WorkerEnv>;
 
-const oauthProvider = new OAuthProvider<WorkerEnv>({
-  accessTokenTTL: 15 * 60,
-  allowImplicitFlow: false,
-  allowPlainPKCE: false,
-  allowTokenExchangeGrant: false,
-  apiHandler: mcpApiHandler,
-  apiRoute: "/mcp",
-  authorizeEndpoint: "/authorize",
-  clientIdMetadataDocumentEnabled: false,
-  clientRegistrationCallback: validateClientRegistration,
-  clientRegistrationEndpoint: "/oauth/register",
-  clientRegistrationTTL: 24 * 60 * 60,
-  defaultHandler,
-  disallowPublicClientRegistration: false,
-  onError: (error) => {
-    const body = `${JSON.stringify({
-      error: error.code,
-      error_description: "OAuth request denied.",
-    })}\n`;
+function isRateLimitedPath(path: string): "auth" | "mcp" | null {
+  if (path === "/mcp") {
+    return "mcp";
+  }
 
-    return jsonResponse(body, byteLength(body), error.status, error.headers);
-  },
-  refreshTokenTTL: 0,
-  scopesSupported: [OWNER_READ_SCOPE],
-  tokenExchangeCallback: bindAccessTokenAuthority,
-  tokenEndpoint: "/oauth/token",
-});
+  if (
+    path.startsWith("/api/auth/") ||
+    path === "/oauth/login" ||
+    path === "/oauth/consent" ||
+    path === "/.well-known/oauth-authorization-server/api/auth"
+  ) {
+    return "auth";
+  }
+
+  return null;
+}
 
 export async function handleWorkerRequest(
   request: Request,
   env: WorkerEnv,
   context: ExecutionContext,
 ): Promise<Response> {
-  const path = new URL(request.url).pathname;
-  const isAuthorizationRequest =
-    path === "/authorize" ||
-    path === "/oauth/github/callback" ||
-    path === "/oauth/register" ||
-    path === "/oauth/token";
-  const isMcpRequest = path === "/mcp";
-  const isBoundedOAuthPost =
-    request.method === "POST" && (path === "/oauth/register" || path === "/oauth/token");
+  let origin: string;
 
-  if (isAuthorizationRequest || isMcpRequest) {
+  try {
+    origin = publicOrigin(env);
+  } catch {
+    return jsonResponse(INTERNAL_ERROR_BODY, INTERNAL_ERROR_BODY_LENGTH, 500);
+  }
+
+  if (new URL(request.url).origin !== origin) {
+    return jsonResponse(MISDIRECTED_BODY, MISDIRECTED_BODY_LENGTH, 421);
+  }
+
+  const path = new URL(request.url).pathname;
+  const limitedPath = isRateLimitedPath(path);
+
+  if (limitedPath !== null) {
     const clientAddress = request.headers.get("cf-connecting-ip") ?? "unknown";
     let rateLimit: RateLimitOutcome;
 
     try {
-      rateLimit = await (isMcpRequest ? env.MCP_RATE_LIMIT : env.AUTH_RATE_LIMIT).limit({
+      rateLimit = await (limitedPath === "mcp" ? env.MCP_RATE_LIMIT : env.AUTH_RATE_LIMIT).limit({
         key: `${path}:${clientAddress.slice(0, 64)}`,
       });
     } catch {
@@ -273,29 +261,7 @@ export async function handleWorkerRequest(
     }
   }
 
-  if (!isBoundedOAuthPost) {
-    return oauthProvider.fetch(request, env, context);
-  }
-
-  const boundedRequest = await readBoundedPostRequest(request, MAX_CLIENT_REGISTRATION_BYTES);
-
-  if (boundedRequest === null) {
-    return jsonResponse(OAUTH_REQUEST_TOO_LARGE_BODY, OAUTH_REQUEST_TOO_LARGE_BODY_LENGTH, 413);
-  }
-
-  return oauthProvider.fetch(boundedRequest, env, context);
-}
-
-export async function purgeOAuthRecords(env: WorkerEnv): Promise<void> {
-  const result = await oauthProvider.purgeExpiredData(env, {
-    batchSize: 50,
-    purgeOrphanedGrants: true,
-    purgeOrphanedTokens: false,
-  });
-
-  if (!result.done) {
-    throw new Error("OAuth record purge did not complete.");
-  }
+  return defaultApp.fetch(request, env, context);
 }
 
 export default class CrewhelmWorker extends WorkerEntrypoint {
@@ -304,6 +270,6 @@ export default class CrewhelmWorker extends WorkerEntrypoint {
   }
 
   override scheduled(_controller: ScheduledController): void {
-    this.ctx.waitUntil(purgeOAuthRecords(this.env));
+    this.ctx.waitUntil(purgeExpiredAuthRecords(this.env));
   }
 }

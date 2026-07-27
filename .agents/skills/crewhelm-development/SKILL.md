@@ -67,7 +67,8 @@ unsettled architecture decision, a new trust boundary, or authority the user has
   local; avoid pass-through layers and speculative seams.
 - Keep authorization and policy enforcement outside model-controlled text.
 - Avoid drive-by cleanup, speculative abstractions, hidden fallbacks, broad permissions,
-  swallowed errors, unexplained `any`, disabled checks, and security TODOs.
+  swallowed errors, unexplained `any`, disabled checks outside the evidence-gated leaf-package
+  declaration exception defined in `AGENTS.md`, and security TODOs.
 - Stop and create a separate objective when an unrelated prerequisite appears.
 - Review each new or updated direct dependency for rationale, exact version, license, and relevant
   supply-chain risk. Let automated audit and license gates cover the unchanged transitive graph.

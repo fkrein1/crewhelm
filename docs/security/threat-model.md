@@ -12,7 +12,8 @@ implementation must address as those components are introduced.
 
 - Owner identity and authorization grants
 - GitHub OAuth client secret and the transient upstream access token
-- OAuth client registrations, authorization state, token hashes, and wrapped encrypted token props
+- OAuth client registrations and leases, authorization state, login sessions, signing keys, and
+  token-revocation hashes
 - Composio project authority, connected accounts, and provider credentials
 - Agent configuration, memory, artifacts, and schedules
 - Recipe integrity and installed capability grants
@@ -23,7 +24,7 @@ implementation must address as those components are introduced.
 
 1. MCP client to Crewhelm's public OAuth and MCP ingress
 2. Crewhelm authorization routes to GitHub's fixed OAuth and user API endpoints
-3. OAuth ingress to the Cloudflare KV namespace holding clients, grants, and token material
+3. OAuth ingress to the Cloudflare D1 database holding protocol state and signing keys
 4. Authenticated MCP ingress to the owner-named private control plane
 5. Control plane to agent runtime and workflows
 6. Runtime to Composio and external toolkits
@@ -36,7 +37,8 @@ implementation must address as those components are introduced.
 - Missing or confused OAuth resource audiences, scope attenuation that survives only in token
   metadata, malicious dynamic client redirects, and stale grants after identity configuration
   changes
-- OAuth state, authorization-code, or refresh-token replay; eventual-consistency races in KV
+- OAuth state or authorization-code replay, session theft, signing-key disclosure, or an
+  accidentally enabled refresh-token path
 - Registration or token endpoint storage/cost exhaustion and oversized unauthenticated bodies
 - GitHub outage, excessive upstream scopes, account substitution, or secret/error leakage
 - Prompt injection causing unauthorized tools, destinations, data flow, or self-approval
@@ -55,15 +57,17 @@ implementation must address as those components are introduced.
 
 ## Required control families
 
-- Exact `/mcp` OAuth resource binding, S256 PKCE, short-lived audience-bound access tokens, disabled
-  refresh tokens, and token-time scope binding to encrypted owner authority
+- Exact `/mcp` OAuth resource binding, S256 PKCE, short-lived signed audience-bound access tokens,
+  disabled refresh tokens, token-time owner/scope checks, and immediate hash-based explicit
+  revocation
 - GitHub numeric-ID allowlisting with an empty upstream scope; the transient GitHub token is
   discarded before Crewhelm creates a grant
 - HTTPS or loopback-only dynamic client redirects, explicit consent that shows the return origin,
   bounded OAuth request bodies, per-client-address platform rate limits, 24-hour client
   registration expiry, and hourly orphan/expiry purging
-- Cryptographically random cookie-bound state, fixed outbound GitHub hosts, bounded provider
-  responses, safe errors, owner-named references, and scoped execution permits
+- Cryptographically protected OAuth state, secure cookies, non-refreshing 10-minute login sessions,
+  fixed outbound GitHub hosts, bounded provider responses, safe errors, owner-named references,
+  and scoped execution permits
 - Execution-time capability intersection and owner approval distinct from model output
 - Default-empty tool inventory, capability IDs, and authority attenuation for child agents
 - Pinned Composio execution with explicit accounts; Sessions, raw proxy, and model connection
@@ -78,28 +82,34 @@ implementation must address as those components are introduced.
 ## OAuth recovery and residual risk
 
 Changing the configured GitHub owner ID or client secret stops new authorization but does not revoke
-an access token already issued for up to 15 minutes. Emergency global revocation replaces the
-`OAUTH_KV` binding with a fresh namespace and deploys the Worker, invalidating all registered
-clients, grants, and tokens while leaving owner control-plane state untouched. Retain the prior
-namespace for forensics or rollback; deletion is a separate destructive action.
+an access token already issued for up to 15 minutes. Explicit OAuth revocation takes effect
+immediately through a D1 record containing only the token's SHA-256 hash. Emergency global
+revocation creates a fresh auth D1 database, applies the migrations, replaces the `AUTH_DB`
+binding, and deploys the Worker. That invalidates all registered clients, sessions, signing keys,
+and tokens while leaving owner control-plane state untouched. Retain the prior database in
+quarantine for forensics; deletion is a separate destructive action. Never restore or rebind that
+database after declaring global revocation, because its old client, session, key, and token state
+can become active again. Recovery must import only reviewed, revocation-preserving data into
+another fresh migrated auth database.
 
-The scheduled purge removes grants after their 24-hour client registration expires. A
-cross-colocation KV negative read can briefly be stale, so an authorization completed immediately
-before the hourly purge may rarely lose its grant and require reauthorization. This
-availability-only race is accepted for the individual release: it cannot widen authority, and
-access tokens remain independently audience-bound and expire after 15 minutes. Purge runs inspect
-up to 50 records to stay within Cloudflare operation limits and fail visibly rather than silently
-accepting an incomplete scan; emergency KV rotation remains the bounded recovery when the
-individual deployment outgrows that scan.
+The scheduled purge removes expired sessions, codes, token records, revocations, signing keys, and
+clients whose 24-hour Crewhelm registration lease has expired. D1 provides the consistency needed
+for authorization-code consumption and immediate revocation. Public registration remains
+rate-limited and bounded, while the lease limits storage duration. An access token issued just
+before its client's lease expires remains valid for at most its independent 15-minute lifetime.
 
-Cloudflare's OAuth provider stores authorization codes and grants in KV. PKCE, a required exact
-resource, disabled refresh tokens, fixed read-only scope, and 15-minute access tokens contain the
-impact if two concurrent exchanges observe an eventually consistent code record: both tokens have
-the same owner, client, audience, and read-only authority. This individual-release tradeoff is
-accepted in preference to a custom token server. Custom consent and GitHub state are also
-cookie-bound and expire after 10 minutes; the upstream GitHub authorization code remains
-single-use. Revisit strongly consistent grant coordination before adding mutation scopes,
-multi-owner service, refresh tokens, or longer token lifetimes.
+Better Auth owns OAuth 2.1 mechanics, JWT/JWKS handling, GitHub login state, and secure session
+cookies. Crewhelm still owns the stricter authorization boundary: only HTTPS or exact loopback
+redirects, one read-only scope, one exact resource, the configured GitHub numeric owner, a
+24-hour public-client lease, no refresh grant, no upstream scope, and no persisted upstream token.
+Database hooks force every upstream token field to null before persistence. Revisit the provider
+configuration and threat model before adding mutation scopes, multi-owner service, refresh tokens,
+additional identity providers, or longer token lifetimes.
+
+The provider seeds the exact MCP resource in insert-only mode so public requests cannot turn
+configuration into repeated D1 writes. A future scope or access-token lifetime change requires an
+explicit migration of the stored resource row; changing configuration alone intentionally does not
+overwrite it.
 
 ## Update triggers
 
