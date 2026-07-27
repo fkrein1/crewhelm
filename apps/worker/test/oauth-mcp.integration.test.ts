@@ -369,8 +369,9 @@ describe("public OAuth to MCP integration", () => {
     const cookies = new CookieJar();
     const registrationResponse = await request(workerEnv, "/api/auth/oauth2/register", {
       body: JSON.stringify({
+        application_type: "native",
         client_name: "<script>Integration MCP client</script>",
-        grant_types: ["authorization_code"],
+        grant_types: ["authorization_code", "refresh_token"],
         redirect_uris: [redirectUri],
         require_pkce: true,
         response_types: ["code"],

@@ -108,6 +108,12 @@ access tokens are audience-bound JWTs that last 15 minutes, refresh tokens are d
 expired protocol records are purged hourly. Authorization endpoints allow at most 10 requests per
 minute per Cloudflare client address, and MCP allows 60.
 
+Native and web MCP clients may dynamically register. Some native clients, including Codex,
+advertise `refresh_token` during registration even when the authorization server does not support
+it; Crewhelm records those clients as authorization-code-only and never issues a refresh token.
+Explicit web clients must use HTTPS redirects, while native clients may use HTTPS or exact
+loopback HTTP redirects.
+
 The MCP surface exposes:
 
 - `crewhelm_status` — return control-plane readiness; requires `control:read`.

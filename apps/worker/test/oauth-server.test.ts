@@ -10,6 +10,7 @@ import { readAuthTestMigrations, registerAuthTestDatabase } from "./auth-testkit
 
 const origin = "https://crewhelm.test";
 const registrationSchema = z.looseObject({
+  application_type: z.enum(["native", "web"]).optional(),
   client_id: z.string().min(1),
   token_endpoint_auth_method: z.literal("none"),
 });
@@ -44,6 +45,29 @@ async function register(
   );
 }
 
+async function registerRaw(body: string): Promise<Response> {
+  return createWorker().fetch(
+    new Request(`${origin}/api/auth/oauth2/register`, {
+      body,
+      headers: {
+        "content-type": "application/json",
+      },
+      method: "POST",
+    }),
+    workerEnv(),
+  );
+}
+
+function decodeStoredJson(value: unknown): unknown {
+  let decoded = value;
+
+  while (typeof decoded === "string") {
+    decoded = JSON.parse(decoded);
+  }
+
+  return decoded;
+}
+
 describe("OAuth server boundary", () => {
   it.each([
     "https://client.example/oauth/callback",
@@ -67,6 +91,100 @@ describe("OAuth server boundary", () => {
       .first();
     expect(resource).not.toBeNull();
     expect(JSON.parse(JSON.parse(String(resource?.allowedScopes)))).toEqual([...OWNER_SCOPES]);
+  });
+
+  it("normalizes Codex native client metadata without enabling refresh grants", async () => {
+    const response = await register(["http://127.0.0.1:43123/callback/crewhelm"], {
+      application_type: "native",
+      grant_types: ["authorization_code", "refresh_token"],
+    });
+    const registration = registrationSchema.parse(await response.json());
+
+    expect(response.status).toBe(201);
+    expect(await hasActiveClientRegistration(workerEnv(), registration.client_id)).toBe(true);
+    const client = await workerEnv()
+      .AUTH_DB.prepare(`SELECT "grantTypes", "metadata" FROM "oauthClient" WHERE "clientId" = ?`)
+      .bind(registration.client_id)
+      .first();
+    const authorize = new URL(`${origin}/api/auth/oauth2/authorize`);
+    authorize.searchParams.set("client_id", registration.client_id);
+    authorize.searchParams.set("redirect_uri", "http://127.0.0.1:43123/callback/crewhelm");
+    authorize.searchParams.set("resource", `${origin}/mcp`);
+    authorize.searchParams.set("response_type", "code");
+    authorize.searchParams.set("scope", OWNER_READ_SCOPE);
+    const authorizeWithoutPkce = await createWorker().fetch(new Request(authorize), workerEnv());
+
+    expect(registration.application_type).toBe("native");
+    expect(JSON.parse(JSON.parse(String(client?.grantTypes)))).toEqual(["authorization_code"]);
+    expect(decodeStoredJson(client?.metadata)).toEqual({
+      application_type: "native",
+      resources: [`${origin}/mcp`],
+    });
+    expect(authorizeWithoutPkce.status).toBe(400);
+    await expect(authorizeWithoutPkce.json()).resolves.toMatchObject({ error: "invalid_request" });
+    const refreshAttempt = await createWorker().fetch(
+      new Request(`${origin}/api/auth/oauth2/token`, {
+        body: new URLSearchParams({
+          client_id: registration.client_id,
+          grant_type: "refresh_token",
+          refresh_token: "unsupported",
+          resource: `${origin}/mcp`,
+        }),
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        method: "POST",
+      }),
+      workerEnv(),
+    );
+
+    expect(refreshAttempt.status).toBe(400);
+    await expect(refreshAttempt.json()).resolves.toMatchObject({ error: "invalid_request" });
+  });
+
+  it("requires an HTTPS redirect for an explicit web client", async () => {
+    const accepted = await register(["https://web-client.example/callback"], {
+      application_type: "web",
+    });
+    const rejected = await register(["http://127.0.0.1:43123/callback"], {
+      application_type: "web",
+    });
+
+    expect(accepted.status).toBe(201);
+    await expect(accepted.json()).resolves.toMatchObject({ application_type: "web" });
+    expect(rejected.status).toBe(400);
+  });
+
+  it("ignores harmless unknown client metadata instead of forwarding it", async () => {
+    const response = await register(["https://client.example/callback"], {
+      harmless_extension: { enabled: true },
+    });
+    const registration = registrationSchema.parse(await response.json());
+    const client = await workerEnv()
+      .AUTH_DB.prepare(`SELECT "metadata" FROM "oauthClient" WHERE "clientId" = ?`)
+      .bind(registration.client_id)
+      .first();
+
+    expect(response.status).toBe(201);
+    expect(registration).not.toHaveProperty("harmless_extension");
+    expect(decodeStoredJson(client?.metadata)).toEqual({
+      resources: [`${origin}/mcp`],
+    });
+  });
+
+  it.each([
+    `{"application_type":"web","application_type":"native","redirect_uris":["http://127.0.0.1:43123/callback"]}`,
+    `{"application_type":"web","application_\\u0074ype":"native","redirect_uris":["http://127.0.0.1:43123/callback"]}`,
+    `{"grant_types":["client_credentials"],"grant_types":["authorization_code"],"redirect_uris":["https://client.example/callback"]}`,
+    `{"redirect_uris":["https://first.example/callback"],"redirect_uris":["https://second.example/callback"]}`,
+  ])("rejects duplicate raw registration object members", async (body) => {
+    const response = await registerRaw(body);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "invalid_client_metadata",
+      error_description: "Client registration denied.",
+    });
   });
 
   it("widens the seeded MCP resource through idempotent D1 scope migrations", async () => {
@@ -149,6 +267,9 @@ describe("OAuth server boundary", () => {
   it.each([
     { backchannel_logout_uri: "https://client.example/logout" },
     { dpop_bound_access_tokens: true },
+    { application_type: "service" },
+    { grant_types: ["authorization_code", "client_credentials"] },
+    { grant_types: ["authorization_code", "refresh_token", "refresh_token"] },
   ])("rejects unsupported provider registration metadata: %j", async (metadata) => {
     const response = await register(["https://client.example/callback"], metadata);
 
