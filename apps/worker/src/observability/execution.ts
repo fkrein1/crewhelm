@@ -27,6 +27,13 @@ const executionEventSchema = z.discriminatedUnion("phase", [
     .strict(),
   z
     .object({
+      outcome: z.enum(["requested", "completed"]),
+      phase: z.literal("run.cancellation"),
+      runId: runIdSchema,
+    })
+    .strict(),
+  z
+    .object({
       outcome: z.enum(["approved", "rejected"]),
       phase: z.literal("tool.approval"),
       runId: runIdSchema,

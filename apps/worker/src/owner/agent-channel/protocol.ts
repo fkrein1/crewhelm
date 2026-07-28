@@ -63,6 +63,7 @@ export class RunReceiverCapabilities {
     const expiresAt = currentTime + RUN_RECEIVER_CAPABILITY_LIFETIME_MS;
     const capabilityName = {
       approve_tool: "run:approvals:approve",
+      cancel: "run:cancel",
       inspect: "run:inspect",
       list_approvals: "run:approvals:read",
       reject_tool: "run:approvals:reject",

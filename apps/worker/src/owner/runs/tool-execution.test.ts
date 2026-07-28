@@ -34,7 +34,7 @@ describe("admitted tool execution", () => {
       executionLimits: {
         maxDurationSeconds: 45,
         maxModelTokens: 2_000,
-        maxToolCalls: 1,
+        maxToolCalls: 3,
         maxTurns: 2,
       },
       idempotencyKey: "tool-agent-701",
@@ -57,7 +57,7 @@ describe("admitted tool execution", () => {
       grantId,
       integrationSlug: "project_toolkit",
       limits: {
-        maxCallsPerRun: 1,
+        maxCallsPerRun: 3,
         maxConcurrency: 1,
         maxCostMicrousdPerCall: 5_000,
         maxDurationMs: 20_000,
@@ -122,7 +122,7 @@ describe("admitted tool execution", () => {
     }
 
     expect(admission.permit.budgetReservation).toMatchObject({
-      maxToolCalls: 1,
+      maxToolCalls: 3,
       toolGrants: [grant],
     });
     await expect(controlPlane.confirmRunAdmission(admission.permit)).resolves.toMatchObject({
@@ -224,16 +224,103 @@ describe("admitted tool execution", () => {
       error: { code: "invalid_execution", message: "Tool execution denied." },
       ok: false,
     });
-    await expect(controlPlane.reserveToolExecution({ ...reference, action })).resolves.toEqual({
+    const abandonedAction = {
+      ...action,
+      toolCallId: "tool_call_77777777-7777-4777-8777-777777777777",
+    };
+    const abandoned = await controlPlane.reserveToolExecution({
+      ...reference,
+      action: abandonedAction,
+    });
+
+    expect(abandoned).toMatchObject({ ok: true, state: "allowed" });
+
+    if (!abandoned.ok || abandoned.state !== "allowed") {
+      throw new Error("Expected abandoned tool execution permit.");
+    }
+
+    await expect(controlPlane.resolveToolExecutionConnection(abandoned.permit)).resolves.toEqual({
+      ok: true,
+      providerConnectionId: "ca_tool_execution_701",
+    });
+    await runInDurableObject(controlPlane, async (instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE tool_executions SET expires_at = ? WHERE tool_call_id = ?",
+        Date.now() - 1,
+        abandonedAction.toolCallId,
+      );
+      await instance.alarm();
+
+      expect(
+        state.storage.sql
+          .exec<{
+            completed_at: number;
+            output_bytes: number;
+            status: string;
+          }>(
+            `SELECT status, output_bytes, completed_at
+             FROM tool_executions
+             WHERE tool_call_id = ?`,
+            abandonedAction.toolCallId,
+          )
+          .one(),
+      ).toEqual({
+        completed_at: expect.any(Number),
+        output_bytes: 0,
+        status: "unknown",
+      });
+      expect(
+        [
+          ...state.storage.sql.exec<{ action: string }>(
+            "SELECT action FROM audit_events WHERE subject_id = ? ORDER BY event_id",
+            abandonedAction.toolCallId,
+          ),
+        ].map((row) => row.action),
+      ).toEqual(["tool.execution_reserved", "tool.execution_dispatched", "tool.execution_unknown"]);
+    });
+    const cancellationAction = {
+      ...action,
+      toolCallId: "tool_call_66666666-6666-4666-8666-666666666666",
+    };
+    const cancellationReserved = await controlPlane.reserveToolExecution({
+      ...reference,
+      action: cancellationAction,
+    });
+
+    expect(cancellationReserved).toMatchObject({ ok: true, state: "allowed" });
+
+    if (!cancellationReserved.ok || cancellationReserved.state !== "allowed") {
+      throw new Error("Expected a pre-dispatch tool execution reservation.");
+    }
+
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE run_admissions
+         SET cancellation_requested_at = ?
+         WHERE run_id = ?`,
+        Date.now(),
+        admission.permit.runId,
+      );
+    });
+
+    await expect(
+      controlPlane.resolveToolExecutionConnection(cancellationReserved.permit),
+    ).resolves.toEqual({
       error: { code: "invalid_execution", message: "Tool execution denied." },
       ok: false,
     });
+    await expect(
+      controlPlane.completeToolExecution({
+        outcome: { outputBytes: 0, status: "failed" },
+        permit: cancellationReserved.permit,
+      }),
+    ).resolves.toEqual({ completed: true, ok: true });
     await expect(
       controlPlane.reserveToolExecution({
         ...reference,
         action: {
           ...action,
-          toolCallId: "tool_call_66666666-6666-4666-8666-666666666666",
+          toolCallId: "tool_call_88888888-8888-4888-8888-888888888888",
         },
       }),
     ).resolves.toEqual({
@@ -254,8 +341,20 @@ describe("admitted tool execution", () => {
         ),
       ].map((row) => row.action);
 
-      expect(consumed).toEqual([{ tool_calls_consumed: 1 }]);
-      expect(auditActions).toEqual(["tool.execution_reserved", "tool.execution_completed"]);
+      expect(consumed).toEqual([{ tool_calls_consumed: 3 }]);
+      expect(auditActions).toEqual([
+        "tool.execution_reserved",
+        "tool.execution_dispatched",
+        "tool.execution_completed",
+      ]);
+      expect(
+        [
+          ...state.storage.sql.exec<{ action: string }>(
+            "SELECT action FROM audit_events WHERE subject_id = ? ORDER BY event_id",
+            cancellationAction.toolCallId,
+          ),
+        ].map((row) => row.action),
+      ).toEqual(["tool.execution_reserved", "tool.execution_failed"]);
 
       const currentTime = Date.now();
       state.storage.sql.exec(

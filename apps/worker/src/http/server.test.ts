@@ -2,7 +2,6 @@ import { SELF, env } from "cloudflare:test";
 import {
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
-  OWNER_SCOPES,
   healthReportSchema,
   ownerAuthoritySchema,
 } from "@crewhelm/contracts";
@@ -11,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createConnectionAuthorizationCallback } from "../owner/connections/authorization-return.js";
 import { createWorker } from "./server.js";
 import { deriveOwnerKey } from "../owner/identity.js";
+import { OAUTH_SCOPES } from "../oauth/scopes.js";
 import { registerAuthTestDatabase } from "../oauth/testkit.js";
 
 const origin = "https://crewhelm.test";
@@ -99,7 +99,7 @@ describe("Crewhelm Worker", () => {
         authorization_servers: [`${origin}/api/auth`],
         bearer_methods_supported: ["header"],
         resource: `${origin}/mcp`,
-        scopes_supported: [...OWNER_SCOPES],
+        scopes_supported: [...OAUTH_SCOPES],
       });
     },
   );

@@ -26,6 +26,7 @@ import {
   LARGE_TEST_PROMPT,
   SLOW_TEST_PROMPT,
   TEST_REPLY,
+  TOOL_RESULT_FALLBACK_TEST_PROMPT,
   TOOL_TEST_PROMPT,
   TestCrewAgent,
 } from "./test-agent.js";
@@ -96,6 +97,149 @@ async function completedRun(
     },
     { interval: 25, timeout: 5_000 },
   );
+}
+
+async function runWithTimeline(
+  controlPlane: ReturnType<Cloudflare.Env["OWNER_CONTROL_PLANE"]["getByName"]>,
+  authority: OwnerAuthority,
+  runId: string,
+  expectedEvents: string[],
+): Promise<Extract<InspectRunResult, { ok: true }>> {
+  return vi.waitFor(
+    async () => {
+      const result = await controlPlane.inspectRun(authority, { runId });
+
+      expect(result).toMatchObject({ ok: true });
+      expect(result.ok ? result.timeline.map((event) => event.event) : []).toEqual(expectedEvents);
+
+      if (!result.ok) {
+        throw new Error("Expected an inspectable run timeline.");
+      }
+
+      return result;
+    },
+    { interval: 25, timeout: 5_000 },
+  );
+}
+
+async function pendingWriteRun(subject: string, idempotencyKey: string, prompt = TOOL_TEST_PROMPT) {
+  const authority = await authorityFor(subject);
+  const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+  const input = agentInput(`${idempotencyKey}-agent`);
+  const created = await controlPlane.createAgent(authority, {
+    ...input,
+    executionLimits: {
+      ...input.executionLimits,
+      maxToolCalls: 1,
+    },
+  });
+
+  if (!created.ok) {
+    throw new Error("Expected approval-enabled CrewAgent fixture.");
+  }
+
+  const connectionId = `connection_${crypto.randomUUID()}`;
+  const grantId = `grant_${crypto.randomUUID()}`;
+  const grant: ComposioToolCapabilityGrant = {
+    agentId: created.agent.id,
+    agentRevision: created.agent.revision,
+    capabilityId: COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
+    connectionId,
+    effect: "write",
+    expiresAt: null,
+    grantId,
+    integrationSlug: "project_toolkit",
+    limits: {
+      maxCallsPerRun: 1,
+      maxConcurrency: 1,
+      maxCostMicrousdPerCall: 5_000,
+      maxDurationMs: 20_000,
+      maxOutputBytes: 64_000,
+    },
+    ownerKey: authority.ownerKey,
+    targetDigests: ["c".repeat(64)],
+    tool: {
+      description: "Update one exact test item.",
+      inputParametersJson:
+        '{"properties":{"itemId":{"type":"string"}},"required":["itemId"],"type":"object"}',
+      name: "Update item",
+      outputParametersJson: '{"itemId":{"type":"string"}}',
+      tags: ["write"],
+    },
+    toolkitVersion: "20260727_00",
+    toolSlug: "PROJECT_TOOLKIT_UPDATE_ITEM",
+  };
+
+  await runInDurableObject(controlPlane, (_instance, state) => {
+    const currentTime = Date.now();
+    state.storage.sql.exec(
+      `INSERT INTO connections
+         (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
+       VALUES (?, 'composio', ?, ?, 'active', ?)`,
+      connectionId,
+      `ca_${idempotencyKey}`,
+      `ac_${idempotencyKey}`,
+      currentTime,
+    );
+    state.storage.sql.exec(
+      `INSERT INTO capability_grants
+         (grant_id, agent_id, agent_revision, connection_id, grant, status, created_at)
+       VALUES (?, ?, ?, ?, ?, 'active', ?)`,
+      grantId,
+      created.agent.id,
+      created.agent.revision,
+      connectionId,
+      JSON.stringify(grant),
+      currentTime,
+    );
+    state.storage.sql.exec(
+      `UPDATE agent_revisions
+       SET capability_grants = ?
+       WHERE agent_id = ? AND revision = ?`,
+      JSON.stringify([grantId]),
+      created.agent.id,
+      created.agent.revision,
+    );
+  });
+
+  const started = await controlPlane.startRun(authority, {
+    agentId: created.agent.id,
+    expectedRevision: created.agent.revision,
+    idempotencyKey,
+    prompt,
+  });
+
+  if (!started.ok) {
+    throw new Error("Expected approval-bound tool run.");
+  }
+
+  const listed = await vi.waitFor(
+    async () => {
+      const result = await controlPlane.listRunToolApprovals(authority, {
+        runId: started.run.runId,
+      });
+
+      if (!result.ok || result.approvals[0] === undefined) {
+        throw new Error("Expected pending owner approval.");
+      }
+
+      return result;
+    },
+    { interval: 25, timeout: 5_000 },
+  );
+  const approval = listed.approvals[0];
+
+  if (approval === undefined) {
+    throw new Error("Expected pending owner approval.");
+  }
+
+  return {
+    agentId: created.agent.id,
+    approval,
+    authority,
+    controlPlane,
+    runId: started.run.runId,
+  };
 }
 
 function crewAgentNamespace(): DurableObjectNamespace<CrewAgent> {
@@ -794,7 +938,7 @@ describe("CrewAgent admitted execution", () => {
       ownerKey: authority.ownerKey,
       targetDigests: [targetDigest],
       tool: {
-        description: "Update one exact test item.",
+        description: "Long provider action detail. ".repeat(20),
         inputParametersJson: '{"itemId":{"required":true,"type":"string"}}',
         name: "Update item",
         outputParametersJson: '{"itemId":{"type":"string"}}',
@@ -859,6 +1003,7 @@ describe("CrewAgent admitted execution", () => {
               action: "projectToolkitReadItem",
               effect: "write",
               risk: "medium",
+              summary: "Update item",
             },
           ],
           ok: true,
@@ -890,6 +1035,24 @@ describe("CrewAgent admitted execution", () => {
       ok: true,
     });
     await completedRun(controlPlane, authority, started.run.runId);
+    const completed = await runWithTimeline(controlPlane, authority, started.run.runId, [
+      "run.admitted",
+      "run.started",
+      "tool.approval_required",
+      "tool.approval_approved",
+      "tool.execution_reserved",
+      "tool.execution_dispatched",
+      "tool.execution_completed",
+      "run.completed",
+    ]);
+    expect(completed.run.completedAt).toBe(completed.timeline.at(-1)?.occurredAt);
+    await expect(controlPlane.cancelRun(authority, { runId: started.run.runId })).resolves.toEqual({
+      error: {
+        code: "run_not_cancellable",
+        message: "Run cancellation denied.",
+      },
+      ok: false,
+    });
 
     const stub = crewAgentNamespace().getByName(
       crewAgentObjectName({
@@ -904,7 +1067,6 @@ describe("CrewAgent admitted execution", () => {
       const approvalRecords = await state.storage.list({
         prefix: "crewhelm:tool-approval:",
       });
-
       expect(executions).toHaveLength(1);
       expect(executions[0]).toMatchObject({
         permit: {
@@ -917,6 +1079,313 @@ describe("CrewAgent admitted execution", () => {
         },
       });
       expect(approvalRecords.size).toBe(0);
+    });
+  });
+
+  it("returns the terminal tool outcome when the model emits no post-approval text", async () => {
+    const fixture = await pendingWriteRun(
+      "crew-agent-612-fallback",
+      "crew-agent-run-612-fallback",
+      TOOL_RESULT_FALLBACK_TEST_PROMPT,
+    );
+
+    await expect(
+      fixture.controlPlane.decideRunToolApproval(fixture.authority, {
+        decision: "approve",
+        executionId: fixture.approval.executionId,
+        runId: fixture.runId,
+      }),
+    ).resolves.toEqual({
+      decided: true,
+      decision: "approve",
+      ok: true,
+    });
+
+    const completed = await runWithTimeline(
+      fixture.controlPlane,
+      fixture.authority,
+      fixture.runId,
+      [
+        "run.admitted",
+        "run.started",
+        "tool.approval_required",
+        "tool.approval_approved",
+        "tool.execution_reserved",
+        "tool.execution_dispatched",
+        "tool.execution_completed",
+        "run.completed",
+      ],
+    );
+
+    expect(completed.run).toMatchObject({
+      output: '{"itemId":"item-701","status":"found"}',
+      outputTruncated: false,
+      status: "completed",
+    });
+  });
+
+  it("rejects an approval without dispatch and preserves the bounded run timeline", async () => {
+    const fixture = await pendingWriteRun("crew-agent-613", "crew-agent-run-613");
+
+    await expect(
+      fixture.controlPlane.decideRunToolApproval(fixture.authority, {
+        decision: "reject",
+        executionId: fixture.approval.executionId,
+        runId: fixture.runId,
+      }),
+    ).resolves.toEqual({
+      decided: true,
+      decision: "reject",
+      ok: true,
+    });
+    const completed = await runWithTimeline(
+      fixture.controlPlane,
+      fixture.authority,
+      fixture.runId,
+      [
+        "run.admitted",
+        "run.started",
+        "tool.approval_required",
+        "tool.approval_rejected",
+        "run.completed",
+      ],
+    );
+
+    expect(completed.run).toMatchObject({ runId: fixture.runId, status: "completed" });
+
+    const stub = crewAgentNamespace().getByName(
+      crewAgentObjectName({
+        agentId: fixture.agentId,
+        ownerKey: fixture.authority.ownerKey,
+      }),
+    );
+    await runInDurableObject(stub, (agent) => {
+      expect(asTestCrewAgent(agent).toolExecutionsForTest()).toEqual([]);
+    });
+  });
+
+  it("cancels an approval-waiting run idempotently before provider dispatch", async () => {
+    const fixture = await pendingWriteRun("crew-agent-614", "crew-agent-run-614");
+    const before = await fixture.controlPlane.inspectRun(fixture.authority, {
+      runId: fixture.runId,
+    });
+
+    expect(before).toMatchObject({
+      ok: true,
+      timeline: expect.arrayContaining([
+        expect.objectContaining({ event: "tool.approval_required" }),
+      ]),
+    });
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await expect(
+        fixture.controlPlane.cancelRun(fixture.authority, { runId: fixture.runId }),
+      ).resolves.toEqual({
+        cancelled: true,
+        ok: true,
+        runId: fixture.runId,
+      });
+    }
+
+    const cancelled = await fixture.controlPlane.inspectRun(fixture.authority, {
+      runId: fixture.runId,
+    });
+
+    expect(cancelled).toMatchObject({
+      ok: true,
+      run: {
+        runId: fixture.runId,
+        status: "cancelled",
+      },
+    });
+    expect(cancelled.ok ? cancelled.timeline.map((event) => event.event) : []).toEqual([
+      "run.admitted",
+      "run.started",
+      "tool.approval_required",
+      "run.cancellation_requested",
+      "run.cancelled",
+    ]);
+    await expect(
+      fixture.controlPlane.listRunToolApprovals(fixture.authority, {
+        runId: fixture.runId,
+      }),
+    ).resolves.toEqual({ approvals: [], ok: true });
+    await expect(
+      fixture.controlPlane.decideRunToolApproval(fixture.authority, {
+        decision: "approve",
+        executionId: fixture.approval.executionId,
+        runId: fixture.runId,
+      }),
+    ).resolves.toEqual({
+      error: {
+        code: "run_unavailable",
+        message: "Tool approval request denied.",
+      },
+      ok: false,
+    });
+
+    const stub = crewAgentNamespace().getByName(
+      crewAgentObjectName({
+        agentId: fixture.agentId,
+        ownerKey: fixture.authority.ownerKey,
+      }),
+    );
+    await runInDurableObject(stub, (agent) => {
+      expect(asTestCrewAgent(agent).toolExecutionsForTest()).toEqual([]);
+    });
+  });
+
+  it("preserves a run that completes while cancellation is crossing the Agent boundary", async () => {
+    const authority = await authorityFor("crew-agent-614-race");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("crew-agent-create-614-race"),
+    );
+
+    if (!created.ok) {
+      throw new Error("Expected cancellation race fixture Agent.");
+    }
+
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-run-614-race",
+      prompt: SLOW_TEST_PROMPT,
+    });
+
+    if (!started.ok) {
+      throw new Error("Expected cancellation race fixture run.");
+    }
+
+    const stub = crewAgentNamespace().getByName(
+      crewAgentObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+      }),
+    );
+    await runInDurableObject(stub, (agent) => {
+      asTestCrewAgent(agent).completeBeforeNextCancellationForTest();
+    });
+    await expect(controlPlane.cancelRun(authority, { runId: started.run.runId })).resolves.toEqual({
+      error: {
+        code: "run_not_cancellable",
+        message: "Run cancellation denied.",
+      },
+      ok: false,
+    });
+
+    const inspected = await controlPlane.inspectRun(authority, { runId: started.run.runId });
+
+    expect(inspected).toMatchObject({
+      ok: true,
+      run: {
+        output: TEST_REPLY,
+        runId: started.run.runId,
+        status: "completed",
+      },
+    });
+    expect(inspected.ok ? inspected.timeline.map((event) => event.event) : []).toEqual([
+      "run.admitted",
+      "run.started",
+      "run.completed",
+    ]);
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      expect(
+        [
+          ...state.storage.sql.exec<{ action: string }>(
+            "SELECT action FROM audit_events WHERE subject_id = ? ORDER BY event_id",
+            started.run.runId,
+          ),
+        ].map((row) => row.action),
+      ).toEqual([
+        "run.admitted",
+        "run.admission_redeemed",
+        "run.cancellation_requested",
+        "run.cancellation_not_applied",
+      ]);
+      expect(
+        state.storage.sql
+          .exec<{
+            cancellation_requested_at: number | null;
+            cancelled_at: number | null;
+          }>(
+            `SELECT cancellation_requested_at, cancelled_at
+             FROM run_admissions
+             WHERE run_id = ?`,
+            started.run.runId,
+          )
+          .one(),
+      ).toEqual({
+        cancellation_requested_at: null,
+        cancelled_at: null,
+      });
+    });
+  });
+
+  it("exposes an interrupted owner cancellation for idempotent retry", async () => {
+    const authority = await authorityFor("crew-agent-615");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(authority, agentInput("crew-agent-create-615"));
+
+    if (!created.ok) {
+      throw new Error("Expected cancellation retry fixture Agent.");
+    }
+
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-run-615",
+      prompt: SLOW_TEST_PROMPT,
+    });
+
+    if (!started.ok) {
+      throw new Error("Expected cancellation retry fixture run.");
+    }
+
+    const stub = crewAgentNamespace().getByName(
+      crewAgentObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+      }),
+    );
+
+    await runInDurableObject(stub, (agent) => {
+      asTestCrewAgent(agent).failNextCancellationForTest();
+    });
+    await expect(controlPlane.cancelRun(authority, { runId: started.run.runId })).resolves.toEqual({
+      error: {
+        code: "run_unavailable",
+        message: "Run cancellation denied.",
+      },
+      ok: false,
+    });
+    await expect(
+      controlPlane.inspectRun(authority, { runId: started.run.runId }),
+    ).resolves.toMatchObject({
+      ok: true,
+      run: {
+        runId: started.run.runId,
+        status: "cancelling",
+      },
+      timeline: expect.arrayContaining([
+        expect.objectContaining({ event: "run.cancellation_requested" }),
+      ]),
+    });
+    await expect(controlPlane.cancelRun(authority, { runId: started.run.runId })).resolves.toEqual({
+      cancelled: true,
+      ok: true,
+      runId: started.run.runId,
+    });
+    await expect(
+      controlPlane.inspectRun(authority, { runId: started.run.runId }),
+    ).resolves.toMatchObject({
+      ok: true,
+      run: {
+        runId: started.run.runId,
+        status: "cancelled",
+      },
+      timeline: expect.arrayContaining([expect.objectContaining({ event: "run.cancelled" })]),
     });
   });
 
@@ -993,6 +1462,12 @@ describe("CrewAgent admitted execution", () => {
         idempotencyKey: "crew-agent-denied-602",
         prompt,
       }),
+    ).resolves.toMatchObject({
+      error: { code: "insufficient_scope" },
+      ok: false,
+    });
+    await expect(
+      controlPlane.cancelRun(readOnly, { runId: admission.permit.runId }),
     ).resolves.toMatchObject({
       error: { code: "insufficient_scope" },
       ok: false,

@@ -1,9 +1,4 @@
-import {
-  OWNER_SCOPES,
-  ownerKeySchema,
-  ownerScopeClaimSchema,
-  ownerScopesSchema,
-} from "@crewhelm/contracts";
+import { ownerKeySchema } from "@crewhelm/contracts";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import type { BetterAuthPlugin } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -16,6 +11,7 @@ import { drizzle } from "drizzle-orm/d1";
 import * as z from "zod";
 
 import { authSchema, mcpTokenRevocation } from "./schema.js";
+import { OAUTH_SCOPES, oauthScopesSchema, ownerScopeClaimFromOAuthClaim } from "./scopes.js";
 import type { WorkerEnv } from "../env.js";
 import { deriveOwnerKey } from "../owner/identity.js";
 
@@ -26,6 +22,7 @@ const GITHUB_USER_URL = "https://api.github.com/user";
 const MAX_GITHUB_RESPONSE_BYTES = 16 * 1024;
 const GITHUB_REQUEST_TIMEOUT_MS = 10_000;
 const AUTH_BASE_PATH = "/api/auth";
+const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 type AuthorizationFailureStage =
   | "better_auth"
@@ -68,7 +65,19 @@ const storedAccountSchema = z.looseObject({
 const accessTokenClaimsSchema = z.looseObject({
   azp: z.string().min(1).max(2_048),
   exp: z.number().int().positive(),
-  scope: ownerScopeClaimSchema,
+  scope: z.string().transform((claim, context) => {
+    const ownerScopeClaim = ownerScopeClaimFromOAuthClaim(claim);
+
+    if (ownerScopeClaim === null) {
+      context.addIssue({
+        code: "custom",
+        message: "Invalid access token scope claim.",
+      });
+      return z.NEVER;
+    }
+
+    return ownerScopeClaim;
+  }),
   sub: ownerKeySchema,
 });
 
@@ -433,8 +442,8 @@ export function createCrewhelmAuth(env: WorkerEnv, origin: string) {
           allowDynamicClientRegistration: true,
           allowPublicClientPrelogin: true,
           allowUnauthenticatedClientRegistration: true,
-          clientRegistrationAllowedScopes: [...OWNER_SCOPES],
-          clientRegistrationDefaultScopes: [...OWNER_SCOPES],
+          clientRegistrationAllowedScopes: [...OAUTH_SCOPES],
+          clientRegistrationDefaultScopes: [...OAUTH_SCOPES],
           codeExpiresIn: 10 * 60,
           consentPage: "/oauth/consent",
           customAccessTokenClaims: async ({ resources, scopes, user }) => {
@@ -447,25 +456,28 @@ export function createCrewhelmAuth(env: WorkerEnv, origin: string) {
               user?.id !== expectedOwnerKey ||
               resources?.length !== 1 ||
               resources[0] !== mcpResourceUrl(origin) ||
-              !ownerScopesSchema.safeParse(scopes).success
+              !oauthScopesSchema.safeParse(scopes).success
             ) {
               throw new Error("Access token authority denied.");
             }
 
             return {};
           },
-          grantTypes: ["authorization_code"],
+          grantTypes: ["authorization_code", "refresh_token"],
           loginPage: "/oauth/login",
+          refreshTokenExpiresIn: REFRESH_TOKEN_TTL_SECONDS,
+          refreshTokenReuseInterval: 0,
           resources: [
             {
               accessTokenTtl: 15 * 60,
-              allowedScopes: [...OWNER_SCOPES],
+              allowedScopes: [...OAUTH_SCOPES],
               identifier: mcpResourceUrl(origin),
               name: "Crewhelm MCP",
+              refreshTokenTtl: REFRESH_TOKEN_TTL_SECONDS,
             },
           ],
           resourceSeedMode: "insertOnly",
-          scopes: [...OWNER_SCOPES],
+          scopes: [...OAUTH_SCOPES],
           silenceWarnings: {
             oauthAuthServerConfig: true,
           },
@@ -542,18 +554,22 @@ export async function revokeMcpAccessToken(
   origin: string,
   token: string,
   clientId: string,
-): Promise<void> {
+): Promise<boolean> {
   const claims = await verifyMcpAccessTokenSignature(auth, origin, token);
 
-  if (claims === null || claims.azp !== clientId) {
-    return;
+  if (claims === null) {
+    return false;
+  }
+
+  if (claims.azp !== clientId) {
+    return true;
   }
 
   const now = new Date();
   const expiresAt = new Date(claims.exp * 1_000);
 
   if (expiresAt <= now) {
-    return;
+    return true;
   }
 
   const database = drizzle(env.AUTH_DB, { schema: authSchema });
@@ -565,6 +581,8 @@ export async function revokeMcpAccessToken(
       expiresAt,
     })
     .onConflictDoNothing();
+
+  return true;
 }
 
 export async function verifyMcpAccessToken(

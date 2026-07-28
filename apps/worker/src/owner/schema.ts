@@ -189,6 +189,8 @@ export const runAdmissions = sqliteTable(
     cleanupAt: integer("cleanup_at").notNull(),
     createdAt: integer("created_at").notNull(),
     redeemedAt: integer("redeemed_at"),
+    cancellationRequestedAt: integer("cancellation_requested_at"),
+    cancelledAt: integer("cancelled_at"),
     modelCallConsumedAt: integer("model_call_consumed_at"),
     modelCallsConsumed: integer("model_calls_consumed").notNull().default(0),
     toolCallsConsumed: integer("tool_calls_consumed").notNull().default(0),
@@ -212,6 +214,24 @@ export const runAdmissions = sqliteTable(
     check("run_admissions_expires_at_positive", sql`${table.expiresAt} > 0`),
     check("run_admissions_cleanup_after_expiry", sql`${table.cleanupAt} > ${table.expiresAt}`),
     check("run_admissions_created_at_positive", sql`${table.createdAt} > 0`),
+    check(
+      "run_admissions_cancellation_requested_at_positive",
+      sql`${table.cancellationRequestedAt} IS NULL OR ${table.cancellationRequestedAt} > 0`,
+    ),
+    check(
+      "run_admissions_cancelled_at_positive",
+      sql`${table.cancelledAt} IS NULL OR ${table.cancelledAt} > 0`,
+    ),
+    check(
+      "run_admissions_cancellation_state",
+      sql`(
+        (${table.cancellationRequestedAt} IS NULL AND ${table.cancelledAt} IS NULL)
+        OR (${table.cancellationRequestedAt} IS NOT NULL
+          AND ${table.cancellationRequestedAt} >= ${table.createdAt}
+          AND (${table.cancelledAt} IS NULL
+            OR ${table.cancelledAt} >= ${table.cancellationRequestedAt}))
+      )`,
+    ),
     check(
       "run_admissions_model_call_consumed_at_positive",
       sql`${table.modelCallConsumedAt} IS NULL OR ${table.modelCallConsumedAt} > 0`,
@@ -251,10 +271,10 @@ export const toolApprovals = sqliteTable(
     toolCallId: text("tool_call_id").notNull().unique(),
     actionDigest: text("action_digest").notNull(),
     clientId: text("client_id").notNull(),
-    decision: text("decision", { enum: ["approved", "rejected"] }).notNull(),
+    decision: text("decision", { enum: ["approved", "rejected"] }),
     expiresAt: integer("expires_at").notNull(),
     requestedAt: integer("requested_at").notNull(),
-    decidedAt: integer("decided_at").notNull(),
+    decidedAt: integer("decided_at"),
   },
   (table) => [
     foreignKey({
@@ -263,10 +283,20 @@ export const toolApprovals = sqliteTable(
     }).onDelete("restrict"),
     index("tool_approvals_run").on(table.runId, table.requestedAt),
     check("tool_approvals_action_digest_length", sql`length(${table.actionDigest}) = 64`),
-    check("tool_approvals_decision", sql`${table.decision} IN ('approved', 'rejected')`),
+    check(
+      "tool_approvals_decision",
+      sql`${table.decision} IS NULL OR ${table.decision} IN ('approved', 'rejected')`,
+    ),
     check("tool_approvals_requested_at_positive", sql`${table.requestedAt} > 0`),
-    check("tool_approvals_decided_after_request", sql`${table.decidedAt} >= ${table.requestedAt}`),
-    check("tool_approvals_expiry_after_decision", sql`${table.expiresAt} > ${table.decidedAt}`),
+    check(
+      "tool_approvals_decision_state",
+      sql`((${table.decision} IS NULL AND ${table.decidedAt} IS NULL)
+        OR (${table.decision} IS NOT NULL AND ${table.decidedAt} >= ${table.requestedAt}))`,
+    ),
+    check(
+      "tool_approvals_expiry_after_request",
+      sql`${table.expiresAt} > coalesce(${table.decidedAt}, ${table.requestedAt})`,
+    ),
   ],
 );
 
@@ -285,6 +315,7 @@ export const toolExecutions = sqliteTable(
     outputBytes: integer("output_bytes"),
     expiresAt: integer("expires_at").notNull(),
     startedAt: integer("started_at").notNull(),
+    dispatchedAt: integer("dispatched_at"),
     completedAt: integer("completed_at"),
   },
   (table) => [
@@ -310,14 +341,33 @@ export const toolExecutions = sqliteTable(
       sql`${table.outputBytes} IS NULL OR ${table.outputBytes} >= 0`,
     ),
     check("tool_executions_started_at_positive", sql`${table.startedAt} > 0`),
+    check(
+      "tool_executions_dispatched_at_positive",
+      sql`${table.dispatchedAt} IS NULL OR ${table.dispatchedAt} > 0`,
+    ),
+    check(
+      "tool_executions_dispatch_after_start",
+      sql`${table.dispatchedAt} IS NULL OR ${table.dispatchedAt} >= ${table.startedAt}`,
+    ),
     check("tool_executions_expiry_after_start", sql`${table.expiresAt} > ${table.startedAt}`),
+    check(
+      "tool_executions_completion_after_dispatch",
+      sql`${table.completedAt} IS NULL
+        OR ${table.dispatchedAt} IS NULL
+        OR ${table.completedAt} >= ${table.dispatchedAt}`,
+    ),
     check(
       "tool_executions_state",
       sql`(
         (${table.status} = 'reserved'
           AND ${table.outputBytes} IS NULL
           AND ${table.completedAt} IS NULL)
-        OR (${table.status} IN ('completed', 'failed', 'unknown')
+        OR (${table.status} = 'completed'
+          AND ${table.dispatchedAt} IS NOT NULL
+          AND ${table.outputBytes} IS NOT NULL
+          AND ${table.completedAt} IS NOT NULL
+          AND ${table.completedAt} >= ${table.startedAt})
+        OR (${table.status} IN ('failed', 'unknown')
           AND ${table.outputBytes} IS NOT NULL
           AND ${table.completedAt} IS NOT NULL
           AND ${table.completedAt} >= ${table.startedAt})

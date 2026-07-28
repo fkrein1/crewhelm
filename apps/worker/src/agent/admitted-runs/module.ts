@@ -1,6 +1,8 @@
 import {
   acceptRunAdmissionInputSchema,
   acceptRunAdmissionResultSchema,
+  cancelAdmittedRunInputSchema,
+  cancelAdmittedRunResultSchema,
   confirmRunAdmissionResultSchema,
   crewAgentObjectName,
   inspectAdmittedRunInputSchema,
@@ -89,6 +91,8 @@ const RUNTIME_ADMISSION_UNAVAILABLE = "CrewAgent runtime admission is not availa
 const RUN_RECORD_PREFIX = "crewhelm:run:";
 const TOOL_APPROVAL_PREFIX = "crewhelm:tool-approval:";
 const MAXIMUM_RUN_OUTPUT_PARTS = 256;
+const EXECUTION_OUTCOME_PREFIX = "[execute tool]";
+const EXECUTION_OUTCOME_MARKER = " Outcome: ";
 const INVALID_RUN_ADMISSION = {
   error: {
     code: "invalid_admission",
@@ -145,6 +149,7 @@ export const BLOCKED_CREW_AGENT_AUTHORITY_METHODS = [
 ] as const;
 
 export interface CrewAgentToolAdapter {
+  readonly approvalSummary: string;
   readonly description: string;
   readonly grant: ComposioToolCapabilityGrant;
   readonly inputSchema: z.ZodType<Record<string, unknown>>;
@@ -1008,15 +1013,16 @@ export class CrewAgent extends Think {
 
     const output =
       submission.status === "completed" ? this.#readRunOutput(capability.runId) : undefined;
+    const outputPending = output?.state === "pending";
 
     return inspectAdmittedRunResultSchema.parse({
       ok: true,
       run: {
         agentId: record.configuration.agentId,
         agentRevision: record.configuration.revision,
-        completedAt: isoTimestamp(submission.completedAt),
+        completedAt: outputPending ? undefined : isoTimestamp(submission.completedAt),
         createdAt: new Date(submission.createdAt).toISOString(),
-        ...(output === undefined
+        ...(output?.state !== "available"
           ? {}
           : {
               output: output.text,
@@ -1024,8 +1030,45 @@ export class CrewAgent extends Think {
             }),
         runId: capability.runId,
         startedAt: isoTimestamp(submission.startedAt),
-        status: publicRunStatus(submission.status),
+        status: outputPending ? "running" : publicRunStatus(submission.status),
       },
+    });
+  }
+
+  async cancelAdmittedRun(input: unknown) {
+    const request = cancelAdmittedRunInputSchema.safeParse(input);
+
+    if (!request.success || !(await this.#redeemReceiverCapability(request.data.capability))) {
+      return INVALID_RUN_ADMISSION;
+    }
+
+    const runId = request.data.capability.runId;
+    const submission = await super.inspectSubmission(runId);
+    const approvalRecords = await this.ctx.storage.list({
+      prefix: toolApprovalPrefix(runId),
+    });
+    const waitingForToolApproval = submission?.status === "completed" && approvalRecords.size > 0;
+
+    if (
+      submission === null ||
+      (["aborted", "completed", "error", "skipped"].includes(submission.status) &&
+        !waitingForToolApproval)
+    ) {
+      return cancelAdmittedRunResultSchema.parse({
+        cancelled: false,
+        ok: true,
+      });
+    }
+
+    if (!waitingForToolApproval) {
+      await this.cancelAdmittedSubmission(runId, "Cancelled by the Crewhelm owner.");
+    }
+
+    await Promise.all([...approvalRecords.keys()].map((key) => this.ctx.storage.delete(key)));
+
+    return cancelAdmittedRunResultSchema.parse({
+      cancelled: true,
+      ok: true,
     });
   }
 
@@ -1246,7 +1289,7 @@ export class CrewAgent extends Think {
         defineAction({
           approval: adapter.grant.effect !== "read",
           approvalRisk: adapter.grant.effect === "destructive" ? "high" : "medium",
-          approvalSummary: adapter.description,
+          approvalSummary: adapter.approvalSummary,
           description: adapter.description,
           execute: (input, context) => this.#executeTool(adapter, input, context),
           inputSchema: adapter.inputSchema,
@@ -1421,7 +1464,7 @@ export class CrewAgent extends Think {
           requestedAt: new Date(requestedAt).toISOString(),
           risk: evaluation.data.decision.effect === "destructive" ? "high" : "medium",
           runId: reference.runId,
-          summary: adapter.description,
+          summary: adapter.approvalSummary,
           toolCallId: action.toolCallId,
         }),
       );
@@ -1552,6 +1595,7 @@ export class CrewAgent extends Think {
     const name = `composio_${normalizedSlug.slice(0, 46)}_${suffix}`;
 
     return {
+      approvalSummary: grant.tool.name,
       description: grant.tool.description ?? grant.tool.name,
       grant,
       inputSchema,
@@ -1902,34 +1946,122 @@ export class CrewAgent extends Think {
     );
   }
 
-  #readRunOutput(runId: string): { text: string; truncated: boolean } | undefined {
+  #readRunOutput(
+    runId: string,
+  ): { state: "available"; text: string; truncated: boolean } | { state: "pending" } | undefined {
+    const terminalMessage = super.sql<{
+      id: string;
+      pending: number;
+      role: "assistant" | "system";
+    }>`
+      WITH RECURSIVE run_messages(id, depth) AS (
+        SELECT id, 0
+        FROM assistant_messages
+        WHERE session_id = ''
+          AND id = ${runUserMessageId(runId)}
+        UNION ALL
+        SELECT child.id, parent.depth + 1
+        FROM assistant_messages AS child
+        INNER JOIN run_messages AS parent ON child.parent_id = parent.id
+        WHERE child.session_id = ''
+      )
+      SELECT
+        message.id,
+        message.role,
+        EXISTS (
+          SELECT 1
+          FROM json_each(message.content, '$.parts') AS candidate
+          WHERE json_extract(candidate.value, '$.approvalDescriptor.kind') = 'durable-pause'
+        ) AS pending
+      FROM assistant_messages AS message
+      INNER JOIN run_messages AS branch ON branch.id = message.id
+      WHERE message.session_id = ''
+        AND (
+          (
+            message.role = 'assistant'
+            AND (
+              EXISTS (
+                SELECT 1
+                FROM json_each(message.content, '$.parts') AS candidate
+                WHERE json_extract(candidate.value, '$.type') = 'text'
+                  AND typeof(json_extract(candidate.value, '$.text')) = 'text'
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM json_each(message.content, '$.parts') AS candidate
+                WHERE json_extract(candidate.value, '$.approvalDescriptor.kind') = 'durable-pause'
+              )
+            )
+          )
+          OR (
+            message.role = 'system'
+            AND EXISTS (
+              SELECT 1
+              FROM json_each(message.content, '$.parts') AS candidate
+              WHERE json_extract(candidate.value, '$.type') = 'text'
+                AND typeof(json_extract(candidate.value, '$.text')) = 'text'
+                AND json_extract(candidate.value, '$.text') LIKE ${`${EXECUTION_OUTCOME_PREFIX}%`}
+                AND instr(
+                  json_extract(candidate.value, '$.text'),
+                  ${EXECUTION_OUTCOME_MARKER}
+                ) > 0
+            )
+          )
+        )
+      ORDER BY branch.depth DESC, message.created_at DESC, message.id DESC
+      LIMIT 1
+    `[0];
+
+    if (terminalMessage === undefined) {
+      return undefined;
+    }
+
+    if (terminalMessage.pending === 1) {
+      return { state: "pending" };
+    }
+
     const text: string[] = [];
     let remaining = MAXIMUM_RUN_OUTPUT_CHARACTERS;
     let truncated = false;
 
     for (let offset = 0; offset < MAXIMUM_RUN_OUTPUT_PARTS; offset += 1) {
       const row = super.sql<{ originalCharacters: number; text: string }>`
-        WITH RECURSIVE run_messages(id) AS (
-          SELECT id
-          FROM assistant_messages
-          WHERE session_id = ''
-            AND id = ${runUserMessageId(runId)}
-          UNION ALL
-          SELECT child.id
-          FROM assistant_messages AS child
-          INNER JOIN run_messages AS parent ON child.parent_id = parent.id
-          WHERE child.session_id = ''
+        WITH terminal_parts AS (
+          SELECT
+            CASE
+              WHEN message.role = 'system'
+              THEN substr(
+                json_extract(part.value, '$.text'),
+                instr(
+                  json_extract(part.value, '$.text'),
+                  ${EXECUTION_OUTCOME_MARKER}
+                ) + ${EXECUTION_OUTCOME_MARKER.length}
+              )
+              ELSE json_extract(part.value, '$.text')
+            END AS text,
+            CAST(part.key AS INTEGER) AS part_index
+          FROM assistant_messages AS message
+          CROSS JOIN json_each(message.content, '$.parts') AS part
+          WHERE message.id = ${terminalMessage.id}
+            AND message.session_id = ''
+            AND json_extract(part.value, '$.type') = 'text'
+            AND typeof(json_extract(part.value, '$.text')) = 'text'
+            AND (
+              message.role = 'assistant'
+              OR (
+                json_extract(part.value, '$.text') LIKE ${`${EXECUTION_OUTCOME_PREFIX}%`}
+                AND instr(
+                  json_extract(part.value, '$.text'),
+                  ${EXECUTION_OUTCOME_MARKER}
+                ) > 0
+              )
+            )
         )
         SELECT
-          length(json_extract(part.value, '$.text')) AS originalCharacters,
-          substr(json_extract(part.value, '$.text'), 1, ${remaining + 1}) AS text
-        FROM assistant_messages AS message, json_each(message.content, '$.parts') AS part
-        WHERE message.session_id = ''
-          AND message.id IN (SELECT id FROM run_messages)
-          AND message.role = 'assistant'
-          AND json_extract(part.value, '$.type') = 'text'
-          AND typeof(json_extract(part.value, '$.text')) = 'text'
-        ORDER BY message.created_at ASC, CAST(part.key AS INTEGER) ASC
+          length(text) AS originalCharacters,
+          substr(text, 1, ${remaining + 1}) AS text
+        FROM terminal_parts
+        ORDER BY part_index ASC
         LIMIT 1 OFFSET ${offset}
       `[0];
 
@@ -1937,6 +2069,7 @@ export class CrewAgent extends Think {
         return text.length === 0
           ? undefined
           : {
+              state: "available",
               text: text.join(""),
               truncated,
             };
@@ -1958,35 +2091,34 @@ export class CrewAgent extends Think {
       }
 
       if (remaining === 0) {
-        return { text: text.join(""), truncated: true };
+        return { state: "available", text: text.join(""), truncated: true };
       }
     }
 
     const additionalPart = super.sql<{ present: number }>`
-      WITH RECURSIVE run_messages(id) AS (
-        SELECT id
-        FROM assistant_messages
-        WHERE session_id = ''
-          AND id = ${runUserMessageId(runId)}
-        UNION ALL
-        SELECT child.id
-        FROM assistant_messages AS child
-        INNER JOIN run_messages AS parent ON child.parent_id = parent.id
-        WHERE child.session_id = ''
-      )
       SELECT 1 AS present
       FROM assistant_messages AS message, json_each(message.content, '$.parts') AS part
       WHERE message.session_id = ''
-        AND message.id IN (SELECT id FROM run_messages)
-        AND message.role = 'assistant'
+        AND message.id = ${terminalMessage.id}
         AND json_extract(part.value, '$.type') = 'text'
         AND typeof(json_extract(part.value, '$.text')) = 'text'
+        AND (
+          message.role = 'assistant'
+          OR (
+            json_extract(part.value, '$.text') LIKE ${`${EXECUTION_OUTCOME_PREFIX}%`}
+            AND instr(
+              json_extract(part.value, '$.text'),
+              ${EXECUTION_OUTCOME_MARKER}
+            ) > 0
+          )
+        )
       LIMIT 1 OFFSET ${MAXIMUM_RUN_OUTPUT_PARTS}
     `[0];
 
     return text.length === 0
       ? undefined
       : {
+          state: "available",
           text: text.join(""),
           truncated: truncated || additionalPart !== undefined,
         };

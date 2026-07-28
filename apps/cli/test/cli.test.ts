@@ -186,6 +186,10 @@ describe("Crewhelm CLI", () => {
       "SELECT 1;\n",
     );
     await writeFile(
+      resolve(directory, "migrations", "0010_oauth_offline_access.sql"),
+      "SELECT 1;\n",
+    );
+    await writeFile(
       resolve(directory, "wrangler-template.json"),
       JSON.stringify({
         ai: { binding: "AI" },

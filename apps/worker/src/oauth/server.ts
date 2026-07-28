@@ -1,4 +1,3 @@
-import { OWNER_SCOPES, ownerScopeClaimSchema } from "@crewhelm/contracts";
 import { APIError } from "better-auth/api";
 import type { Context, Hono } from "hono";
 import {
@@ -14,6 +13,7 @@ import { drizzle } from "drizzle-orm/d1";
 import * as z from "zod";
 
 import { revokeMcpAccessToken, type CrewhelmAuth } from "./auth.js";
+import { OAUTH_SCOPES, oauthScopeClaimSchema } from "./scopes.js";
 import {
   authSchema,
   jwks,
@@ -31,7 +31,7 @@ import type { WorkerEnv } from "../env.js";
 import { readBoundedPostRequest } from "../http/request-body.js";
 
 const MAX_OAUTH_REQUEST_BYTES = 8 * 1024;
-const CLIENT_REGISTRATION_TTL_SECONDS = 24 * 60 * 60;
+const CLIENT_REGISTRATION_TTL_SECONDS = 30 * 24 * 60 * 60;
 const AUTH_BASE_PATH = "/api/auth";
 const AUTH_SERVER_PATHS = new Set([
   `${AUTH_BASE_PATH}/.well-known/oauth-authorization-server`,
@@ -71,7 +71,7 @@ const registrationRequestSchema = z.object({
   require_pkce: z.literal(true).optional(),
   resources: z.array(z.url().max(2_048)).max(1).optional(),
   response_types: z.tuple([z.literal("code")]).optional(),
-  scope: ownerScopeClaimSchema.optional(),
+  scope: oauthScopeClaimSchema.optional(),
   skip_consent: z.never().optional(),
   token_endpoint_auth_method: z.literal("none").optional(),
   type: z.never().optional(),
@@ -83,17 +83,26 @@ const authorizationRequestSchema = z.strictObject({
   codeChallengeMethod: z.literal("S256"),
   resource: z.url().max(2_048),
   responseType: z.literal("code"),
-  scope: ownerScopeClaimSchema,
+  scope: oauthScopeClaimSchema,
 });
-const tokenRequestSchema = z.strictObject({
-  clientId: tokenClientSchema,
-  grantType: z.literal("authorization_code"),
-  resource: z.url().max(2_048),
-});
+const tokenRequestSchema = z.discriminatedUnion("grantType", [
+  z.strictObject({
+    clientId: tokenClientSchema,
+    grantType: z.literal("authorization_code"),
+    refreshToken: z.undefined(),
+    resource: z.url().max(2_048),
+  }),
+  z.strictObject({
+    clientId: tokenClientSchema,
+    grantType: z.literal("refresh_token"),
+    refreshToken: z.string().min(1).max(8_192),
+    resource: z.url().max(2_048).optional(),
+  }),
+]);
 const revocationRequestSchema = z.strictObject({
   clientId: tokenClientSchema,
   token: z.string().min(1).max(8_192),
-  tokenTypeHint: z.literal("access_token").optional(),
+  tokenTypeHint: z.enum(["access_token", "refresh_token"]).optional(),
 });
 
 type AuthApp = Hono<{ Bindings: WorkerEnv }>;
@@ -232,6 +241,16 @@ function fixedJsonResponse(
   return new Response(`${JSON.stringify(body)}\n`, { headers, status });
 }
 
+function successfulRevocationResponse(): Response {
+  return new Response(null, {
+    headers: {
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+    },
+    status: 200,
+  });
+}
+
 function authorizationUnavailable(stage: "client_lease" | "provider"): Response {
   console.error("crewhelm.authorization_unavailable", { stage });
   return fixedJsonResponse(
@@ -285,6 +304,29 @@ async function normalizeProtocolErrorResponse(response: Response): Promise<Respo
     },
     response.status,
   );
+}
+
+async function normalizeAuthorizationServerMetadata(response: Response): Promise<Response> {
+  if (!response.ok) {
+    return response;
+  }
+
+  let body: unknown;
+
+  try {
+    body = await response.clone().json();
+  } catch {
+    return response;
+  }
+
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return response;
+  }
+
+  const metadata = { ...body };
+  Reflect.deleteProperty(metadata, "authorization_response_iss_parameter_supported");
+
+  return fixedJsonResponse(metadata, response.status, response.headers);
 }
 
 function invalidClient(): Response {
@@ -376,7 +418,7 @@ async function normalizeRegistrationRequest(
     request: new Request(request.url, {
       body: JSON.stringify({
         client_name: registration.data.client_name,
-        grant_types: ["authorization_code"],
+        grant_types: registration.data.grant_types ?? ["authorization_code"],
         redirect_uris: registration.data.redirect_uris,
         require_pkce: true,
         resources: [resource],
@@ -411,6 +453,25 @@ function authorizationClientId(request: Request): string | null {
     : null;
 }
 
+function normalizeAuthorizationResource(request: Request): Request | null {
+  const url = new URL(request.url);
+  const resources = url.searchParams.getAll("resource");
+
+  if (resources.length <= 1) {
+    return request;
+  }
+
+  const resource = resources[0];
+
+  if (resource === undefined || resources.some((candidate) => candidate !== resource)) {
+    return null;
+  }
+
+  url.searchParams.delete("resource");
+  url.searchParams.set("resource", resource);
+  return new Request(url, request);
+}
+
 async function tokenClientId(request: Request): Promise<string | null> {
   if (
     request.method !== "POST" ||
@@ -424,10 +485,25 @@ async function tokenClientId(request: Request): Promise<string | null> {
     const tokenRequest = tokenRequestSchema.safeParse({
       clientId: form.getAll("client_id").length === 1 ? form.get("client_id") : null,
       grantType: form.getAll("grant_type").length === 1 ? form.get("grant_type") : null,
-      resource: form.getAll("resource").length === 1 ? form.get("resource") : null,
+      refreshToken:
+        form.getAll("refresh_token").length === 0
+          ? undefined
+          : form.getAll("refresh_token").length === 1
+            ? form.get("refresh_token")
+            : null,
+      resource:
+        form.getAll("resource").length === 0
+          ? undefined
+          : form.getAll("resource").length === 1
+            ? form.get("resource")
+            : null,
     });
 
-    return tokenRequest.success &&
+    if (!tokenRequest.success) {
+      return null;
+    }
+
+    return tokenRequest.data.resource === undefined ||
       tokenRequest.data.resource === `${new URL(request.url).origin}/mcp`
       ? tokenRequest.data.clientId
       : null;
@@ -625,6 +701,16 @@ export async function handleAuthServerRequest(
     request = normalizedRequest.request;
   }
 
+  if (path === `${AUTH_BASE_PATH}/oauth2/authorize`) {
+    const normalizedRequest = normalizeAuthorizationResource(request);
+
+    if (normalizedRequest === null) {
+      return invalidAuthorizationRequest();
+    }
+
+    request = normalizedRequest;
+  }
+
   if (path === `${AUTH_BASE_PATH}/oauth2/authorize` || path === `${AUTH_BASE_PATH}/oauth2/token`) {
     const denied = await requireActiveClient(request, context.env, path);
 
@@ -644,20 +730,22 @@ export async function handleAuthServerRequest(
     }
 
     try {
-      await revokeMcpAccessToken(
-        context.env,
-        auth,
-        new URL(request.url).origin,
-        revocation.token,
-        revocation.clientId,
-      );
-      return new Response(null, {
-        headers: {
-          "cache-control": "no-store",
-          "x-content-type-options": "nosniff",
-        },
-        status: 200,
-      });
+      const recognizedAccessToken =
+        revocation.tokenTypeHint === "refresh_token"
+          ? false
+          : await revokeMcpAccessToken(
+              context.env,
+              auth,
+              new URL(request.url).origin,
+              revocation.token,
+              revocation.clientId,
+            );
+
+      if (recognizedAccessToken || revocation.tokenTypeHint === "access_token") {
+        return successfulRevocationResponse();
+      }
+
+      return normalizeProtocolErrorResponse(await auth.handler(request));
     } catch {
       return authorizationUnavailable("provider");
     }
@@ -675,6 +763,13 @@ export async function handleAuthServerRequest(
     return authorizationUnavailable("provider");
   }
   response = await normalizeProtocolErrorResponse(response);
+
+  if (
+    path === `${AUTH_BASE_PATH}/.well-known/oauth-authorization-server` ||
+    path === `/.well-known/oauth-authorization-server${AUTH_BASE_PATH}`
+  ) {
+    response = await normalizeAuthorizationServerMetadata(response);
+  }
 
   if (
     path !== `${AUTH_BASE_PATH}/oauth2/register` ||
@@ -713,7 +808,7 @@ export function protectedResourceMetadata(origin: string): Response {
       authorization_servers: [`${origin}${AUTH_BASE_PATH}`],
       bearer_methods_supported: ["header"],
       resource: `${origin}/mcp`,
-      scopes_supported: [...OWNER_SCOPES],
+      scopes_supported: [...OAUTH_SCOPES],
     },
     200,
   );

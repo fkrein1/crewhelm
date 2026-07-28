@@ -5,6 +5,7 @@ import {
   composioToolCapabilityGrantSchema,
   runIdSchema,
   sha256DigestSchema,
+  toolCallIdSchema,
 } from "./capabilities.js";
 import {
   agentExecutionLimitsSchema,
@@ -23,10 +24,14 @@ export const MAXIMUM_RUN_INPUT_CHARACTERS = 24 * 1_024;
 export const MAXIMUM_RUN_MODEL_OUTPUT_TOKENS = 16 * 1_024;
 export const MAXIMUM_RUN_OUTPUT_CHARACTERS = 64 * 1_024;
 export const MAXIMUM_RUN_PROMPT_CHARACTERS = 16 * 1_024;
+export const MAXIMUM_RUN_TIMELINE_EVENTS = 512;
 export const MAXIMUM_OWNER_RUN_INPUT_CHARACTERS_PER_WINDOW = 1_000_000;
 export const MAXIMUM_OWNER_RUN_MODEL_CALLS_PER_WINDOW = 100;
 export const MAXIMUM_OWNER_RUN_OUTPUT_TOKENS_PER_WINDOW = 1_000_000;
-export const RUNNABLE_AGENT_MODELS = ["@cf/meta/llama-4-scout-17b-16e-instruct"] as const;
+export const RUNNABLE_AGENT_MODELS = [
+  "@cf/meta/llama-4-scout-17b-16e-instruct",
+  "@cf/zai-org/glm-4.7-flash",
+] as const;
 
 export const runAdmissionIdempotencyKeySchema = z
   .string()
@@ -51,7 +56,14 @@ export const runPromptSchema = z.string().min(1).max(MAXIMUM_RUN_PROMPT_CHARACTE
 export const runOutputSchema = z.string().max(MAXIMUM_RUN_OUTPUT_CHARACTERS);
 export const runnableAgentModelSchema = z.enum(RUNNABLE_AGENT_MODELS);
 
-export const runStatusSchema = z.enum(["queued", "running", "completed", "cancelled", "failed"]);
+export const runStatusSchema = z.enum([
+  "queued",
+  "running",
+  "cancelling",
+  "completed",
+  "cancelled",
+  "failed",
+]);
 
 export const createRunAdmissionInputSchema = z.strictObject({
   agentId: agentIdSchema,
@@ -189,6 +201,11 @@ export const inspectRunCapabilitySchema = runReceiverCapabilityBaseSchema.extend
   capability: z.literal("run:inspect"),
 });
 
+export const cancelRunCapabilitySchema = runReceiverCapabilityBaseSchema.extend({
+  action: z.literal("cancel"),
+  capability: z.literal("run:cancel"),
+});
+
 export const listRunApprovalsCapabilitySchema = runReceiverCapabilityBaseSchema.extend({
   action: z.literal("list_approvals"),
   capability: z.literal("run:approvals:read"),
@@ -209,6 +226,7 @@ export const rejectRunToolCapabilitySchema = runReceiverCapabilityBaseSchema.ext
 export const runReceiverCapabilitySchema = z.discriminatedUnion("action", [
   resumeRunCapabilitySchema,
   inspectRunCapabilitySchema,
+  cancelRunCapabilitySchema,
   listRunApprovalsCapabilitySchema,
   approveRunToolCapabilitySchema,
   rejectRunToolCapabilitySchema,
@@ -263,8 +281,14 @@ export const inspectRunInputSchema = z.strictObject({
   runId: runIdSchema,
 });
 
+export const cancelRunInputSchema = inspectRunInputSchema;
+
 export const inspectAdmittedRunInputSchema = z.strictObject({
   capability: inspectRunCapabilitySchema,
+});
+
+export const cancelAdmittedRunInputSchema = z.strictObject({
+  capability: cancelRunCapabilitySchema,
 });
 
 export const verifyActiveRunAdmissionInputSchema = z.strictObject({
@@ -290,6 +314,27 @@ export const runSchema = z.strictObject({
   runId: runIdSchema,
   startedAt: z.iso.datetime().optional(),
   status: runStatusSchema,
+});
+
+export const runTimelineEventSchema = z.strictObject({
+  event: z.enum([
+    "run.admitted",
+    "run.started",
+    "tool.approval_required",
+    "tool.approval_approved",
+    "tool.approval_rejected",
+    "tool.execution_reserved",
+    "tool.execution_dispatched",
+    "tool.execution_completed",
+    "tool.execution_failed",
+    "tool.execution_unknown",
+    "run.cancellation_requested",
+    "run.cancelled",
+    "run.completed",
+    "run.failed",
+  ]),
+  occurredAt: z.iso.datetime(),
+  toolCallId: toolCallIdSchema.optional(),
 });
 
 const runRequestErrorSchema = z.strictObject({
@@ -340,11 +385,44 @@ export const inspectRunResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     ok: z.literal(true),
     run: runSchema,
+    timeline: z.array(runTimelineEventSchema).max(MAXIMUM_RUN_TIMELINE_EVENTS),
   }),
   z.strictObject({
     error: runReadErrorSchema,
     ok: z.literal(false),
   }),
+]);
+
+export const cancelRunResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    cancelled: z.literal(true),
+    ok: z.literal(true),
+    runId: runIdSchema,
+  }),
+  z.strictObject({
+    error: z.strictObject({
+      code: z.enum([
+        "incompatible_schema",
+        "insufficient_scope",
+        "invalid_authority",
+        "invalid_request",
+        "owner_mismatch",
+        "run_not_cancellable",
+        "run_not_found",
+        "run_unavailable",
+      ]),
+      message: z.literal("Run cancellation denied."),
+    }),
+    ok: z.literal(false),
+  }),
+]);
+
+export const cancelAdmittedRunResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    cancelled: z.boolean(),
+    ok: z.literal(true),
+  }),
+  invalidRunAdmissionSchema,
 ]);
 
 export const inspectAdmittedRunResultSchema = z.discriminatedUnion("ok", [
@@ -357,6 +435,8 @@ export const inspectAdmittedRunResultSchema = z.discriminatedUnion("ok", [
 
 export type AcceptRunAdmissionInput = z.infer<typeof acceptRunAdmissionInputSchema>;
 export type AcceptRunAdmissionResult = z.infer<typeof acceptRunAdmissionResultSchema>;
+export type CancelRunCapability = z.infer<typeof cancelRunCapabilitySchema>;
+export type CancelRunResult = z.infer<typeof cancelRunResultSchema>;
 export type ConfirmRunAdmissionResult = z.infer<typeof confirmRunAdmissionResultSchema>;
 export type CreateRunAdmissionInput = z.infer<typeof createRunAdmissionInputSchema>;
 export type CreateRunAdmissionResult = z.infer<typeof createRunAdmissionResultSchema>;
@@ -372,6 +452,7 @@ export type RunAdmissionPermit = z.infer<typeof runAdmissionPermitSchema>;
 export type RunAdmissionSummary = z.infer<typeof runAdmissionSummarySchema>;
 export type RunBudgetReservation = z.infer<typeof runBudgetReservationSchema>;
 export type RunReceiverCapability = z.infer<typeof runReceiverCapabilitySchema>;
+export type RunTimelineEvent = z.infer<typeof runTimelineEventSchema>;
 export type ResumeRunAdmissionInput = z.infer<typeof resumeRunAdmissionInputSchema>;
 export type ResumeRunCapability = z.infer<typeof resumeRunCapabilitySchema>;
 export type StartRunResult = z.infer<typeof startRunResultSchema>;

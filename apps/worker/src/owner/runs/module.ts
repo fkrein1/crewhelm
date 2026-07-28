@@ -32,7 +32,7 @@ import {
   type VerifyActiveRunAdmissionResult,
   type VerifyRunAdmissionResult,
 } from "@crewhelm/contracts";
-import { and, count, eq, gt, inArray, lte, min } from "drizzle-orm";
+import { and, count, eq, gt, inArray, isNotNull, isNull, lte, min } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import { recordExecutionEvent } from "../../observability/execution.js";
@@ -372,6 +372,163 @@ export class RunAdmissions {
     return result;
   }
 
+  requestCancellation(
+    authority: OwnerAuthority,
+    runId: string,
+  ): "not_cancellable" | "not_found" | "requested" {
+    const currentTime = Date.now();
+    let recorded = false;
+
+    const result = this.#database.transaction((transaction) => {
+      const row = this.#admission(transaction, runId);
+
+      if (row === undefined) {
+        return "not_found";
+      }
+
+      if (row.cancellationRequestedAt !== null) {
+        return "requested";
+      }
+
+      if (
+        row.status === "expired" ||
+        transaction
+          .select({ toolCallId: toolExecutions.toolCallId })
+          .from(toolExecutions)
+          .where(and(eq(toolExecutions.runId, runId), isNotNull(toolExecutions.dispatchedAt)))
+          .get() !== undefined
+      ) {
+        return "not_cancellable";
+      }
+
+      const updated = transaction
+        .update(runAdmissions)
+        .set({ cancellationRequestedAt: currentTime })
+        .where(and(eq(runAdmissions.runId, runId), isNull(runAdmissions.cancellationRequestedAt)))
+        .returning({ runId: runAdmissions.runId })
+        .all();
+
+      if (updated.length !== 1) {
+        return "not_cancellable";
+      }
+
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: "run.cancellation_requested",
+          clientId: authority.clientId,
+          occurredAt: currentTime,
+          subjectId: runId,
+        })
+        .run();
+      recorded = true;
+
+      return "requested";
+    });
+
+    if (recorded) {
+      recordExecutionEvent({
+        outcome: "requested",
+        phase: "run.cancellation",
+        runId,
+      });
+    }
+
+    return result;
+  }
+
+  completeCancellation(authority: OwnerAuthority, runId: string): boolean {
+    const currentTime = Date.now();
+    let recorded = false;
+
+    const result = this.#database.transaction((transaction) => {
+      const row = this.#admission(transaction, runId);
+
+      if (row === undefined || row.cancellationRequestedAt === null) {
+        return false;
+      }
+
+      if (row.cancelledAt !== null) {
+        return true;
+      }
+
+      const updated = transaction
+        .update(runAdmissions)
+        .set({ cancelledAt: currentTime })
+        .where(and(eq(runAdmissions.runId, runId), isNull(runAdmissions.cancelledAt)))
+        .returning({ runId: runAdmissions.runId })
+        .all();
+
+      if (updated.length !== 1) {
+        return false;
+      }
+
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: "run.cancelled",
+          clientId: authority.clientId,
+          occurredAt: currentTime,
+          subjectId: runId,
+        })
+        .run();
+      recorded = true;
+
+      return true;
+    });
+
+    if (recorded) {
+      recordExecutionEvent({
+        outcome: "completed",
+        phase: "run.cancellation",
+        runId,
+      });
+    }
+
+    return result;
+  }
+
+  releaseCancellation(authority: OwnerAuthority, runId: string): boolean {
+    const currentTime = Date.now();
+
+    return this.#database.transaction((transaction) => {
+      const row = this.#admission(transaction, runId);
+
+      if (row === undefined || row.cancellationRequestedAt === null || row.cancelledAt !== null) {
+        return false;
+      }
+
+      const updated = transaction
+        .update(runAdmissions)
+        .set({ cancellationRequestedAt: null })
+        .where(
+          and(
+            eq(runAdmissions.runId, runId),
+            isNotNull(runAdmissions.cancellationRequestedAt),
+            isNull(runAdmissions.cancelledAt),
+          ),
+        )
+        .returning({ runId: runAdmissions.runId })
+        .all();
+
+      if (updated.length !== 1) {
+        return false;
+      }
+
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: "run.cancellation_not_applied",
+          clientId: authority.clientId,
+          occurredAt: currentTime,
+          subjectId: runId,
+        })
+        .run();
+
+      return true;
+    });
+  }
+
   async verify(input: unknown): Promise<VerifyRunAdmissionResult> {
     const permit = runAdmissionPermitSchema.safeParse(input);
 
@@ -389,6 +546,7 @@ export class RunAdmissions {
       if (
         row === undefined ||
         row.status !== "issued" ||
+        row.cancellationRequestedAt !== null ||
         row.nonceDigest !== nonceDigest ||
         row.expiresAt <= currentTime ||
         !this.#matchesPermit(row, permit.data)
@@ -434,6 +592,7 @@ export class RunAdmissions {
 
       if (
         row === undefined ||
+        row.cancellationRequestedAt !== null ||
         row.nonceDigest !== nonceDigest ||
         !this.#matchesPermit(row, permit.data)
       ) {
@@ -514,6 +673,7 @@ export class RunAdmissions {
       if (
         row === undefined ||
         row.status !== "redeemed" ||
+        row.cancellationRequestedAt !== null ||
         row.cleanupAt <= currentTime ||
         row.modelCallsConsumed >= row.budgetReservation.maxModelCalls ||
         row.agentId !== request.data.agentId ||
@@ -570,6 +730,8 @@ export class RunAdmissions {
     if (
       row === undefined ||
       row.status !== "redeemed" ||
+      (!["cancel", "inspect"].includes(capability.data.action) &&
+        row.cancellationRequestedAt !== null) ||
       row.cleanupAt <= currentTime ||
       row.agentId !== capability.data.agentId ||
       row.agentRevision !== capability.data.agentRevision ||
