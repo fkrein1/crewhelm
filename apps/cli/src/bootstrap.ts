@@ -49,6 +49,7 @@ const EXPECTED_MIGRATIONS = [
   "0007_connection_read_scope.sql",
   "0008_connection_config_read_scope.sql",
   "0009_connection_config_write_scope.sql",
+  "0010_oauth_offline_access.sql",
 ] as const;
 const MAX_WORKER_SCRIPT_BYTES = 10 * 1_048_576;
 const MAX_SOURCE_MAP_BYTES = 25 * 1_048_576;

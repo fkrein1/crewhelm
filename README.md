@@ -83,9 +83,10 @@ definitions, `agents:read` to inspect full Agent definitions including instructi
 list bounded connection summaries, `connections:write` to create private hosted connection links,
 `connection-configs:read` to list project auth configurations, `connection-configs:write` to
 enable Composio-managed authentication, and `integrations:read` to search Composio's catalog and
-inspect exact tool schemas. Registrations default to all nine scopes; every token keeps the exact
-approved scope set, so adding a capability never widens an issued token. The consent page
-discloses the bounded metadata sent to Composio. The app callback URL must be:
+inspect exact tool schemas. Registrations default to all nine Crewhelm scopes plus the standard
+`offline_access` scope; every token keeps the exact approved scope set, so adding a capability
+never widens an issued token. The consent page discloses the bounded metadata sent to Composio.
+The app callback URL must be:
 
 ```text
 https://YOUR_WORKER_HOST/api/auth/callback/github
@@ -103,16 +104,15 @@ configuration do not enter source control:
 
 The GitHub token is used only to read that numeric ID during authorization and is then discarded.
 Better Auth owns the OAuth 2.1 protocol and GitHub login flow; Drizzle persists its protocol state
-in the bound D1 database. D1 stores public client metadata with a 24-hour Crewhelm lease,
-authorization codes, consent, non-refreshing 10-minute login sessions, signing keys, and hashes of
-explicitly revoked access tokens. It never stores the GitHub token or GitHub client secret. MCP
-access tokens are audience-bound JWTs that last 15 minutes, refresh tokens are disabled, and
-expired protocol records are purged hourly. Authorization endpoints allow at most 10 requests per
-minute per Cloudflare client address, and MCP allows 60.
+in the bound D1 database. D1 stores public client metadata with a 30-day Crewhelm lease,
+authorization codes, consent, non-refreshing 10-minute login sessions, signing keys, hashed
+rotating refresh tokens, and hashes of explicitly revoked access tokens. It never stores the
+GitHub token or GitHub client secret. MCP access tokens are audience-bound JWTs that last 15
+minutes; client-bound refresh tokens last at most 30 days, rotate on use, and invalidate their
+family on replay. Expired protocol records are purged hourly. Authorization endpoints allow at
+most 10 requests per minute per Cloudflare client address, and MCP allows 60.
 
-Native and web MCP clients may dynamically register. Some native clients, including Codex,
-advertise `refresh_token` during registration even when the authorization server does not support
-it; Crewhelm records those clients as authorization-code-only and never issues a refresh token.
+Native and web MCP clients may dynamically register for authorization-code and refresh grants.
 Explicit web clients must use HTTPS redirects, while native clients may use HTTPS or exact
 loopback HTTP redirects.
 
@@ -134,8 +134,15 @@ The MCP surface exposes:
   Agent revision and never returns the Composio connected-account ID.
 - `crewhelm_start_run` — admit and durably start one bounded turn against an exact immutable Agent
   revision; requires `agents:write` and an idempotency key.
-- `crewhelm_inspect_run` — inspect the status and bounded output of one owner-scoped run; requires
+- `crewhelm_inspect_run` — inspect the status, bounded output, and chronological admission,
+  approval, dispatch, cancellation, and outcome timeline of one owner-scoped run; requires
   `agents:read`.
+- `crewhelm_cancel_run` — idempotently cancel one owner-scoped run while no external tool effect
+  has been dispatched; requires `agents:write`.
+- `crewhelm_list_run_tool_approvals` — list exact sensitive tool actions waiting on the owner;
+  requires `agents:read`.
+- `crewhelm_decide_run_tool_approval` — approve or reject one exact pending action; requires
+  `agents:write`.
 - `crewhelm_search_integrations` — search and paginate the complete non-deprecated Composio
   integration catalog, including Composio-managed and project toolkits; requires
   `integrations:read`.
@@ -182,15 +189,16 @@ decision is local policy evidence, not a cross-object execution permit and not p
 Composio; runtime admission, atomic budget reservation, single-use verified permits, approval
 evidence, account revalidation, and connector execution remain separate boundaries.
 
-Changing `OWNER_GITHUB_USER_ID` or the GitHub client secret blocks new authorization but does not
-revoke an already issued 15-minute access token. For emergency global revocation, create a fresh
-auth D1 database, apply the migrations, replace the `AUTH_DB` binding ID, and deploy. Retain the
-old database in quarantine for forensics rather than deleting it. Do not restore or rebind that
-database after declaring global revocation: doing so can reactivate its clients, sessions, signing
-keys, and unexpired tokens. Recover data into another fresh auth database only through a reviewed
-revocation-preserving migration. Then rotate the GitHub OAuth secret and reauthorize clients. This
-deliberately invalidates every client, session, signing key, and token without changing durable
-owner control-plane state.
+Changing `OWNER_GITHUB_USER_ID` blocks new authorization and refresh, but does not revoke an
+already issued 15-minute access token. Rotating only the GitHub client secret blocks new login but
+does not invalidate existing Crewhelm refresh tokens. For emergency global revocation, create a
+fresh auth D1 database, apply the migrations, replace the `AUTH_DB` binding ID, and deploy. Retain
+the old database in quarantine for forensics rather than deleting it. Do not restore or rebind
+that database after declaring global revocation: doing so can reactivate its clients, sessions,
+signing keys, and unexpired tokens. Recover data into another fresh auth database only through a
+reviewed revocation-preserving migration. Then rotate the GitHub OAuth secret and reauthorize
+clients. This deliberately invalidates every client, session, signing key, and token without
+changing durable owner control-plane state.
 
 Read [AGENTS.md](AGENTS.md) before using an AI coding agent in this repository. Human contribution
 guidance lives in [CONTRIBUTING.md](CONTRIBUTING.md). Shared language is defined in

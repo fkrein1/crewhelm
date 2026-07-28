@@ -25,18 +25,18 @@ Trust changes at:
 
 ## Threats and controls
 
-| Threat                                                 | Required control                                                                                                                                                 |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Token theft, confused identity, or cross-owner access  | Audience-bound short-lived tokens, exact owner and scope checks at ingress and execution, owner-named objects, explicit revocation                               |
-| Malicious OAuth clients, replay, or storage exhaustion | S256 PKCE, HTTPS or exact-loopback redirects, protected state, bounded bodies and sessions, rate limits, expiring registrations, no refresh tokens               |
-| Prompt injection or hostile provider data              | Treat all model, recipe, MCP, retrieved, and provider content as inert input; trusted code classifies authority, effects, targets, and cost                      |
-| Credential disclosure                                  | Keep provider credentials outside models and Crewhelm state; bound and normalize responses; exclude secrets from results, errors, telemetry, URLs, and backups   |
-| SSRF or redirected egress                              | Use fixed HTTPS provider endpoints, manual redirect handling, bounded response size and time, and no model-selected network destination                          |
-| Stale, replayed, or amplified authority                | Bind permits and approvals to owner, client, Agent revision, action digest, budget, nonce, and short expiry; recheck current policy immediately before execution |
-| Duplicate or partial external effects                  | Reserve idempotency before dispatch, use single-use permits, audit transitions, and treat an ambiguous provider outcome as unknown rather than retrying          |
-| Runaway execution or cost                              | Bound models, turns, tools, schedules, concurrency, payloads, output, duration, and cost before work starts                                                      |
-| Unsafe persistence or recovery                         | Apply ordered checksummed migrations before admission; preserve revocation during backup, restore, deletion, and recovery                                        |
-| Supply-chain or deployment compromise                  | Pin dependencies and automation, minimize CI permissions, validate release artifacts, and require explicit deployment authority                                  |
+| Threat                                                 | Required control                                                                                                                                                  |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Token theft, confused identity, or cross-owner access  | Audience-bound short-lived tokens, exact owner and scope checks at ingress and execution, owner-named objects, explicit revocation                                |
+| Malicious OAuth clients, replay, or storage exhaustion | S256 PKCE, HTTPS or exact-loopback redirects, protected state, bounded bodies and sessions, rate limits, expiring registrations, hashed rotating refresh tokens   |
+| Prompt injection or hostile provider data              | Treat all model, recipe, MCP, retrieved, and provider content as inert input; trusted code classifies authority, effects, targets, and cost                       |
+| Credential disclosure                                  | Keep provider credentials outside models and Crewhelm state; bound and normalize responses; exclude secrets from results, errors, telemetry, URLs, and backups    |
+| SSRF or redirected egress                              | Use fixed HTTPS provider endpoints, manual redirect handling, bounded response size and time, and no model-selected network destination                           |
+| Stale, replayed, or amplified authority                | Bind permits and approvals to owner, client, Agent revision, action digest, budget, nonce, and short expiry; recheck current policy immediately before execution  |
+| Duplicate or partial external effects                  | Reserve idempotency before dispatch, use single-use permits, make cancellation and dispatch mutually exclusive, audit transitions, and treat ambiguity as unknown |
+| Runaway execution or cost                              | Bound models, turns, tools, schedules, concurrency, payloads, output, duration, and cost before work starts                                                       |
+| Unsafe persistence or recovery                         | Apply ordered checksummed migrations before admission; preserve revocation during backup, restore, deletion, and recovery                                         |
+| Supply-chain or deployment compromise                  | Pin dependencies and automation, minimize CI permissions, validate release artifacts, and require explicit deployment authority                                   |
 
 Tool discovery never grants execution authority. Model output never grants permission or approves
 an action. External writes remain approval-gated where policy classifies them as write or
@@ -46,20 +46,27 @@ destructive.
 
 ### OAuth
 
-Changing the GitHub owner or client secret blocks new authorization but does not revoke an access
-token already issued for its remaining lifetime of at most 15 minutes. Explicit revocation is
-immediate. Emergency global revocation uses a fresh migrated Auth D1 binding; the old database is
-quarantined and must never be rebound because doing so could reactivate clients, sessions, signing
-keys, or tokens.
+Changing the GitHub owner blocks new authorization and refresh but does not revoke an access token
+already issued for its remaining lifetime of at most 15 minutes. Rotating only the GitHub client
+secret does not invalidate existing Crewhelm refresh tokens. Refresh tokens are client-bound,
+hashed at rest, rotate on use, invalidate their family on replay, and expire with the 30-day client
+lease. Explicit revocation is immediate. Emergency global revocation uses a fresh migrated Auth D1
+binding; the old database is quarantined and must never be rebound because doing so could
+reactivate clients, sessions, signing keys, or tokens.
 
 Crewhelm permits only the explicit `control:read`, `control:write`, `agents:read`, `agents:write`,
 `connections:read`, `connections:write`, `connection-configs:read`,
-`connection-configs:write`, and `integrations:read` scopes. Tokens and existing client
-registrations are never silently widened. GitHub login uses no upstream scope, and its transient
-token is not persisted.
+`connection-configs:write`, and `integrations:read` capability scopes, plus standard
+`offline_access` for refresh. Tokens and existing client registrations are never silently widened.
+GitHub login uses no upstream scope, and its transient token is not persisted.
 
-Revisit this model before adding another identity provider, refresh tokens, broader mutations,
-multi-owner service, or longer token lifetimes.
+Authorization-server metadata does not advertise the optional authorization response `iss`
+parameter because current Codex clients discard it before validation. Crewhelm still emits `iss`;
+fixed issuer and endpoints, exact redirect binding, S256 PKCE, authorization-code binding, and
+audience-bound token validation remain enforced.
+
+Revisit this model before adding another identity provider, broader mutations, a multi-owner
+service, or longer token lifetimes.
 
 ### Persistence and Agent execution
 
@@ -74,8 +81,10 @@ is charged when it cannot be proven unspent and is not silently repeated.
 
 Tool execution rechecks the current immutable grant, connection, effect, target, approval, and
 budget before issuing a single-use adapter permit. An outcome that becomes ambiguous after
-dispatch remains `unknown`; the same tool-call identity cannot dispatch again. Crewhelm does not
-yet reconcile unknown effects through provider logs or expose a persisted global kill switch.
+dispatch remains `unknown`; the same tool-call identity cannot dispatch again. Owner cancellation
+is idempotent and prevents later reservation or dispatch, but cannot claim to undo an effect that
+already crossed the provider boundary. Crewhelm does not yet reconcile unknown effects through
+provider logs or expose a persisted global kill switch.
 
 ### Composio
 

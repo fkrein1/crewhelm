@@ -17,7 +17,7 @@ import {
   type ToolExecutionPermit,
 } from "@crewhelm/contracts";
 import { evaluateApprovedComposioToolAction, evaluateComposioToolAction } from "@crewhelm/core";
-import { and, count, eq, gt } from "drizzle-orm";
+import { and, count, eq, gt, isNotNull, lte, min } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import { recordExecutionEvent } from "../../observability/execution.js";
@@ -74,10 +74,16 @@ function createNonce(): string {
 export class ToolExecutions {
   readonly #database: ControlPlaneDatabase;
   readonly #objectName: string | undefined;
+  readonly #storage: DurableObjectStorage;
 
-  constructor(objectName: string | undefined, database: ControlPlaneDatabase) {
+  constructor(
+    objectName: string | undefined,
+    database: ControlPlaneDatabase,
+    storage: DurableObjectStorage,
+  ) {
     this.#database = database;
     this.#objectName = objectName;
+    this.#storage = storage;
   }
 
   async evaluate(input: unknown): Promise<EvaluateToolExecutionResult> {
@@ -177,6 +183,8 @@ export class ToolExecutions {
       nonce,
     });
     const permitDigest = await digestToolExecutionPermit(permit, "reserved");
+    const executionDeadline =
+      evaluatedAt + Math.min(decision.constraints.maxDurationMs, 5 * 60 * 1_000);
     const result = this.#database.transaction((transaction) => {
       const currentGateInput = this.#gateInput(transaction, request.data, evaluatedAt);
 
@@ -186,9 +194,6 @@ export class ToolExecutions {
       ) {
         return INVALID_TOOL_EXECUTION;
       }
-
-      const executionDeadline =
-        evaluatedAt + Math.min(decision.constraints.maxDurationMs, 5 * 60 * 1_000);
 
       if (
         transaction
@@ -258,9 +263,89 @@ export class ToolExecutions {
         runId: request.data.runId,
         toolCallId: request.data.action.toolCallId,
       });
+      await this.#scheduleReconciliation(executionDeadline);
     }
 
     return result;
+  }
+
+  reconcileExpired(currentTime: number): void {
+    const reconciled = this.#database.transaction((transaction) => {
+      const expired = transaction
+        .select({
+          clientId: runAdmissions.clientId,
+          runId: toolExecutions.runId,
+          toolCallId: toolExecutions.toolCallId,
+        })
+        .from(toolExecutions)
+        .innerJoin(runAdmissions, eq(runAdmissions.runId, toolExecutions.runId))
+        .where(
+          and(
+            eq(toolExecutions.status, "reserved"),
+            isNotNull(toolExecutions.dispatchedAt),
+            lte(toolExecutions.expiresAt, currentTime),
+          ),
+        )
+        .all();
+      const completed: typeof expired = [];
+
+      for (const execution of expired) {
+        const updated = transaction
+          .update(toolExecutions)
+          .set({
+            completedAt: currentTime,
+            outputBytes: 0,
+            status: "unknown",
+          })
+          .where(
+            and(
+              eq(toolExecutions.toolCallId, execution.toolCallId),
+              eq(toolExecutions.status, "reserved"),
+              isNotNull(toolExecutions.dispatchedAt),
+              lte(toolExecutions.expiresAt, currentTime),
+            ),
+          )
+          .returning({ toolCallId: toolExecutions.toolCallId })
+          .all();
+
+        if (updated.length !== 1) {
+          continue;
+        }
+
+        transaction
+          .insert(auditEvents)
+          .values({
+            action: "tool.execution_unknown",
+            clientId: execution.clientId,
+            occurredAt: currentTime,
+            subjectId: execution.toolCallId,
+          })
+          .run();
+        completed.push(execution);
+      }
+
+      return completed;
+    });
+
+    for (const execution of reconciled) {
+      recordExecutionEvent({
+        outcome: "unknown",
+        outputBytes: 0,
+        phase: "tool.completion",
+        runId: execution.runId,
+        toolCallId: execution.toolCallId,
+      });
+    }
+  }
+
+  nextReconciliationAt(): number | null {
+    return (
+      this.#database
+        .select({ value: min(toolExecutions.expiresAt) })
+        .from(toolExecutions)
+        .where(and(eq(toolExecutions.status, "reserved"), isNotNull(toolExecutions.dispatchedAt)))
+        .get()?.value ?? null
+    );
   }
 
   async complete(input: unknown): Promise<CompleteToolExecutionResult> {
@@ -381,11 +466,14 @@ export class ToolExecutions {
 
     const reservedPermitDigest = await digestToolExecutionPermit(permit.data, "reserved");
     const dispatchedPermitDigest = await digestToolExecutionPermit(permit.data, "dispatched");
+    const dispatchedAt = Date.now();
 
     const result = this.#database.transaction((transaction) => {
       const row = transaction
         .select({
           actionDigest: toolExecutions.actionDigest,
+          cancellationRequestedAt: runAdmissions.cancellationRequestedAt,
+          clientId: runAdmissions.clientId,
           connectionId: capabilityGrants.connectionId,
           connectionStatus: connections.status,
           expiresAt: toolExecutions.expiresAt,
@@ -400,6 +488,7 @@ export class ToolExecutions {
         .from(toolExecutions)
         .innerJoin(capabilityGrants, eq(capabilityGrants.grantId, toolExecutions.grantId))
         .innerJoin(connections, eq(connections.connectionId, capabilityGrants.connectionId))
+        .innerJoin(runAdmissions, eq(runAdmissions.runId, toolExecutions.runId))
         .where(eq(toolExecutions.toolCallId, permit.data.action.toolCallId))
         .get();
       const grant = composioToolCapabilityGrantSchema.safeParse(row?.grant);
@@ -408,7 +497,8 @@ export class ToolExecutions {
         row === undefined ||
         !grant.success ||
         row.status !== "reserved" ||
-        row.expiresAt <= Date.now() ||
+        row.expiresAt <= dispatchedAt ||
+        row.cancellationRequestedAt !== null ||
         row.connectionStatus !== "active" ||
         row.grantStatus !== "active" ||
         row.nonceDigest !== reservedPermitDigest ||
@@ -424,7 +514,7 @@ export class ToolExecutions {
 
       const claimed = transaction
         .update(toolExecutions)
-        .set({ nonceDigest: dispatchedPermitDigest })
+        .set({ dispatchedAt, nonceDigest: dispatchedPermitDigest })
         .where(
           and(
             eq(toolExecutions.toolCallId, permit.data.action.toolCallId),
@@ -438,6 +528,16 @@ export class ToolExecutions {
       if (claimed.length !== 1) {
         return INVALID_TOOL_EXECUTION;
       }
+
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: "tool.execution_dispatched",
+          clientId: row.clientId,
+          occurredAt: dispatchedAt,
+          subjectId: permit.data.action.toolCallId,
+        })
+        .run();
 
       return resolveToolExecutionConnectionResultSchema.parse({
         ok: true,
@@ -457,6 +557,14 @@ export class ToolExecutions {
     return result;
   }
 
+  async #scheduleReconciliation(reconcileAt: number): Promise<void> {
+    const scheduledAlarm = await this.#storage.getAlarm();
+
+    if (scheduledAlarm === null || reconcileAt < scheduledAlarm) {
+      await this.#storage.setAlarm(reconcileAt);
+    }
+  }
+
   #gateInput(database: ToolExecutionDatabase, request: ToolExecutionRequest, evaluatedAt: number) {
     if (request.ownerKey !== this.#objectName) {
       return undefined;
@@ -471,6 +579,7 @@ export class ToolExecutions {
     if (
       admission === undefined ||
       admission.status !== "redeemed" ||
+      admission.cancellationRequestedAt !== null ||
       admission.cleanupAt <= evaluatedAt ||
       admission.agentId !== request.agentId ||
       admission.agentRevision !== request.agentRevision ||

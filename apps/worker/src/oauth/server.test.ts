@@ -1,11 +1,12 @@
 import { env } from "cloudflare:test";
-import { OWNER_READ_SCOPE, OWNER_SCOPES } from "@crewhelm/contracts";
+import { OWNER_READ_SCOPE } from "@crewhelm/contracts";
 import { describe, expect, it } from "vitest";
 import * as z from "zod";
 
 import type { WorkerEnv } from "../env.js";
 import { createWorker } from "../http/server.js";
 import { hasActiveClientRegistration, purgeExpiredAuthRecords } from "./server.js";
+import { OAUTH_SCOPES } from "./scopes.js";
 import { readAuthTestMigrations, registerAuthTestDatabase } from "./testkit.js";
 
 const origin = "https://crewhelm.test";
@@ -90,10 +91,10 @@ describe("OAuth server boundary", () => {
       .bind(`${origin}/mcp`)
       .first();
     expect(resource).not.toBeNull();
-    expect(JSON.parse(JSON.parse(String(resource?.allowedScopes)))).toEqual([...OWNER_SCOPES]);
+    expect(JSON.parse(JSON.parse(String(resource?.allowedScopes)))).toEqual([...OAUTH_SCOPES]);
   });
 
-  it("normalizes Codex native client metadata without enabling refresh grants", async () => {
+  it("preserves the Codex native client's refresh grant and requires a valid token", async () => {
     const response = await register(["http://127.0.0.1:43123/callback/crewhelm"], {
       application_type: "native",
       grant_types: ["authorization_code", "refresh_token"],
@@ -115,7 +116,10 @@ describe("OAuth server boundary", () => {
     const authorizeWithoutPkce = await createWorker().fetch(new Request(authorize), workerEnv());
 
     expect(registration.application_type).toBe("native");
-    expect(JSON.parse(JSON.parse(String(client?.grantTypes)))).toEqual(["authorization_code"]);
+    expect(JSON.parse(JSON.parse(String(client?.grantTypes)))).toEqual([
+      "authorization_code",
+      "refresh_token",
+    ]);
     expect(decodeStoredJson(client?.metadata)).toEqual({
       application_type: "native",
       resources: [`${origin}/mcp`],
@@ -139,7 +143,29 @@ describe("OAuth server boundary", () => {
     );
 
     expect(refreshAttempt.status).toBe(400);
-    await expect(refreshAttempt.json()).resolves.toMatchObject({ error: "invalid_request" });
+    await expect(refreshAttempt.json()).resolves.toMatchObject({ error: "invalid_grant" });
+  });
+
+  it("rejects conflicting authorization resources", async () => {
+    const response = await register(["http://127.0.0.1:43123/callback/crewhelm"], {
+      application_type: "native",
+    });
+    const registration = registrationSchema.parse(await response.json());
+    const authorize = new URL(`${origin}/api/auth/oauth2/authorize`);
+
+    authorize.searchParams.set("client_id", registration.client_id);
+    authorize.searchParams.set("code_challenge", "a".repeat(43));
+    authorize.searchParams.set("code_challenge_method", "S256");
+    authorize.searchParams.set("redirect_uri", "http://127.0.0.1:43123/callback/crewhelm");
+    authorize.searchParams.append("resource", `${origin}/mcp`);
+    authorize.searchParams.append("resource", "https://other.example/mcp");
+    authorize.searchParams.set("response_type", "code");
+    authorize.searchParams.set("scope", OWNER_READ_SCOPE);
+
+    const authorizeResponse = await createWorker().fetch(new Request(authorize), workerEnv());
+
+    expect(authorizeResponse.status).toBe(400);
+    await expect(authorizeResponse.json()).resolves.toMatchObject({ error: "invalid_request" });
   });
 
   it("requires an HTTPS redirect for an explicit web client", async () => {
@@ -210,7 +236,8 @@ describe("OAuth server boundary", () => {
         candidate.name === "0006_connection_write_scope.sql" ||
         candidate.name === "0007_connection_read_scope.sql" ||
         candidate.name === "0008_connection_config_read_scope.sql" ||
-        candidate.name === "0009_connection_config_write_scope.sql",
+        candidate.name === "0009_connection_config_write_scope.sql" ||
+        candidate.name === "0010_oauth_offline_access.sql",
     );
 
     expect(migrations.map((migration) => migration.name)).toEqual([
@@ -222,6 +249,7 @@ describe("OAuth server boundary", () => {
       "0007_connection_read_scope.sql",
       "0008_connection_config_read_scope.sql",
       "0009_connection_config_write_scope.sql",
+      "0010_oauth_offline_access.sql",
     ]);
     for (const migration of migrations) {
       for (const query of migration.queries) {
@@ -241,7 +269,7 @@ describe("OAuth server boundary", () => {
       .bind(registration.client_id)
       .first();
 
-    expect(JSON.parse(JSON.parse(String(resource?.allowedScopes)))).toEqual([...OWNER_SCOPES]);
+    expect(JSON.parse(JSON.parse(String(resource?.allowedScopes)))).toEqual([...OAUTH_SCOPES]);
     expect(JSON.parse(JSON.parse(String(client?.scopes)))).toEqual([OWNER_READ_SCOPE]);
   });
 
@@ -329,12 +357,13 @@ describe("OAuth server boundary", () => {
     expect(response.status).toBe(200);
     expect(metadata).toMatchObject({
       authorization_endpoint: `${origin}/api/auth/oauth2/authorize`,
-      grant_types_supported: ["authorization_code"],
+      grant_types_supported: ["authorization_code", "refresh_token"],
       issuer: `${origin}/api/auth`,
       registration_endpoint: `${origin}/api/auth/oauth2/register`,
-      scopes_supported: [...OWNER_SCOPES],
+      scopes_supported: [...OAUTH_SCOPES],
       token_endpoint: `${origin}/api/auth/oauth2/token`,
     });
+    expect(metadata).not.toHaveProperty("authorization_response_iss_parameter_supported");
   });
 
   it("returns a protocol 4xx for an invalid authorization code", async () => {

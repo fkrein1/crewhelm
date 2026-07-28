@@ -33,6 +33,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as z from "zod";
 
 import {
+  MCP_CANCEL_RUN_TOOL_NAME,
   MCP_CREATE_AGENT_TOOL_NAME,
   MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
   MCP_ENABLE_INTEGRATION_TOOL_NAME,
@@ -156,6 +157,9 @@ describe("authenticated MCP handler", () => {
       (tool) => tool.name === MCP_LIST_CONNECTIONS_TOOL_NAME,
     );
     const startRunTool = payload.result.tools.find((tool) => tool.name === MCP_START_RUN_TOOL_NAME);
+    const cancelRunTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_CANCEL_RUN_TOOL_NAME,
+    );
     const inspectRunTool = payload.result.tools.find(
       (tool) => tool.name === MCP_INSPECT_RUN_TOOL_NAME,
     );
@@ -219,6 +223,12 @@ describe("authenticated MCP handler", () => {
       openWorldHint: false,
       readOnlyHint: false,
     });
+    expect(cancelRunTool?.annotations).toMatchObject({
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+      readOnlyHint: false,
+    });
     expect(inspectRunTool?.annotations).toMatchObject({
       destructiveHint: false,
       idempotentHint: true,
@@ -264,7 +274,7 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 4,
+        schemaVersion: 6,
         status: "ready",
       },
     });
@@ -331,6 +341,9 @@ describe("authenticated MCP handler", () => {
       BETTER_AUTH_SECRET: signingSecret,
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
+          cancelRun: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           configureAgentConnection: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -1446,6 +1459,7 @@ describe("authenticated MCP handler", () => {
       COMPOSIO_API_KEY: "test-composio-api-key",
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
+          cancelRun: unavailableControlPlane,
           completeConnectionLink: unavailableControlPlane,
           completeIntegrationEnablement: unavailableControlPlane,
           configureAgentConnection: unavailableControlPlane,
@@ -1545,6 +1559,7 @@ describe("authenticated MCP handler", () => {
       COMPOSIO_API_KEY: "test-composio-api-key",
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
+          cancelRun: unavailableControlPlane,
           completeConnectionLink: (authorityInput: unknown, input: unknown) =>
             runInDurableObject(stub, (instance) =>
               instance.completeConnectionLink(authorityInput, input),

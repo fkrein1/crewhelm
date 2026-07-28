@@ -9,6 +9,7 @@ import {
   OWNER_WRITE_SCOPE,
   ownerAuthoritySchema,
   type ControlPlaneStatusResult,
+  type CancelRunResult,
   type CreateAgentResult,
   type CreateConnectionLinkResult,
   type EnableIntegrationResult,
@@ -46,6 +47,7 @@ import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlit
 
 import {
   AgentChannel,
+  deniedCancelRun,
   deniedDecideRunToolApproval,
   deniedInspectRun,
   deniedListRunToolApprovals,
@@ -101,7 +103,7 @@ export class OwnerControlPlane extends DurableObject {
       schema: controlPlaneSchema,
     });
     this.#runAdmissions = new RunAdmissions(this.#objectName, this.#database, this.#storage);
-    this.#toolExecutions = new ToolExecutions(this.#objectName, this.#database);
+    this.#toolExecutions = new ToolExecutions(this.#objectName, this.#database, this.#storage);
     this.#agents = new AgentRegistry(this.#database);
     this.#connections = new Connections(this.#database, this.#storage);
     this.#agentChannel = new AgentChannel(
@@ -109,6 +111,7 @@ export class OwnerControlPlane extends DurableObject {
       this.#database,
       environment.CREW_AGENT,
       this.#runAdmissions,
+      this.#toolExecutions,
     );
     this.#storage.sql.exec("PRAGMA foreign_keys = ON");
     void this.ctx.blockConcurrencyWhile(async () => {
@@ -235,6 +238,14 @@ export class OwnerControlPlane extends DurableObject {
       : deniedStartRun(authorization.code);
   }
 
+  async cancelRun(authorityInput: unknown, input: unknown): Promise<CancelRunResult> {
+    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#agentChannel.cancel(authorization.authority, input)
+      : deniedCancelRun(authorization.code);
+  }
+
   async inspectRun(authorityInput: unknown, input: unknown): Promise<InspectRunResult> {
     const authorization = this.#authorize(authorityInput, AGENTS_READ_SCOPE);
 
@@ -323,15 +334,15 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     const currentTime = Date.now();
+    this.#toolExecutions.reconcileExpired(currentTime);
     this.#runAdmissions.cleanup(currentTime);
     const nextConnectionCleanup = this.#connections.cleanup(currentTime);
     const nextRunCleanup = this.#runAdmissions.nextCleanupAt();
+    const nextToolReconciliation = this.#toolExecutions.nextReconciliationAt();
     const nextAlarm =
-      nextConnectionCleanup === null
-        ? nextRunCleanup
-        : nextRunCleanup === null
-          ? nextConnectionCleanup
-          : Math.min(nextConnectionCleanup, nextRunCleanup);
+      [nextConnectionCleanup, nextRunCleanup, nextToolReconciliation]
+        .filter((candidate): candidate is number => candidate !== null)
+        .toSorted((left, right) => left - right)[0] ?? null;
 
     if (nextAlarm !== null) {
       await this.#storage.setAlarm(nextAlarm);

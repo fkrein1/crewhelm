@@ -26,7 +26,7 @@ server per request. There is one SQLite-backed `OwnerControlPlane` per owner and
 | State owner         | Authoritative facts                                                                           |
 | ------------------- | --------------------------------------------------------------------------------------------- |
 | Worker              | Authenticated request context only                                                            |
-| Auth D1             | OAuth state, signing keys, and token revocation                                               |
+| Auth D1             | OAuth state, signing keys, rotating refresh tokens, and token revocation                      |
 | `OwnerControlPlane` | Agent revisions, connection references, admission, budgets, approvals, idempotency, and audit |
 | `CrewAgent`         | Think submissions, transcripts, output, deadlines, and approval waits                         |
 | Composio            | Connected-account credentials and refresh                                                     |
@@ -77,7 +77,9 @@ composition root or external adapter. Split only around a coherent invariant or 
 5. `ToolGate` evaluates the exact grant and current policy immediately before a single-use
    execution reservation. The production adapter atomically consumes the complete permit to claim
    the opaque account once, verifies the account and toolkit again, then executes through
-   Composio's fixed direct-tool endpoint.
+   Composio's fixed direct-tool endpoint. Owner cancellation and provider dispatch race in the
+   same control-plane transaction boundary: cancellation is refused after dispatch, and dispatch
+   is refused after cancellation.
 6. Connect Links create owner-facing setup flows. Browser returns record lifecycle evidence; they
    do not by themselves activate a connection or authorize execution.
 

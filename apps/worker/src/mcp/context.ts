@@ -1,6 +1,7 @@
 import type { OwnerAuthority } from "@crewhelm/contracts";
 
 export interface OwnerControlPlaneClient {
+  cancelRun(authorityInput: unknown, input: unknown): Promise<unknown>;
   configureAgentConnection(authorityInput: unknown, input: unknown): Promise<unknown>;
   createAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
   completeConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;

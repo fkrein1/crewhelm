@@ -7,7 +7,6 @@ import {
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
-  OWNER_DEFAULT_SCOPE_CLAIM,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   createAgentResultSchema,
@@ -21,7 +20,6 @@ import {
   listConnectionsResultSchema,
   ownerAuthoritySchema,
   ownerKeySchema,
-  ownerScopeClaimSchema,
   updateAgentResultSchema,
 } from "@crewhelm/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -44,6 +42,11 @@ import {
 } from "../mcp/server.js";
 import { deriveOwnerKey } from "../owner/identity.js";
 import { exchangeGithubAuthorizationCode } from "./auth.js";
+import {
+  OAUTH_DEFAULT_SCOPE_CLAIM,
+  OFFLINE_ACCESS_SCOPE,
+  oauthScopeClaimSchema,
+} from "./scopes.js";
 import { registerAuthTestDatabase } from "./testkit.js";
 
 const origin = "https://crewhelm.test";
@@ -58,8 +61,11 @@ const registrationSchema = z.looseObject({
 const tokenSchema = z.looseObject({
   access_token: z.string().min(1),
   expires_in: z.literal(15 * 60),
-  scope: ownerScopeClaimSchema,
+  scope: oauthScopeClaimSchema,
   token_type: z.literal("Bearer"),
+});
+const refreshableTokenSchema = tokenSchema.extend({
+  refresh_token: z.string().min(1),
 });
 const toolResultSchema = z.looseObject({
   result: z.looseObject({
@@ -384,7 +390,7 @@ describe("public OAuth to MCP integration", () => {
         redirect_uris: [redirectUri],
         require_pkce: true,
         response_types: ["code"],
-        scope: reversedOwnerScopeClaim,
+        scope: `${reversedOwnerScopeClaim} ${OFFLINE_ACCESS_SCOPE}`,
         token_endpoint_auth_method: "none",
       }),
       headers: {
@@ -401,9 +407,10 @@ describe("public OAuth to MCP integration", () => {
     authorize.searchParams.set("code_challenge", await codeChallenge(verifier));
     authorize.searchParams.set("code_challenge_method", "S256");
     authorize.searchParams.set("redirect_uri", redirectUri);
-    authorize.searchParams.set("resource", `${origin}/mcp`);
+    authorize.searchParams.append("resource", `${origin}/mcp`);
+    authorize.searchParams.append("resource", `${origin}/mcp`);
     authorize.searchParams.set("response_type", "code");
-    authorize.searchParams.set("scope", reversedOwnerScopeClaim);
+    authorize.searchParams.set("scope", `${reversedOwnerScopeClaim} ${OFFLINE_ACCESS_SCOPE}`);
     authorize.searchParams.set("state", "integration-client-state");
     const authorizeResponse = await request(workerEnv, `${authorize.pathname}${authorize.search}`, {
       headers: {
@@ -431,12 +438,16 @@ describe("public OAuth to MCP integration", () => {
     expect(loginPageResponse.headers.get("content-security-policy")).toContain("script-src 'self'");
     expect(loginPageResponse.headers.get("content-security-policy")).toContain("style-src 'self'");
     expect(loginPage).toContain('href="/oauth/styles.css"');
+    expect(loginPage).toContain('<script src="/oauth/actions.js" defer></script>');
     expect(loginPage).toContain('href="/oauth/login/continue?');
+    expect(loginPage).toContain('data-navigation-start data-pending-label="Opening GitHub…"');
     const stylesheetResponse = await request(workerEnv, "/oauth/styles.css");
+    const stylesheet = await stylesheetResponse.text();
 
     expect(stylesheetResponse.status).toBe(200);
     expect(stylesheetResponse.headers.get("content-type")).toBe("text/css; charset=utf-8");
-    expect(await stylesheetResponse.text()).toContain(".primary");
+    expect(stylesheet).toContain(".primary");
+    expect(stylesheet).toContain('.button[aria-disabled="true"]');
     const continueResponse = await request(workerEnv, `/oauth/login/continue?${loginQuery}`);
     const continueLocation = new URL(responseLocation(continueResponse), origin);
 
@@ -553,8 +564,12 @@ describe("public OAuth to MCP integration", () => {
     expect(consentPage.match(/data-consent-form/g)).toHaveLength(2);
     expect(consentPage).toContain('<input type="hidden" name="decision" value="approve">');
     expect(consentPage).toContain('<input type="hidden" name="decision" value="deny">');
-    expect(consentPage).toContain('<button class="primary" type="submit">Authorize</button>');
-    expect(consentPage).toContain('<button class="secondary" type="submit">Deny</button>');
+    expect(consentPage).toContain(
+      '<button class="primary" type="submit" data-pending-label="Authorizing…">Authorize</button>',
+    );
+    expect(consentPage).toContain(
+      '<button class="secondary" type="submit" data-pending-label="Denying…">Deny</button>',
+    );
     expect(consentPage).toContain(
       '<a class="button primary" data-navigation-link hidden>Continue to client</a>',
     );
@@ -575,6 +590,9 @@ describe("public OAuth to MCP integration", () => {
       "Create private, short-lived Composio Connect Links. The selected auth configuration and an opaque owner key are sent to Composio; provider credentials stay with Composio.",
     );
     expect(consentPage).toContain(
+      "Keep this MCP client signed in using a rotating, revocable refresh token.",
+    );
+    expect(consentPage).toContain(
       "List enabled Composio auth configurations for a selected integration. The integration slug is sent to Composio; provider credentials are not returned.",
     );
     const actionsScriptResponse = await request(workerEnv, "/oauth/actions.js");
@@ -587,6 +605,8 @@ describe("public OAuth to MCP integration", () => {
 
     expect(actionsScript).toContain('method: "POST"');
     expect(actionsScript).toContain("new FormData(consentForm)");
+    expect(actionsScript).toContain('link.setAttribute("aria-disabled", "true")');
+    expect(actionsScript).toContain('submittingButton.setAttribute("aria-busy", "true")');
     expect(actionsScript).not.toContain("event.submitter");
     expect(actionsScript).toContain("navigationLink.href = result.redirectUrl");
     expect(actionsScript).not.toContain("window.location.assign(result.redirectUrl)");
@@ -659,10 +679,44 @@ describe("public OAuth to MCP integration", () => {
     const token = tokenSchema.parse(rawToken);
 
     expect(tokenResponse.status).toBe(200);
-    expect(token.scope).toBe(OWNER_DEFAULT_SCOPE_CLAIM);
-    expect(typeof rawToken === "object" && rawToken !== null && "refresh_token" in rawToken).toBe(
-      false,
-    );
+    expect(token.scope).toBe(OAUTH_DEFAULT_SCOPE_CLAIM);
+    const refreshableToken = refreshableTokenSchema.parse(rawToken);
+    const refreshedResponse = await request(workerEnv, "/api/auth/oauth2/token", {
+      body: new URLSearchParams({
+        client_id: registration.client_id,
+        grant_type: "refresh_token",
+        refresh_token: refreshableToken.refresh_token,
+        resource: `${origin}/mcp`,
+      }),
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      method: "POST",
+    });
+    const refreshedToken = refreshableTokenSchema.parse(await refreshedResponse.json());
+
+    expect(refreshedResponse.status).toBe(200);
+    expect(refreshedToken.scope).toBe(OAUTH_DEFAULT_SCOPE_CLAIM);
+    expect(refreshedToken.refresh_token).not.toBe(refreshableToken.refresh_token);
+    expect((await callMcp(workerEnv, refreshedToken.access_token)).status).toBe(200);
+    const replayResponse = await request(workerEnv, "/api/auth/oauth2/token", {
+      body: new URLSearchParams({
+        client_id: registration.client_id,
+        grant_type: "refresh_token",
+        refresh_token: refreshableToken.refresh_token,
+      }),
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      method: "POST",
+    });
+
+    expect(replayResponse.status).toBe(400);
+    await expect(replayResponse.json()).resolves.toMatchObject({
+      error: "invalid_grant",
+      error_description: "OAuth request denied.",
+    });
+    expect(JSON.stringify(rawToken)).not.toContain(workerEnv.BETTER_AUTH_SECRET);
     const storedAccounts = await workerEnv.AUTH_DB.prepare(
       `SELECT
          "accountId", "accessToken", "refreshToken", "idToken",
@@ -723,7 +777,7 @@ describe("public OAuth to MCP integration", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(toolResult.content[0].text))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 4,
+        schemaVersion: 6,
         status: "ready",
       },
     });

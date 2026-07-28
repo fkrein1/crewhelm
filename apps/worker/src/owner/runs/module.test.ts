@@ -244,6 +244,51 @@ describe("OwnerControlPlane runs", () => {
     ]);
   });
 
+  it("admits explicitly supported models and rejects unlisted models", async () => {
+    const authority = await authorityFor("236", [OWNER_WRITE_SCOPE, AGENTS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const supported = await stub.createAgent(authority, {
+      ...agentInput("create-supported-model-agent-236"),
+      model: "@cf/zai-org/glm-4.7-flash",
+    });
+    const unlisted = await stub.createAgent(authority, {
+      ...agentInput("create-unlisted-model-agent-236"),
+      model: "@cf/example/unlisted-model",
+    });
+    const prompt = "Perform the exact admitted task.";
+
+    if (!supported.ok || !unlisted.ok) {
+      throw new Error("Expected model-policy fixture Agents.");
+    }
+
+    await expect(
+      stub.createRunAdmission(authority, {
+        agentId: supported.agent.id,
+        expectedRevision: supported.agent.revision,
+        idempotencyKey: "admit-supported-model-236",
+        promptCharacters: prompt.length,
+        promptDigest: await digestRunPrompt(prompt),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      permit: {
+        budgetReservation: {
+          model: "@cf/zai-org/glm-4.7-flash",
+        },
+      },
+      state: "issued",
+    });
+    await expect(
+      stub.createRunAdmission(authority, {
+        agentId: unlisted.agent.id,
+        expectedRevision: unlisted.agent.revision,
+        idempotencyKey: "deny-unlisted-model-236",
+        promptCharacters: prompt.length,
+        promptDigest: await digestRunPrompt(prompt),
+      }),
+    ).resolves.toEqual(fixedRunAdmissionFailure("model_unavailable"));
+  });
+
   it("denies malformed, unauthorized, conflicting, cross-owner, stale, and expired admissions", async () => {
     const authority = await authorityFor("231", [OWNER_WRITE_SCOPE, AGENTS_WRITE_SCOPE]);
     const readOnly = await authorityFor("231", [OWNER_READ_SCOPE]);

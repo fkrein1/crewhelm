@@ -70,7 +70,7 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toEqual({
       ok: true,
       status: {
-        schemaVersion: 4,
+        schemaVersion: 6,
         status: "ready",
       },
     });
@@ -102,6 +102,16 @@ describe("OwnerControlPlane", () => {
           checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
           name: "0003_windy_stepford_cuckoos",
           version: 4,
+        },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0004_eminent_mongoose",
+          version: 5,
+        },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0005_young_norman_osborn",
+          version: 6,
         },
       ],
       owner: { owner_key: authority.ownerKey },
@@ -153,12 +163,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 4, status: "ready" },
+      status: { schemaVersion: 6, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 4, status: "ready" },
+      status: { schemaVersion: 6, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -362,16 +372,23 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 4, status: "ready" },
+      status: { schemaVersion: 6, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       const rows = [
         ...state.storage.sql.exec<{
           budget_reservation: string;
+          cancellation_requested_at: number | null;
+          cancelled_at: number | null;
           model_calls_consumed: number;
           run_id: string;
         }>(
-          `SELECT run_id, budget_reservation, model_calls_consumed
+          `SELECT
+             run_id,
+             budget_reservation,
+             cancellation_requested_at,
+             cancelled_at,
+             model_calls_consumed
            FROM run_admissions
            WHERE run_id IN (?, ?)
            ORDER BY run_id`,
@@ -384,14 +401,28 @@ describe("OwnerControlPlane", () => {
       expect(
         rows.map((row) => ({
           modelCallsConsumed: row.model_calls_consumed,
+          cancellationRequestedAt: row.cancellation_requested_at,
+          cancelledAt: row.cancelled_at,
           runId: row.run_id,
           toolGrants: runBudgetReservationSchema.parse(JSON.parse(row.budget_reservation))
             .toolGrants,
         })),
       ).toEqual(
         [
-          { modelCallsConsumed: 0, runId: issued.permit.runId, toolGrants: [] },
-          { modelCallsConsumed: 1, runId: redeemed.permit.runId, toolGrants: [] },
+          {
+            cancellationRequestedAt: null,
+            cancelledAt: null,
+            modelCallsConsumed: 0,
+            runId: issued.permit.runId,
+            toolGrants: [],
+          },
+          {
+            cancellationRequestedAt: null,
+            cancelledAt: null,
+            modelCallsConsumed: 1,
+            runId: redeemed.permit.runId,
+            toolGrants: [],
+          },
         ].toSorted((left, right) => left.runId.localeCompare(right.runId)),
       );
       expect([...state.storage.sql.exec("PRAGMA foreign_key_check")]).toEqual([]);
@@ -399,7 +430,144 @@ describe("OwnerControlPlane", () => {
         ...state.storage.sql.exec<{ version: number }>(
           "SELECT version FROM control_plane_migrations ORDER BY version",
         ),
-      ]).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
+      ]).toEqual([
+        { version: 1 },
+        { version: 2 },
+        { version: 3 },
+        { version: 4 },
+        { version: 5 },
+        { version: 6 },
+      ]);
+    });
+  });
+
+  it("preserves completed executions through the cancellation timeline migrations", async () => {
+    const authority = await authorityFor("90136", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("migration-v4-agent"));
+
+    if (!created.ok) {
+      throw new Error("Expected populated v4 migration Agent fixture.");
+    }
+
+    const prompt = "Preserve this completed legacy tool execution.";
+    const admission = await stub.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "migration-v4-run",
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
+    });
+
+    if (!admission.ok || admission.state !== "issued") {
+      throw new Error("Expected populated v4 migration run fixture.");
+    }
+
+    await expect(stub.confirmRunAdmission(admission.permit)).resolves.toMatchObject({
+      confirmed: true,
+      ok: true,
+    });
+    const toolCallId = "tool_call_90136000-0000-4000-8000-000000000001";
+
+    await runInDurableObject(stub, (_instance, state) => {
+      const startedAt = Date.now() - 2;
+      const completedAt = startedAt + 1;
+
+      state.storage.sql.exec(
+        `INSERT INTO connections
+           (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
+         VALUES (?, 'composio', ?, ?, 'active', ?)`,
+        "connection_90136000-0000-4000-8000-000000000001",
+        "ca_migration_v4",
+        "ac_migration_v4",
+        startedAt,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO capability_grants
+           (grant_id, agent_id, agent_revision, connection_id, grant, status, created_at)
+         VALUES (?, ?, ?, ?, '{}', 'active', ?)`,
+        "grant_90136000-0000-4000-8000-000000000001",
+        created.agent.id,
+        created.agent.revision,
+        "connection_90136000-0000-4000-8000-000000000001",
+        startedAt,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO tool_executions
+           (tool_call_id, run_id, grant_id, action_digest, nonce_digest, status,
+            cost_microusd, output_bytes, expires_at, started_at, dispatched_at, completed_at)
+         VALUES (?, ?, ?, ?, ?, 'completed', 0, 16, ?, ?, ?, ?)`,
+        toolCallId,
+        admission.permit.runId,
+        "grant_90136000-0000-4000-8000-000000000001",
+        "a".repeat(64),
+        "b".repeat(43),
+        completedAt + 1,
+        startedAt,
+        startedAt,
+        completedAt,
+      );
+      state.storage.sql.exec("PRAGMA foreign_keys=OFF");
+      state.storage.sql.exec(
+        `CREATE TABLE legacy_tool_executions AS
+         SELECT
+           tool_call_id, run_id, grant_id, action_digest, nonce_digest, status,
+           cost_microusd, output_bytes, expires_at, started_at, completed_at
+         FROM tool_executions`,
+      );
+      state.storage.sql.exec("DROP TABLE tool_executions");
+      state.storage.sql.exec("ALTER TABLE legacy_tool_executions RENAME TO tool_executions");
+      state.storage.sql.exec(
+        `CREATE TABLE legacy_run_admissions AS
+         SELECT
+           client_id, idempotency_key, request_digest, run_id, agent_id, agent_revision,
+           prompt_digest, budget_reservation, nonce_digest, status, expires_at, cleanup_at,
+           created_at, redeemed_at, model_call_consumed_at, model_calls_consumed,
+           tool_calls_consumed
+         FROM run_admissions`,
+      );
+      state.storage.sql.exec("DROP TABLE run_admissions");
+      state.storage.sql.exec("ALTER TABLE legacy_run_admissions RENAME TO run_admissions");
+      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 5");
+      state.storage.sql.exec("PRAGMA foreign_keys=ON");
+    });
+
+    await evictDurableObject(stub);
+    await expect(stub.status(authority)).resolves.toMatchObject({
+      ok: true,
+      status: { schemaVersion: 6, status: "ready" },
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      expect(
+        state.storage.sql
+          .exec<{
+            cancellation_requested_at: number | null;
+            cancelled_at: number | null;
+            completed_at: number;
+            dispatched_at: number;
+          }>(
+            `SELECT
+               run_admissions.cancellation_requested_at,
+               run_admissions.cancelled_at,
+               tool_executions.dispatched_at,
+               tool_executions.completed_at
+             FROM run_admissions
+             INNER JOIN tool_executions USING (run_id)
+             WHERE tool_executions.tool_call_id = ?`,
+            toolCallId,
+          )
+          .one(),
+      ).toEqual({
+        cancellation_requested_at: null,
+        cancelled_at: null,
+        completed_at: expect.any(Number),
+        dispatched_at: expect.any(Number),
+      });
+      expect([...state.storage.sql.exec("PRAGMA foreign_key_check")]).toEqual([]);
     });
   });
 
@@ -453,7 +621,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec(
         `INSERT INTO control_plane_migrations (version, name, checksum, applied_at)
          VALUES (?, ?, ?, ?)`,
-        5,
+        7,
         "future_migration",
         "f".repeat(64),
         Date.now(),
