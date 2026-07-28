@@ -9,24 +9,21 @@ Ship one observable pull-request objective as a complete, green slice.
 
 ## Frame
 
-1. Classify by the highest affected risk:
-   - **R0**: documentation or process wording with no executable behavior.
-   - **R1**: isolated stateless logic or tooling.
-   - **R2**: public contracts, ordinary persistence, schedules, provider adapters, or exact-pinned
-     dependencies or lockfiles without privileged lifecycle behavior.
-   - **R3**: authority, secrets, external effects, state ownership, migrations, sandboxing, remote
+1. Classify the change:
+   - **Docs**: prose only, with no executable behavior.
+   - **Code**: ordinary executable behavior.
+   - **Sensitive**: authority, secrets, external effects, persistence recovery, sandboxing, remote
      execution, deployment, CI/release permissions, or privileged dependencies.
 2. Read only relevant guidance:
    - New capability: `docs/product/philosophy.md`.
    - Authority or execution: `docs/security/invariants.md`.
    - State, trust, dependency, or contract boundary: `docs/architecture/system.md`.
-   - Module interface or refactor: `docs/engineering/module-design.md` and
-     `docs/engineering/code-philosophy.md`.
+   - Module interface or refactor: `docs/engineering/design.md`.
 3. State:
 
 ```text
 Objective:
-Risk:
+Category:
 Acceptance:
 Proposed commit:
 ```
@@ -42,6 +39,8 @@ unrelated outcomes.
   the owning capability; avoid speculative seams.
 - Review changed direct dependencies for purpose, exact version, license, install behavior, and
   runtime authority.
+- Do not disable checks. The sole `skipLibCheck` exception is defined in
+  `references/declaration-check-exception.md`.
 - Reduce scope when a capability exceeds its appetite; never defer correctness or security.
 
 For bugs and regressions, first reproduce the exact symptom with a fast, deterministic check. For
@@ -49,7 +48,7 @@ non-obvious failures, test specific falsifiable hypotheses. Turn the minimized r
 failing regression test, verify it passes after the fix, and rerun the original scenario. Remove
 temporary instrumentation before finishing.
 
-For R2/R3, cover relevant abuse and failure paths:
+For sensitive changes, cover relevant abuse and failure paths:
 
 - Treat model, provider, tool, and retrieved data as untrusted. Validate any identity, URL,
   destination, scope, resource, action, or cost it influences.
@@ -69,19 +68,27 @@ For R2/R3, cover relevant abuse and failure paths:
 2. For nontrivial code, simplify changed code and immediate callers without changing behavior,
    contracts, security, recovery, observability, or ownership; then repeat affected checks.
 3. Run risk-specific integration, migration, recovery, packaging, or staging checks.
-4. Once an R1-R3 pull-request diff settles, run `pnpm verify`. For R0, run formatting, relevant
-   document/foundation tests, and diff checks unless executable configuration or automation changed.
+4. Once a code or sensitive diff settles, run `pnpm verify`. For docs, run formatting, relevant
+   document or foundation tests, and diff checks unless executable configuration or automation
+   changed.
 5. Inspect `git diff --check`, the complete diff, and the staged diff.
 6. Self-review every change.
 7. Before pull-request creation, use one independent reviewer for the settled diff. Provide the
-   objective, risk context, and validation already completed. Ask for a holistic review covering
+   objective, category, and validation already completed. Ask for a holistic review covering
    simplicity, correctness, security risks introduced or affected by the change, and unintended
    compatibility breaks. The reviewer must not delegate or repeat successful checks unless
    investigating a specific finding or missing evidence. Address blocking findings and repeat only
-   checks invalidated by later changes. Add a second security-focused reviewer when the change
-   creates or changes authentication, authorization, secret lifecycle, sandboxing or remote
-   execution, destructive behavior, migration recovery, deployment authority, or another trust or
-   enforcement boundary.
+   checks invalidated by later changes.
 
 Do not commit with a failing or flaky required check, unresolved high-impact finding, unreviewed
 dependency, unproven migration recovery, or undemonstrated objective.
+
+## Deliver
+
+- Branch from protected `main`; use a short-lived `codex/*` branch for Codex-authored work. Never
+  commit or push directly to `main`.
+- Use semantic commit and pull-request titles: `<type>: <summary>`.
+- Keep commits green, scoped, independently revertible, and signed off with `git commit -s`.
+- Merge only after required checks pass and blocking conversations are resolved.
+- Do not push, merge, deploy, publish, create external resources, or perform destructive actions
+  without explicit user authorization.

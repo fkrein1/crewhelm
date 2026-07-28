@@ -949,7 +949,7 @@ describe("Composio connection-link adapter", () => {
 
     const [endpoint, init] = fetchMock.mock.calls[0] ?? [];
 
-    expect(endpoint).toBe("https://backend.composio.dev/api/v3/connected_accounts/link");
+    expect(endpoint).toBe("https://backend.composio.dev/api/v3.1/connected_accounts/link");
     expect(init?.method).toBe("POST");
     expect(init?.redirect).toBe("manual");
     expect(init?.signal).toBeInstanceOf(AbortSignal);

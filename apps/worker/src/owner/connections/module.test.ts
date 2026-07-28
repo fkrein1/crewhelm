@@ -1,4 +1,5 @@
 import {
+  CONNECTION_CONFIGS_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   OWNER_READ_SCOPE,
@@ -18,6 +19,89 @@ import {
 } from "../testkit.js";
 
 describe("OwnerControlPlane connections", () => {
+  it("reserves, completes, replays, and audits integration enablement", async () => {
+    const authority = await authorityFor("111-enable", [CONNECTION_CONFIGS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const input = {
+      idempotencyKey: "enable-github-111",
+      integrationSlug: "github",
+    };
+    const reservation = await stub.reserveIntegrationEnablement(authority, input);
+
+    expect(reservation).toMatchObject({ ok: true, state: "dispatch" });
+    if (!reservation.ok || reservation.state !== "dispatch") {
+      throw new Error("Expected integration enablement dispatch reservation.");
+    }
+
+    const completion = {
+      authConfigId: "ac_github_managed",
+      authScheme: "oauth2",
+      created: true,
+      integrationSlug: "github",
+      managed: true,
+      reservationId: reservation.reservationId,
+    };
+
+    await expect(stub.completeIntegrationEnablement(authority, completion)).resolves.toEqual({
+      authConfigId: completion.authConfigId,
+      authScheme: completion.authScheme,
+      created: true,
+      integrationSlug: "github",
+      managed: true,
+      ok: true,
+    });
+    await expect(stub.completeIntegrationEnablement(authority, completion)).resolves.toMatchObject({
+      created: false,
+      ok: true,
+    });
+    await expect(stub.reserveIntegrationEnablement(authority, input)).resolves.toMatchObject({
+      authConfigId: completion.authConfigId,
+      ok: true,
+      state: "replay",
+    });
+    await expect(
+      stub.reserveIntegrationEnablement(authority, {
+        ...input,
+        integrationSlug: "slack",
+      }),
+    ).resolves.toMatchObject({
+      error: { code: "idempotency_conflict" },
+      ok: false,
+    });
+
+    const stored = await runInDurableObject(stub, (_instance, state) => ({
+      audit: state.storage.sql
+        .exec("SELECT action, subject_id FROM audit_events ORDER BY event_id")
+        .toArray(),
+      requests: state.storage.sql
+        .exec(
+          `SELECT client_id, integration_slug, auth_config_id, auth_scheme, status
+           FROM integration_enablement_requests`,
+        )
+        .toArray(),
+    }));
+
+    expect(stored.audit).toEqual([
+      {
+        action: "integration.enablement_reserved",
+        subject_id: reservation.reservationId,
+      },
+      {
+        action: "integration.enabled",
+        subject_id: completion.authConfigId,
+      },
+    ]);
+    expect(stored.requests).toEqual([
+      {
+        auth_config_id: completion.authConfigId,
+        auth_scheme: completion.authScheme,
+        client_id: authority.clientId,
+        integration_slug: "github",
+        status: "completed",
+      },
+    ]);
+  });
+
   it("reserves, completes, replays, audits, and survives eviction without credentials", async () => {
     const authority = await authorityFor("112", [CONNECTIONS_WRITE_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);

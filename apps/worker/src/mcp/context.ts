@@ -4,6 +4,7 @@ export interface OwnerControlPlaneClient {
   configureAgentConnection(authorityInput: unknown, input: unknown): Promise<unknown>;
   createAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
   completeConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;
+  completeIntegrationEnablement(authorityInput: unknown, input: unknown): Promise<unknown>;
   decideRunToolApproval(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgentRevision(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -14,6 +15,7 @@ export interface OwnerControlPlaneClient {
   listRunToolApprovals(authorityInput: unknown, input: unknown): Promise<unknown>;
   lookupAgentConnectionConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
   reserveConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;
+  reserveIntegrationEnablement(authorityInput: unknown, input: unknown): Promise<unknown>;
   resolveConnectionForAttachment(authorityInput: unknown, input: unknown): Promise<unknown>;
   startRun(authorityInput: unknown, input: unknown): Promise<unknown>;
   status(authorityInput: unknown): Promise<unknown>;

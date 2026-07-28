@@ -11,7 +11,8 @@ import * as z from "zod";
 
 import { readBoundedJson } from "./bounded-json.js";
 
-const COMPOSIO_CONNECTION_LINK_URL = "https://backend.composio.dev/api/v3/connected_accounts/link";
+const COMPOSIO_CONNECTION_LINK_URL =
+  "https://backend.composio.dev/api/v3.1/connected_accounts/link";
 const COMPOSIO_CONNECT_ORIGIN = "https://connect.composio.dev";
 const CONNECTION_LINK_TIMEOUT_MS = 5_000;
 const MAXIMUM_CONNECTION_LINK_RESPONSE_BYTES = 32 * 1_024;

@@ -131,6 +131,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "connections:read",
           "connections:write",
           "connection-configs:read",
+          "connection-configs:write",
           "integrations:read",
         ],
       };
@@ -154,6 +155,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "connections:read",
           "connections:write",
           "connection-configs:read",
+          "connection-configs:write",
           "integrations:read",
         ],
         token_endpoint: "https://crewhelm.example/api/auth/oauth2/token",
@@ -190,6 +192,10 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
   await writeFile(resolve(assets, "migrations", "0007_connection_read_scope.sql"), "SELECT 1;\n");
   await writeFile(
     resolve(assets, "migrations", "0008_connection_config_read_scope.sql"),
+    "SELECT 1;\n",
+  );
+  await writeFile(
+    resolve(assets, "migrations", "0009_connection_config_write_scope.sql"),
     "SELECT 1;\n",
   );
   await writeFile(
@@ -366,6 +372,7 @@ describe("Cloudflare bootstrap", () => {
               "0006_connection_write_scope.sql",
               "0007_connection_read_scope.sql",
               "0008_connection_config_read_scope.sql",
+              "0009_connection_config_write_scope.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
@@ -516,6 +523,7 @@ describe("Cloudflare bootstrap", () => {
               "0006_connection_write_scope.sql",
               "0007_connection_read_scope.sql",
               "0008_connection_config_read_scope.sql",
+              "0009_connection_config_write_scope.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
@@ -856,6 +864,7 @@ describe("Cloudflare bootstrap", () => {
               "0006_connection_write_scope.sql",
               "0007_connection_read_scope.sql",
               "0008_connection_config_read_scope.sql",
+              "0009_connection_config_write_scope.sql",
             ])
           : queryResult(AUTH_TABLES);
       }

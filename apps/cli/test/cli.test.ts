@@ -35,6 +35,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "connections:read",
           "connections:write",
           "connection-configs:read",
+          "connection-configs:write",
           "integrations:read",
         ],
       };
@@ -58,6 +59,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "connections:read",
           "connections:write",
           "connection-configs:read",
+          "connection-configs:write",
           "integrations:read",
         ],
         token_endpoint: "https://crewhelm.example/api/auth/oauth2/token",
@@ -177,6 +179,10 @@ describe("Crewhelm CLI", () => {
     );
     await writeFile(
       resolve(directory, "migrations", "0008_connection_config_read_scope.sql"),
+      "SELECT 1;\n",
+    );
+    await writeFile(
+      resolve(directory, "migrations", "0009_connection_config_write_scope.sql"),
       "SELECT 1;\n",
     );
     await writeFile(

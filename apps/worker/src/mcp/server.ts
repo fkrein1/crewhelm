@@ -4,6 +4,7 @@ import {
   type OwnerAuthority,
 } from "@crewhelm/contracts";
 import {
+  createComposioAuthConfigs,
   createComposioCatalog,
   createComposioConnectionLinks,
   createComposioRuntime,
@@ -36,6 +37,7 @@ export {
   MCP_LIST_CONNECTIONS_TOOL_NAME,
 } from "./connection-tools.js";
 export {
+  MCP_ENABLE_INTEGRATION_TOOL_NAME,
   MCP_INSPECT_INTEGRATION_TOOL_NAME,
   MCP_LIST_INTEGRATION_AUTH_CONFIGS_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
@@ -150,14 +152,16 @@ function createMcpServer(
     }),
     signal,
   });
-  registerIntegrationTools(
-    server,
-    authority,
-    createComposioCatalog({
+  registerIntegrationTools(server, context, {
+    authConfigs: createComposioAuthConfigs({
       apiKey: env.COMPOSIO_API_KEY,
       signal,
     }),
-  );
+    catalog: createComposioCatalog({
+      apiKey: env.COMPOSIO_API_KEY,
+      signal,
+    }),
+  });
 
   server.registerTool(
     MCP_STATUS_TOOL_NAME,

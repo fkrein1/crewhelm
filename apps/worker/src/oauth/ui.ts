@@ -2,6 +2,7 @@ import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
   CONNECTION_CONFIGS_READ_SCOPE,
+  CONNECTION_CONFIGS_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
@@ -487,6 +488,9 @@ function consentPage(
     requestedScopes.includes(CONNECTION_CONFIGS_READ_SCOPE) &&
     requestedScopes.includes(INTEGRATIONS_READ_SCOPE)
       ? "<li>List enabled Composio auth configurations for a selected integration. The integration slug is sent to Composio; provider credentials are not returned.</li>"
+      : "",
+    requestedScopes.includes(CONNECTION_CONFIGS_WRITE_SCOPE)
+      ? "<li>Enable Composio-managed authentication for a selected integration. The integration slug is sent to Composio; provider credentials are not returned.</li>"
       : "",
     requestedScopes.includes(INTEGRATIONS_READ_SCOPE)
       ? "<li>Search the Composio integration catalog and inspect exact tool schemas. Search terms and selected integration slugs are sent to Composio.</li>"

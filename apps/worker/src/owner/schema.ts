@@ -396,6 +396,56 @@ export const connectionLinkRequests = sqliteTable(
   ],
 );
 
+export const integrationEnablementRequests = sqliteTable(
+  "integration_enablement_requests",
+  {
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    integrationSlug: text("integration_slug").notNull(),
+    reservationId: text("reservation_id").notNull().unique(),
+    status: text("status", {
+      enum: ["pending", "completed", "abandoned"],
+    }).notNull(),
+    recoverAfter: integer("recover_after").notNull(),
+    authConfigId: text("auth_config_id"),
+    authScheme: text("auth_scheme"),
+    createdAt: integer("created_at").notNull(),
+    completedAt: integer("completed_at"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.clientId, table.idempotencyKey] }),
+    uniqueIndex("integration_enablement_requests_pending_slug")
+      .on(table.integrationSlug)
+      .where(sql`${table.status} = 'pending'`),
+    check(
+      "integration_enablement_requests_request_digest_length",
+      sql`length(${table.requestDigest}) = 43`,
+    ),
+    check(
+      "integration_enablement_requests_status",
+      sql`${table.status} IN ('pending', 'completed', 'abandoned')`,
+    ),
+    check("integration_enablement_requests_recover_after_positive", sql`${table.recoverAfter} > 0`),
+    check("integration_enablement_requests_created_at_positive", sql`${table.createdAt} > 0`),
+    check(
+      "integration_enablement_requests_state",
+      sql`(
+        (${table.status} = 'completed'
+          AND ${table.authConfigId} IS NOT NULL
+          AND ${table.authScheme} IS NOT NULL
+          AND ${table.completedAt} IS NOT NULL
+          AND ${table.completedAt} >= ${table.createdAt})
+        OR
+        (${table.status} IN ('pending', 'abandoned')
+          AND ${table.authConfigId} IS NULL
+          AND ${table.authScheme} IS NULL
+          AND ${table.completedAt} IS NULL)
+      )`,
+    ),
+  ],
+);
+
 export const connectionAuthorizationReturns = sqliteTable(
   "connection_authorization_returns",
   {
@@ -474,6 +524,7 @@ export const controlPlaneSchema = {
   connections,
   controlPlane,
   controlPlaneMigrations,
+  integrationEnablementRequests,
   runAdmissions,
   toolApprovals,
   toolExecutions,

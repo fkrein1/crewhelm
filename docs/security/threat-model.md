@@ -2,489 +2,117 @@
 
 Status: authenticated MCP control plane
 
-## Scope
+Crewhelm protects remote MCP administration, owner-local control state, isolated Agent execution,
+provider integrations, and deployment authority. The [security invariants](invariants.md) define
+the required properties; the [system architecture](../architecture/system.md) defines ownership
+and authority flow. This document records threats, control choices, and residual risks.
 
-Crewhelm's security boundary covers remote MCP administration, a private control plane, isolated
-agent runtimes, and provider connectors. This document records the minimum threats and controls for
-that architecture, including boundaries whose runtime adapters are outside the implemented
-surface.
+## Assets and boundaries
 
-## Assets
+Protected assets are owner identity and grants; OAuth clients, sessions, signing keys, and
+revocations; Composio project authority and connected accounts; Agent configuration and execution
+state; audit, budgets, and recovery data; and repository or deployment authority.
 
-- Owner identity and authorization grants
-- GitHub OAuth client secret and the transient upstream access token
-- OAuth client registrations and leases, authorization state, login sessions, signing keys, and
-  token-revocation hashes
-- Composio project authority, connected accounts, and provider credentials
-- Agent configuration, memory, artifacts, and schedules
-- Recipe integrity and installed capability grants
-- Audit history, budgets, and recovery material
-- Repository instructions, automation, and release authority
+Trust changes at:
 
-## Trust boundaries
+1. public OAuth and MCP ingress;
+2. fixed GitHub identity endpoints and Auth D1;
+3. authenticated ingress to the owner control plane;
+4. the control plane to `CrewAgent`;
+5. Crewhelm to fixed Composio catalog, connection, and execution endpoints;
+6. recipes and model or provider output entering trusted policy;
+7. build automation and the bootstrap CLI reaching release or Cloudflare resources.
 
-1. MCP client to Crewhelm's public OAuth and MCP ingress
-2. Crewhelm authorization routes to GitHub's fixed OAuth and user API endpoints
-3. OAuth ingress to the Cloudflare D1 database holding protocol state and signing keys
-4. Authenticated MCP ingress to the owner-named private control plane
-5. Authenticated MCP ingress to Composio's fixed toolkit and tool catalog endpoints
-6. Control plane to agent runtime and workflows
-7. Runtime to Composio and external toolkits
-8. Repository recipe to installed, owner-approved configuration
-9. Build and release automation to published packages and deployments
-10. Local bootstrap CLI to the selected Cloudflare account, D1 database, and Worker deployment
+## Threats and controls
 
-## Primary threats
+| Threat                                                 | Required control                                                                                                                                                 |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Token theft, confused identity, or cross-owner access  | Audience-bound short-lived tokens, exact owner and scope checks at ingress and execution, owner-named objects, explicit revocation                               |
+| Malicious OAuth clients, replay, or storage exhaustion | S256 PKCE, HTTPS or exact-loopback redirects, protected state, bounded bodies and sessions, rate limits, expiring registrations, no refresh tokens               |
+| Prompt injection or hostile provider data              | Treat all model, recipe, MCP, retrieved, and provider content as inert input; trusted code classifies authority, effects, targets, and cost                      |
+| Credential disclosure                                  | Keep provider credentials outside models and Crewhelm state; bound and normalize responses; exclude secrets from results, errors, telemetry, URLs, and backups   |
+| SSRF or redirected egress                              | Use fixed HTTPS provider endpoints, manual redirect handling, bounded response size and time, and no model-selected network destination                          |
+| Stale, replayed, or amplified authority                | Bind permits and approvals to owner, client, Agent revision, action digest, budget, nonce, and short expiry; recheck current policy immediately before execution |
+| Duplicate or partial external effects                  | Reserve idempotency before dispatch, use single-use permits, audit transitions, and treat an ambiguous provider outcome as unknown rather than retrying          |
+| Runaway execution or cost                              | Bound models, turns, tools, schedules, concurrency, payloads, output, duration, and cost before work starts                                                      |
+| Unsafe persistence or recovery                         | Apply ordered checksummed migrations before admission; preserve revocation during backup, restore, deletion, and recovery                                        |
+| Supply-chain or deployment compromise                  | Pin dependencies and automation, minimize CI permissions, validate release artifacts, and require explicit deployment authority                                  |
 
-- Token theft, issuer/subject collision, confused-deputy behavior, and cross-owner references
-- Missing or confused OAuth resource audiences, scope attenuation that survives only in token
-  metadata, malicious dynamic client redirects, and stale grants after identity configuration
-  changes
-- OAuth state or authorization-code replay, session theft, signing-key disclosure, or an
-  accidentally enabled refresh-token path
-- Registration or token endpoint storage/cost exhaustion and oversized unauthenticated bodies
-- GitHub outage, excessive upstream scopes, account substitution, or secret/error leakage
-- Prompt injection causing unauthorized tools, destinations, data flow, or self-approval
-- Stale or replayed approval after policy, connection, or revocation changes
-- Tool-name/source collision or raw Composio paths bypassing `ToolGate`
-- Child-agent privilege amplification or lost cancellation
-- Credential disclosure through model context, logs, errors, URLs, or backups
-- SSRF, redirect abuse, arbitrary egress, and hostile external MCP servers
-- Idempotency-key collision, duplicate effects, and unknown provider outcomes during retries
-- Runaway loops, schedules, fan-out, provider usage, and cost
-- Malicious or silently widened marketplace recipes
-- Unsafe migrations, deletion without revocation, and restore that reactivates execution
-- Compromised dependencies, CI workflows, or package publication
-- Instruction poisoning or unsafe pull-request automation causing an agent or maintainer to run
-  attacker-controlled commands
+Tool discovery never grants execution authority. Model output never grants permission or approves
+an action. External writes remain approval-gated where policy classifies them as write or
+destructive.
 
-## Required control families
+## Residual risks and recovery
 
-- Exact `/mcp` OAuth resource binding, S256 PKCE, short-lived signed audience-bound access tokens,
-  disabled refresh tokens, token-time owner/scope checks, method-level read/write enforcement, and
-  immediate hash-based explicit revocation
-- GitHub numeric-ID allowlisting with an empty upstream scope; the transient GitHub token is
-  discarded before Crewhelm creates a grant
-- HTTPS or loopback-only dynamic client redirects, explicit consent that shows the return origin,
-  bounded OAuth request bodies, per-client-address platform rate limits, 24-hour client
-  registration expiry, and hourly orphan/expiry purging
-- Cryptographically protected OAuth state, secure cookies, non-refreshing 10-minute login sessions,
-  fixed outbound GitHub hosts, bounded provider responses, safe errors, owner-named references,
-  and scoped execution permits
-- Execution-time capability intersection and owner approval distinct from model output
-- Default-empty tool inventory, capability IDs, and authority attenuation for child agents
-- Pinned Composio execution with explicit accounts; Sessions, raw proxy, and model connection
-  management stay disabled
-- Full Composio toolkit and exact-tool discovery through a fixed host, exact read scope, manual
-  redirect handling, bounded time and response size, strict normalization, and
-  provider-independent safe errors
-- Private Composio Connect Links through a fixed mutation endpoint, a separate write scope,
-  short-lived canonical hosted URLs, opaque owner and connection identifiers, bounded responses,
-  durable idempotency reservations, and no connected-account credential reads
-- Schema, provenance, size, and content validation
-- Idempotency, audit, budgets, and rate limits
-- Versioned migrations, backup, quarantined restore, and rollback procedures
-- Locked dependencies, minimal CI permissions, review gates, and release provenance
-- Review instruction, workflow, manifest, and lockfile changes before running agents or scripts on
-  untrusted contributions; never expose repository secrets to fork pull requests
+### OAuth
 
-## OAuth recovery and residual risk
+Changing the GitHub owner or client secret blocks new authorization but does not revoke an access
+token already issued for its remaining lifetime of at most 15 minutes. Explicit revocation is
+immediate. Emergency global revocation uses a fresh migrated Auth D1 binding; the old database is
+quarantined and must never be rebound because doing so could reactivate clients, sessions, signing
+keys, or tokens.
 
-Changing the configured GitHub owner ID or client secret stops new authorization but does not revoke
-an access token already issued for up to 15 minutes. Explicit OAuth revocation takes effect
-immediately through a D1 record containing only the token's SHA-256 hash. Emergency global
-revocation creates a fresh auth D1 database, applies the migrations, replaces the `AUTH_DB`
-binding, and deploys the Worker. That invalidates all registered clients, sessions, signing keys,
-and tokens while leaving owner control-plane state untouched. Retain the prior database in
-quarantine for forensics; deletion is a separate destructive action. Never restore or rebind that
-database after declaring global revocation, because its old client, session, key, and token state
-can become active again. Recovery must import only reviewed, revocation-preserving data into
-another fresh migrated auth database.
+Crewhelm permits only the explicit `control:read`, `control:write`, `agents:read`, `agents:write`,
+`connections:read`, `connections:write`, `connection-configs:read`,
+`connection-configs:write`, and `integrations:read` scopes. Tokens and existing client
+registrations are never silently widened. GitHub login uses no upstream scope, and its transient
+token is not persisted.
 
-The scheduled purge removes expired sessions, codes, token records, revocations, signing keys, and
-clients whose 24-hour Crewhelm registration lease has expired. D1 provides the consistency needed
-for authorization-code consumption and immediate revocation. Public registration remains
-rate-limited and bounded, while the lease limits storage duration. An access token issued just
-before its client's lease expires remains valid for at most its independent 15-minute lifetime.
+Revisit this model before adding another identity provider, refresh tokens, broader mutations,
+multi-owner service, or longer token lifetimes.
 
-Better Auth owns OAuth 2.1 mechanics, JWT/JWKS handling, GitHub login state, and secure session
-cookies. Crewhelm still owns the stricter authorization boundary: only HTTPS or exact loopback
-redirects, the explicit `control:read`, `control:write`, `agents:read`, `agents:write`,
-`connections:read`, `connections:write`, `connection-configs:read`, and `integrations:read` scopes,
-one exact resource, the configured GitHub numeric owner, a 24-hour public-client lease, no refresh
-grant, no upstream scope, and no persisted upstream token. The consent page distinguishes
-control-plane summary read, full Agent-definition read, Agent creation, Agent revision updates,
-local connection-summary read, project auth-configuration read, Composio catalog egress, and
-private connection-link creation; each implementation independently enforces its required scope.
-Existing clients and tokens are never silently widened. Database hooks force every upstream token
-field to null before persistence. Revisit the provider configuration and threat model before adding
-broader mutation classes, multi-owner service, refresh tokens, additional identity providers, or
-longer token lifetimes.
+### Persistence and Agent execution
 
-OAuth login can start from a same-origin continuation link for clients that block native form
-submissions, but every approve-or-deny consent decision requires a bounded same-origin POST. The
-consent page's external same-origin script submits that POST and exposes the validated callback
-target as an explicit continuation link that works in embedded browsers; without JavaScript, the
-same form submits conventionally. Consent GETs are read-only, so prefetchers, scanners, history
-restoration, and link inspection cannot authorize or deny access. The signed OAuth query is
-revalidated by Better Auth, and missing sessions, changed OAuth parameters, duplicate fields,
-cross-origin requests, and malformed bodies fail closed. The page uses `no-referrer`, denies
-framing, and permits scripts, styles, connections, and form actions only from Crewhelm's own
-origin.
+Control-plane state admits requests only after migration versions, names, checksums, required
+tables, indexes, and foreign keys validate. Recovery uses a reviewed forward migration or
+Cloudflare point-in-time recovery; partial or unknown schemas fail closed.
 
-Dynamic registration accepts only bounded public-client metadata. It recognizes the standard
-`native` and `web` application types, requires HTTPS redirects for an explicit web client, and
-continues to allow only HTTPS or exact-loopback HTTP redirects overall. Crewhelm records and returns
-the validated application type. A client may advertise `refresh_token` alongside
-`authorization_code` for interoperability, but Crewhelm normalizes the stored registration to
-authorization-code-only before Better Auth sees it. Missing PKCE at authorization and every
-refresh-token exchange still fail at the Crewhelm boundary. Duplicate raw JSON object members,
-duplicate or additional grant types, unsupported application types, and understood authority-bearing
-provider fields fail closed before forwarding. Harmless unknown extension fields are ignored and
-dropped when Crewhelm reconstructs the provider request.
+The owner control plane admits a run and issues short-lived, single-use authority bound to the
+exact owner, client, Agent revision, prompt, idempotency key, and budget. `CrewAgent` cannot expose
+its namespace or authority-bearing framework entrypoints to public callers. Interrupted inference
+is charged when it cannot be proven unspent and is not silently repeated.
 
-The provider seeds the exact MCP resource in insert-only mode so public requests cannot turn
-configuration into repeated D1 writes. Scope and access-token lifetime changes require explicit
-migrations of the stored resource row; changing configuration alone intentionally does not
-overwrite it. Scope migrations update only an explicitly recognized prior representation.
+Tool execution rechecks the current immutable grant, connection, effect, target, approval, and
+budget before issuing a single-use adapter permit. An outcome that becomes ambiguous after
+dispatch remains `unknown`; the same tool-call identity cannot dispatch again. Crewhelm does not
+yet reconcile unknown effects through provider logs or expose a persisted global kill switch.
 
-## Control-plane persistence integrity
+### Composio
 
-Drizzle owns the SQLite schema and every feature-level control-plane query. Generated migration SQL
-is bundled as immutable Worker input and applied under Durable Object initialization serialization
-before any RPC is served. The runtime verifies contiguous migration versions, names, and SHA-256
-checksums against its journal. Unknown entries, modified migration content, missing tables or
-required indexes, and foreign-key violations make the object incompatible; Crewhelm does not infer
-or reconstruct authoritative state from a partial schema. Recovery blocks admissions and uses a
-reviewed forward migration or Cloudflare SQLite point-in-time recovery. Migration and
-fault-injection tests may use raw SQL to construct hostile states, but production feature paths do
-not.
+Catalog reads, auth-configuration reads, managed auth-configuration creation, connection links,
+Agent tool attachment, and execution are separate capabilities. All use fixed Composio endpoints,
+bounded requests and responses, manual redirect handling, normalized safe errors, and opaque
+identifiers.
 
-## Agent registry authority and residual risk
+Reading enabled auth configurations requires `connection-configs:read`. Enabling a
+Composio-managed configuration requires `connection-configs:write` and performs a bounded,
+idempotent find-or-create for one exact toolkit. Concurrent duplicate writes are suppressed. An
+ambiguous create remains unknown unless a bounded follow-up read proves the configuration exists.
 
-The owner-named Durable Object generates Agent IDs and stores configurations as immutable
-revisions. Creation requires `control:write`; replacement creates a new revision and requires the
-separately consented `agents:write`; status and bounded summary listing require `control:read`;
-exact current-definition reads require `agents:read`. Exact reads return instructions only after
-validating the owner-generated Agent ID inside the owner-bound Durable Object. The same
-`agents:read` scope permits bounded newest-first revision summaries and one exact historical
-definition; summaries omit instructions, and stable numeric cursors prevent overlap while new
-revisions are appended. Missing, malformed, wrong-owner, and insufficient-scope requests use fixed
-failures, and a read creates no audit mutation. Caller input cannot select a Durable Object name.
-Connection configuration can alter the tools exposed to an Agent only with the separately
-consented `agents:write`, `connections:read`, and `integrations:read` scopes, an exact current
-revision, and a provider-verified connection. Starting a run requires `agents:write` and an exact
-current Agent revision; inspection requires `agents:read`. Instructions and model identifiers
-remain inert until the control plane admits a run against their immutable revision.
+Connect Link callbacks are short-lived bearer capabilities visible to Composio and browser
+infrastructure. Crewhelm stores only a digest, authenticates the exact owner-local reservation,
+returns no identifiers, and treats the callback as lifecycle evidence rather than authorization.
+Active account state is established separately when tools are attached and checked again before
+execution.
 
-Every creation and update carries a bounded idempotency key scoped to the authenticated MCP client
-and its operation class. An exact replay returns the original Agent revision without another
-mutation, while key reuse by that client with different normalized input fails closed. Records
-store only request digests. Updates are full configuration replacements, require the expected
-current revision, reject no-ops and stale writes, and preserve capability grants. The Agent
-revision, current pointer, idempotency record, and one minimal audit event commit in one synchronous
-SQLite transaction. Durable Object serialization admits only one of two concurrent writes against
-the same revision. Listing omits instructions and uses bounded pages so a large or hostile
-configuration cannot amplify MCP output. A transactional ceiling of 100 Agents per owner bounds
-initial Agent storage; exact creation retries still succeed at the ceiling, while new creations
-fail without partial writes. Each Agent retains at most 1,000 immutable revisions; the final
-allowed update and its exact retries succeed, while a distinct update at the ceiling fails without
-partial writes. A normal Agent update clones active connection tool grants into the new immutable
-revision with new opaque grant IDs. Connection configuration replaces one connection's selected
-tools, and an empty selection detaches that connection without changing its Composio
-authorization. Connection onboarding and run admission remain separate scoped state machines.
+Provider names, descriptions, tags, schemas, and results remain untrusted. Unknown tool effects
+default to approval-gated write. Credential-shaped tools and outputs are denied. Composio remains
+the authority for provider consent, disablement, deletion, and credential refresh.
 
-## CrewAgent runtime reachability and defaults
+### Observability and deployment
 
-The production Worker exports and binds the SQLite-backed `CrewAgent` class and Workers AI.
-`OwnerControlPlane` derives the exact Agent object name and issues a 30-second, single-use permit
-that binds the owner, MCP client, Agent revision, run, prompt digest, expiry, nonce, idempotency
-key, and an explicit budget reservation. The reservation snapshots exact active tool grants and
-bounds model calls, turns, tool calls, the exact instruction-plus-prompt character count, output
-tokens, and total wall-clock duration. A grant-free reservation permits one model call and one
-turn. Admission accepts only explicitly classified runnable models and reserves against finite
-rolling 24-hour per-owner ceilings for input characters, model calls, and output tokens. Only the
-nonce digest is stored. The rolling output-token budget charges the per-call allowance for every
-reserved model call. Verification and redemption occur in the owner object before `CrewAgent`
-calls Think submission APIs. Immediately before every inference, Think's per-step hook asks the
-owner object to verify the exact redeemed reservation and current Agent revision again; that
-transaction atomically claims one bounded model call. Concurrent verification and attempts beyond
-the reservation fail, and a crash after a claim is deliberately charged as spent. The accepted
-runtime record stores the validated configuration and prompt digest, not the prompt or nonce.
+Cloudflare automatic traces and invocation logs remain disabled because request URLs may contain
+OAuth or connection capabilities. Allowlisted custom events are diagnostic only and cannot prove a
+durable transition. Initial 100-percent custom-event sampling must be reduced under an explicit
+retention and cost policy before sustained high-volume operation.
 
-Run admission is retry-safe across the cross-object boundary. Reissuing an unredeemed idempotent
-request rotates the nonce but preserves the original expiry and retention window, so retries cannot
-keep a reservation alive after it falls out of budget accounting; reusing the key with different
-input fails closed. A run ID is also the Think submission ID and idempotency key. If the owner
-records redemption before the Agent submits, a retry can resume only through a five-second,
-single-use receiver capability minted inside the original client's authorized owner request.
-Inspection uses a distinct capability bound to the inspecting client; a raw run ID cannot call the
-Agent receiver. Stale, malformed, replayed, expired, cross-owner, wrong-client, wrong-object,
-wrong-prompt, and wrong-revision inputs return fixed failures without exposing model or provider
-errors.
-
-MCP and HTTP callers never receive a `CrewAgent` namespace or stub. The production Worker and
-`OwnerControlPlane` are the only holders of that internal object capability, and their call sites
-use closed Crewhelm receiver methods. Crewhelm additionally shadows the inherited Think
-configuration, fetch, transcript, cancellation, approval, submission-management, MCP, host,
-workflow, fiber, agent-tool, sub-agent-routing, and facet-scheduling entrypoints that carry
-authority outside the admitted execution path. Think's internal transcript and alarm helpers
-remain available to the framework; they are not an authentication boundary and are not routed from
-untrusted requests. A pinned inherited-method fingerprint and explicit override checks make an
-upstream surface change fail tests for review.
-
-Safe lifecycle reads return empty inventories so Think can initialize without creating ambient
-authority. Grant-free turns expose no active tools and deny Think action authority. Workspace Bash,
-automatic MCP tool materialization, fetch tools, reasoning emission, and model or tool payload
-telemetry are disabled. These are deny-by-default policy settings, not a replacement for Think's
-framework features or the namespace capability boundary.
-
-A persisted total wall-clock deadline schedules cancellation before submission and remains
-effective after Durable Object eviction; cancellation failures propagate so the durable schedule
-can retry. Automatic provider-turn recovery is disabled because an interrupted inference cannot be
-proven unspent and must not be silently duplicated. Pre-provider submission recovery remains
-idempotent. Terminal Agent records, transcript branches, submissions, and materialized output are
-deleted after 24 hours. Inspection passes through the owner-authorized control plane, reads output
-incrementally, and returns at most 64 KiB of text.
-
-## ToolGate policy authority and residual risk
-
-The pure ToolGate policy module accepts only closed, bounded Crewhelm contracts. It intersects an
-immutable capability grant, a trusted adapter's classified action, and an authoritative current
-policy and budget snapshot. Exact owner, Agent revision, capability, grant, Crewhelm connection,
-Composio integration, tool, pinned toolkit version, effect, and target-digest bindings must match.
-The policy denies inactive or stale Agents, grants, and connections; expired grants; exhausted
-call, concurrency, duration, output, or cost budgets; and unknown cost. The pure ToolGate contract
-also denies a supplied kill-switch signal, but this slice has no authoritative persisted
-kill-switch source and therefore does not claim that runtime control. Write and destructive effects
-return `requires_approval` rather than allow. Valid catalog slugs are schema-bounded but not
-curated, so project toolkits and newly discovered Composio integrations remain eligible without
-becoming authorized.
-
-Every status and budget snapshot identifies its exact owner, Agent revision, run, grant,
-capability, and connection. ToolGate rejects the snapshot before consuming any authority when
-those bindings do not match both the grant and classified action, preventing one object's active
-status or unused budget from authorizing another object.
-
-The evaluator uses its own current time rather than accepting the snapshot timestamp as current.
-It rejects future-dated and more than five-second-old snapshots, checks grant expiry against that
-trusted time, and never extends local decision evidence beyond 30 seconds from either evaluation
-or snapshot creation.
-
-Raw tool arguments, target values, provider responses, credentials, and secrets do not enter the
-policy contract. Input and target digests are authority only when produced by a trusted, versioned
-adapter; ToolGate derives the complete canonical action digest. Model output and Composio tags
-cannot classify their own effect, targets, or cost. The current allow result is local policy
-evidence only. It is not signed, reserves no budget, cannot cross a Durable Object boundary, and no
-connector accepts it. `OwnerControlPlane` rebuilds a current snapshot from the redeemed run, exact
-immutable grant, current Agent revision, current grant and connection status, and persisted
-execution counts. It reruns ToolGate, atomically charges a new tool call, records the execution and
-audit event, and issues a five-second, nonce-bound permit only to the exact trusted adapter call.
-A second reservation for the same tool-call identity is denied, including when the first provider
-outcome is unknown; recovery must reconcile that outcome instead of redispatching it. Completed,
-expired, mismatched, revoked, unavailable, over-budget, or unknown actions fail closed. The adapter
-reports a bounded completion outcome, and late or oversized outcomes become `unknown`. Production
-exposes a provider tool only when its bounded dynamic schema can be converted by the trusted
-generic Composio adapter.
-
-Write and destructive actions park in Think before execution. Owner-scoped MCP list and decision
-commands are distinct from model authority; they bind an authenticated client to one run and one
-durable-pause execution. The control plane persists the exact action digest and immutable approval
-or rejection evidence before issuing a single-use receiver capability. On approval, `CrewAgent`
-reclassifies the stored input and asks the control plane for a fresh ToolGate reservation
-immediately before invoking the adapter. Duplicate model attempts for one tool-call identity are
-denied rather than creating duplicate waits. Approval expiry, the run deadline, current revocation,
-budget exhaustion, or digest drift prevents the effect even when earlier approval evidence exists.
-
-## Composio catalog authority and residual risk
-
-The `integrations:read` MCP catalog tools send bounded searches, optional exact integration
-filters, opaque pagination cursors, and exact tool/version inspection requests only to Composio's
-fixed toolkit and tool endpoints. `control:read` alone grants no provider egress. Crewhelm always
-requests `managed_by=all` for toolkits, resolves current tool definitions explicitly, excludes
-deprecated entries, and does not maintain a toolkit or tool allowlist. Newly available Composio
-and project integrations and their exact tools therefore remain discoverable without a Crewhelm
-code change. Catalog discovery and inspection grant no connection or execution authority.
-Listing project-specific enabled auth configurations additionally requires the dedicated
-`connection-configs:read` scope; neither catalog read nor connection-config read alone grants that
-Composio project-metadata egress. Existing tokens cannot gain this capability without a new
-consent.
-
-The adapter sends the project key only in the fixed request header, rejects redirects, propagates
-request cancellation, limits latency and response bytes, validates provider structure, and returns
-small normalized summaries. Search omits input and output schemas; exact inspection requires the
-selected tool slug and concrete toolkit version, rejects provider identity substitution, and
-returns only inert JSON parameter maps bounded by raw bytes, nesting depth, node count, container
-width, key length, and string length. Agent connection configuration snapshots that reviewed
-contract for an exact pinned version.
-Provider bodies, errors, request IDs, URLs, and the API key never enter MCP failures, logs, D1, or
-Durable Objects. A successful provider payload is also rejected if any normalized output string
-contains the exact project key. Names and descriptions remain untrusted external text even after
-structural validation. A provider outage, schema drift, malformed cursor, missing key, or reflected
-key fails closed as one catalog-unavailable result. Auth-config discovery accepts one validated
-toolkit slug, follows only bounded opaque pagination, and returns enabled configuration names,
-schemes, managed status, and opaque IDs. Provider credentials, errors, and project keys are never
-returned. Connection setup, exact tool classification, grants, and execution remain separate
-boundaries.
-
-## Composio connection-link authority and residual risk
-
-The `connections:read` MCP tool queries only the authenticated owner's Durable Object and requires
-its dedicated scope at that boundary. It returns at most 50 Crewhelm connection IDs,
-auth-configuration references, local statuses, authorization-return outcomes, and creation
-timestamps in stable ID order. It never performs Composio egress and excludes connected-account
-IDs, hosted links, provider state, and credentials. The current `initiated` status records only
-successful local link finalization. Authorization outcomes distinguish a pending, returned,
-failed, or expired hosted browser flow; `untracked` identifies a pre-v4 connection for which no
-callback evidence exists. None is evidence that provider consent completed or that a connection is
-active.
-
-The `connections:write` MCP tool accepts any structurally valid Composio auth-config ID; it has no
-toolkit allowlist and grants no Agent or execution authority. The owner Durable Object first binds
-the normalized request digest to the authenticated MCP client and idempotency key, reserves a
-connection slot, and writes a minimal audit event. Only then does the adapter send the exact auth
-config and opaque owner key to Composio's fixed link endpoint. It explicitly requests a private
-account, rejects redirects, bounds time and bytes, and accepts only an unexpired canonical
-`https://connect.composio.dev/link/ln_…` URL whose token matches the provider response. Provider
-bodies, errors, headers, and project keys are never persisted or returned.
-
-The reservation transaction also binds a 256-bit random callback token to the exact owner-local
-reservation and conservative recovery deadline while storing only its SHA-256 digest. Before
-sending the callback URL, the Worker adds a domain-separated HMAC over the owner, reservation,
-conservative expiry, and random token. Successful finalization atomically stores a
-Crewhelm-generated connection ID, Composio's opaque connected-account ID, the auth-config
-reference, the expiring hosted link, the idempotency result, and one audit event; it also binds the
-callback row to that account and replaces the conservative deadline with the shorter provider link
-expiry. The raw token and authenticator exist only in the callback URL sent to Composio and in
-transient MCP request handling; neither is returned in the MCP result or persisted. The adapter
-rejects a normalized Composio result that reflects either secret.
-
-The public callback accepts only GET, the exact capability path, one documented `status`, and at
-most one exact connected-account ID. Before an untrusted owner key can select a Durable Object, the
-Worker rejects an expired conservative deadline and verifies the HMAC using its secret binding.
-The owner object then verifies the random-token digest, the potentially shorter provider expiry,
-the reservation, and the connected-account ID. Malformed, forged, cross-owner, substituted,
-expired, or contradictory replays receive one fixed denial. Exact terminal replay is inert.
-Responses contain no identifiers, use no-store, a no-referrer policy, deny framing, and a
-default-deny content security policy. Callback requests share a coarse per-address authorization
-rate-limit key that excludes the capability. Recording a return changes only the local
-authorization outcome and adds a bounded audit event; it cannot create a grant, execution permit,
-or active status.
-
-Callback authentication is domain-separated but derives from the Worker authentication secret.
-Rotating that secret intentionally invalidates every outstanding callback URL; the owner must
-request a new Connect Link.
-
-An owner-local alarm normally scrubs an expired capability URL and expires an unused callback at
-its exact expiry while retaining non-secret idempotency and callback tombstones. The
-recovery-deadline alarm is scheduled before provider egress, so cleanup remains bounded by the
-30-minute recovery window even if exact-expiry rescheduling fails. Connection links never call
-credential-bearing connected-account endpoints. Exact retries replay the same unexpired link;
-conflicting key reuse fails. A dispatched request with no validated response remains unknown and
-cannot dispatch again. Another key for the same auth config is blocked for the conservative
-recovery window, after which any unreceived hosted link has expired and a new intent may proceed.
-Link-attempt and connection ceilings bound owner-local storage.
-
-The Composio browser redirect is not a signed provider assertion. Someone who obtains an unexpired
-callback URL could submit its one-time receipt, and Composio or browser infrastructure may observe
-the bearer URL. The exact account binding, short lifetime, digest-only storage, no-referrer
-response, and lack of execution authority bound that residual risk. Completing consent remains a
-human action; active-account evidence is established separately during Agent configuration and
-rechecked at execution time. Disablement, deletion, and changes to provider access remain Composio
-operations.
-
-## Agent connection configuration and Composio execution authority
-
-The connection-configuration MCP tool requires the intersection of `agents:write`,
-`connections:read`, and `integrations:read`. It resolves the opaque connected-account ID only
-inside trusted Worker and owner-object calls, fetches that exact account from Composio, accepts
-only `ACTIVE`, and requires every selected exact tool definition to belong to the verified
-toolkit. Credential-bearing account state is bounded and structurally stripped; it is never
-persisted, logged, returned through MCP, placed in a grant or permit, or shown to the model.
-
-One request replaces at most 20 selected tools for one connection and one exact Agent revision.
-Crewhelm stores their public names, descriptions, tags, bounded input and output parameter maps,
-and pinned versions as inert snapshots. The same generic JSON-Schema conversion path handles
-every structurally valid tool; Crewhelm has no per-tool code or schema registry. Total grants
-remain bounded by the Agent contract. The owner object creates the new Agent revision, grant rows,
-current pointer, idempotency result, connection activation evidence, and audit event in one SQLite
-transaction. An empty selection creates a revision without that connection's grants. Existing
-Composio authorization is unchanged, so reconnecting or changing provider access remains the
-owner's explicit Composio action. Exact idempotent retries are resolved from the committed owner
-record before provider egress, so a lost response can replay successfully even if Composio later
-becomes unavailable; conflicting key reuse still fails closed.
-
-Provider tags and descriptions remain untrusted. Tags can escalate a tool to destructive but
-cannot lower its risk except for the explicit `readOnlyHint`, which applies only when a recognized
-read verb is present and no destructive or mutating verb conflicts. Unknown and ambiguous tools
-default to approval-gated write. Tools whose name, slug, or declared output fields advertise
-credential material cannot be attached. The model cannot select its own effect, connection,
-version, grant, limits, or target digest.
-
-After ToolGate atomically reserves one exact action, the Agent uses the nonce-bound five-second
-permit to atomically claim the connected-account ID once. The stored digest binds the complete
-permit, including its action, expiry, limits, audience, and nonce; a modified or replayed permit
-cannot claim dispatch or complete an execution. After the claim, the adapter verifies the exact
-account is still active and belongs to the expected toolkit, then sends one non-retried POST to
-Composio's fixed direct-execution endpoint with the pinned version and schema-validated arguments.
-It rejects redirects, propagates cancellation, bounds time and response bytes, returns only a
-successful `data` payload, and denies credential-shaped fields and string patterns, the project
-key, or the opaque connected-account ID. The outer Agent boundary independently checks JSON
-serialization and the permit's output limit.
-
-Any error after reservation is recorded as `unknown`, because a provider-side effect may have
-completed even when Crewhelm received no trustworthy response. The same tool-call identity cannot
-reserve again, so Crewhelm does not silently duplicate it. This slice does not yet reconcile an
-unknown outcome through Composio logs or expose a persisted global kill switch; those remain
-explicit follow-up controls rather than implied retry safety.
-
-## Execution observability and residual risk
-
-Workers Logs are diagnostic and never participate in admission, approval, dispatch, or retry
-decisions. Custom execution events accept only a fixed phase, fixed outcome, bounded `runId`,
-optional bounded `toolCallId`, duration, and output byte count. Extra or invalid fields are rejected
-without reflection. Prompts, tool arguments and outputs, permits, nonces, owner and client
-authority, grant and connection references, provider request IDs and errors, and secrets have no
-telemetry field.
-
-Cloudflare invocation logs and automatic traces are explicitly disabled because their documented
-request attributes include full URLs and query strings, while this Worker handles secret-bearing
-OAuth and connection callback URLs. Custom event sampling is temporarily set to 100 percent for the
-initial production end-to-end validation. It must be reduced under an explicit retention and cost
-policy before sustained high-volume operation. Telemetry failures do not change execution, and
-logs are not proof that a durable transition committed. The owner-local SQLite audit remains
-authoritative. Full automatic tracing requires a future route-isolation or redaction boundary.
-
-## Bootstrap and deployment authority
-
-The bootstrap CLI holds the operator's Cloudflare deployment authority. It runs the exact pinned
-Wrangler package without a shell, from a private temporary directory, with an allowlisted
-environment so an ambient Worker config, `.env`, API base override, or Worker-name override cannot
-redirect that authority. It resolves one account from validated `whoami` output, requires explicit
-selection when more than one account is available, writes that account ID into every remote command
-configuration, and requires HTTPS before any external mutation.
-
-Packaged Worker code, source maps, configuration, and migrations are treated as a release artifact.
-Bootstrap validates their exact inventory, file types, size limits, and security-critical config
-shape before contacting Cloudflare. An existing D1 database is never selected by name alone: the
-operator must confirm its UUID, and Crewhelm checks its table and migration provenance before
-applying packaged migrations. A new database that appears after an ambiguous create is preserved
-but not trusted automatically.
-
-GitHub OAuth values and the Composio project key enter through the parent process environment, are
-removed from Wrangler's child environment, and are passed to Cloudflare only through a mode-0600
-file inside the private directory. Existing Worker secrets are additive and preserved. Bootstrap
-reads only their names, validates the inventory as hostile input, and rejects an incomplete
-point-in-time snapshot before any D1 creation or migration. Another operator can delete a secret
-after that snapshot; strict deployment revalidates the required names and fails with the migrated D1
-database preserved for a safe retry. The directory is removed after Wrangler has exited. Wrangler
-output is bounded and never reflected to the user. On timeout or excess output, the CLI terminates
-the process with bounded escalation and marks the remote outcome unknown. Database creation,
-migration, and deployment are reconciled through validated Cloudflare inventory; an unconfirmed
-result stops with resources preserved for inspection and an explicit retry.
+The bootstrap CLI holds operator deployment authority. It uses pinned Wrangler without a shell,
+an allowlisted environment, explicit account and database identity, validated release artifacts,
+and bounded output. Ambiguous remote mutations stop with resources preserved for inspection; they
+are not assumed successful or automatically repeated.
 
 ## Update triggers
 
-Update this model whenever a change adds a trust boundary, data class, provider, execution
-capability, external side effect, authentication flow, persistent store, migration, or release
-channel.
+Update this model when a change adds or materially changes a trust boundary, data class, identity
+provider, permission, execution capability, external side effect, persistent store, recovery path,
+telemetry surface, dependency authority, or release channel.

@@ -2,6 +2,8 @@ import * as z from "zod";
 
 import { connectionAuthConfigIdSchema } from "./connections.js";
 
+export const INTEGRATION_ENABLEMENT_UNKNOWN_RECOVERY_MS = 30 * 60 * 1_000;
+export const MAXIMUM_INTEGRATION_ENABLEMENT_REQUESTS_PER_OWNER = 5_000;
 const MAXIMUM_TOOL_PARAMETER_CONTAINER_ENTRIES = 512;
 const MAXIMUM_TOOL_PARAMETER_DEPTH = 24;
 const MAXIMUM_TOOL_PARAMETER_KEY_LENGTH = 256;
@@ -211,6 +213,77 @@ export const integrationAuthConfigListResultSchema = z.discriminatedUnion("ok", 
     ok: z.literal(false),
   }),
 ]);
+export const integrationEnablementIdempotencyKeySchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9._~-]+$/, "Expected an opaque idempotency key.");
+export const integrationEnablementReservationIdSchema = z
+  .string()
+  .regex(
+    /^integration_enablement_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    "Expected an opaque integration enablement reservation ID.",
+  );
+export const enableIntegrationInputSchema = z.strictObject({
+  idempotencyKey: integrationEnablementIdempotencyKeySchema,
+  integrationSlug: integrationSlugSchema,
+});
+const integrationEnablementErrorSchema = z.strictObject({
+  code: z.enum([
+    "idempotency_conflict",
+    "incompatible_schema",
+    "insufficient_scope",
+    "integration_enablement_in_progress",
+    "integration_enablement_outcome_unknown",
+    "integration_enablement_request_limit_exceeded",
+    "integration_enablement_unavailable",
+    "invalid_authority",
+    "invalid_request",
+    "owner_mismatch",
+  ]),
+  message: z.literal("Integration enablement request denied."),
+});
+export const enableIntegrationResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    authConfigId: connectionAuthConfigIdSchema,
+    authScheme: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
+    created: z.boolean(),
+    integrationSlug: integrationSlugSchema,
+    managed: z.literal(true),
+    ok: z.literal(true),
+  }),
+  z.strictObject({
+    error: integrationEnablementErrorSchema,
+    ok: z.literal(false),
+  }),
+]);
+export const reserveIntegrationEnablementResultSchema = z.union([
+  z.strictObject({
+    authConfigId: connectionAuthConfigIdSchema,
+    authScheme: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
+    integrationSlug: integrationSlugSchema,
+    managed: z.literal(true),
+    ok: z.literal(true),
+    state: z.literal("replay"),
+  }),
+  z.strictObject({
+    ok: z.literal(true),
+    reservationId: integrationEnablementReservationIdSchema,
+    state: z.literal("dispatch"),
+  }),
+  z.strictObject({
+    error: integrationEnablementErrorSchema,
+    ok: z.literal(false),
+  }),
+]);
+export const completeIntegrationEnablementInputSchema = z.strictObject({
+  authConfigId: connectionAuthConfigIdSchema,
+  authScheme: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
+  created: z.boolean(),
+  integrationSlug: integrationSlugSchema,
+  managed: z.literal(true),
+  reservationId: integrationEnablementReservationIdSchema,
+});
 export const integrationToolSearchInputSchema = z.strictObject({
   cursor: integrationCatalogCursorSchema.optional(),
   integrationSlug: integrationSlugSchema.optional(),
@@ -281,12 +354,20 @@ export const inspectIntegrationToolResultSchema = z.discriminatedUnion("ok", [
 
 export type InspectIntegrationToolInput = z.infer<typeof inspectIntegrationToolInputSchema>;
 export type InspectIntegrationToolResult = z.infer<typeof inspectIntegrationToolResultSchema>;
+export type CompleteIntegrationEnablementInput = z.infer<
+  typeof completeIntegrationEnablementInputSchema
+>;
+export type EnableIntegrationInput = z.infer<typeof enableIntegrationInputSchema>;
+export type EnableIntegrationResult = z.infer<typeof enableIntegrationResultSchema>;
 export type IntegrationAuthConfig = z.infer<typeof integrationAuthConfigSchema>;
 export type IntegrationAuthConfigListInput = z.infer<typeof integrationAuthConfigListInputSchema>;
 export type IntegrationAuthConfigListResult = z.infer<typeof integrationAuthConfigListResultSchema>;
 export type IntegrationCatalogItem = z.infer<typeof integrationCatalogItemSchema>;
 export type IntegrationCatalogSearchInput = z.infer<typeof integrationCatalogSearchInputSchema>;
 export type IntegrationCatalogSearchResult = z.infer<typeof integrationCatalogSearchResultSchema>;
+export type ReserveIntegrationEnablementResult = z.infer<
+  typeof reserveIntegrationEnablementResultSchema
+>;
 export type IntegrationToolCatalogItem = z.infer<typeof integrationToolCatalogItemSchema>;
 export type IntegrationToolInspection = z.infer<typeof integrationToolInspectionSchema>;
 export type IntegrationToolRuntimeDefinition = z.infer<
