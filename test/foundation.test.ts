@@ -514,12 +514,6 @@ describe("repository foundation", () => {
     const productPhilosophy = await read("docs/product/philosophy.md");
     const systemArchitecture = await read("docs/architecture/system.md");
     const codePhilosophy = await read("docs/engineering/code-philosophy.md");
-    const controlPlaneDecision = await read(
-      "docs/decisions/0002-owner-scoped-durable-object-control-plane.md",
-    );
-    const runtimeDecision = await read(
-      "docs/decisions/0003-declarative-recipes-and-hardened-think.md",
-    );
 
     for (const field of [
       "Problem and evidence:",
@@ -548,10 +542,6 @@ describe("repository foundation", () => {
     expect(codePhilosophy).toContain("Correctness and security");
     expect(codePhilosophy).toContain("Given what this implementation taught us");
     expect(codePhilosophy).toContain("Never simplify away");
-    expect(controlPlaneDecision).toContain("Status: accepted");
-    expect(controlPlaneDecision).toContain("One SQLite-backed `OwnerControlPlane`");
-    expect(runtimeDecision).toContain("Status: accepted");
-    expect(runtimeDecision).toContain("one data-driven `CrewAgent`");
   });
 
   it("keeps GitHub workflows minimally privileged and immutable", async () => {

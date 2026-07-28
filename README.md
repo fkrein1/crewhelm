@@ -191,8 +191,6 @@ guidance lives in [CONTRIBUTING.md](CONTRIBUTING.md). Shared language is defined
   dependency direction.
 - [Code philosophy](docs/engineering/code-philosophy.md) defines the project's standard for
   simple, complete implementations.
-- [Decision records](docs/decisions/) capture durable choices without turning routine work into
-  process.
 
 Repository maintainers should apply the
 [GitHub security and branch settings](docs/maintainers/github-settings.md) after creating the

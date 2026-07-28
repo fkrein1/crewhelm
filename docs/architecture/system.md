@@ -4,8 +4,7 @@ Status: current ownership and dependency map
 
 Crewhelm is an authority layer over Cloudflare execution and Composio integrations. Firecrawl is
 one Composio toolkit, not a Crewhelm subsystem. Detailed controls live in the
-[security invariants](../security/invariants.md), [threat model](../security/threat-model.md), and
-[ADRs](../decisions/).
+[security invariants](../security/invariants.md) and [threat model](../security/threat-model.md).
 
 ## Runtime
 
@@ -72,9 +71,7 @@ composition root or external adapter. Split only around a coherent invariant or 
    do not activate a connection or authorize execution.
 
 Control-plane migrations are ordered and checksummed; incompatible state fails closed before RPC
-admission. Recovery rules are in
-[ADR 0002](../decisions/0002-owner-scoped-durable-object-control-plane.md), and OAuth storage is in
-[ADR 0004](../decisions/0004-better-auth-on-d1.md).
+admission. Auth D1 remains authoritative only for OAuth protocol state.
 
 ## Dependency direction
 
