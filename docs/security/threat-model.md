@@ -103,8 +103,11 @@ the authority for provider consent, disablement, deletion, and credential refres
 
 Cloudflare automatic traces and invocation logs remain disabled because request URLs may contain
 OAuth or connection capabilities. Allowlisted custom events are diagnostic only and cannot prove a
-durable transition. Initial 100-percent custom-event sampling must be reduced under an explicit
-retention and cost policy before sustained high-volume operation.
+durable transition. They may contain operation outcomes and durations, provider status and bounded
+error identifiers, integration or tool slugs, and opaque run, tool-call, or connection-link
+correlation identifiers. They exclude credentials, provider account identifiers, user content, and
+request or response bodies. Initial 100-percent custom-event sampling must be reduced under an
+explicit retention and cost policy before sustained high-volume operation.
 
 The bootstrap CLI holds operator deployment authority. It uses pinned Wrangler without a shell,
 an allowlisted environment, explicit account and database identity, validated release artifacts,

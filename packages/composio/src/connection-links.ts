@@ -21,8 +21,8 @@ const composioApiKeySchema = z.string().min(16).max(4_096).regex(/^\S+$/);
 const composioLinkTokenSchema = z
   .string()
   .min(4)
-  .max(256)
-  .regex(/^ln_[A-Za-z0-9_-]+$/);
+  .max(512)
+  .regex(/^[A-Za-z0-9._~-]+$/);
 const connectionAuthorizationCallbackUrlSchema = z
   .url()
   .max(2_048)
@@ -49,9 +49,12 @@ const composioConnectionLinkInputSchema = z.strictObject({
 const composioConnectionLinkResponseSchema = z.looseObject({
   connected_account_id: composioConnectedAccountIdSchema,
   expires_at: z.iso.datetime(),
-  experimental: z.looseObject({
-    account_type: z.literal("PRIVATE"),
-  }),
+  // v3.1 does not require this response field even when the request explicitly pins PRIVATE.
+  experimental: z
+    .looseObject({
+      account_type: z.literal("PRIVATE"),
+    })
+    .optional(),
   link_token: composioLinkTokenSchema,
   redirect_url: connectionLinkUrlSchema,
 });
@@ -89,7 +92,23 @@ export interface ComposioConnectionLinksOptions {
   apiKey: string | undefined;
   fetch?: typeof globalThis.fetch;
   now?: () => number;
+  onResponse?: (event: ComposioConnectionLinkResponseEvent) => void;
   signal?: AbortSignal;
+}
+
+export interface ComposioConnectionLinkResponseEvent {
+  durationMs: number;
+  operation: "link";
+  outcome:
+    | "accepted"
+    | "invalid_connected_account_id"
+    | "invalid_expires_at"
+    | "invalid_link_token"
+    | "invalid_redirect_url"
+    | "invalid_response"
+    | "policy_rejected"
+    | "provider_rejected";
+  status: number;
 }
 
 function outcomeUnknown(): ComposioConnectionLinkResult {
@@ -120,6 +139,23 @@ export function createComposioConnectionLinks(
   const fetchImplementation = options.fetch ?? globalThis.fetch;
   const now = options.now ?? Date.now;
 
+  function recordResponse(
+    status: number,
+    outcome: ComposioConnectionLinkResponseEvent["outcome"],
+    startedAt: number,
+  ): void {
+    try {
+      options.onResponse?.({
+        durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+        operation: "link",
+        outcome,
+        status,
+      });
+    } catch {
+      // Diagnostic telemetry must not alter provider behavior.
+    }
+  }
+
   return {
     async create(input) {
       const request = composioConnectionLinkInputSchema.safeParse(input);
@@ -129,6 +165,7 @@ export function createComposioConnectionLinks(
       }
 
       try {
+        const startedAt = performance.now();
         const response = await fetchImplementation(COMPOSIO_CONNECTION_LINK_URL, {
           body: JSON.stringify({
             auth_config_id: request.data.authConfigId,
@@ -150,11 +187,11 @@ export function createComposioConnectionLinks(
               ? AbortSignal.timeout(CONNECTION_LINK_TIMEOUT_MS)
               : AbortSignal.any([options.signal, AbortSignal.timeout(CONNECTION_LINK_TIMEOUT_MS)]),
         });
-
         if (
           response.status !== 201 ||
           !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
         ) {
+          recordResponse(response.status, "provider_rejected", startedAt);
           return outcomeUnknown();
         }
 
@@ -163,6 +200,19 @@ export function createComposioConnectionLinks(
         );
 
         if (!connectionLink.success) {
+          const field = connectionLink.error.issues[0]?.path[0];
+          const outcome =
+            field === "connected_account_id"
+              ? "invalid_connected_account_id"
+              : field === "expires_at"
+                ? "invalid_expires_at"
+                : field === "link_token"
+                  ? "invalid_link_token"
+                  : field === "redirect_url"
+                    ? "invalid_redirect_url"
+                    : "invalid_response";
+
+          recordResponse(response.status, outcome, startedAt);
           return outcomeUnknown();
         }
 
@@ -174,6 +224,7 @@ export function createComposioConnectionLinks(
           expiresAt > currentTime + CONNECTION_LINK_UNKNOWN_RECOVERY_MS ||
           !isExpectedConnectUrl(connectionLink.data.redirect_url, connectionLink.data.link_token)
         ) {
+          recordResponse(response.status, "policy_rejected", startedAt);
           return outcomeUnknown();
         }
 
@@ -185,11 +236,17 @@ export function createComposioConnectionLinks(
 
         const serializedResult = JSON.stringify(result);
 
-        return [apiKey.data, ...request.data.callbackSecrets].some((secret) =>
-          serializedResult.includes(secret),
-        )
-          ? outcomeUnknown()
-          : { connectionLink: result, ok: true };
+        if (
+          [apiKey.data, ...request.data.callbackSecrets].some((secret) =>
+            serializedResult.includes(secret),
+          )
+        ) {
+          recordResponse(response.status, "policy_rejected", startedAt);
+          return outcomeUnknown();
+        }
+
+        recordResponse(response.status, "accepted", startedAt);
+        return { connectionLink: result, ok: true };
       } catch {
         return outcomeUnknown();
       }

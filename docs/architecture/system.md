@@ -36,9 +36,11 @@ carry explicit authority because Durable Objects do not share transactions. D1 i
 authoritative store for control-plane or Agent domain state.
 
 Cloudflare Workers Logs provide diagnostic execution telemetry. Persisted custom events correlate
-allowlisted run and tool-call identifiers, but they do not authorize work or replace the
-owner-local audit record. Invocation logs and automatic traces remain disabled because this Worker
-also handles secret-bearing OAuth and connection callback URLs.
+allowlisted run, tool-call, and connection-link identifiers with bounded operation, outcome,
+duration, provider status, error identifier, integration, and tool metadata. They exclude provider
+account identifiers, user content, credentials, and bodies; they do not authorize work or replace
+the owner-local audit record. Invocation logs and automatic traces remain disabled because this
+Worker also handles secret-bearing OAuth and connection callback URLs.
 
 ## Module map
 

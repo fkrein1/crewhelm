@@ -1,4 +1,4 @@
-import { runIdSchema, toolCallIdSchema } from "@crewhelm/contracts";
+import { integrationToolSlugSchema, runIdSchema, toolCallIdSchema } from "@crewhelm/contracts";
 import * as z from "zod";
 
 const durationMsSchema = z
@@ -7,6 +7,7 @@ const durationMsSchema = z
   .nonnegative()
   .max(24 * 60 * 60 * 1_000);
 const outputBytesSchema = z.number().int().nonnegative().safe();
+const providerStatusSchema = z.number().int().min(100).max(599).nullable();
 
 const executionEventSchema = z.discriminatedUnion("phase", [
   z
@@ -69,6 +70,42 @@ const executionEventSchema = z.discriminatedUnion("phase", [
 ]);
 
 export type ExecutionEvent = z.infer<typeof executionEventSchema>;
+const executionProviderResponseEventSchema = z.discriminatedUnion("operation", [
+  z
+    .object({
+      durationMs: durationMsSchema,
+      operation: z.literal("verify"),
+      outcome: z.enum(["accepted", "invalid_response", "provider_rejected", "transport_error"]),
+      runId: runIdSchema,
+      status: providerStatusSchema,
+      toolCallId: toolCallIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      durationMs: durationMsSchema,
+      operation: z.literal("execute"),
+      outcome: z.enum([
+        "accepted",
+        "invalid_response",
+        "provider_rejected",
+        "sensitive_response",
+        "transport_error",
+      ]),
+      providerErrorCode: z.number().int().nonnegative().safe().optional(),
+      providerErrorSlug: z
+        .string()
+        .min(1)
+        .max(80)
+        .regex(/^[A-Za-z0-9._-]+$/)
+        .optional(),
+      runId: runIdSchema,
+      status: providerStatusSchema,
+      toolCallId: toolCallIdSchema,
+      toolSlug: integrationToolSlugSchema,
+    })
+    .strict(),
+]);
 
 function rejectTelemetry(): void {
   try {
@@ -88,6 +125,21 @@ export function recordExecutionEvent(input: unknown): void {
 
   try {
     console.info({ event: "crewhelm.execution", ...event.data });
+  } catch {
+    // Durable audit remains authoritative if diagnostic logging is unavailable.
+  }
+}
+
+export function recordExecutionProviderResponse(input: unknown): void {
+  const event = executionProviderResponseEventSchema.safeParse(input);
+
+  if (!event.success) {
+    rejectTelemetry();
+    return;
+  }
+
+  try {
+    console.info({ event: "crewhelm.execution.provider_response", ...event.data });
   } catch {
     // Durable audit remains authoritative if diagnostic logging is unavailable.
   }

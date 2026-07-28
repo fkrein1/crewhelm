@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { recordExecutionEvent } from "./execution.js";
+import { recordExecutionEvent, recordExecutionProviderResponse } from "./execution.js";
 
 const runId = "run_00000000-0000-4000-8000-000000000001";
 const toolCallId = "tool_call_00000000-0000-4000-8000-000000000002";
@@ -50,5 +50,34 @@ describe("execution observability", () => {
       event: "crewhelm.execution.telemetry_rejected",
     });
     expect(JSON.stringify(warn.mock.calls)).not.toContain(secret);
+  });
+
+  it("emits bounded provider diagnostics with run and tool correlation", () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    recordExecutionProviderResponse({
+      durationMs: 157,
+      operation: "execute",
+      outcome: "provider_rejected",
+      providerErrorCode: 4001,
+      providerErrorSlug: "invalid_tool_input",
+      runId,
+      status: 403,
+      toolCallId,
+      toolSlug: "DISCORD_GET_MY_USER",
+    });
+
+    expect(info).toHaveBeenCalledExactlyOnceWith({
+      event: "crewhelm.execution.provider_response",
+      durationMs: 157,
+      operation: "execute",
+      outcome: "provider_rejected",
+      providerErrorCode: 4001,
+      providerErrorSlug: "invalid_tool_input",
+      runId,
+      status: 403,
+      toolCallId,
+      toolSlug: "DISCORD_GET_MY_USER",
+    });
   });
 });
