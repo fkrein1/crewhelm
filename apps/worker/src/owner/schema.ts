@@ -31,11 +31,25 @@ export const agents = sqliteTable(
   {
     agentId: text("agent_id").primaryKey(),
     currentRevision: integer("current_revision").notNull(),
+    status: text("status", { enum: ["active", "disabled"] })
+      .notNull()
+      .default("active"),
     createdAt: integer("created_at").notNull(),
+    disabledAt: integer("disabled_at"),
   },
   (table) => [
     check("agents_current_revision_positive", sql`${table.currentRevision} > 0`),
+    check("agents_status", sql`${table.status} IN ('active', 'disabled')`),
     check("agents_created_at_positive", sql`${table.createdAt} > 0`),
+    check(
+      "agents_state",
+      sql`(
+        (${table.status} = 'active' AND ${table.disabledAt} IS NULL)
+        OR (${table.status} = 'disabled'
+          AND ${table.disabledAt} IS NOT NULL
+          AND ${table.disabledAt} >= ${table.createdAt})
+      )`,
+    ),
   ],
 );
 
@@ -78,6 +92,7 @@ export const connections = sqliteTable(
       enum: ["initiated", "active", "revoked", "unavailable"],
     }).notNull(),
     createdAt: integer("created_at").notNull(),
+    revokedAt: integer("revoked_at"),
   },
   (table) => [
     check("connections_provider_composio", sql`${table.provider} = 'composio'`),
@@ -86,6 +101,15 @@ export const connections = sqliteTable(
       sql`${table.status} IN ('initiated', 'active', 'revoked', 'unavailable')`,
     ),
     check("connections_created_at_positive", sql`${table.createdAt} > 0`),
+    check(
+      "connections_revocation_state",
+      sql`(
+        (${table.status} = 'revoked'
+          AND ${table.revokedAt} IS NOT NULL
+          AND ${table.revokedAt} >= ${table.createdAt})
+        OR (${table.status} != 'revoked' AND ${table.revokedAt} IS NULL)
+      )`,
+    ),
   ],
 );
 
@@ -269,6 +293,7 @@ export const toolApprovals = sqliteTable(
     executionId: text("execution_id").primaryKey(),
     runId: text("run_id").notNull(),
     toolCallId: text("tool_call_id").notNull().unique(),
+    grantId: text("grant_id"),
     actionDigest: text("action_digest").notNull(),
     clientId: text("client_id").notNull(),
     decision: text("decision", { enum: ["approved", "rejected"] }),
@@ -280,6 +305,10 @@ export const toolApprovals = sqliteTable(
     foreignKey({
       columns: [table.runId],
       foreignColumns: [runAdmissions.runId],
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.grantId],
+      foreignColumns: [capabilityGrants.grantId],
     }).onDelete("restrict"),
     index("tool_approvals_run").on(table.runId, table.requestedAt),
     check("tool_approvals_action_digest_length", sql`length(${table.actionDigest}) = 64`),
@@ -307,6 +336,7 @@ export const toolExecutions = sqliteTable(
     runId: text("run_id").notNull(),
     grantId: text("grant_id").notNull(),
     actionDigest: text("action_digest").notNull(),
+    effectDigest: text("effect_digest").notNull(),
     nonceDigest: text("nonce_digest").notNull(),
     status: text("status", {
       enum: ["reserved", "completed", "failed", "unknown"],
@@ -317,6 +347,8 @@ export const toolExecutions = sqliteTable(
     startedAt: integer("started_at").notNull(),
     dispatchedAt: integer("dispatched_at"),
     completedAt: integer("completed_at"),
+    reconciliation: text("reconciliation", { enum: ["applied", "not_applied"] }),
+    reconciledAt: integer("reconciled_at"),
   },
   (table) => [
     foreignKey({
@@ -329,7 +361,9 @@ export const toolExecutions = sqliteTable(
     }).onDelete("restrict"),
     index("tool_executions_run").on(table.runId, table.startedAt),
     index("tool_executions_grant_status").on(table.grantId, table.status),
+    index("tool_executions_effect_status").on(table.effectDigest, table.status),
     check("tool_executions_action_digest_length", sql`length(${table.actionDigest}) = 64`),
+    check("tool_executions_effect_digest_length", sql`length(${table.effectDigest}) = 64`),
     check("tool_executions_nonce_digest_length", sql`length(${table.nonceDigest}) = 43`),
     check(
       "tool_executions_status",
@@ -355,6 +389,27 @@ export const toolExecutions = sqliteTable(
       sql`${table.completedAt} IS NULL
         OR ${table.dispatchedAt} IS NULL
         OR ${table.completedAt} >= ${table.dispatchedAt}`,
+    ),
+    check(
+      "tool_executions_reconciliation",
+      sql`${table.reconciliation} IS NULL
+        OR ${table.reconciliation} IN ('applied', 'not_applied')`,
+    ),
+    check(
+      "tool_executions_reconciliation_state",
+      sql`(
+        (${table.reconciliation} IS NULL AND ${table.reconciledAt} IS NULL)
+        OR (${table.reconciliation} = 'applied'
+          AND ${table.status} = 'completed'
+          AND ${table.reconciledAt} IS NOT NULL
+          AND ${table.completedAt} IS NOT NULL
+          AND ${table.reconciledAt} >= ${table.completedAt})
+        OR (${table.reconciliation} = 'not_applied'
+          AND ${table.status} = 'failed'
+          AND ${table.reconciledAt} IS NOT NULL
+          AND ${table.completedAt} IS NOT NULL
+          AND ${table.reconciledAt} >= ${table.completedAt})
+      )`,
     ),
     check(
       "tool_executions_state",

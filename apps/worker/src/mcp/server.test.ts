@@ -9,6 +9,7 @@ import {
   INTEGRATIONS_READ_SCOPE,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
+  changeAuthorityResultSchema,
   createAgentResultSchema,
   createConnectionLinkResultSchema,
   configureAgentConnectionResultSchema,
@@ -48,6 +49,8 @@ import {
   MCP_LIST_CONNECTIONS_TOOL_NAME,
   MCP_LIST_RUN_TOOL_APPROVALS_TOOL_NAME,
   MCP_DECIDE_RUN_TOOL_APPROVAL_TOOL_NAME,
+  MCP_RECONCILE_TOOL_EXECUTION_TOOL_NAME,
+  MCP_REVOKE_AUTHORITY_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME,
   MCP_STATUS_TOOL_NAME,
@@ -169,6 +172,11 @@ describe("authenticated MCP handler", () => {
     const decideApprovalTool = payload.result.tools.find(
       (tool) => tool.name === MCP_DECIDE_RUN_TOOL_APPROVAL_TOOL_NAME,
     );
+    const recoveryTools = payload.result.tools.filter(
+      (tool) =>
+        tool.name === MCP_REVOKE_AUTHORITY_TOOL_NAME ||
+        tool.name === MCP_RECONCILE_TOOL_EXECUTION_TOOL_NAME,
+    );
     const revisionTools = payload.result.tools.filter(
       (tool) =>
         tool.name === MCP_GET_AGENT_REVISION_TOOL_NAME ||
@@ -217,6 +225,16 @@ describe("authenticated MCP handler", () => {
       openWorldHint: false,
       readOnlyHint: false,
     });
+    expect(recoveryTools).toHaveLength(2);
+    expect(
+      recoveryTools.every(
+        (tool) =>
+          tool.annotations.destructiveHint &&
+          tool.annotations.idempotentHint &&
+          !tool.annotations.openWorldHint &&
+          !tool.annotations.readOnlyHint,
+      ),
+    ).toBe(true);
     expect(startRunTool?.annotations).toMatchObject({
       destructiveHint: false,
       idempotentHint: true,
@@ -274,8 +292,60 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 6,
+        schemaVersion: 7,
         status: "ready",
+      },
+    });
+  });
+
+  it("disables an Agent through the recovery MCP tool", async () => {
+    const authority = await ownerAuthority("mcp-recovery-owner", [
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+    ]);
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(authority, {
+      executionLimits: {
+        maxDurationSeconds: 60,
+        maxModelTokens: 2_000,
+        maxToolCalls: 1,
+        maxTurns: 2,
+      },
+      idempotencyKey: "mcp-recovery-agent",
+      instructions: "Stop immediately when disabled.",
+      model: "anthropic/claude-sonnet-4",
+      name: "Recovery Agent",
+    });
+
+    if (!created.ok) {
+      throw new Error("Expected recovery Agent.");
+    }
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 2,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { agentId: created.agent.id, target: "agent" },
+            name: MCP_REVOKE_AUTHORITY_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload: unknown = await response.json();
+    const result = jsonRpcToolResultSchema.parse(payload).result;
+
+    expect(result.isError).toBe(false);
+    expect(changeAuthorityResultSchema.parse(JSON.parse(result.content[0]?.text ?? ""))).toEqual({
+      changed: true,
+      ok: true,
+      state: {
+        agentId: created.agent.id,
+        status: "disabled",
+        target: "agent",
       },
     });
   });
@@ -344,6 +414,9 @@ describe("authenticated MCP handler", () => {
           cancelRun: async () => {
             throw new Error("do-not-reflect-this");
           },
+          changeAuthority: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           configureAgentConnection: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -387,6 +460,9 @@ describe("authenticated MCP handler", () => {
             throw new Error("do-not-reflect-this");
           },
           reserveIntegrationEnablement: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          reconcileToolExecution: async () => {
             throw new Error("do-not-reflect-this");
           },
           resolveConnectionForAttachment: async () => {
@@ -1460,6 +1536,7 @@ describe("authenticated MCP handler", () => {
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
           cancelRun: unavailableControlPlane,
+          changeAuthority: unavailableControlPlane,
           completeConnectionLink: unavailableControlPlane,
           completeIntegrationEnablement: unavailableControlPlane,
           configureAgentConnection: unavailableControlPlane,
@@ -1481,6 +1558,7 @@ describe("authenticated MCP handler", () => {
             state: "dispatch",
           }),
           reserveIntegrationEnablement: unavailableControlPlane,
+          reconcileToolExecution: unavailableControlPlane,
           resolveConnectionForAttachment: unavailableControlPlane,
           status: unavailableControlPlane,
           startRun: unavailableControlPlane,
@@ -1560,6 +1638,7 @@ describe("authenticated MCP handler", () => {
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
           cancelRun: unavailableControlPlane,
+          changeAuthority: unavailableControlPlane,
           completeConnectionLink: (authorityInput: unknown, input: unknown) =>
             runInDurableObject(stub, (instance) =>
               instance.completeConnectionLink(authorityInput, input),
@@ -1581,6 +1660,7 @@ describe("authenticated MCP handler", () => {
               instance.reserveConnectionLink(authorityInput, input),
             ),
           reserveIntegrationEnablement: unavailableControlPlane,
+          reconcileToolExecution: unavailableControlPlane,
           resolveConnectionForAttachment: unavailableControlPlane,
           status: unavailableControlPlane,
           startRun: unavailableControlPlane,

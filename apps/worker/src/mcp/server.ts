@@ -22,6 +22,7 @@ import { registerConnectionAttachmentTools } from "./connection-attachment-tools
 import type { McpEnvironment } from "./context.js";
 import { registerIntegrationTools } from "./integration-tools.js";
 import { registerRunTools } from "./run-tools.js";
+import { registerRecoveryTools } from "./recovery-tools.js";
 import { controlPlaneToolResult } from "./tool-result.js";
 
 export { MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME } from "./connection-attachment-tools.js";
@@ -51,6 +52,10 @@ export {
   MCP_LIST_RUN_TOOL_APPROVALS_TOOL_NAME,
   MCP_START_RUN_TOOL_NAME,
 } from "./run-tools.js";
+export {
+  MCP_RECONCILE_TOOL_EXECUTION_TOOL_NAME,
+  MCP_REVOKE_AUTHORITY_TOOL_NAME,
+} from "./recovery-tools.js";
 
 const MAX_MCP_BODY_BYTES = 64 * 1024;
 const MCP_SERVER_INFO = {
@@ -136,6 +141,7 @@ function createMcpServer(
 
   registerAgentTools(server, context);
   registerRunTools(server, context);
+  registerRecoveryTools(server, context);
   registerConnectionTools(server, context, {
     connectionLinks: createComposioConnectionLinks({
       apiKey: env.COMPOSIO_API_KEY,

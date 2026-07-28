@@ -11,6 +11,7 @@ import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
 import * as z from "zod";
 
 import { CrewAgent, type CrewAgentToolAdapter } from "./module.js";
+import { digestToolInput } from "./protocol.js";
 
 const TEST_REPLY = "Crewhelm completed the admitted test run.";
 const LARGE_TEST_PROMPT = "Return an output larger than the retained character boundary.";
@@ -209,14 +210,6 @@ export class TestCrewAgent extends CrewAgent {
       inputSchema: z.strictObject({ itemId: z.string().min(1).max(80) }),
       name: TEST_TOOL_NAME,
       classify: async (input, context) => {
-        const digest = await crypto.subtle.digest(
-          "SHA-256",
-          new TextEncoder().encode(JSON.stringify(input)),
-        );
-        const inputDigest = [...new Uint8Array(digest)]
-          .map((byte) => byte.toString(16).padStart(2, "0"))
-          .join("");
-
         return {
           agentId: grant.agentId,
           agentRevision: grant.agentRevision,
@@ -225,7 +218,7 @@ export class TestCrewAgent extends CrewAgent {
           effect: grant.effect,
           estimatedCostMicrousd: 0,
           grantId: grant.grantId,
-          inputDigest,
+          inputDigest: await digestToolInput(input),
           integrationSlug: grant.integrationSlug,
           ownerKey: grant.ownerKey,
           runId: context.runId,

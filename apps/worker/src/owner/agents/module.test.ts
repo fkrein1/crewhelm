@@ -55,6 +55,7 @@ describe("OwnerControlPlane agents", () => {
           model: input.model,
           name: input.name,
           revision: 1,
+          status: "active",
         },
       ],
       nextCursor: null,
@@ -509,6 +510,7 @@ describe("OwnerControlPlane agents", () => {
           name: created.agent.name,
           revisedAt: created.agent.createdAt,
           revision: 1,
+          status: "active",
         },
       ],
     });

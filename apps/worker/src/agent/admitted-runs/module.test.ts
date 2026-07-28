@@ -1164,6 +1164,53 @@ describe("CrewAgent admitted execution", () => {
     });
   });
 
+  it("refuses a pending approval after its capability is revoked", async () => {
+    const fixture = await pendingWriteRun(
+      "crew-agent-revoked-approval",
+      "crew-agent-run-revoked-approval",
+    );
+
+    await expect(
+      fixture.controlPlane.changeAuthority(fixture.authority, {
+        grantId: fixture.approval.grantId,
+        target: "capability",
+      }),
+    ).resolves.toMatchObject({
+      changed: true,
+      ok: true,
+      state: {
+        grantId: fixture.approval.grantId,
+        status: "revoked",
+        target: "capability",
+      },
+    });
+    await expect(
+      fixture.controlPlane.decideRunToolApproval(fixture.authority, {
+        decision: "approve",
+        executionId: fixture.approval.executionId,
+        runId: fixture.runId,
+      }),
+    ).resolves.toEqual({
+      error: {
+        code: "run_unavailable",
+        message: "Tool approval request denied.",
+      },
+      ok: false,
+    });
+
+    await runInDurableObject(fixture.controlPlane, (_instance, state) => {
+      expect([
+        ...state.storage.sql.exec(
+          "SELECT tool_call_id FROM tool_executions WHERE run_id = ?",
+          fixture.runId,
+        ),
+      ]).toEqual([]);
+    });
+    await expect(
+      fixture.controlPlane.cancelRun(fixture.authority, { runId: fixture.runId }),
+    ).resolves.toMatchObject({ cancelled: true, ok: true });
+  });
+
   it("cancels an approval-waiting run idempotently before provider dispatch", async () => {
     const fixture = await pendingWriteRun("crew-agent-614", "crew-agent-run-614");
     const before = await fixture.controlPlane.inspectRun(fixture.authority, {

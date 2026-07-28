@@ -25,18 +25,18 @@ Trust changes at:
 
 ## Threats and controls
 
-| Threat                                                 | Required control                                                                                                                                                  |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Token theft, confused identity, or cross-owner access  | Audience-bound short-lived tokens, exact owner and scope checks at ingress and execution, owner-named objects, explicit revocation                                |
-| Malicious OAuth clients, replay, or storage exhaustion | S256 PKCE, HTTPS or exact-loopback redirects, protected state, bounded bodies and sessions, rate limits, expiring registrations, hashed rotating refresh tokens   |
-| Prompt injection or hostile provider data              | Treat all model, recipe, MCP, retrieved, and provider content as inert input; trusted code classifies authority, effects, targets, and cost                       |
-| Credential disclosure                                  | Keep provider credentials outside models and Crewhelm state; bound and normalize responses; exclude secrets from results, errors, telemetry, URLs, and backups    |
-| SSRF or redirected egress                              | Use fixed HTTPS provider endpoints, manual redirect handling, bounded response size and time, and no model-selected network destination                           |
-| Stale, replayed, or amplified authority                | Bind permits and approvals to owner, client, Agent revision, action digest, budget, nonce, and short expiry; recheck current policy immediately before execution  |
-| Duplicate or partial external effects                  | Reserve idempotency before dispatch, use single-use permits, make cancellation and dispatch mutually exclusive, audit transitions, and treat ambiguity as unknown |
-| Runaway execution or cost                              | Bound models, turns, tools, schedules, concurrency, payloads, output, duration, and cost before work starts                                                       |
-| Unsafe persistence or recovery                         | Apply ordered checksummed migrations before admission; preserve revocation during backup, restore, deletion, and recovery                                         |
-| Supply-chain or deployment compromise                  | Pin dependencies and automation, minimize CI permissions, validate release artifacts, and require explicit deployment authority                                   |
+| Threat                                                 | Required control                                                                                                                                                       |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Token theft, confused identity, or cross-owner access  | Audience-bound short-lived tokens, exact owner and scope checks at ingress and execution, owner-named objects, explicit revocation                                     |
+| Malicious OAuth clients, replay, or storage exhaustion | S256 PKCE, HTTPS or exact-loopback redirects, protected state, bounded bodies and sessions, rate limits, expiring registrations, hashed rotating refresh tokens        |
+| Prompt injection or hostile provider data              | Treat all model, recipe, MCP, retrieved, and provider content as inert input; trusted code classifies authority, effects, targets, and cost                            |
+| Credential disclosure                                  | Keep provider credentials outside models and Crewhelm state; bound and normalize responses; exclude secrets from results, errors, telemetry, URLs, and backups         |
+| SSRF or redirected egress                              | Use fixed HTTPS provider endpoints, manual redirect handling, bounded response size and time, and no model-selected network destination                                |
+| Stale, replayed, or amplified authority                | Bind permits and approvals to owner, client, Agent revision, action digest, budget, nonce, and short expiry; recheck current policy immediately before execution       |
+| Duplicate or partial external effects                  | Reserve idempotency before dispatch, use single-use permits, make cancellation and dispatch mutually exclusive, and block equivalent writes while outcomes are unknown |
+| Runaway execution or cost                              | Bound models, turns, tools, schedules, concurrency, payloads, output, duration, and cost before work starts                                                            |
+| Unsafe persistence or recovery                         | Apply ordered checksummed migrations before admission; preserve revocation during backup, restore, deletion, and recovery                                              |
+| Supply-chain or deployment compromise                  | Pin dependencies and automation, minimize CI permissions, validate release artifacts, and require explicit deployment authority                                        |
 
 Tool discovery never grants execution authority. Model output never grants permission or approves
 an action. External writes remain approval-gated where policy classifies them as write or
@@ -79,12 +79,13 @@ exact owner, client, Agent revision, prompt, idempotency key, and budget. `CrewA
 its namespace or authority-bearing framework entrypoints to public callers. Interrupted inference
 is charged when it cannot be proven unspent and is not silently repeated.
 
-Tool execution rechecks the current immutable grant, connection, effect, target, approval, and
-budget before issuing a single-use adapter permit. An outcome that becomes ambiguous after
-dispatch remains `unknown`; the same tool-call identity cannot dispatch again. Owner cancellation
-is idempotent and prevents later reservation or dispatch, but cannot claim to undo an effect that
-already crossed the provider boundary. Crewhelm does not yet reconcile unknown effects through
-provider logs or expose a persisted global kill switch.
+Tool execution rechecks the Agent lifecycle, current immutable grant, connection, effect, target,
+approval, and budget before issuing a single-use adapter permit. Disabling an Agent or revoking a
+connection or capability is owner-local, idempotent, audited, and blocks later admission,
+approval, or dispatch. An ambiguous provider outcome remains `unknown` and blocks an equivalent
+mutating effect until the owner records `applied` or `not_applied` from independent evidence.
+Cancellation and revocation cannot claim to undo an effect that already crossed the provider
+boundary.
 
 ### Composio
 
@@ -106,17 +107,20 @@ execution.
 
 Provider names, descriptions, tags, schemas, and results remain untrusted. Unknown tool effects
 default to approval-gated write. Credential-shaped tools and outputs are denied. Composio remains
-the authority for provider consent, disablement, deletion, and credential refresh.
+the authority for provider consent, deletion, and credential refresh; Crewhelm revocation
+immediately stops local use but does not revoke provider-side credentials.
 
 ### Observability and deployment
 
 Cloudflare automatic traces and invocation logs remain disabled because request URLs may contain
 OAuth or connection capabilities. Allowlisted custom events are diagnostic only and cannot prove a
 durable transition. They may contain operation outcomes and durations, provider status and bounded
-error identifiers, integration or tool slugs, and opaque run, tool-call, or connection-link
-correlation identifiers. They exclude credentials, provider account identifiers, user content, and
-request or response bodies. Initial 100-percent custom-event sampling must be reduced under an
-explicit retention and cost policy before sustained high-volume operation.
+error identifiers, integration or tool slugs, and opaque owner-local Agent, connection, grant, run,
+tool-call, or connection-link correlation identifiers. These identifiers support recovery
+diagnosis without identifying a provider account. Events exclude credentials, provider account
+identifiers, user content, and request or response bodies. Initial 100-percent custom-event
+sampling must be reduced under an explicit retention and cost policy before sustained high-volume
+operation.
 
 The bootstrap CLI holds operator deployment authority. It uses pinned Wrangler without a shell,
 an allowlisted environment, explicit account and database identity, validated release artifacts,

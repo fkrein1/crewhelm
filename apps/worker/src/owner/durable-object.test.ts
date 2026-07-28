@@ -70,7 +70,7 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toEqual({
       ok: true,
       status: {
-        schemaVersion: 6,
+        schemaVersion: 7,
         status: "ready",
       },
     });
@@ -112,6 +112,11 @@ describe("OwnerControlPlane", () => {
           checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
           name: "0005_young_norman_osborn",
           version: 6,
+        },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0006_concerned_mesmero",
+          version: 7,
         },
       ],
       owner: { owner_key: authority.ownerKey },
@@ -163,12 +168,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 6, status: "ready" },
+      status: { schemaVersion: 7, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 6, status: "ready" },
+      status: { schemaVersion: 7, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -195,15 +200,20 @@ describe("OwnerControlPlane", () => {
                             CREATE TABLE __new_agents (
                               agent_id text PRIMARY KEY NOT NULL,
                               current_revision integer NOT NULL,
+                              status text NOT NULL,
                               created_at integer NOT NULL,
+                              disabled_at integer,
                               CONSTRAINT "agents_current_revision_positive"
                                 CHECK(current_revision > 0),
+                              CONSTRAINT "agents_status"
+                                CHECK(status IN ('active', 'disabled')),
                               CONSTRAINT "agents_created_at_positive" CHECK(created_at > 0)
                             );
                             --> statement-breakpoint
                             INSERT INTO __new_agents
-                              (agent_id, current_revision, created_at)
-                              SELECT agent_id, current_revision, created_at FROM agents;
+                              (agent_id, current_revision, status, created_at, disabled_at)
+                              SELECT agent_id, current_revision, status, created_at, disabled_at
+                              FROM agents;
                             --> statement-breakpoint
                             DROP TABLE agents;
                             --> statement-breakpoint
@@ -372,7 +382,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 6, status: "ready" },
+      status: { schemaVersion: 7, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       const rows = [
@@ -437,6 +447,7 @@ describe("OwnerControlPlane", () => {
         { version: 4 },
         { version: 5 },
         { version: 6 },
+        { version: 7 },
       ]);
     });
   });
@@ -472,6 +483,7 @@ describe("OwnerControlPlane", () => {
       ok: true,
     });
     const toolCallId = "tool_call_90136000-0000-4000-8000-000000000001";
+    const unknownToolCallId = "tool_call_90136000-0000-4000-8000-000000000002";
 
     await runInDurableObject(stub, (_instance, state) => {
       const startedAt = Date.now() - 2;
@@ -498,14 +510,31 @@ describe("OwnerControlPlane", () => {
       );
       state.storage.sql.exec(
         `INSERT INTO tool_executions
-           (tool_call_id, run_id, grant_id, action_digest, nonce_digest, status,
+           (tool_call_id, run_id, grant_id, action_digest, effect_digest, nonce_digest, status,
             cost_microusd, output_bytes, expires_at, started_at, dispatched_at, completed_at)
-         VALUES (?, ?, ?, ?, ?, 'completed', 0, 16, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, 'completed', 0, 16, ?, ?, ?, ?)`,
         toolCallId,
         admission.permit.runId,
         "grant_90136000-0000-4000-8000-000000000001",
         "a".repeat(64),
+        "f".repeat(64),
         "b".repeat(43),
+        completedAt + 1,
+        startedAt,
+        startedAt,
+        completedAt,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO tool_executions
+           (tool_call_id, run_id, grant_id, action_digest, effect_digest, nonce_digest, status,
+            cost_microusd, output_bytes, expires_at, started_at, dispatched_at, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'unknown', 0, 0, ?, ?, ?, ?)`,
+        unknownToolCallId,
+        admission.permit.runId,
+        "grant_90136000-0000-4000-8000-000000000001",
+        "c".repeat(64),
+        "d".repeat(64),
+        "e".repeat(43),
         completedAt + 1,
         startedAt,
         startedAt,
@@ -521,6 +550,7 @@ describe("OwnerControlPlane", () => {
       );
       state.storage.sql.exec("DROP TABLE tool_executions");
       state.storage.sql.exec("ALTER TABLE legacy_tool_executions RENAME TO tool_executions");
+      state.storage.sql.exec("ALTER TABLE tool_approvals DROP COLUMN grant_id");
       state.storage.sql.exec(
         `CREATE TABLE legacy_run_admissions AS
          SELECT
@@ -539,7 +569,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 6, status: "ready" },
+      status: { schemaVersion: 7, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       expect(
@@ -568,7 +598,21 @@ describe("OwnerControlPlane", () => {
         dispatched_at: expect.any(Number),
       });
       expect([...state.storage.sql.exec("PRAGMA foreign_key_check")]).toEqual([]);
+      expect(
+        state.storage.sql
+          .exec<{ effect_digest: string; status: string }>(
+            "SELECT effect_digest, status FROM tool_executions WHERE tool_call_id = ?",
+            unknownToolCallId,
+          )
+          .one(),
+      ).toEqual({ effect_digest: "0".repeat(64), status: "unknown" });
     });
+    await expect(
+      stub.reconcileToolExecution(authority, {
+        resolution: "not_applied",
+        toolCallId: unknownToolCallId,
+      }),
+    ).resolves.toMatchObject({ ok: true, reconciled: true });
   });
 
   it("rolls back migration DDL when its journal write fails", async () => {
@@ -621,7 +665,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec(
         `INSERT INTO control_plane_migrations (version, name, checksum, applied_at)
          VALUES (?, ?, ?, ?)`,
-        7,
+        8,
         "future_migration",
         "f".repeat(64),
         Date.now(),

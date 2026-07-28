@@ -220,7 +220,7 @@ export const classifiedComposioToolActionSchema = composioToolBindingSchema.exte
 export const toolGatePolicySnapshotSchema = z.strictObject({
   activeGrantCalls: z.number().int().min(0).max(100),
   agentId: agentIdSchema,
-  agentStatus: z.enum(["active", "revoked"]),
+  agentStatus: z.enum(["active", "disabled", "revoked"]),
   capabilityId: z.literal(COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID),
   connectionId: connectionIdSchema,
   connectionStatus: z.enum(["active", "revoked", "unavailable"]),

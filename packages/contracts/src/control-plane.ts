@@ -139,6 +139,7 @@ export const agentSummarySchema = z.strictObject({
   model: agentModelSchema,
   name: agentNameSchema,
   revision: agentRevisionNumberSchema,
+  status: z.enum(["active", "disabled"]),
 });
 export const agentSchema = agentSummarySchema.extend({
   instructions: agentInstructionsSchema,
@@ -193,6 +194,7 @@ const agentRequestErrorSchema = z.strictObject({
     "agent_limit_exceeded",
     "agent_not_found",
     "agent_revision_limit_exceeded",
+    "agent_unavailable",
     "idempotency_conflict",
     "incompatible_schema",
     "insufficient_scope",

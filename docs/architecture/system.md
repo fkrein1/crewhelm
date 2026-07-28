@@ -23,24 +23,25 @@ The Worker authenticates requests, derives owner and client authority, and creat
 server per request. There is one SQLite-backed `OwnerControlPlane` per owner and one name-addressed
 `CrewAgent` per logical Agent.
 
-| State owner         | Authoritative facts                                                                           |
-| ------------------- | --------------------------------------------------------------------------------------------- |
-| Worker              | Authenticated request context only                                                            |
-| Auth D1             | OAuth state, signing keys, rotating refresh tokens, and token revocation                      |
-| `OwnerControlPlane` | Agent revisions, connection references, admission, budgets, approvals, idempotency, and audit |
-| `CrewAgent`         | Think submissions, transcripts, output, deadlines, and approval waits                         |
-| Composio            | Connected-account credentials and refresh                                                     |
+| State owner         | Authoritative facts                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------------------------------- |
+| Worker              | Authenticated request context only                                                                      |
+| Auth D1             | OAuth state, signing keys, rotating refresh tokens, and token revocation                                |
+| `OwnerControlPlane` | Agent and connection lifecycle, grants, admission, budgets, approvals, effect reconciliation, and audit |
+| `CrewAgent`         | Think submissions, transcripts, output, deadlines, and approval waits                                   |
+| Composio            | Connected-account credentials and refresh                                                               |
 
 The control plane owns admission and administration; the Agent owns execution. Cross-object calls
 carry explicit authority because Durable Objects do not share transactions. D1 is not an
 authoritative store for control-plane or Agent domain state.
 
 Cloudflare Workers Logs provide diagnostic execution telemetry. Persisted custom events correlate
-allowlisted run, tool-call, and connection-link identifiers with bounded operation, outcome,
-duration, provider status, error identifier, integration, and tool metadata. They exclude provider
-account identifiers, user content, credentials, and bodies; they do not authorize work or replace
-the owner-local audit record. Invocation logs and automatic traces remain disabled because this
-Worker also handles secret-bearing OAuth and connection callback URLs.
+allowlisted owner-local Agent, connection, grant, run, tool-call, and connection-link identifiers
+with bounded operation, outcome, duration, provider status, error identifier, integration, and tool
+metadata. They exclude provider account identifiers, user content, credentials, and bodies; they
+do not authorize work or replace the owner-local audit record. Invocation logs and automatic
+traces remain disabled because this Worker also handles secret-bearing OAuth and connection
+callback URLs.
 
 ## Module map
 
@@ -49,6 +50,7 @@ Worker also handles secret-bearing OAuth and connection callback URLs.
 | Owner authorization and wiring        | `owner/durable-object.ts` |
 | Agent definitions and revisions       | `owner/agents/`           |
 | Run admission, budgets, and execution | `owner/runs/`             |
+| Disablement, revocation, recovery     | `owner/recovery/`         |
 | Connection lifecycle                  | `owner/connections/`      |
 | Owner-to-Agent capabilities           | `owner/agent-channel/`    |
 | Admitted Think execution              | `agent/admitted-runs/`    |
@@ -80,7 +82,10 @@ composition root or external adapter. Split only around a coherent invariant or 
    Composio's fixed direct-tool endpoint. Owner cancellation and provider dispatch race in the
    same control-plane transaction boundary: cancellation is refused after dispatch, and dispatch
    is refused after cancellation.
-6. Connect Links create owner-facing setup flows. Browser returns record lifecycle evidence; they
+6. Agent disablement and connection or capability revocation take effect at admission, approval,
+   and dispatch gates. Ambiguous mutating effects remain blocked by their stable effect identity
+   until the owner reconciles them from independent evidence.
+7. Connect Links create owner-facing setup flows. Browser returns record lifecycle evidence; they
    do not by themselves activate a connection or authorize execution.
 
 Control-plane migrations are ordered and checksummed; incompatible state fails closed before RPC
