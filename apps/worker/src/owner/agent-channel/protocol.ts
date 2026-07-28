@@ -7,7 +7,7 @@ import {
   type RunReceiverCapability,
 } from "@crewhelm/contracts";
 
-import type { RunAdmissions } from "../runs/module.js";
+import type { RunAdmissions } from "../runs/index.js";
 
 const MAXIMUM_PENDING_CAPABILITIES = 128;
 const INVALID_CAPABILITY = {

@@ -3,7 +3,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { Hono, type Context } from "hono";
 import * as z from "zod";
 
-import { CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX } from "../owner/connections/authorization-return.js";
+import { CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX } from "../owner/connections/index.js";
 import { createCrewhelmAuth, verifyMcpAccessToken } from "../oauth/auth.js";
 import type { WorkerEnv } from "../env.js";
 import { handleAuthenticatedMcpRequest } from "../mcp/server.js";

@@ -6,7 +6,7 @@ import {
   callbackParametersSchema,
   CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX,
   hasValidCallbackAuthenticator,
-} from "../owner/connections/authorization-return.js";
+} from "../owner/connections/index.js";
 import type { WorkerEnv } from "../env.js";
 
 const CONNECTION_AUTHORIZATION_RETURN_ROUTE =

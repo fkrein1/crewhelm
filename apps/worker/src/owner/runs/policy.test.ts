@@ -2,10 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
-  evaluateApprovedComposioToolAction,
-  evaluateComposioToolAction,
-} from "./index.js";
-import type { ComposioToolGateInput } from "../../contracts/src/index.js";
+  type ComposioToolGateInput,
+} from "@crewhelm/contracts";
+import { evaluateApprovedComposioToolAction, evaluateComposioToolAction } from "./policy.js";
 
 const ownerKey = `owner_${"A".repeat(43)}`;
 const agentId = "agent_11111111-1111-4111-8111-111111111111";

@@ -62,6 +62,10 @@ callback URLs.
 authority and connect modules; capability behavior stays in the owning folder. Tests live beside
 the behavior they cover.
 
+A capability folder exposes its public API through `index.ts`. Policy, persistence, transactions,
+and failure handling remain internal to that folder. Another capability may import its facade, but
+not its internal files; shared packages are reserved for provider adapters and stable contracts.
+
 A routine change should require the owning module, its contract, its tests, and at most one
 composition root or external adapter. Split only around a coherent invariant or reason to change.
 

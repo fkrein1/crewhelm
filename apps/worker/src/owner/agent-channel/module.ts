@@ -30,8 +30,7 @@ import {
 import { asc, eq } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
-import { digestRunPrompt } from "../../agent/admitted-runs/protocol.js";
-import type { CrewAgent } from "../../agent/durable-object.js";
+import { digestRunPrompt, type CrewAgent } from "../../agent/admitted-runs/index.js";
 import { recordExecutionEvent } from "../../observability/execution.js";
 import {
   agents,
@@ -42,8 +41,7 @@ import {
   toolExecutions,
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
-import type { RunAdmissions } from "../runs/module.js";
-import type { ToolExecutions } from "../runs/tool-execution.js";
+import type { RunAdmissions, ToolExecutions } from "../runs/index.js";
 import { RunReceiverCapabilities } from "./protocol.js";
 
 type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;

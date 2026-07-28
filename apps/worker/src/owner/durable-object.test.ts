@@ -17,7 +17,7 @@ import {
 } from "./migrations.js";
 import { controlPlaneSchema } from "./schema.js";
 import { deriveOwnerKey } from "./identity.js";
-import { digestRunPrompt } from "../agent/admitted-runs/protocol.js";
+import { digestRunPrompt } from "../agent/admitted-runs/index.js";
 import migration1 from "../../control-plane-migrations/0001_windy_bushwacker.sql";
 import migration2 from "../../control-plane-migrations/0002_cool_rictor.sql";
 
