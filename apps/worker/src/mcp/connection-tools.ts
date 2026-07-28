@@ -12,7 +12,7 @@ import type { ComposioConnectionLinks } from "@crewhelm/composio";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type * as z from "zod";
 
-import { createConnectionAuthorizationCallback } from "../owner/connections/authorization-return.js";
+import { createConnectionAuthorizationCallback } from "../owner/connections/index.js";
 import type { McpToolContext, OwnerControlPlaneClient } from "./context.js";
 import {
   controlPlaneToolResult,

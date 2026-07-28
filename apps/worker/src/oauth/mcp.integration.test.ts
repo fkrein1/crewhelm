@@ -25,7 +25,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as z from "zod";
 
-import { CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX } from "../owner/connections/authorization-return.js";
+import { CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX } from "../owner/connections/index.js";
 import type { WorkerEnv } from "../env.js";
 import { handleWorkerRequest } from "../http/server.js";
 import {

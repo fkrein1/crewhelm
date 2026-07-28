@@ -7,7 +7,7 @@ import {
 } from "@crewhelm/contracts";
 import { describe, expect, it, vi } from "vitest";
 
-import { createConnectionAuthorizationCallback } from "../owner/connections/authorization-return.js";
+import { createConnectionAuthorizationCallback } from "../owner/connections/index.js";
 import { createWorker } from "./server.js";
 import { deriveOwnerKey } from "../owner/identity.js";
 import { OAUTH_SCOPES } from "../oauth/scopes.js";

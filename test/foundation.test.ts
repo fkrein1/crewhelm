@@ -342,9 +342,22 @@ describe("repository foundation", () => {
           ? []
           : [posix.normalize(posix.join(posix.dirname(path), specifier)).replace(/\.js$/, ".ts")];
       });
-      const importsOwnCompositionRoot =
-        (/^owner\/[^/]+\//.test(path) && importedPaths.includes("owner/durable-object.ts")) ||
-        (/^agent\/[^/]+\//.test(path) && importedPaths.includes("agent/durable-object.ts"));
+      const importsCompositionRoot =
+        /^(agent|owner)\/[^/]+\//.test(path) &&
+        importedPaths.some(
+          (importedPath) =>
+            importedPath === "agent/durable-object.ts" ||
+            importedPath === "owner/durable-object.ts",
+        );
+      const importsCapabilityInternals = importedPaths.some((importedPath) => {
+        const importedCapability = /^(agent|owner)\/([^/]+)\//.exec(importedPath);
+
+        return (
+          importedCapability !== null &&
+          !path.startsWith(`${importedCapability[1]}/${importedCapability[2]}/`) &&
+          importedPath !== `${importedCapability[1]}/${importedCapability[2]}/index.ts`
+        );
+      });
       const crossesAdmittedRunOwnership =
         path.startsWith("agent/admitted-runs/") &&
         importedPaths.some((importedPath) => importedPath.startsWith("owner/"));
@@ -355,7 +368,10 @@ describe("repository foundation", () => {
           (importedPath) => importedPath === "mcp/server.ts" || importedPath.startsWith("http/"),
         );
 
-      return importsOwnCompositionRoot || crossesAdmittedRunOwnership || bypassesMcpComposition
+      return importsCompositionRoot ||
+        importsCapabilityInternals ||
+        crossesAdmittedRunOwnership ||
+        bypassesMcpComposition
         ? [path]
         : [];
     });
@@ -370,7 +386,6 @@ describe("repository foundation", () => {
     const cliManifest = parseJsonObject(await read("apps/cli/package.json"));
     const composioManifest = parseJsonObject(await read("packages/composio/package.json"));
     const contractsManifest = parseJsonObject(await read("packages/contracts/package.json"));
-    const coreManifest = parseJsonObject(await read("packages/core/package.json"));
 
     expect(cliManifest).toMatchObject({
       name: "@crewhelm/cli",
@@ -403,16 +418,6 @@ describe("repository foundation", () => {
       private: true,
       dependencies: {
         zod: "4.4.3",
-      },
-      exports: {
-        ".": "./src/index.ts",
-      },
-    });
-    expect(coreManifest).toMatchObject({
-      name: "@crewhelm/core",
-      private: true,
-      dependencies: {
-        "@crewhelm/contracts": "workspace:*",
       },
       exports: {
         ".": "./src/index.ts",

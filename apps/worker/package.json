@@ -12,7 +12,6 @@
     "@cloudflare/think": "0.15.0",
     "@crewhelm/composio": "workspace:*",
     "@crewhelm/contracts": "workspace:*",
-    "@crewhelm/core": "workspace:*",
     "@modelcontextprotocol/sdk": "1.29.0",
     "agents": "0.19.0",
     "ai": "7.0.37",

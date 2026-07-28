@@ -7,8 +7,6 @@ import {
   type ToolGatePolicySnapshot,
 } from "@crewhelm/contracts";
 
-export { COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID } from "@crewhelm/contracts";
-
 const LOCAL_DECISION_TTL_MS = 30 * 1_000;
 const MAXIMUM_POLICY_SNAPSHOT_AGE_MS = 5 * 1_000;
 

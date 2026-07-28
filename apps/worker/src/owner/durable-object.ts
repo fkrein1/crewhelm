@@ -55,21 +55,20 @@ import {
   deniedInspectRun,
   deniedListRunToolApprovals,
   deniedStartRun,
-} from "./agent-channel/module.js";
-import { AgentRegistry, deniedAgent, deniedConnectionAttachment } from "./agents/module.js";
+} from "./agent-channel/index.js";
+import { AgentRegistry, deniedAgent, deniedConnectionAttachment } from "./agents/index.js";
 import {
   Connections,
   deniedConnectionAuthorizationReturn,
   deniedConnectionLink,
   deniedConnectionRead,
   deniedIntegrationEnablement,
-} from "./connections/module.js";
+} from "./connections/index.js";
 import { CONTROL_PLANE_SCHEMA_VERSION, migrateControlPlane } from "./migrations.js";
 import { controlPlane, controlPlaneSchema, type ControlPlaneDatabaseSchema } from "./schema.js";
 
-import { RunAdmissions } from "./runs/module.js";
-import { ToolExecutions, deniedToolExecutionReconciliation } from "./runs/tool-execution.js";
-import { AuthorityControls, deniedAuthorityControl } from "./recovery/module.js";
+import { AuthorityControls, deniedAuthorityControl } from "./recovery/index.js";
+import { RunAdmissions, ToolExecutions, deniedToolExecutionReconciliation } from "./runs/index.js";
 
 const INVALID_RUN_ADMISSION = {
   error: {

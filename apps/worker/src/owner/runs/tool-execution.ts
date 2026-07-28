@@ -20,7 +20,6 @@ import {
   type ToolExecutionPermit,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
-import { evaluateApprovedComposioToolAction, evaluateComposioToolAction } from "@crewhelm/core";
 import { and, count, eq, gt, isNotNull, isNull, lte, min, or } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
@@ -36,6 +35,7 @@ import {
   toolExecutions,
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
+import { evaluateApprovedComposioToolAction, evaluateComposioToolAction } from "./policy.js";
 
 const INVALID_TOOL_EXECUTION = {
   error: {
