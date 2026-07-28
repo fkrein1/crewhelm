@@ -7,5 +7,12 @@
     "skipLibCheck": true,
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["control-plane-migrations/**/*.ts", "sql.d.ts", "src/**/*.ts"]
+  "include": ["control-plane-migrations/**/*.ts", "sql.d.ts", "src/**/*.ts"],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/auth-testkit.ts",
+    "src/test-crew-agent.ts",
+    "src/worker-test-env.d.ts",
+    "src/worker-test-entry.ts"
+  ]
 }

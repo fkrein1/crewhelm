@@ -229,7 +229,7 @@ describe("repository foundation", () => {
       test: "vitest run --maxWorkers=50%",
       "test:watch": "vitest --maxWorkers=50%",
       typecheck:
-        "tsc --noEmit && tsc --noEmit --project apps/worker/tsconfig.json && tsc --noEmit --project apps/worker/test/tsconfig.json",
+        "tsc --noEmit && tsc --noEmit --project apps/worker/tsconfig.json && tsc --noEmit --project apps/worker/src/tsconfig.json",
       verify: "node ./scripts/verify.mjs",
     });
   });
@@ -471,19 +471,20 @@ describe("repository foundation", () => {
     expect(productPhilosophy).toContain("Updates never silently widen grants");
     expect(systemArchitecture).toContain("OwnerControlPlane");
     expect(systemArchitecture).toContain("D1 is not an authoritative store");
-    expect(systemArchitecture).toContain("`ScheduleSpec`");
-    expect(systemArchitecture).toContain("`TurnExecution`");
-    expect(systemArchitecture).toContain("`WorkflowExecution`");
+    expect(systemArchitecture).toContain("`agent-registry.ts`");
+    expect(systemArchitecture).toContain("Keep focused tests beside these implementations");
+    expect(systemArchitecture).toContain("Prefer a pass-through composition root");
     expect(systemArchitecture).toContain("workspaceBash = false");
     expect(systemArchitecture).toContain("includeMcpTools = false");
     expect(systemArchitecture).toContain("Tool discovery is not authorization");
     expect(systemArchitecture).toContain("fresh MCP");
-    expect(systemArchitecture).toContain("Only composition roots");
+    expect(systemArchitecture).toMatch(/Only\s+composition roots/u);
     expect(systemArchitecture).toContain("control plane owns admission and administration");
-    expect(systemArchitecture).toContain("never fall through to `latest`");
+    expect(systemArchitecture).toContain("Never fall through to `latest`");
     expect(systemArchitecture).toContain("Do not expose Composio Sessions");
-    expect(systemArchitecture).toContain("Firecrawl is one Composio toolkit");
+    expect(systemArchitecture).toMatch(/Firecrawl is one\s+Composio toolkit/u);
     expect(systemArchitecture).toContain("approval-required actions remain unavailable");
+    expect(systemArchitecture.split(/\s+/u).length).toBeLessThan(1_500);
     expect(codePhilosophy).toContain("Correctness and security");
     expect(codePhilosophy).toContain("Given what this implementation taught us");
     expect(codePhilosophy).toContain("Never simplify away");

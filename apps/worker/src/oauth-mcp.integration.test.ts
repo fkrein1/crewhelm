@@ -25,10 +25,10 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as z from "zod";
 
-import type { WorkerEnv } from "../src/env.js";
-import { exchangeGithubAuthorizationCode } from "../src/auth.js";
-import { CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX } from "../src/connection-authorization-return.js";
-import { handleWorkerRequest } from "../src/index.js";
+import type { WorkerEnv } from "./env.js";
+import { exchangeGithubAuthorizationCode } from "./auth.js";
+import { CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX } from "./connection-authorization-return.js";
+import { handleWorkerRequest } from "./index.js";
 import {
   MCP_CREATE_AGENT_TOOL_NAME,
   MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
@@ -40,8 +40,8 @@ import {
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_STATUS_TOOL_NAME,
   MCP_UPDATE_AGENT_TOOL_NAME,
-} from "../src/mcp-handler.js";
-import { deriveOwnerKey } from "../src/owner-identity.js";
+} from "./mcp-handler.js";
+import { deriveOwnerKey } from "./owner-identity.js";
 import { registerAuthTestDatabase } from "./auth-testkit.js";
 
 const origin = "https://crewhelm.test";

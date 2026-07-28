@@ -35,10 +35,10 @@ import {
   applyControlPlaneMigration,
   applyControlPlaneMigrationSql,
   runControlPlaneMigrationTransaction,
-} from "../src/control-plane-migrations.js";
-import { controlPlaneSchema } from "../src/control-plane-schema.js";
-import { deriveOwnerKey } from "../src/owner-identity.js";
-import { digestRunPrompt } from "../src/run-admission.js";
+} from "./control-plane-migrations.js";
+import { controlPlaneSchema } from "./control-plane-schema.js";
+import { deriveOwnerKey } from "./owner-identity.js";
+import { digestRunPrompt } from "./run-admission.js";
 import migration1 from "../control-plane-migrations/0001_windy_bushwacker.sql";
 import migration2 from "../control-plane-migrations/0002_cool_rictor.sql";
 

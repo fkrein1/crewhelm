@@ -19,9 +19,9 @@ import {
   BLOCKED_CREW_AGENT_AUTHORITY_METHODS,
   CrewAgent,
   isToolExecutionPermitFresh,
-} from "../src/crew-agent.js";
-import { deriveOwnerKey } from "../src/owner-identity.js";
-import { digestRunPrompt } from "../src/run-admission.js";
+} from "./crew-agent.js";
+import { deriveOwnerKey } from "./owner-identity.js";
+import { digestRunPrompt } from "./run-admission.js";
 import {
   LARGE_TEST_PROMPT,
   SLOW_TEST_PROMPT,

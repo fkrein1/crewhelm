@@ -1,368 +1,142 @@
 # System architecture
 
-Status: target architecture for the first vertical slice
+Status: current architecture and non-negotiable boundaries
 
-Crewhelm is a thin authority layer over two bets: Cloudflare for durable execution and Composio
-for app and web integrations. Firecrawl is one Composio toolkit, not a Crewhelm subsystem.
-Ownership and trust boundaries are strict; libraries and package layout may change.
+Crewhelm is an authority layer over two infrastructure bets: Cloudflare provides authenticated
+ingress and durable execution; Composio provides app and web integrations. Firecrawl is one
+Composio toolkit, not a Crewhelm subsystem.
 
-## Runtime
+This document answers three questions: where a request goes, who owns each fact, and which
+boundaries must not be bypassed. Detailed controls live in the
+[security invariants](../security/invariants.md), [threat model](../security/threat-model.md), and
+[ADRs](../decisions/).
+
+## Runtime shape
 
 ```mermaid
 flowchart LR
-    CLI["Bootstrap CLI"] --> Deploy["Cloudflare deployment"]
-    MCP["Authorized MCP client"] --> Ingress["OAuth MCP Worker"]
-    Ingress --> Auth["Auth D1"]
-    Ingress --> CP["OwnerControlPlane DO"]
-    Catalog["Git recipe catalog"] --> CP
-    CP --> Agent["CrewAgent DO / Think"]
-    CP --> Flow["Cloudflare Workflow"]
-    Agent --> Gate["ToolGate"]
-    Flow --> Gate
-    Gate --> Composio["Composio adapter"]
-    Composio --> Apps["App toolkits"]
-    Composio --> Web["Web toolkits / Firecrawl"]
+    MCP["Authorized MCP client"] --> Worker["OAuth MCP Worker"]
+    Worker --> Auth["Auth D1"]
+    Worker --> Owner["OwnerControlPlane"]
+    Owner --> Agent["CrewAgent / Think"]
+    Worker --> Catalog["Composio catalog and Connect Link adapters"]
+    Agent --> Gate["ToolGate and execution reservation"]
+    Gate --> Adapter["Trusted tool adapter"]
+    Adapter --> Composio["Composio"]
 ```
 
-The CLI handles Cloudflare deployment, MCP authentication setup, the Composio project secret, and
-health checks. Once healthy, MCP owns administration.
+The Worker authenticates the request, derives owner and client authority, and creates a fresh MCP
+server, handler, and transport for that request. MCP handlers translate protocol input into
+commands; they do not read SQL, agent storage, or credentials.
 
-| Layer      | Job                                                                                                             |
-| ---------- | --------------------------------------------------------------------------------------------------------------- |
-| Crewhelm   | Identity, recipes, grants, budgets, approval, audit, admission, and tool policy                                 |
-| Cloudflare | MCP ingress, owner and agent state, Think turns, durable workflows, and artifacts                               |
-| Composio   | The integration plane: 1,000+ app and web toolkits, connected accounts, token refresh, discovery, and execution |
-
-Crewhelm does not rebuild integrations already served by Composio. Recipes select Firecrawl or
-another catalog tool without changing Crewhelm core.
+There is one SQLite-backed `OwnerControlPlane` Durable Object per owner and one name-addressed
+`CrewAgent` Durable Object per logical agent. Never route multiple owners through a global control
+plane.
 
 ## State ownership
 
-| Owner               | Authoritative facts                                                                                                                                                   |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| MCP Worker          | Authenticated request context only                                                                                                                                    |
-| Auth D1             | OAuth clients and leases, login sessions, authorization codes and consent, signing keys, and token revocations                                                        |
-| `OwnerControlPlane` | Agent and recipe revisions, connection references, grants, `ScheduleSpec`, `RunAdmission`, budgets, approval policy, administrative lifecycle, idempotency, and audit |
-| `CrewAgent`         | Think sessions, workspace, materialized schedules, `TurnExecution`, transcript, tool records, and agent-action approval waits/evidence                                |
-| Workflow            | Its `WorkflowExecution`, checkpoints, retries, waits, and approval evidence                                                                                           |
-| Composio            | Connected-account credentials and refresh                                                                                                                             |
-| Git                 | Public recipe source before installation                                                                                                                              |
-| R2 bucket           | Large artifacts                                                                                                                                                       |
-| Future domain D1    | Rebuildable search, marketplace, or analytics projections—not domain authority                                                                                        |
+| Owner               | Authoritative facts                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------- |
+| MCP Worker          | Authenticated request context only                                                                |
+| Auth D1             | OAuth protocol state, signing keys, and token revocation                                          |
+| `OwnerControlPlane` | Agent revisions, connection references, run admission, budgets, approvals, idempotency, and audit |
+| `CrewAgent`         | Think submissions, transcript state, run output, deadlines, and tool-approval waits               |
+| Composio            | Connected-account credentials and refresh                                                         |
 
-The control plane owns admission and administration, the agent owns turns, and a Workflow owns its
-steps. Any control-plane runtime status is a timestamped projection, never a second source of
-truth. Cross-object work is idempotent because Durable Objects do not share transactions.
+The control plane owns admission and administration; the agent owns execution. Cross-object calls
+carry explicit authority and are idempotent because Durable Objects do not share transactions.
+D1 is not an authoritative store for agent or control-plane domain state.
 
-The production Worker exports and binds one data-driven `CrewAgent` class based on Think, together
-with Workers AI. Each run carries a closed exact Agent-revision configuration bound to the canonical
-owner-plus-Agent object name; mutable object-global configuration does not select a queued turn's
-model or instructions. `OwnerControlPlane` issues a 30-second, single-use admission permit binding
-the owner, MCP client, Agent revision, run, prompt digest, expiry, nonce, idempotency key, and an
-explicit budget reservation. The reservation contains the exact active tool grants and bounds
-model calls, turns, tool calls, input characters, output tokens, and total wall-clock duration.
-Grant-free reservations still allow only one model call and one turn. The control plane admits only
-explicitly classified runnable models and reserves the envelope against finite rolling 24-hour
-owner limits for input characters, model calls, and output tokens. `CrewAgent` verifies and redeems
-the permit before durably submitting the turn, then rechecks the authoritative current Agent
-revision and atomically consumes one reserved model call in Think's per-step hook immediately
-before every inference. The rolling output-token reservation charges the per-call allowance for
-every reserved model call. A crash after a claim is treated as spent and cannot replay the provider
-call. The submission ID and idempotency key are the run ID. Resume, inspection, and
-tool-approval operations use distinct five-second, single-use receiver capabilities minted only
-inside an already authorized owner-object request.
+The control-plane composition root delegates cohesive behavior to deep modules:
 
-MCP and HTTP callers never receive the `CrewAgent` namespace or an object stub. Only the production
-Worker and `OwnerControlPlane` hold that internal capability, and their call sites use the closed
-Crewhelm receiver methods. Crewhelm also shadows authority-bearing inherited Think entrypoints for
-configuration, fetch, transcript, approval, cancellation, MCP, host, workflow, fiber, agent-tool,
-sub-agent routing, facet scheduling, and submission management. Framework-internal transcript and
-alarm helpers remain available to Think and are not routed from untrusted requests; a pinned
-inherited-method fingerprint forces review when that upstream surface changes.
+| Module                   | Responsibility                                                            |
+| ------------------------ | ------------------------------------------------------------------------- |
+| `agent-registry.ts`      | Agent creation, immutable revisions, reads, and pagination                |
+| `run-admission.ts`       | Run permits, budget reservations, replay protection, and cleanup          |
+| `tool-execution.ts`      | Execution-time policy evaluation, reservations, approvals, and completion |
+| `owner-control-plane.ts` | Owner authorization, cross-object coordination, and module composition    |
+| `crew-agent.ts`          | Admitted Think execution and durable run lifecycle                        |
 
-Framework lifecycle reads that Think invokes internally return sealed empty inventories. Grant-free
-turns expose no tools or action authority and disable automatic MCP tool materialization, fetch
-tools, workspace Bash, reasoning emission, and tool payload telemetry. A persisted deadline cancels
-a submission even after eviction, and terminal run records, transcript branches, submissions, and
-materialized output are removed after 24 hours. Status reads materialize at most 64 KiB of text
-through the owner-authorized control plane.
+Keep focused tests beside these implementations. Add a module when it hides a coherent policy or
+state transition behind a small interface—not merely to shorten a file.
 
-The durable submission can resume safely after a cross-object failure that occurs before provider
-execution starts. Automatic provider-turn recovery is disabled because replaying an interrupted
-paid inference could duplicate spend; an interrupted provider call becomes terminal instead of
-being silently reissued. This is a recovery policy on top of Think, not a replacement for its
-framework or extension seams. Later tool, workflow, and child-agent capabilities can re-enable
-those seams only through equivalent deterministic Crewhelm admission and policy adapters.
+## Authority boundaries
 
-Use one SQLite-backed control-plane object per owner and one name-addressed agent object per
-logical agent. Never use a global control-plane object. D1 is not an authoritative store for
-control-plane or agent domain state in the individual release; the auth D1 database is narrowly
-authoritative for OAuth protocol state. See
-[ADR 0002](../decisions/0002-owner-scoped-durable-object-control-plane.md) and
-[ADR 0004](../decisions/0004-better-auth-on-d1.md).
+### Identity and ingress
 
-The `OwnerControlPlane` schema is declared once with Drizzle. Runtime reads, writes, and
-transactions use that typed schema; generated SQL is confined to immutable migration artifacts and
-the migration adapter that applies them before RPCs are admitted. A checksummed, ordered journal is
-the only schema-version authority. The owner-binding row contains no duplicate schema version.
-Missing tables or required indexes, unknown journal entries, changed migration content, or an
-existing unjournaled Crewhelm table fail closed as an incompatible schema instead of being guessed
-or repaired. Table-rebuild migrations run atomically with foreign-key enforcement restored after
-the migration and explicit integrity validation before the transaction commits.
+Build the owner key only from verified issuer and subject claims. Do not use email, username,
+model input, or free-form claims. The Worker validates token authenticity, issuer, audience,
+subject, expiry, client, resource, and operation scope before selecting an owner object. Bearer
+tokens never cross the Worker boundary.
 
-### Durable Object lifecycle and recovery
+Typed RPC is not authorization. Every owner-object entrypoint validates owner binding and scope.
+MCP and HTTP callers never receive a Durable Object namespace, object stub, or raw storage handle.
 
-Declare new SQLite-backed classes with Wrangler's `exports` lifecycle map. After a class has been
-deployed, a recovery release must roll forward: retain the class export, binding, and SQLite
-storage declaration while disabling or reverting callers. Do not use a source-control revert or
-Workers version rollback that removes an established class lifecycle declaration.
+### Run admission
 
-Before a recovery deployment, run the object eviction/reconstruction tests and a Wrangler dry-run.
-If a bad release changed stored state, block new admissions first and use Cloudflare's SQLite
-point-in-time recovery before re-enabling callers. Namespace deletion or a lifecycle tombstone is a
-separate destructive operation and requires explicit approval.
+`OwnerControlPlane` issues a short-lived, single-use permit bound to the owner, client, exact Agent
+revision, run, prompt digest, idempotency key, and reserved budget. `CrewAgent` redeems that permit
+before submission, rechecks the current revision, and claims reserved model work immediately
+before inference.
 
-## Identity and references
+A claimed provider call is spent. Recovery may resume work only before provider execution starts;
+Crewhelm does not silently replay interrupted paid inference.
 
-Build the owner principal only from verified OAuth issuer and subject claims, plus a tenant claim
-only when its issuer validates it. Convert that tuple to a stable opaque, non-PII owner key; never
-use email, username, model input, or a free-form claim.
+Think remains behind Crewhelm-owned methods. Authority-bearing inherited entrypoints stay blocked,
+and the inherited surface is fingerprinted so dependency upgrades force review. Grant-free turns
+expose no actions: `workspaceBash = false`, `includeMcpTools = false`, and tool inventories default
+empty.
 
-The control plane generates agent IDs. Agent object names derive from owner key plus agent ID.
-Every workflow, connection, secret reference, and artifact is owner-namespaced. Callers never
-choose raw object names or secret references; opaque references are unguessable, sensitive, and
-redacted.
+### Tool execution
 
-Typed RPC is not authorization. Every cross-object command and short-lived execution permit binds
-owner, client, run, agent revision, capability, connection, normalized target/effect, budget
-reservation, expiry, nonce, and idempotency key. The receiver verifies the permit and current
-revocation state.
+Tool discovery is not authorization. Effective authority is the intersection of the exact Agent
+grant, connected account, current policy and revocation state, target/effect restrictions, and
+remaining budget.
 
-## Recipes
+Every effect reaches `ToolGate` immediately before execution. An allow decision alone is not an
+execution permit. The execution owner must atomically reserve current budget, rerun policy, and
+issue a short-lived, single-use permit for one exact adapter call. Duplicate or unknown outcomes
+fail closed until reconciled. Write and destructive approval-required actions remain unavailable
+without separate owner evidence bound to the exact action.
 
-A recipe may declare instructions, model requirements, Composio toolkits and tools, connection
-requirements, schedules, and limits. It contains no executable code, credential, unrestricted
-destination, tool implementation, or grant.
+The production tool adapter is not wired yet. A grant with no trusted adapter exposes no model tool
+and reaches no provider.
 
-Ingestion accepts bounded inert data through a closed schema. Fetch only from allowed sources and
-pin a commit, not a branch or tag. Never run repository hooks, scripts, submodules, or declared
-commands; reject path traversal and symlinks. Store canonical content, digest, source, and schema
-version as an immutable installed revision.
+Composio discovery is open-world, but execution is exact: grants bind toolkit, tool, version,
+connected account, effect, targets, and limits. Never fall through to `latest` or automatic account
+selection. Do not expose Composio Sessions, raw proxy execution, connection-management meta-tools,
+or model-managed credentials. Provider schemas, classifications, errors, and results are untrusted
+input.
 
-Before install or update, show the validated capability diff—not recipe prose. An update creates a
-new revision and never inherits wider authority without owner consent.
+Connect Links are owner-facing setup flows. A browser return records lifecycle evidence; it is not
+a signed provider assertion, does not activate a connection, and cannot create a grant or
+execution permit.
 
-## Agent runtime
+## Storage and recovery
 
-One generic `CrewAgent` class executes every recipe on Think. Think stays behind Crewhelm-owned
-contracts.
+The control-plane schema is declared once with Drizzle. Ordered, checksummed migrations run before
+RPC admission; unknown or changed migration state fails closed. Deployed Durable Object class
+bindings and SQLite declarations roll forward even when callers are disabled. Recovery that
+changes or deletes stored state requires explicit approval.
 
-Crewhelm adapters preserve the useful semantics of the underlying Agents/Think framework and make
-its lifecycle administrable through MCP. The adapter boundary centralizes authority, recovery, and
-compatibility; it is not a permanently reduced substitute for the framework. Framework features
-can remain unavailable only until an equivalent deterministic policy and recovery path exists.
-
-Crewhelm builds a default-empty effective tool registry. Each executable path has one stable
-capability ID independent of its model-visible name; duplicate or overriding names fail startup.
-After Think merges tools, the runtime enumerates the final set and rejects any unmapped path.
-
-Composio catalog discovery is not restricted by a Crewhelm-maintained toolkit allowlist. Any
-catalog integration may be connected and granted by the owner through its exact toolkit, tool,
-version, and connected-account identity. Sessions, raw proxy calls, and model-managed connections
-remain outside the execution path because they bypass that exact grant boundary, not because their
-underlying integrations are unsupported.
-
-Harden Think explicitly:
-
-- `workspaceBash = false`, `includeMcpTools = false`, and `authorizeTurn()` fails closed.
-- `beforeTurn()` exposes only effective tools; `authorizeAction()` and `beforeToolCall()` call
-  `ToolGate`.
-- Caller client tools, executable skills, dynamic extensions, Code Mode, browser tools, and raw
-  MCP paths are off until a reviewed adapter proves equivalent gating.
-- Workspace read/write/edit/delete tools require explicit capability mappings.
-
-Cloudflare Actions are experimental. Keep them behind a pinned Crewhelm adapter; their ledger and
-authorization defaults never replace Crewhelm policy or provider idempotency. See
-[ADR 0003](../decisions/0003-declarative-recipes-and-hardened-think.md).
-
-Every child agent is admitted by the control plane. Its capabilities, connections, targets, budget,
-lifetime, concurrency, and depth are strict subsets of the parent reservation. Carry lineage,
-propagate cancellation and revocation, audit delegation, and never give a child administrative MCP
-authority. Raw Think spawning paths cannot bypass this wrapper.
-
-Use Agents for identity, conversation, memory, streaming, short turns, schedules, and short bounded
-effects with stable idempotency and unknown-outcome reconciliation. Use Workflows for multi-step
-jobs, retries, long waits, durable approvals, and effects whose recovery history matters. A model
-may perform a Workflow step; it is not the workflow engine.
-
-## Tool execution
-
-Tool discovery is not authorization.
-
-Effective authority is:
-
-```text
-recipe request
-∩ owner grant
-∩ connection scope
-∩ runtime allowlist
-∩ budget
-∩ current revocation state
-```
-
-Every call reaches `ToolGate` immediately before execution. A connector receives only a verified
-execution permit and opaque connection reference. It constrains targets, time, output, concurrency,
-egress, and cost; propagates cancellation; normalizes untrusted results; and emits safe errors.
-Telemetry contains only allowlisted metadata and correlation IDs—never raw provider bodies,
-headers, URLs, credentials, or exceptions.
-
-The pure policy layer evaluates one classified Composio action against one immutable exact grant
-and an authoritative current policy and budget snapshot. Raw tool arguments and target values do
-not enter this layer; trusted adapters supply canonical input and target digests plus an explicit
-effect and known cost. The snapshot is itself bound to the exact owner, Agent revision, run, grant,
-capability, and connection before its status or budget values are used. ToolGate derives the
-complete canonical action digest. The decision binds owner, Agent revision, run, tool call,
-capability, connection, exact toolkit/tool/version, effect, targets, and the tightest time, output,
-and cost limits. Snapshot freshness and grant expiry are checked against the evaluator's trusted
-current time; future-dated or more than five-second-old snapshots fail closed, and decision expiry
-is bounded from both current time and snapshot creation. It also fails closed on malformed input,
-inactive policy, cross-object mismatches, unknown cost, and exhausted budgets. Write and
-destructive effects require distinct owner approval.
-Write and destructive approval-required actions remain unavailable until the owner decision is
-stored and a fresh execution-time reservation succeeds.
-
-An in-process allow decision is deliberately not a verified execution permit, does not reserve a
-budget, and cannot authorize a connector or cross an object boundary. The execution owner must
-atomically reserve current budget, rerun policy immediately before the effect, and issue the
-short-lived verified permit described above. `OwnerControlPlane` now owns that reservation: it
-rebuilds a current snapshot from the redeemed run, exact immutable grant, current Agent revision,
-connection and grant status, and persisted execution counts; atomically charges the run and writes
-the execution record; then issues a five-second, single-use permit to the exact adapter call. A
-second reservation for the same tool-call identity is denied, including while the first outcome is
-unknown; recovery must reconcile that outcome before a new action is admitted. Unknown,
-unavailable, stale, over-budget, mismatched, or expired calls fail closed. The pure ToolGate
-contract can deny an authoritative kill-switch signal, but this slice does not yet persist or
-operate that signal. The production Composio execution adapter remains a separate integration
-slice, so an admitted grant without a trusted adapter still exposes no model tool and reaches no
-provider.
-
-### Composio
-
-Composio is the default path to third-party apps. Crewhelm maps its opaque owner key to a stable
-Composio user ID and stores only opaque auth-config and connected-account references. Composio owns
-raw credentials and refresh; Crewhelm never retrieves credential state.
-
-Use catalog APIs for discovery and direct tool execution for runs. Each grant snapshots the schema
-and binds an exact tool slug, toolkit version, effect class, and connected account. After
-`ToolGate`, execute with those exact values; never fall through to `latest` or automatic account
-selection.
-
-Do not expose Composio Sessions, MCP, connection-management meta-tools, remote Bash/workbench,
-multi-execute, or proxy-execute to the model. Catalog search is read-only; batches expand into
-separately permitted direct calls.
-
-Composio schemas, behavior tags, and results are untrusted provider input, not Crewhelm authority.
-Unknown tools remain unavailable until classified. Grants bind exact tool slugs, toolkit versions,
-and effect classes; open-world tools also bind targets and budgets.
-
-Connection setup returns a Composio Connect Link through an owner-facing MCP flow; completing the
-provider consent remains a human action. Each link carries a short-lived Crewhelm callback
-capability bound to the exact owner, reservation, and connected-account reference. Its browser
-return records only `pending`, `returned`, `failed`, `expired`, or legacy `untracked` lifecycle
-evidence. The Worker authenticates callback routing before selecting an owner Durable Object; the
-owner object then enforces the one-time stored binding. Because the browser redirect is not a
-signed provider assertion, it never marks a connection active and never creates a grant or
-execution permit. Keep the Composio project key in a Cloudflare secret, separate environments into
-separate Composio projects, and never expose the key to a model.
-
-Web tools such as Firecrawl use the same boundary. Constrain domains, pages, depth, concurrency,
-time, output, and cost; treat results as hostile. Arbitrary headers, cookies, TLS bypass, robots
-overrides, browser code, and autonomous research require separate grants. Long provider jobs
-persist their external ID and resume through a Workflow.
-
-## Approval and revocation
-
-Approval is owner-authenticated evidence from an interaction distinct from model output. It binds
-owner, client, run, revision, tool, canonical input/target/effect/cost digest, expiry, and nonce.
-The requesting model cannot approve or call the approval path. Owner-scoped MCP tools list pending
-run approvals and approve or reject one exact Think durable-pause execution. The control plane
-stores the immutable digest-bound decision and audit event before issuing a single-use decision
-capability to the Agent.
-
-The execution owner stores the wait and immutable decision evidence; the control plane owns who may
-approve. After approval, run `ToolGate` again against current grants, connection, budget,
-and revocation immediately before the side effect. The resulting permit, rather than
-the earlier approval or model output, is the only authority the trusted adapter receives. Duplicate
-model attempts for the same tool call do not create duplicate waits.
-
-Revocation or deletion first blocks new admissions and permit verification, invalidates pending
-approvals, then sends idempotent cancellation to schedules, queued turns, workflows, and connector
-caches. Completed provider effects cannot be recalled; record and reconcile them.
-
-## MCP command path
-
-The Worker is an OAuth 2.1 resource server over Streamable HTTP. Validate token authenticity
-through either a signature or an active opaque-token lookup, bind the authorization server or
-issuer, and validate audience/resource, subject, expiry, client ID, and operation scopes. The
-individual release uses Better Auth's OAuth provider with signing keys and protocol state in D1.
-It issues 15-minute JWTs for the exact `/mcp` resource and checks a D1 denylist of token hashes for
-immediate explicit revocation. The authenticated subject is an opaque owner key derived only from
-the configured, GitHub-verified numeric ID. Deny missing context and never forward bearer tokens.
-
-Create a fresh MCP server, handler, and transport per request. Never share a module-global instance
-across clients.
-
-```text
-authenticate -> validate -> derive owner/client authority
--> create command/query -> OwnerControlPlane RPC -> safe response
-```
-
-Mutation idempotency records are scoped by owner, client, operation, and key, and bind a canonical
-validated-request digest. Reject reuse with different input. External effects use stable domain
-identifiers and reconcile an unknown provider result before retry.
-
-Handlers never read SQL or secrets, construct provider clients, or access agent storage.
+Exact migration and Durable Object recovery requirements are recorded in
+[ADR 0002](../decisions/0002-owner-scoped-durable-object-control-plane.md). OAuth storage is
+recorded in [ADR 0004](../decisions/0004-better-auth-on-d1.md).
 
 ## Dependency direction
 
 ```text
-entrypoints -> application commands/queries -> domain policy/contracts
-external adapters -------------------------> application ports/contracts
-composition roots -------------------------> concrete implementations
+entrypoints -> application commands -> domain policy and contracts
+adapters ---------------------------> application ports and contracts
+composition roots -----------------> concrete implementations
 ```
 
-Contracts import no Cloudflare, Think, MCP, Composio, Firecrawl, database, or environment APIs.
-Only composition roots read the full environment. They pass narrow bindings to adapters; designated
-adapters may construct scoped SDK clients. Create packages only when a working slice earns the
-boundary.
+Contracts import no Cloudflare, Think, MCP, Composio, database, or environment APIs. Only
+composition roots read the full environment. Modules receive the narrow database, namespace, or
+adapter they need. Provider adapters do not decide authority, and policy modules do not perform
+provider I/O.
 
-Likely first boundaries are `apps/cli`, `apps/worker`, and
-`packages/{contracts,core,cloudflare,composio,testkit}`. This keeps Pi's separation of provider,
-agent loop, and entrypoint while adding Crewhelm's permission boundary.
-
-## Required evidence
-
-Add each check with the first slice it protects:
-
-- import-boundary and runtime-schema tests;
-- recipe ingestion, digest, capability-diff, and no-code fixtures;
-- a final Think tool inventory proving every path reaches `ToolGate`;
-- negative tests for OAuth claims, cross-owner references, permits, approvals, revocation, and
-  child attenuation;
-- Durable Object and Workflow tests for duplicates, stale revisions, eviction, retry, and
-  recovery; and
-- Composio contract tests for version drift, limits, redaction, cancellation, and unknown outcomes.
-
-Changes to a strict invariant, trust boundary, state owner, or dependency direction are R3. Public
-contracts are R2 by default. Write an ADR only for a durable, hard-to-reverse choice.
-
-## Sources
-
-- [Cloudflare Think](https://developers.cloudflare.com/agents/harnesses/think/)
-- [Cloudflare Agents with Workflows](https://developers.cloudflare.com/agents/concepts/workflows/)
-- [Cloudflare MCP handler](https://developers.cloudflare.com/agents/model-context-protocol/apis/handler-api/)
-- [Composio direct tool execution](https://docs.composio.dev/docs/tools-direct/executing-tools)
-- [Composio toolkit versioning](https://docs.composio.dev/docs/tools-direct/toolkit-versioning)
-- [Composio authentication](https://docs.composio.dev/docs/authentication)
-- [Composio Firecrawl toolkit](https://docs.composio.dev/toolkits/firecrawl)
-- [Pi agent harness](https://github.com/earendil-works/pi)
+Prefer a pass-through composition root when validation and policy already live in the called
+module. Keep orchestration in the root only when it coordinates multiple state owners or converts
+one authority into a narrower capability. See [module design](../engineering/module-design.md) for
+the boundary test.
