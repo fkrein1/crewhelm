@@ -4,8 +4,8 @@ import {
   COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
   evaluateApprovedComposioToolAction,
   evaluateComposioToolAction,
-} from "../packages/core/src/index.js";
-import type { ComposioToolGateInput } from "../packages/contracts/src/index.js";
+} from "./index.js";
+import type { ComposioToolGateInput } from "../../contracts/src/index.js";
 
 const ownerKey = `owner_${"A".repeat(43)}`;
 const agentId = "agent_11111111-1111-4111-8111-111111111111";

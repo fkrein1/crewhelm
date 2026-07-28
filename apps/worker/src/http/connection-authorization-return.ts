@@ -8,7 +8,7 @@ import {
 import { type Hono } from "hono";
 import * as z from "zod";
 
-import type { WorkerEnv } from "./env.js";
+import type { WorkerEnv } from "../env.js";
 
 export const CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX = "/connections/composio/callback/";
 const CONNECTION_AUTHORIZATION_RETURN_ROUTE =

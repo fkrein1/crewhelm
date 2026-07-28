@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  createComposioCatalog,
-  createComposioConnectionLinks,
-} from "../packages/composio/src/index.js";
-import { integrationToolParameterMapSchema } from "../packages/contracts/src/index.js";
+import { integrationToolParameterMapSchema } from "../../contracts/src/index.js";
+import { createComposioCatalog, createComposioConnectionLinks } from "./index.js";
 
 function catalogResponse(body: unknown, init?: ResponseInit): Response {
   const headers = new Headers(init?.headers);

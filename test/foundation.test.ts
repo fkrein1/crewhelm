@@ -274,7 +274,7 @@ describe("repository foundation", () => {
     const migrationFiles = (await readdir(new URL("apps/worker/control-plane-migrations/", root)))
       .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/.test(name))
       .toSorted();
-    const ownerControlPlane = await read("apps/worker/src/owner-control-plane.ts");
+    const ownerControlPlane = await read("apps/worker/src/owner/durable-object.ts");
 
     expect(journal["dialect"]).toBe("sqlite");
     expect(Array.isArray(entries)).toBe(true);
@@ -305,12 +305,77 @@ describe("repository foundation", () => {
     const workerEntry = await read("apps/worker/src/index.ts");
     const wrangler = await read("apps/worker/wrangler.jsonc");
 
-    expect(workerEntry).toContain('export { CrewAgent } from "./crew-agent.js";');
+    expect(workerEntry).toContain('export { CrewAgent } from "./agent/durable-object.js";');
     expect(wrangler).toMatch(/"ai"\s*:\s*\{\s*"binding"\s*:\s*"AI"/);
     expect(wrangler).toMatch(/"name"\s*:\s*"CREW_AGENT"\s*,\s*"class_name"\s*:\s*"CrewAgent"/);
     expect(wrangler).toMatch(
       /"CrewAgent"\s*:\s*\{\s*"type"\s*:\s*"durable-object"\s*,\s*"storage"\s*:\s*"sqlite"/,
     );
+  });
+
+  it("keeps Worker behavior inside capability-owned deep modules", async () => {
+    const sourceRootFiles = await readdir(new URL("apps/worker/src/", root));
+    const ownerRoot = await read("apps/worker/src/owner/durable-object.ts");
+    const agentRoot = await read("apps/worker/src/agent/durable-object.ts");
+    const mcpRoot = await read("apps/worker/src/mcp/server.ts");
+    const capabilityPaths = [
+      "apps/worker/src/owner/agents/module.ts",
+      "apps/worker/src/owner/agents/module.test.ts",
+      "apps/worker/src/owner/runs/module.ts",
+      "apps/worker/src/owner/runs/module.test.ts",
+      "apps/worker/src/owner/runs/tool-execution.ts",
+      "apps/worker/src/owner/runs/tool-execution.test.ts",
+      "apps/worker/src/owner/connections/module.ts",
+      "apps/worker/src/owner/connections/module.test.ts",
+      "apps/worker/src/owner/agent-channel/module.ts",
+      "apps/worker/src/owner/agent-channel/protocol.ts",
+      "apps/worker/src/agent/admitted-runs/module.ts",
+      "apps/worker/src/agent/admitted-runs/schema.ts",
+      "apps/worker/src/agent/admitted-runs/module.test.ts",
+      "apps/worker/src/mcp/agent-tools.ts",
+      "apps/worker/src/mcp/run-tools.ts",
+      "apps/worker/src/mcp/connection-tools.ts",
+      "apps/worker/src/mcp/integration-tools.ts",
+      "apps/worker/src/http/server.ts",
+      "apps/worker/src/http/server.test.ts",
+      "apps/worker/src/oauth/server.ts",
+      "apps/worker/src/oauth/server.test.ts",
+      "apps/worker/src/oauth/mcp.integration.test.ts",
+    ];
+    const capabilitySources = await Promise.all(capabilityPaths.map((path) => read(path)));
+
+    expect(sourceRootFiles.filter((path) => path.endsWith(".test.ts"))).toEqual([]);
+    for (const moduleName of [
+      "AgentRegistry",
+      "RunAdmissions",
+      "ToolExecutions",
+      "Connections",
+      "AgentChannel",
+    ]) {
+      expect(ownerRoot).toContain(moduleName);
+    }
+    expect(agentRoot).toContain('from "./admitted-runs/module.js"');
+    for (const registrarName of [
+      "registerAgentTools",
+      "registerRunTools",
+      "registerConnectionTools",
+      "registerIntegrationTools",
+    ]) {
+      expect(mcpRoot).toContain(registrarName);
+    }
+    const boundaryViolations = capabilityPaths.flatMap((path, index) => {
+      if (path.endsWith(".test.ts")) {
+        return [];
+      }
+
+      const forbiddenImport = path.includes("/mcp/")
+        ? 'from "./server.js"'
+        : 'from "../durable-object.js"';
+
+      return capabilitySources[index]?.includes(forbiddenImport) ? [path] : [];
+    });
+
+    expect(boundaryViolations).toEqual([]);
   });
 
   it("pins the bootstrap CLI and shared provider and contract workspaces", async () => {
@@ -471,7 +536,7 @@ describe("repository foundation", () => {
     expect(productPhilosophy).toContain("Updates never silently widen grants");
     expect(systemArchitecture).toContain("OwnerControlPlane");
     expect(systemArchitecture).toContain("D1 is not an authoritative store");
-    expect(systemArchitecture).toContain("`agent-registry.ts`");
+    expect(systemArchitecture).toContain("`owner/agents/`");
     expect(systemArchitecture).toContain("Keep focused tests beside these implementations");
     expect(systemArchitecture).toContain("Prefer a pass-through composition root");
     expect(systemArchitecture).toContain("workspaceBash = false");

@@ -1,3 +1,3 @@
 export { default } from "./index.js";
-export { OwnerControlPlane } from "./owner-control-plane.js";
-export { TestCrewAgent } from "./test-crew-agent.js";
+export { TestCrewAgent } from "./agent/admitted-runs/test-agent.js";
+export { OwnerControlPlane } from "./owner/durable-object.js";

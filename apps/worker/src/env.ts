@@ -1,5 +1,5 @@
-import type { CrewAgent } from "./crew-agent.js";
-import type { OwnerControlPlane } from "./owner-control-plane.js";
+import type { CrewAgent } from "./agent/durable-object.js";
+import type { OwnerControlPlane } from "./owner/durable-object.js";
 
 declare global {
   namespace Cloudflare {

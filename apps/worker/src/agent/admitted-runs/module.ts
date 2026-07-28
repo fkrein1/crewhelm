@@ -3,15 +3,11 @@ import {
   acceptRunAdmissionResultSchema,
   confirmRunAdmissionResultSchema,
   crewAgentObjectName,
-  crewAgentRuntimeConfigSchema,
   inspectAdmittedRunInputSchema,
   inspectAdmittedRunResultSchema,
   MAXIMUM_RUN_OUTPUT_CHARACTERS,
-  ownerClientIdSchema,
   redeemRunReceiverCapabilityResultSchema,
   RUN_ADMISSION_RETENTION_MS,
-  runAdmissionIdempotencyKeySchema,
-  runBudgetReservationSchema,
   resumeRunAdmissionInputSchema,
   runIdSchema,
   completeToolExecutionResultSchema,
@@ -71,9 +67,17 @@ import {
 } from "@cloudflare/think";
 import type { ToolSet, UIMessage } from "ai";
 import type { RetryOptions, Schedule } from "agents";
-import * as z from "zod";
+import type * as z from "zod";
 
-import { digestRunPrompt } from "./run-admission.js";
+import { digestRunPrompt } from "../../owner/runs/module.js";
+import {
+  admittedRunRecordSchema,
+  admittedTurnMetadataSchema,
+  pendingToolApprovalRecordSchema,
+  scheduledRunInputSchema,
+  type AdmittedRunRecord,
+  type AdmittedTurnMetadata,
+} from "./schema.js";
 
 const RUNTIME_ADMISSION_UNAVAILABLE = "CrewAgent runtime admission is not available.";
 const RUN_RECORD_PREFIX = "crewhelm:run:";
@@ -133,37 +137,6 @@ export const BLOCKED_CREW_AGENT_AUTHORITY_METHODS = [
   "_cf_subAgentTargetPath",
   "_cf_unregisterFacetRun",
 ] as const;
-
-const admittedRunRecordSchema = z.strictObject({
-  budgetReservation: runBudgetReservationSchema,
-  cleanupAt: z.number().int().positive(),
-  clientId: ownerClientIdSchema,
-  configuration: crewAgentRuntimeConfigSchema,
-  createdAt: z.number().int().positive(),
-  deadlineAt: z.number().int().positive(),
-  idempotencyKey: runAdmissionIdempotencyKeySchema,
-  promptCharacters: z.number().int().positive(),
-  promptDigest: z.string().regex(/^[0-9a-f]{64}$/),
-});
-
-const admittedTurnMetadataSchema = z.strictObject({
-  crewhelmRun: z.strictObject({
-    budgetReservation: runBudgetReservationSchema,
-    configuration: crewAgentRuntimeConfigSchema,
-    promptCharacters: z.number().int().positive(),
-    promptDigest: z.string().regex(/^[0-9a-f]{64}$/),
-    runId: runIdSchema,
-  }),
-});
-const scheduledRunInputSchema = z.strictObject({
-  runId: runIdSchema,
-});
-
-type AdmittedRunRecord = z.infer<typeof admittedRunRecordSchema>;
-type AdmittedTurnMetadata = z.infer<typeof admittedTurnMetadataSchema>["crewhelmRun"];
-const pendingToolApprovalRecordSchema = pendingToolApprovalSchema
-  .omit({ executionId: true })
-  .extend({ runId: runIdSchema });
 
 export interface CrewAgentToolAdapter {
   readonly description: string;
