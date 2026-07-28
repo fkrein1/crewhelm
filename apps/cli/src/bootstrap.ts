@@ -33,7 +33,7 @@ const SECRET_ENVIRONMENT_BY_NAME: Partial<Record<RequiredSecretName, string>> = 
   GITHUB_CLIENT_SECRET: GITHUB_SECRET_ENVIRONMENT.clientSecret,
   OWNER_GITHUB_USER_ID: GITHUB_SECRET_ENVIRONMENT.ownerUserId,
 } as const;
-const EXPECTED_DEPLOYMENT_FILES = [
+const EXPECTED_DEPLOYMENT_CORE_FILES = [
   "index.js",
   "index.js.map",
   "migrations",
@@ -47,9 +47,15 @@ const EXPECTED_MIGRATIONS = [
   "0005_agent_update_scope.sql",
   "0006_connection_write_scope.sql",
   "0007_connection_read_scope.sql",
+  "0008_connection_config_read_scope.sql",
 ] as const;
-const MAX_ASSET_BYTES = 10 * 1_048_576;
+const MAX_WORKER_SCRIPT_BYTES = 10 * 1_048_576;
+const MAX_SOURCE_MAP_BYTES = 25 * 1_048_576;
+const MAX_TEMPLATE_BYTES = 1_048_576;
 const MAX_MIGRATION_BYTES = 1_048_576;
+const MAX_WORKER_TEXT_MODULES = 20;
+const WORKER_TEXT_MODULE_NAME = /^[0-9a-f]{40}-[0-9]{4}_[a-z0-9_]{1,128}\.sql$/u;
+const WORKER_TEXT_MODULE_IMPORT = /from "\.\/([^"]+\.sql)";/gu;
 const WORKER_NOT_FOUND_CODE = /\[code:\s*10007\]/u;
 const TABLE_INVENTORY_SQL = "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name";
 const MIGRATION_INVENTORY_SQL = "SELECT name FROM d1_migrations ORDER BY id";
@@ -119,6 +125,9 @@ const queryResultSchema = z.tuple([
   }),
 ]);
 const deploymentTemplateSchema = z.strictObject({
+  ai: z.strictObject({
+    binding: z.literal("AI"),
+  }),
   compatibility_date: z.literal("2026-07-22"),
   compatibility_flags: z.tuple([z.literal("nodejs_compat")]),
   d1_databases: z.tuple([
@@ -135,9 +144,17 @@ const deploymentTemplateSchema = z.strictObject({
         class_name: z.literal("OwnerControlPlane"),
         name: z.literal("OWNER_CONTROL_PLANE"),
       }),
+      z.strictObject({
+        class_name: z.literal("CrewAgent"),
+        name: z.literal("CREW_AGENT"),
+      }),
     ]),
   }),
   exports: z.strictObject({
+    CrewAgent: z.strictObject({
+      storage: z.literal("sqlite"),
+      type: z.literal("durable-object"),
+    }),
     OwnerControlPlane: z.strictObject({
       storage: z.literal("sqlite"),
       type: z.literal("durable-object"),
@@ -145,6 +162,17 @@ const deploymentTemplateSchema = z.strictObject({
   }),
   main: z.literal("./index.js"),
   name: z.literal("crewhelm"),
+  observability: z.strictObject({
+    enabled: z.literal(true),
+    logs: z.strictObject({
+      enabled: z.literal(true),
+      head_sampling_rate: z.literal(1),
+      invocation_logs: z.literal(false),
+    }),
+    traces: z.strictObject({
+      enabled: z.literal(false),
+    }),
+  }),
   ratelimits: z.tuple([
     z.strictObject({
       name: z.literal("AUTH_RATE_LIMIT"),
@@ -161,6 +189,13 @@ const deploymentTemplateSchema = z.strictObject({
         limit: z.literal(60),
         period: z.literal(60),
       }),
+    }),
+  ]),
+  rules: z.tuple([
+    z.strictObject({
+      fallthrough: z.literal(true),
+      globs: z.tuple([z.literal("**/*.sql")]),
+      type: z.literal("Text"),
     }),
   ]),
   triggers: z.strictObject({
@@ -226,6 +261,7 @@ type GitHubSecrets = z.infer<typeof githubSecretsSchema>;
 interface DeploymentAssets {
   migrations: readonly string[];
   template: DeploymentTemplate;
+  workerTextModules: readonly string[];
 }
 
 interface CloudflareContext {
@@ -318,16 +354,53 @@ async function loadDeploymentAssets(
       withFileTypes: true,
     });
     const entryNames = entries.map((entry) => entry.name).toSorted();
+    const workerTextModules = entryNames.filter(
+      (name) => !(EXPECTED_DEPLOYMENT_CORE_FILES as readonly string[]).includes(name),
+    );
 
-    if (entryNames.join("\n") !== EXPECTED_DEPLOYMENT_FILES.toSorted().join("\n")) {
+    if (
+      !EXPECTED_DEPLOYMENT_CORE_FILES.every((name) => entryNames.includes(name)) ||
+      workerTextModules.length > MAX_WORKER_TEXT_MODULES ||
+      workerTextModules.some((name) => !WORKER_TEXT_MODULE_NAME.test(name))
+    ) {
       throw new Error("Unexpected deployment asset inventory.");
     }
 
-    for (const name of ["index.js", "index.js.map", "wrangler-template.json"]) {
+    const boundedFiles = [
+      ["index.js", MAX_WORKER_SCRIPT_BYTES],
+      ["index.js.map", MAX_SOURCE_MAP_BYTES],
+      ["wrangler-template.json", MAX_TEMPLATE_BYTES],
+    ] as const;
+
+    for (const [name, maximumBytes] of boundedFiles) {
       const file = await lstat(resolve(dependencies.deploymentAssetsDirectory, name));
 
-      if (!file.isFile() || file.size > MAX_ASSET_BYTES) {
+      if (!file.isFile() || file.size > maximumBytes) {
         throw new Error("Unexpected deployment asset.");
+      }
+    }
+
+    const workerSource = await readFile(
+      resolve(dependencies.deploymentAssetsDirectory, "index.js"),
+      "utf8",
+    );
+    const referencedTextModules = [...workerSource.matchAll(WORKER_TEXT_MODULE_IMPORT)]
+      .map((match) => match[1])
+      .filter((name): name is string => name !== undefined)
+      .toSorted();
+
+    if (
+      new Set(referencedTextModules).size !== referencedTextModules.length ||
+      referencedTextModules.join("\n") !== workerTextModules.join("\n")
+    ) {
+      throw new Error("Unexpected Worker text-module inventory.");
+    }
+
+    for (const name of workerTextModules) {
+      const textModule = await lstat(resolve(dependencies.deploymentAssetsDirectory, name));
+
+      if (!textModule.isFile() || textModule.size > MAX_MIGRATION_BYTES) {
+        throw new Error("Unexpected Worker text module.");
       }
     }
 
@@ -359,7 +432,7 @@ async function loadDeploymentAssets(
         ),
       ),
     );
-    return { migrations: migrationNames, template };
+    return { migrations: migrationNames, template, workerTextModules };
   } catch {
     throw commandFailed("assets", "Packaged deployment assets are invalid.");
   }
@@ -783,8 +856,16 @@ async function stageDeployment(
     await cp(sourceMapPath, resolve(context.cwd, "index.js.map"));
     await cp(migrationPath, resolve(context.cwd, "migrations"), { recursive: true });
 
+    for (const name of assets.workerTextModules) {
+      await cp(
+        resolve(context.dependencies.deploymentAssetsDirectory, name),
+        resolve(context.cwd, name),
+      );
+    }
+
     const config = {
       account_id: accountId,
+      ai: assets.template.ai,
       compatibility_date: assets.template.compatibility_date,
       compatibility_flags: assets.template.compatibility_flags,
       d1_databases: [
@@ -799,7 +880,9 @@ async function stageDeployment(
       exports: assets.template.exports,
       main: "./index.js",
       name: options.workerName,
+      observability: assets.template.observability,
       ratelimits: assets.template.ratelimits,
+      rules: assets.template.rules,
       secrets: {
         required: REQUIRED_SECRET_NAMES,
       },

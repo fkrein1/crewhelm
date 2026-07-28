@@ -6,7 +6,6 @@ Parts of the following files adapt material from
 [mattpocock/skills](https://github.com/mattpocock/skills):
 
 - `.agents/skills/crewhelm-development/SKILL.md`
-- `.agents/skills/crewhelm-development/references/bug-diagnosis.md`
 - `docs/engineering/module-design.md`
 
 The adapted material is distributed under the following license:

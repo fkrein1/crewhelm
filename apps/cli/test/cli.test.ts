@@ -34,6 +34,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "agents:write",
           "connections:read",
           "connections:write",
+          "connection-configs:read",
           "integrations:read",
         ],
       };
@@ -56,6 +57,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "agents:write",
           "connections:read",
           "connections:write",
+          "connection-configs:read",
           "integrations:read",
         ],
         token_endpoint: "https://crewhelm.example/api/auth/oauth2/token",
@@ -174,8 +176,13 @@ describe("Crewhelm CLI", () => {
       "SELECT 1;\n",
     );
     await writeFile(
+      resolve(directory, "migrations", "0008_connection_config_read_scope.sql"),
+      "SELECT 1;\n",
+    );
+    await writeFile(
       resolve(directory, "wrangler-template.json"),
       JSON.stringify({
+        ai: { binding: "AI" },
         compatibility_date: "2026-07-22",
         compatibility_flags: ["nodejs_compat"],
         d1_databases: [
@@ -187,13 +194,22 @@ describe("Crewhelm CLI", () => {
           },
         ],
         durable_objects: {
-          bindings: [{ class_name: "OwnerControlPlane", name: "OWNER_CONTROL_PLANE" }],
+          bindings: [
+            { class_name: "OwnerControlPlane", name: "OWNER_CONTROL_PLANE" },
+            { class_name: "CrewAgent", name: "CREW_AGENT" },
+          ],
         },
         exports: {
+          CrewAgent: { storage: "sqlite", type: "durable-object" },
           OwnerControlPlane: { storage: "sqlite", type: "durable-object" },
         },
         main: "./index.js",
         name: "crewhelm",
+        observability: {
+          enabled: true,
+          logs: { enabled: true, head_sampling_rate: 1, invocation_logs: false },
+          traces: { enabled: false },
+        },
         ratelimits: [
           {
             name: "AUTH_RATE_LIMIT",
@@ -206,6 +222,7 @@ describe("Crewhelm CLI", () => {
             simple: { limit: 60, period: 60 },
           },
         ],
+        rules: [{ fallthrough: true, globs: ["**/*.sql"], type: "Text" }],
         triggers: { crons: ["17 * * * *"] },
         vars: { PUBLIC_ORIGIN: "https://crewhelm.example" },
       }),

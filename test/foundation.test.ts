@@ -458,12 +458,6 @@ describe("repository foundation", () => {
     const metadata = parseYamlObject(
       await read(".agents/skills/crewhelm-development/agents/openai.yaml"),
     );
-    const bugDiagnosis = await read(
-      ".agents/skills/crewhelm-development/references/bug-diagnosis.md",
-    );
-    const simplificationReview = await read(
-      ".agents/skills/crewhelm-development/references/simplification-review.md",
-    );
 
     expect(instructions).toContain(".agents/skills/crewhelm-development/SKILL.md");
     expect(instructions).toContain("git commit -s");
@@ -486,10 +480,12 @@ describe("repository foundation", () => {
     expect(skill).toContain("one observable pull-request objective");
     expect(skill).toContain("Prefer deep modules with small interfaces.");
     expect(skill).toContain("dependencies or lockfiles");
-    expect(skill).toContain("references/simplification-review.md");
-    expect(bugDiagnosis).toContain("Build the feedback loop first");
-    expect(simplificationReview).toContain("would a clean implementation use a materially simpler");
-    expect(simplificationReview).toContain("Clarity outranks line count");
+    expect(skill).toContain("simplify changed code and immediate callers");
+    expect(skill).toContain("authorization deterministic");
+    expect(skill).toContain("one independent reviewer");
+    expect(skill).toContain("second security-focused reviewer");
+    expect(skill).toContain("reproduce the exact symptom");
+    expect(skill).toContain("failing regression test");
     expect(metadata).toMatchObject({
       interface: {
         display_name: "Crewhelm Development",

@@ -110,15 +110,27 @@ before its client's lease expires remains valid for at most its independent 15-m
 Better Auth owns OAuth 2.1 mechanics, JWT/JWKS handling, GitHub login state, and secure session
 cookies. Crewhelm still owns the stricter authorization boundary: only HTTPS or exact loopback
 redirects, the explicit `control:read`, `control:write`, `agents:read`, `agents:write`,
-`connections:read`, `connections:write`, and `integrations:read` scopes, one exact resource, the
-configured GitHub numeric owner, a 24-hour public-client lease, no refresh grant, no upstream scope,
-and no persisted upstream token. The consent page distinguishes control-plane summary read, full
-Agent-definition read, Agent creation, Agent revision updates, local connection-summary read,
-Composio catalog egress, and private connection-link creation; each implementation independently
-enforces its required scope. Existing clients and tokens are never silently widened. Database hooks
-force every upstream token field to null before persistence. Revisit the provider configuration and
-threat model before adding broader mutation classes, multi-owner service, refresh tokens,
-additional identity providers, or longer token lifetimes.
+`connections:read`, `connections:write`, `connection-configs:read`, and `integrations:read` scopes,
+one exact resource, the configured GitHub numeric owner, a 24-hour public-client lease, no refresh
+grant, no upstream scope, and no persisted upstream token. The consent page distinguishes
+control-plane summary read, full Agent-definition read, Agent creation, Agent revision updates,
+local connection-summary read, project auth-configuration read, Composio catalog egress, and
+private connection-link creation; each implementation independently enforces its required scope.
+Existing clients and tokens are never silently widened. Database hooks force every upstream token
+field to null before persistence. Revisit the provider configuration and threat model before adding
+broader mutation classes, multi-owner service, refresh tokens, additional identity providers, or
+longer token lifetimes.
+
+OAuth login can start from a same-origin continuation link for clients that block native form
+submissions, but every approve-or-deny consent decision requires a bounded same-origin POST. The
+consent page's external same-origin script submits that POST and exposes the validated callback
+target as an explicit continuation link that works in embedded browsers; without JavaScript, the
+same form submits conventionally. Consent GETs are read-only, so prefetchers, scanners, history
+restoration, and link inspection cannot authorize or deny access. The signed OAuth query is
+revalidated by Better Auth, and missing sessions, changed OAuth parameters, duplicate fields,
+cross-origin requests, and malformed bodies fail closed. The page uses `no-referrer`, denies
+framing, and permits scripts, styles, connections, and form actions only from Crewhelm's own
+origin.
 
 Dynamic registration accepts only bounded public-client metadata. It recognizes the standard
 `native` and `web` application types, requires HTTPS redirects for an explicit web client, and
@@ -293,6 +305,10 @@ requests `managed_by=all` for toolkits, resolves current tool definitions explic
 deprecated entries, and does not maintain a toolkit or tool allowlist. Newly available Composio
 and project integrations and their exact tools therefore remain discoverable without a Crewhelm
 code change. Catalog discovery and inspection grant no connection or execution authority.
+Listing project-specific enabled auth configurations additionally requires the dedicated
+`connection-configs:read` scope; neither catalog read nor connection-config read alone grants that
+Composio project-metadata egress. Existing tokens cannot gain this capability without a new
+consent.
 
 The adapter sends the project key only in the fixed request header, rejects redirects, propagates
 request cancellation, limits latency and response bytes, validates provider structure, and returns
@@ -305,8 +321,11 @@ Provider bodies, errors, request IDs, URLs, and the API key never enter MCP fail
 Durable Objects. A successful provider payload is also rejected if any normalized output string
 contains the exact project key. Names and descriptions remain untrusted external text even after
 structural validation. A provider outage, schema drift, malformed cursor, missing key, or reflected
-key fails closed as one catalog-unavailable result. Connection setup, exact tool classification,
-grants, and execution remain separate boundaries.
+key fails closed as one catalog-unavailable result. Auth-config discovery accepts one validated
+toolkit slug, follows only bounded opaque pagination, and returns enabled configuration names,
+schemes, managed status, and opaque IDs. Provider credentials, errors, and project keys are never
+returned. Connection setup, exact tool classification, grants, and execution remain separate
+boundaries.
 
 ## Composio connection-link authority and residual risk
 
@@ -418,6 +437,23 @@ completed even when Crewhelm received no trustworthy response. The same tool-cal
 reserve again, so Crewhelm does not silently duplicate it. This slice does not yet reconcile an
 unknown outcome through Composio logs or expose a persisted global kill switch; those remain
 explicit follow-up controls rather than implied retry safety.
+
+## Execution observability and residual risk
+
+Workers Logs are diagnostic and never participate in admission, approval, dispatch, or retry
+decisions. Custom execution events accept only a fixed phase, fixed outcome, bounded `runId`,
+optional bounded `toolCallId`, duration, and output byte count. Extra or invalid fields are rejected
+without reflection. Prompts, tool arguments and outputs, permits, nonces, owner and client
+authority, grant and connection references, provider request IDs and errors, and secrets have no
+telemetry field.
+
+Cloudflare invocation logs and automatic traces are explicitly disabled because their documented
+request attributes include full URLs and query strings, while this Worker handles secret-bearing
+OAuth and connection callback URLs. Custom event sampling is temporarily set to 100 percent for the
+initial production end-to-end validation. It must be reduced under an explicit retention and cost
+policy before sustained high-volume operation. Telemetry failures do not change execution, and
+logs are not proof that a durable transition committed. The owner-local SQLite audit remains
+authoritative. Full automatic tracing requires a future route-isolation or redaction boundary.
 
 ## Bootstrap and deployment authority
 

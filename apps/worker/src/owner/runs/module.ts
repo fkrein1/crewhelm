@@ -35,6 +35,7 @@ import {
 import { and, count, eq, gt, inArray, lte, min } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
+import { recordExecutionEvent } from "../../observability/execution.js";
 import {
   agentRevisions,
   agents,
@@ -360,6 +361,11 @@ export class RunAdmissions {
     });
 
     if (result.ok && result.state === "issued") {
+      recordExecutionEvent({
+        outcome: result.created ? "created" : "replayed",
+        phase: "run.admission",
+        runId: result.permit.runId,
+      });
       await this.#scheduleCleanup(Date.parse(result.permit.expiresAt));
     }
 
@@ -422,7 +428,7 @@ export class RunAdmissions {
     const nonceDigest = await digestBase64Url(permit.data.nonce);
     const currentTime = Date.now();
 
-    return this.#database.transaction((transaction) => {
+    const result = this.#database.transaction((transaction) => {
       this.#cleanup(transaction, currentTime);
       const row = this.#admission(transaction, permit.data.runId);
 
@@ -481,6 +487,16 @@ export class RunAdmissions {
         runId: permit.data.runId,
       });
     });
+
+    if (result.ok && result.confirmed) {
+      recordExecutionEvent({
+        outcome: "redeemed",
+        phase: "run.admission",
+        runId: result.runId,
+      });
+    }
+
+    return result;
   }
 
   verifyActive(input: unknown): VerifyActiveRunAdmissionResult {

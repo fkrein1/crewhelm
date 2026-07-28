@@ -1,4 +1,8 @@
-import { INTEGRATIONS_READ_SCOPE, type OwnerAuthority } from "@crewhelm/contracts";
+import {
+  CONNECTION_CONFIGS_READ_SCOPE,
+  INTEGRATIONS_READ_SCOPE,
+  type OwnerAuthority,
+} from "@crewhelm/contracts";
 import type * as z from "zod";
 
 const CONTROL_PLANE_UNAVAILABLE_BODY = JSON.stringify({
@@ -55,6 +59,26 @@ export async function integrationReadToolResult<Result extends { ok: boolean }>(
 ) {
   return validatedToolResult(
     authority.scopes.includes(INTEGRATIONS_READ_SCOPE)
+      ? await operation()
+      : {
+          error: {
+            code: "insufficient_scope",
+            message: "Integration catalog request denied.",
+          },
+          ok: false,
+        },
+    schema,
+  );
+}
+
+export async function connectionConfigurationToolResult<Result extends { ok: boolean }>(
+  authority: OwnerAuthority,
+  operation: () => Promise<unknown>,
+  schema: z.ZodType<Result>,
+) {
+  return validatedToolResult(
+    authority.scopes.includes(INTEGRATIONS_READ_SCOPE) &&
+      authority.scopes.includes(CONNECTION_CONFIGS_READ_SCOPE)
       ? await operation()
       : {
           error: {

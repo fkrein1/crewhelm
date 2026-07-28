@@ -2,6 +2,7 @@ import { createExecutionContext, env, runInDurableObject } from "cloudflare:test
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  CONNECTION_CONFIGS_READ_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
@@ -48,7 +49,7 @@ const origin = "https://crewhelm.test";
 const redirectUri = "https://client.example/oauth/callback";
 const ownerGithubUserId = "123456";
 const githubToken = "transient-github-token-must-not-be-stored";
-const reversedOwnerScopeClaim = `${INTEGRATIONS_READ_SCOPE} ${CONNECTIONS_WRITE_SCOPE} ${CONNECTIONS_READ_SCOPE} ${AGENTS_WRITE_SCOPE} ${AGENTS_READ_SCOPE} ${OWNER_WRITE_SCOPE} ${OWNER_READ_SCOPE}`;
+const reversedOwnerScopeClaim = `${INTEGRATIONS_READ_SCOPE} ${CONNECTION_CONFIGS_READ_SCOPE} ${CONNECTIONS_WRITE_SCOPE} ${CONNECTIONS_READ_SCOPE} ${AGENTS_WRITE_SCOPE} ${AGENTS_READ_SCOPE} ${OWNER_WRITE_SCOPE} ${OWNER_READ_SCOPE}`;
 const registrationSchema = z.looseObject({
   client_id: z.string().min(1),
   token_endpoint_auth_method: z.literal("none"),
@@ -191,6 +192,15 @@ class CookieJar {
   }
 }
 
+function decodeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
+}
+
 function htmlAttribute(body: string, name: string): string {
   const match = body.match(new RegExp(`name="${name}" value="([^"]+)"`));
 
@@ -198,12 +208,7 @@ function htmlAttribute(body: string, name: string): string {
     throw new Error(`Expected ${name} form value.`);
   }
 
-  return match[1]
-    .replaceAll("&quot;", '"')
-    .replaceAll("&#39;", "'")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&amp;", "&");
+  return decodeHtmlAttribute(match[1]);
 }
 
 function responseLocation(response: Response): string {
@@ -332,16 +337,17 @@ async function completeOAuthFlow(
       oauth_query: htmlAttribute(consentPage, "oauth_query"),
     }),
     headers: {
+      accept: "application/json",
       "content-type": "application/x-www-form-urlencoded",
       cookie: cookies.header(),
       origin,
-      "sec-fetch-mode": "navigate",
     },
     method: "POST",
   });
-  const authorizationCode = new URL(responseLocation(consentResponse), origin).searchParams.get(
-    "code",
-  );
+  const consentNavigation = z
+    .strictObject({ redirectUrl: z.url() })
+    .parse(await consentResponse.json());
+  const authorizationCode = new URL(consentNavigation.redirectUrl).searchParams.get("code");
   const tokenResponse = await request(workerEnv, "/api/auth/oauth2/token", {
     body: new URLSearchParams({
       client_id: registration.client_id,
@@ -418,12 +424,47 @@ describe("public OAuth to MCP integration", () => {
     expect(loginPageResponse.headers.get("content-security-policy")).toContain(
       "frame-ancestors 'none'",
     );
+    expect(loginPageResponse.headers.get("content-security-policy")).toContain(
+      "connect-src 'self'",
+    );
+    expect(loginPageResponse.headers.get("content-security-policy")).toContain("script-src 'self'");
+    expect(loginPageResponse.headers.get("content-security-policy")).toContain("style-src 'self'");
+    expect(loginPage).toContain('href="/oauth/styles.css"');
+    expect(loginPage).toContain('href="/oauth/login/continue?');
+    const stylesheetResponse = await request(workerEnv, "/oauth/styles.css");
+
+    expect(stylesheetResponse.status).toBe(200);
+    expect(stylesheetResponse.headers.get("content-type")).toBe("text/css; charset=utf-8");
+    expect(await stylesheetResponse.text()).toContain(".primary");
+    const continueResponse = await request(workerEnv, `/oauth/login/continue?${loginQuery}`);
+    const continueLocation = new URL(responseLocation(continueResponse), origin);
+
+    expect(continueResponse.status).toBe(302);
+    expect(continueLocation.origin).toBe("https://github.com");
+    const crossSiteLoginResponse = await request(workerEnv, "/oauth/login", {
+      body: new URLSearchParams({ oauth_query: loginQuery }),
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        origin: "https://attacker.example",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "cross-site",
+      },
+      method: "POST",
+    });
+    const ambiguousLoginResponse = await request(workerEnv, "/oauth/login", {
+      body: new URLSearchParams({ oauth_query: loginQuery }),
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "sec-fetch-mode": "navigate",
+      },
+      method: "POST",
+    });
     const loginResponse = await request(workerEnv, "/oauth/login", {
       body: new URLSearchParams({ oauth_query: loginQuery }),
       headers: {
         "content-type": "application/x-www-form-urlencoded",
-        origin,
         "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "same-origin",
       },
       method: "POST",
     });
@@ -431,6 +472,8 @@ describe("public OAuth to MCP integration", () => {
     const githubLocation = new URL(responseLocation(loginResponse), origin);
     const githubState = githubLocation.searchParams.get("state");
 
+    expect(crossSiteLoginResponse.status).toBe(400);
+    expect(ambiguousLoginResponse.status).toBe(400);
     expect(loginResponse.status).toBe(302);
     expect(githubLocation.origin).toBe("https://github.com");
     expect(githubLocation.searchParams.get("scope")).toBeNull();
@@ -505,6 +548,15 @@ describe("public OAuth to MCP integration", () => {
     const consentQuery = htmlAttribute(consentPage, "oauth_query");
 
     expect(consentPageResponse.status).toBe(200);
+    expect(consentPage).toContain('<script src="/oauth/actions.js" defer></script>');
+    expect(consentPage.match(/data-consent-form/g)).toHaveLength(2);
+    expect(consentPage).toContain('<input type="hidden" name="decision" value="approve">');
+    expect(consentPage).toContain('<input type="hidden" name="decision" value="deny">');
+    expect(consentPage).toContain('<button class="primary" type="submit">Authorize</button>');
+    expect(consentPage).toContain('<button class="secondary" type="submit">Deny</button>');
+    expect(consentPage).toContain(
+      '<a class="button primary" data-navigation-link hidden>Continue to client</a>',
+    );
     expect(consentPage).toContain("&lt;script&gt;Integration MCP client&lt;/script&gt;");
     expect(consentPage).not.toContain("<script>Integration MCP client</script>");
     expect(consentPage).toContain("View control-plane status and Agent summaries.");
@@ -516,27 +568,50 @@ describe("public OAuth to MCP integration", () => {
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
     expect(consentPage).toContain(
-      "Search the Composio integration catalog and inspect exact tool schemas. Search terms are sent to Composio.",
+      "Search the Composio integration catalog and inspect exact tool schemas. Search terms and selected integration slugs are sent to Composio.",
     );
     expect(consentPage).toContain(
       "Create private, short-lived Composio Connect Links. The selected auth configuration and an opaque owner key are sent to Composio; provider credentials stay with Composio.",
     );
+    expect(consentPage).toContain(
+      "List enabled Composio auth configurations for a selected integration. The integration slug is sent to Composio; provider credentials are not returned.",
+    );
+    const actionsScriptResponse = await request(workerEnv, "/oauth/actions.js");
+
+    expect(actionsScriptResponse.status).toBe(200);
+    expect(actionsScriptResponse.headers.get("content-type")).toBe(
+      "text/javascript; charset=utf-8",
+    );
+    const actionsScript = await actionsScriptResponse.text();
+
+    expect(actionsScript).toContain('method: "POST"');
+    expect(actionsScript).toContain("new FormData(consentForm)");
+    expect(actionsScript).not.toContain("event.submitter");
+    expect(actionsScript).toContain("navigationLink.href = result.redirectUrl");
+    expect(actionsScript).not.toContain("window.location.assign(result.redirectUrl)");
+    const speculativeGetResponse = await request(workerEnv, "/oauth/consent/decision");
+    const unauthenticatedApproveResponse = await request(workerEnv, "/oauth/consent", {
+      body: new URLSearchParams({ decision: "approve", oauth_query: consentQuery }),
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        origin,
+      },
+      method: "POST",
+    });
     const consentResponse = await request(workerEnv, "/oauth/consent", {
-      body: new URLSearchParams({
-        decision: "approve",
-        oauth_query: consentQuery,
-      }),
+      body: new URLSearchParams({ decision: "approve", oauth_query: consentQuery }),
       headers: {
         "content-type": "application/x-www-form-urlencoded",
         cookie: cookies.header(),
         origin,
-        "sec-fetch-mode": "navigate",
       },
       method: "POST",
     });
     const clientLocation = new URL(responseLocation(consentResponse), origin);
     const authorizationCode = clientLocation.searchParams.get("code");
 
+    expect(speculativeGetResponse.status).toBe(404);
+    expect(unauthenticatedApproveResponse.status).toBe(401);
     expect(consentResponse.status).toBe(302);
     expect(clientLocation.origin).toBe("https://client.example");
     expect(clientLocation.searchParams.get("state")).toBe("integration-client-state");
@@ -835,9 +910,11 @@ describe("public OAuth to MCP integration", () => {
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
     expect(consentPage).not.toContain(
-      "Search the Composio integration catalog and inspect exact tool schemas. Search terms are sent to Composio.",
+      "Search the Composio integration catalog and inspect exact tool schemas. Search terms and selected integration slugs are sent to Composio.",
     );
-    expect(consentPage).not.toContain("Create private, short-lived Composio Connect Links.");
+    expect(consentPage).not.toContain(
+      "List enabled Composio auth configurations for a selected integration.",
+    );
     const ownerKey = await deriveOwnerKey({
       issuer: "https://github.com",
       subject: workerEnv.OWNER_GITHUB_USER_ID,
@@ -1081,7 +1158,7 @@ describe("public OAuth to MCP integration", () => {
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
     expect(consentPage).not.toContain(
-      "Search the Composio integration catalog and inspect exact tool schemas. Search terms are sent to Composio.",
+      "Search the Composio integration catalog and inspect exact tool schemas. Search terms and selected integration slugs are sent to Composio.",
     );
     const createResponse = await callMcp(
       workerEnv,
@@ -1169,7 +1246,7 @@ describe("public OAuth to MCP integration", () => {
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
     expect(consentPage).toContain(
-      "Search the Composio integration catalog and inspect exact tool schemas. Search terms are sent to Composio.",
+      "Search the Composio integration catalog and inspect exact tool schemas. Search terms and selected integration slugs are sent to Composio.",
     );
 
     vi.restoreAllMocks();
@@ -1222,6 +1299,19 @@ describe("public OAuth to MCP integration", () => {
     });
   });
 
+  it("does not advertise auth-config discovery without catalog read", async () => {
+    const workerEnv = integrationEnv(allowRateLimit(), "123499");
+    const { consentPage, token } = await completeOAuthFlow(
+      workerEnv,
+      CONNECTION_CONFIGS_READ_SCOPE,
+    );
+
+    expect(token.scope).toBe(CONNECTION_CONFIGS_READ_SCOPE);
+    expect(consentPage).not.toContain(
+      "List enabled Composio auth configurations for a selected integration.",
+    );
+  });
+
   it("grants private connection-link creation without widening catalog or control reads", async () => {
     const workerEnv = integrationEnv(allowRateLimit(), "123460");
     const { consentPage, token } = await completeOAuthFlow(workerEnv, CONNECTIONS_WRITE_SCOPE);
@@ -1229,6 +1319,9 @@ describe("public OAuth to MCP integration", () => {
     expect(token.scope).toBe(CONNECTIONS_WRITE_SCOPE);
     expect(consentPage).toContain(
       "Create private, short-lived Composio Connect Links. The selected auth configuration and an opaque owner key are sent to Composio; provider credentials stay with Composio.",
+    );
+    expect(consentPage).not.toContain(
+      "List enabled Composio auth configurations for a selected integration.",
     );
     expect(consentPage).not.toContain("View control-plane status and Agent summaries.");
     expect(consentPage).not.toContain(
@@ -1378,7 +1471,9 @@ describe("public OAuth to MCP integration", () => {
     expect(consentPage).toContain(
       "View bounded Crewhelm connection summaries. Provider account identifiers and credentials are not returned.",
     );
-    expect(consentPage).not.toContain("Create private, short-lived Composio Connect Links.");
+    expect(consentPage).not.toContain(
+      "List enabled Composio auth configurations for a selected integration.",
+    );
 
     vi.restoreAllMocks();
     const ownerKey = await deriveOwnerKey({

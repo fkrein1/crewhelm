@@ -71,6 +71,7 @@ import type { ToolSet, UIMessage } from "ai";
 import type { RetryOptions, Schedule } from "agents";
 import type * as z from "zod";
 
+import { recordExecutionEvent } from "../../observability/execution.js";
 import { digestRunPrompt } from "./protocol.js";
 import {
   admittedRunRecordSchema,
@@ -1476,6 +1477,7 @@ export class CrewAgent extends Think {
     await this.#scheduleRunLifecycle(runId, record);
 
     let submission: SubmitMessagesResult;
+    const startedAt = performance.now();
 
     try {
       const turnMetadata = admittedTurnMetadataSchema.parse({
@@ -1501,8 +1503,21 @@ export class CrewAgent extends Think {
         submissionId: runId,
       });
     } catch {
+      recordExecutionEvent({
+        durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+        outcome: "rejected",
+        phase: "run.submission",
+        runId,
+      });
       return INVALID_RUN_ADMISSION;
     }
+
+    recordExecutionEvent({
+      durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+      outcome: submission.accepted ? "accepted" : "rejected",
+      phase: "run.submission",
+      runId,
+    });
 
     return acceptRunAdmissionResultSchema.parse({
       accepted: submission.accepted,
@@ -1576,24 +1591,44 @@ export class CrewAgent extends Think {
           throw new Error("Composio tool execution denied.");
         }
 
-        const verified = await runtime.verifyConnection(
-          resolved.data.providerConnectionId,
-          context.signal,
-        );
+        const providerConnectionId = resolved.data.providerConnectionId;
+        const startedAt = performance.now();
 
-        if (!verified.ok || verified.toolkitSlug !== grant.integrationSlug) {
-          throw new Error("Composio tool execution denied.");
+        try {
+          const verified = await runtime.verifyConnection(providerConnectionId, context.signal);
+
+          if (!verified.ok || verified.toolkitSlug !== grant.integrationSlug) {
+            throw new Error("Composio tool execution denied.");
+          }
+
+          const output = await runtime.execute({
+            arguments: input,
+            maximumOutputBytes: context.permit.constraints.maxOutputBytes,
+            providerConnectionId,
+            signal: context.signal,
+            timeoutMs: context.permit.constraints.maxDurationMs,
+            toolkitVersion: grant.toolkitVersion,
+            toolSlug: grant.toolSlug,
+          });
+
+          recordExecutionEvent({
+            durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+            outcome: "completed",
+            phase: "tool.provider",
+            runId: context.permit.action.runId,
+            toolCallId: context.permit.action.toolCallId,
+          });
+          return output;
+        } catch (error) {
+          recordExecutionEvent({
+            durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+            outcome: "failed",
+            phase: "tool.provider",
+            runId: context.permit.action.runId,
+            toolCallId: context.permit.action.toolCallId,
+          });
+          throw error;
         }
-
-        return runtime.execute({
-          arguments: input,
-          maximumOutputBytes: context.permit.constraints.maxOutputBytes,
-          providerConnectionId: resolved.data.providerConnectionId,
-          signal: context.signal,
-          timeoutMs: context.permit.constraints.maxDurationMs,
-          toolkitVersion: grant.toolkitVersion,
-          toolSlug: grant.toolSlug,
-        });
       },
     };
   }
