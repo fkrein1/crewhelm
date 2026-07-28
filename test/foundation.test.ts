@@ -413,11 +413,12 @@ describe("repository foundation", () => {
     );
 
     expect(instructions).toContain(".agents/skills/crewhelm-development/SKILL.md");
-    expect(instructions).toContain("docs/engineering/module-design.md");
-    expect(instructions).toContain("docs/product/philosophy.md");
-    expect(instructions).toContain("docs/architecture/system.md");
-    expect(instructions).toContain("docs/engineering/code-philosophy.md");
     expect(instructions).toContain("git commit -s");
+    expect(skill).toContain("docs/engineering/module-design.md");
+    expect(skill).toContain("docs/product/philosophy.md");
+    expect(skill).toContain("docs/architecture/system.md");
+    expect(skill).toContain("docs/engineering/code-philosophy.md");
+    expect(skill).toContain("docs/security/invariants.md");
     expect(context).toContain("A recipe may request a capability");
     expect(frontmatter["name"]).toBe("crewhelm-development");
 
@@ -429,11 +430,10 @@ describe("repository foundation", () => {
     }
 
     expect(description.length).toBeLessThanOrEqual(1024);
-    expect(skill).toContain("Complete one observable objective at a time.");
-    expect(skill).toContain("Prefer deep modules with small, explicit interfaces.");
+    expect(skill).toContain("one observable pull-request objective");
+    expect(skill).toContain("Prefer deep modules with small interfaces.");
     expect(skill).toContain("dependencies or lockfiles");
     expect(skill).toContain("references/simplification-review.md");
-    expect(skill).toContain("git commit -s");
     expect(bugDiagnosis).toContain("Build the feedback loop first");
     expect(simplificationReview).toContain("would a clean implementation use a materially simpler");
     expect(simplificationReview).toContain("Clarity outranks line count");
