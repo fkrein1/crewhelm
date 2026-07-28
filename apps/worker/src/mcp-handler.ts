@@ -25,6 +25,10 @@ import {
   listAgentsResultSchema,
   listConnectionsInputSchema,
   listConnectionsResultSchema,
+  listRunToolApprovalsInputSchema,
+  listRunToolApprovalsResultSchema,
+  decideRunToolApprovalInputSchema,
+  decideRunToolApprovalResultSchema,
   ownerAuthoritySchema,
   reserveConnectionLinkResultSchema,
   startRunInputSchema,
@@ -57,6 +61,8 @@ interface McpEnvironment {
       getAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
       getAgentRevision(authorityInput: unknown, input: unknown): Promise<unknown>;
       inspectRun(authorityInput: unknown, input: unknown): Promise<unknown>;
+      listRunToolApprovals(authorityInput: unknown, input: unknown): Promise<unknown>;
+      decideRunToolApproval(authorityInput: unknown, input: unknown): Promise<unknown>;
       listAgentRevisions(authorityInput: unknown, input: unknown): Promise<unknown>;
       listAgents(authorityInput: unknown, input: unknown): Promise<unknown>;
       listConnections(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -116,6 +122,8 @@ export const MCP_GET_AGENT_TOOL_NAME = "crewhelm_get_agent";
 export const MCP_GET_AGENT_REVISION_TOOL_NAME = "crewhelm_get_agent_revision";
 export const MCP_INSPECT_INTEGRATION_TOOL_NAME = "crewhelm_inspect_integration_tool";
 export const MCP_INSPECT_RUN_TOOL_NAME = "crewhelm_inspect_run";
+export const MCP_LIST_RUN_TOOL_APPROVALS_TOOL_NAME = "crewhelm_list_run_tool_approvals";
+export const MCP_DECIDE_RUN_TOOL_APPROVAL_TOOL_NAME = "crewhelm_decide_run_tool_approval";
 export const MCP_LIST_AGENT_REVISIONS_TOOL_NAME = "crewhelm_list_agent_revisions";
 export const MCP_LIST_AGENTS_TOOL_NAME = "crewhelm_list_agents";
 export const MCP_LIST_CONNECTIONS_TOOL_NAME = "crewhelm_list_connections";
@@ -611,6 +619,47 @@ function createMcpServer(
   );
 
   server.registerTool(
+    MCP_LIST_RUN_TOOL_APPROVALS_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: true,
+      },
+      description: "List sensitive tool actions waiting for this authenticated owner.",
+      inputSchema: listRunToolApprovalsInputSchema,
+      title: "List run tool approvals",
+    },
+    async (input) =>
+      controlPlaneToolResult(
+        () => controlPlane.listRunToolApprovals(authority, input),
+        listRunToolApprovalsResultSchema,
+      ),
+  );
+
+  server.registerTool(
+    MCP_DECIDE_RUN_TOOL_APPROVAL_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: false,
+      },
+      description:
+        "Approve or reject one exact sensitive tool action waiting in an authenticated-owner run.",
+      inputSchema: decideRunToolApprovalInputSchema,
+      title: "Decide run tool approval",
+    },
+    async (input) =>
+      controlPlaneToolResult(
+        () => controlPlane.decideRunToolApproval(authority, input),
+        decideRunToolApprovalResultSchema,
+      ),
+  );
+
+  server.registerTool(
     MCP_STATUS_TOOL_NAME,
     {
       annotations: {
@@ -637,7 +686,7 @@ function createMcpServer(
         readOnlyHint: false,
       },
       description:
-        "Durably start one bounded, no-tool turn for an exact authenticated-owner Crewhelm Agent revision.",
+        "Durably start one bounded turn for an exact authenticated-owner Crewhelm Agent revision.",
       inputSchema: startRunInputSchema,
       title: "Start Crewhelm run",
     },

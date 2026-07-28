@@ -1,7 +1,12 @@
 import * as z from "zod";
 
 import { connectionIdSchema } from "./connections.js";
-import { agentIdSchema, agentRevisionNumberSchema, ownerKeySchema } from "./control-plane.js";
+import {
+  agentIdSchema,
+  agentRevisionNumberSchema,
+  capabilityGrantIdSchema,
+  ownerKeySchema,
+} from "./control-plane.js";
 import {
   integrationSlugSchema,
   integrationToolkitVersionSchema,
@@ -15,12 +20,6 @@ const MAXIMUM_TOOL_DURATION_MS = 5 * 60 * 1_000;
 const MAXIMUM_TOOL_OUTPUT_BYTES = 10 * 1_024 * 1_024;
 const MAXIMUM_TOOL_TARGETS = 32;
 
-export const capabilityGrantIdSchema = z
-  .string()
-  .regex(
-    /^grant_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-    "Expected an opaque Crewhelm capability grant ID.",
-  );
 export const runIdSchema = z
   .string()
   .regex(

@@ -90,6 +90,12 @@ export const agentIdSchema = z
     /^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     "Expected an opaque Crewhelm agent ID.",
   );
+export const capabilityGrantIdSchema = z
+  .string()
+  .regex(
+    /^grant_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    "Expected an opaque Crewhelm capability grant ID.",
+  );
 export const MAXIMUM_AGENTS_PER_OWNER = 100;
 export const MAXIMUM_REVISIONS_PER_AGENT = 1_000;
 export const agentNameSchema = z.string().trim().min(1).max(80);
@@ -112,7 +118,14 @@ export const agentExecutionLimitsSchema = z.strictObject({
   maxToolCalls: z.number().int().min(0).max(100),
   maxTurns: z.number().int().min(1).max(100),
 });
-export const agentCapabilityGrantsSchema = z.tuple([]);
+export const agentCapabilityGrantsSchema = z
+  .array(capabilityGrantIdSchema)
+  .max(100)
+  .refine(
+    (grantIds) =>
+      grantIds.every((grantId, index) => index === 0 || (grantIds[index - 1] ?? "") < grantId),
+    "Expected unique capability grant IDs in canonical order.",
+  );
 export const agentRevisionNumberSchema = z.number().int().positive().safe();
 export const agentSummarySchema = z.strictObject({
   capabilityGrants: agentCapabilityGrantsSchema,

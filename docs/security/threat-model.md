@@ -82,7 +82,7 @@ surface.
   short-lived canonical hosted URLs, opaque owner and connection identifiers, bounded responses,
   durable idempotency reservations, and no connected-account credential reads
 - Schema, provenance, size, and content validation
-- Idempotency, audit, budgets, rate limits, and a kill switch
+- Idempotency, audit, budgets, and rate limits
 - Versioned migrations, backup, quarantined restore, and rollback procedures
 - Locked dependencies, minimal CI permissions, review gates, and release provenance
 - Review instruction, workflow, manifest, and lockfile changes before running agents or scripts on
@@ -183,17 +183,18 @@ onboarding and run admission are separate scoped state machines.
 The production Worker exports and binds the SQLite-backed `CrewAgent` class and Workers AI.
 `OwnerControlPlane` derives the exact Agent object name and issues a 30-second, single-use permit
 that binds the owner, MCP client, Agent revision, run, prompt digest, expiry, nonce, idempotency
-key, and an explicit budget reservation. The reservation permits one model call, one turn, no
-tools, the exact instruction-plus-prompt character count, bounded output tokens, and a total
-wall-clock duration. Admission accepts only explicitly classified runnable models and reserves
-against finite rolling 24-hour per-owner ceilings for input characters, model calls, and output
-tokens. Only the nonce digest is stored. Verification and redemption occur in the owner object
-before `CrewAgent` calls Think submission APIs. Immediately before inference, the Agent asks the
+key, and an explicit budget reservation. The reservation snapshots exact active tool grants and
+bounds model calls, turns, tool calls, the exact instruction-plus-prompt character count, output
+tokens, and total wall-clock duration. A grant-free reservation permits one model call and one
+turn. Admission accepts only explicitly classified runnable models and reserves against finite
+rolling 24-hour per-owner ceilings for input characters, model calls, and output tokens. Only the
+nonce digest is stored. The rolling output-token budget charges the per-call allowance for every
+reserved model call. Verification and redemption occur in the owner object before `CrewAgent`
+calls Think submission APIs. Immediately before every inference, Think's per-step hook asks the
 owner object to verify the exact redeemed reservation and current Agent revision again; that
-transaction atomically claims the one permitted model call. A concurrent verification, retry, or
-crash recovery cannot claim it again, and a crash after the claim is deliberately charged as spent.
-The accepted runtime record stores the validated configuration and prompt digest, not the prompt
-or nonce.
+transaction atomically claims one bounded model call. Concurrent verification and attempts beyond
+the reservation fail, and a crash after a claim is deliberately charged as spent. The accepted
+runtime record stores the validated configuration and prompt digest, not the prompt or nonce.
 
 Run admission is retry-safe across the cross-object boundary. Reissuing an unredeemed idempotent
 request rotates the nonce but preserves the original expiry and retention window, so retries cannot
@@ -208,7 +209,7 @@ errors.
 
 MCP and HTTP callers never receive a `CrewAgent` namespace or stub. The production Worker and
 `OwnerControlPlane` are the only holders of that internal object capability, and their call sites
-use the three Crewhelm receiver methods. Crewhelm additionally shadows the inherited Think
+use closed Crewhelm receiver methods. Crewhelm additionally shadows the inherited Think
 configuration, fetch, transcript, cancellation, approval, submission-management, MCP, host,
 workflow, fiber, agent-tool, sub-agent-routing, and facet-scheduling entrypoints that carry
 authority outside the admitted execution path. Think's internal transcript and alarm helpers
@@ -236,11 +237,13 @@ The pure ToolGate policy module accepts only closed, bounded Crewhelm contracts.
 immutable capability grant, a trusted adapter's classified action, and an authoritative current
 policy and budget snapshot. Exact owner, Agent revision, capability, grant, Crewhelm connection,
 Composio integration, tool, pinned toolkit version, effect, and target-digest bindings must match.
-The policy denies inactive or stale Agents, grants, and connections; kill-switch activation;
-expired grants; exhausted call, concurrency, duration, output, or cost budgets; and unknown cost.
-Write and destructive effects return `requires_approval` rather than allow. Valid catalog slugs
-are schema-bounded but not curated, so project toolkits and newly discovered Composio integrations
-remain eligible without becoming authorized.
+The policy denies inactive or stale Agents, grants, and connections; expired grants; exhausted
+call, concurrency, duration, output, or cost budgets; and unknown cost. The pure ToolGate contract
+also denies a supplied kill-switch signal, but this slice has no authoritative persisted
+kill-switch source and therefore does not claim that runtime control. Write and destructive effects
+return `requires_approval` rather than allow. Valid catalog slugs are schema-bounded but not
+curated, so project toolkits and newly discovered Composio integrations remain eligible without
+becoming authorized.
 
 Every status and budget snapshot identifies its exact owner, Agent revision, run, grant,
 capability, and connection. ToolGate rejects the snapshot before consuming any authority when
@@ -257,10 +260,24 @@ policy contract. Input and target digests are authority only when produced by a 
 adapter; ToolGate derives the complete canonical action digest. Model output and Composio tags
 cannot classify their own effect, targets, or cost. The current allow result is local policy
 evidence only. It is not signed, reserves no budget, cannot cross a Durable Object boundary, and no
-connector accepts it. Runtime integration remains denied until the execution owner can reserve
-budget atomically, rerun the gate against current revocation and kill-switch state, and issue a
-short-lived verified permit. Approval-required effects remain unavailable until a distinct
-owner-authenticated approval channel exists.
+connector accepts it. `OwnerControlPlane` rebuilds a current snapshot from the redeemed run, exact
+immutable grant, current Agent revision, current grant and connection status, and persisted
+execution counts. It reruns ToolGate, atomically charges a new tool call, records the execution and
+audit event, and issues a five-second, nonce-bound permit only to the exact trusted adapter call.
+A second reservation for the same tool-call identity is denied, including when the first provider
+outcome is unknown; recovery must reconcile that outcome instead of redispatching it. Completed,
+expired, mismatched, revoked, unavailable, over-budget, or unknown actions fail closed. The adapter
+reports a bounded completion outcome, and late or oversized outcomes become `unknown`. Production
+still exposes no provider tool when the corresponding trusted Composio adapter is unavailable.
+
+Write and destructive actions park in Think before execution. Owner-scoped MCP list and decision
+commands are distinct from model authority; they bind an authenticated client to one run and one
+durable-pause execution. The control plane persists the exact action digest and immutable approval
+or rejection evidence before issuing a single-use receiver capability. On approval, `CrewAgent`
+reclassifies the stored input and asks the control plane for a fresh ToolGate reservation
+immediately before invoking the adapter. Duplicate model attempts for one tool-call identity are
+denied rather than creating duplicate waits. Approval expiry, the run deadline, current revocation,
+budget exhaustion, or digest drift prevents the effect even when earlier approval evidence exists.
 
 ## Composio catalog authority and residual risk
 

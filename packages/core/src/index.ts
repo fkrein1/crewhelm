@@ -81,7 +81,10 @@ async function digestAction(action: ClassifiedComposioToolAction): Promise<strin
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export async function evaluateComposioToolAction(input: unknown): Promise<ToolGateDecision> {
+async function evaluateComposioToolActionWithApproval(
+  input: unknown,
+  approvedActionDigest?: string,
+): Promise<ToolGateDecision> {
   const request = composioToolGateInputSchema.safeParse(input);
 
   if (!request.success) {
@@ -141,12 +144,14 @@ export async function evaluateComposioToolAction(input: unknown): Promise<ToolGa
   if (action.effect !== "read") {
     const actionDigest = await digestAction(action);
 
-    return toolGateDecisionSchema.parse({
-      actionDigest,
-      decision: "requires_approval",
-      effect: action.effect,
-      grantId: action.grantId,
-    });
+    if (approvedActionDigest !== actionDigest) {
+      return toolGateDecisionSchema.parse({
+        actionDigest,
+        decision: "requires_approval",
+        effect: action.effect,
+        grantId: action.grantId,
+      });
+    }
   }
 
   const localDecisionExpiresAt = Math.min(
@@ -169,4 +174,15 @@ export async function evaluateComposioToolAction(input: unknown): Promise<ToolGa
     },
     decision: "allow",
   });
+}
+
+export function evaluateComposioToolAction(input: unknown): Promise<ToolGateDecision> {
+  return evaluateComposioToolActionWithApproval(input);
+}
+
+export function evaluateApprovedComposioToolAction(
+  input: unknown,
+  approvedActionDigest: string,
+): Promise<ToolGateDecision> {
+  return evaluateComposioToolActionWithApproval(input, approvedActionDigest);
 }

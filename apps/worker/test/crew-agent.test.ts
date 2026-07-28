@@ -1,6 +1,7 @@
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
   MAXIMUM_RUN_OUTPUT_CHARACTERS,
   OWNER_WRITE_SCOPE,
   crewAgentObjectName,
@@ -8,18 +9,24 @@ import {
   type CreateAgentInput,
   type InspectRunResult,
   type OwnerAuthority,
+  type ComposioToolCapabilityGrant,
 } from "@crewhelm/contracts";
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 
-import { BLOCKED_CREW_AGENT_AUTHORITY_METHODS, CrewAgent } from "../src/crew-agent.js";
+import {
+  BLOCKED_CREW_AGENT_AUTHORITY_METHODS,
+  CrewAgent,
+  isToolExecutionPermitFresh,
+} from "../src/crew-agent.js";
 import { deriveOwnerKey } from "../src/owner-identity.js";
 import { digestRunPrompt } from "../src/run-admission.js";
 import {
   LARGE_TEST_PROMPT,
   SLOW_TEST_PROMPT,
   TEST_REPLY,
+  TOOL_TEST_PROMPT,
   TestCrewAgent,
 } from "./test-crew-agent.js";
 
@@ -141,6 +148,17 @@ const REQUIRED_CREW_AGENT_OVERRIDES = [
 ] as const;
 
 describe("CrewAgent admitted execution", () => {
+  it("rejects an execution permit at and after its dispatch deadline", () => {
+    const permit = {
+      constraints: { decisionExpiresAt: "2026-07-27T18:20:05.000Z" },
+    };
+    const expiresAt = Date.parse(permit.constraints.decisionExpiresAt);
+
+    expect(isToolExecutionPermitFresh(permit, expiresAt - 1)).toBe(true);
+    expect(isToolExecutionPermitFresh(permit, expiresAt)).toBe(false);
+    expect(isToolExecutionPermitFresh(permit, expiresAt + 1)).toBe(false);
+  });
+
   it("pins the complete inherited surface and owns every authority-bearing override", () => {
     const inherited = new Set<string>();
     let prototype: object | null = Reflect.getPrototypeOf(CrewAgent.prototype);
@@ -267,6 +285,8 @@ describe("CrewAgent admitted execution", () => {
       await expect(agent.pendingApprovals()).rejects.toThrow(
         "CrewAgent runtime admission is not available.",
       );
+      await expect(agent.listAdmittedRunToolApprovals({})).resolves.toEqual(invalidRunAdmission());
+      await expect(agent.decideAdmittedRunToolApproval({})).resolves.toEqual(invalidRunAdmission());
       await expect(agent.approveExecution("unadmitted")).rejects.toThrow(
         "CrewAgent runtime admission is not available.",
       );
@@ -292,6 +312,10 @@ describe("CrewAgent admitted execution", () => {
         servers: {},
         tools: [],
       });
+      expect(agent.getTools()).toEqual({});
+      expect(() => agent.getActions()).toThrow(
+        "CrewAgent runtime configuration is missing or invalid.",
+      );
       await expect(agent.destroy()).rejects.toThrow(
         "CrewAgent runtime admission is not available.",
       );
@@ -419,6 +443,130 @@ describe("CrewAgent admitted execution", () => {
     await expect(controlPlane.inspectRun(authority, { runId: started.run.runId })).resolves.toEqual(
       finished,
     );
+  });
+
+  it("routes an exact admitted read tool through ToolGate and records its permit", async () => {
+    const authority = await authorityFor("crew-agent-611");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(authority, {
+      ...agentInput("crew-agent-create-611"),
+      executionLimits: {
+        ...agentInput("unused").executionLimits,
+        maxToolCalls: 1,
+      },
+    });
+
+    if (!created.ok) {
+      throw new Error("Expected tool-enabled CrewAgent fixture.");
+    }
+
+    const connectionId = "connection_61111111-1111-4111-8111-111111111111";
+    const grantId = "grant_61111111-1111-4111-8111-111111111111";
+    const targetDigest = "b".repeat(64);
+    const grant: ComposioToolCapabilityGrant = {
+      agentId: created.agent.id,
+      agentRevision: created.agent.revision,
+      capabilityId: COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
+      connectionId,
+      effect: "read",
+      expiresAt: null,
+      grantId,
+      integrationSlug: "project_toolkit",
+      limits: {
+        maxCallsPerRun: 1,
+        maxConcurrency: 1,
+        maxCostMicrousdPerCall: 5_000,
+        maxDurationMs: 20_000,
+        maxOutputBytes: 64_000,
+      },
+      ownerKey: authority.ownerKey,
+      targetDigests: [targetDigest],
+      toolkitVersion: "20260727_00",
+      toolSlug: "PROJECT_TOOLKIT_READ_ITEM",
+    };
+
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      const currentTime = Date.now();
+      state.storage.sql.exec(
+        `INSERT INTO connections
+           (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
+         VALUES (?, 'composio', ?, ?, 'active', ?)`,
+        connectionId,
+        "ca_crew_agent_611",
+        "ac_crew_agent_611",
+        currentTime,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO capability_grants
+           (grant_id, agent_id, agent_revision, connection_id, grant, status, created_at)
+         VALUES (?, ?, ?, ?, ?, 'active', ?)`,
+        grantId,
+        created.agent.id,
+        created.agent.revision,
+        connectionId,
+        JSON.stringify(grant),
+        currentTime,
+      );
+      state.storage.sql.exec(
+        `UPDATE agent_revisions
+         SET capability_grants = ?
+         WHERE agent_id = ? AND revision = ?`,
+        JSON.stringify([grantId]),
+        created.agent.id,
+        created.agent.revision,
+      );
+    });
+
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-run-611",
+      prompt: TOOL_TEST_PROMPT,
+    });
+
+    if (!started.ok) {
+      throw new Error("Expected admitted tool run.");
+    }
+
+    await vi.waitFor(
+      async () => {
+        await expect(
+          controlPlane.inspectRun(authority, { runId: started.run.runId }),
+        ).resolves.toMatchObject({
+          ok: true,
+          run: { runId: started.run.runId, status: "completed" },
+        });
+      },
+      { interval: 25, timeout: 5_000 },
+    );
+    const stub = crewAgentNamespace().getByName(
+      crewAgentObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+      }),
+    );
+
+    await runInDurableObject(stub, async (agent) => {
+      const testAgent = asTestCrewAgent(agent);
+      const calls = testAgent.modelCallsForTest();
+      const executions = testAgent.toolExecutionsForTest();
+
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toMatchObject({ toolCount: 1 });
+      expect(JSON.stringify(calls[1]?.prompt)).not.toContain("ActionAuthorizationError");
+      expect(executions).toHaveLength(1);
+      expect(executions[0]).toMatchObject({
+        input: { itemId: "item-701" },
+        permit: {
+          action: {
+            grantId,
+            runId: started.run.runId,
+            targetDigests: [targetDigest],
+          },
+          audience: "composio_adapter",
+        },
+      });
+    });
   });
 
   it("truncates retained output at the public character boundary", async () => {
@@ -599,6 +747,162 @@ describe("CrewAgent admitted execution", () => {
     );
     await runInDurableObject(stub, (agent) => {
       expect(asTestCrewAgent(agent).modelCallsForTest()).toHaveLength(1);
+    });
+  });
+
+  it("parks an exact write tool for owner approval and reauthorizes it before execution", async () => {
+    const authority = await authorityFor("crew-agent-612");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(authority, {
+      ...agentInput("crew-agent-create-612"),
+      executionLimits: {
+        ...agentInput("unused").executionLimits,
+        maxToolCalls: 1,
+      },
+    });
+
+    if (!created.ok) {
+      throw new Error("Expected approval-enabled CrewAgent fixture.");
+    }
+
+    const connectionId = "connection_61222222-2222-4222-8222-222222222222";
+    const grantId = "grant_61222222-2222-4222-8222-222222222222";
+    const targetDigest = "c".repeat(64);
+    const grant: ComposioToolCapabilityGrant = {
+      agentId: created.agent.id,
+      agentRevision: created.agent.revision,
+      capabilityId: COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
+      connectionId,
+      effect: "write",
+      expiresAt: null,
+      grantId,
+      integrationSlug: "project_toolkit",
+      limits: {
+        maxCallsPerRun: 1,
+        maxConcurrency: 1,
+        maxCostMicrousdPerCall: 5_000,
+        maxDurationMs: 20_000,
+        maxOutputBytes: 64_000,
+      },
+      ownerKey: authority.ownerKey,
+      targetDigests: [targetDigest],
+      toolkitVersion: "20260727_00",
+      toolSlug: "PROJECT_TOOLKIT_UPDATE_ITEM",
+    };
+
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      const currentTime = Date.now();
+      state.storage.sql.exec(
+        `INSERT INTO connections
+           (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
+         VALUES (?, 'composio', ?, ?, 'active', ?)`,
+        connectionId,
+        "ca_crew_agent_612",
+        "ac_crew_agent_612",
+        currentTime,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO capability_grants
+           (grant_id, agent_id, agent_revision, connection_id, grant, status, created_at)
+         VALUES (?, ?, ?, ?, ?, 'active', ?)`,
+        grantId,
+        created.agent.id,
+        created.agent.revision,
+        connectionId,
+        JSON.stringify(grant),
+        currentTime,
+      );
+      state.storage.sql.exec(
+        `UPDATE agent_revisions
+         SET capability_grants = ?
+         WHERE agent_id = ? AND revision = ?`,
+        JSON.stringify([grantId]),
+        created.agent.id,
+        created.agent.revision,
+      );
+    });
+
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-run-612",
+      prompt: TOOL_TEST_PROMPT,
+    });
+
+    if (!started.ok) {
+      throw new Error("Expected approval-bound tool run.");
+    }
+
+    const listed = await vi.waitFor(
+      async () => {
+        const result = await controlPlane.listRunToolApprovals(authority, {
+          runId: started.run.runId,
+        });
+
+        expect(result).toMatchObject({
+          approvals: [
+            {
+              action: "projectToolkitReadItem",
+              effect: "write",
+              risk: "medium",
+            },
+          ],
+          ok: true,
+        });
+
+        if (!result.ok || result.approvals[0] === undefined) {
+          throw new Error("Expected pending owner approval.");
+        }
+
+        return result;
+      },
+      { interval: 25, timeout: 5_000 },
+    );
+    const approval = listed.approvals[0];
+
+    if (approval === undefined) {
+      throw new Error("Expected pending owner approval.");
+    }
+
+    await expect(
+      controlPlane.decideRunToolApproval(authority, {
+        decision: "approve",
+        executionId: approval.executionId,
+        runId: started.run.runId,
+      }),
+    ).resolves.toEqual({
+      decided: true,
+      decision: "approve",
+      ok: true,
+    });
+    await completedRun(controlPlane, authority, started.run.runId);
+
+    const stub = crewAgentNamespace().getByName(
+      crewAgentObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+      }),
+    );
+
+    await runInDurableObject(stub, async (agent, state) => {
+      const testAgent = asTestCrewAgent(agent);
+      const executions = testAgent.toolExecutionsForTest();
+      const approvalRecords = await state.storage.list({
+        prefix: "crewhelm:tool-approval:",
+      });
+
+      expect(executions).toHaveLength(1);
+      expect(executions[0]).toMatchObject({
+        permit: {
+          action: {
+            effect: "write",
+            grantId,
+            runId: started.run.runId,
+            targetDigests: [targetDigest],
+          },
+        },
+      });
+      expect(approvalRecords.size).toBe(0);
     });
   });
 

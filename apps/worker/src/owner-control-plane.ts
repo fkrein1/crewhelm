@@ -28,6 +28,11 @@ import {
   listAgentsResultSchema,
   listConnectionsInputSchema,
   listConnectionsResultSchema,
+  listAdmittedRunToolApprovalsResultSchema,
+  listRunToolApprovalsInputSchema,
+  listRunToolApprovalsResultSchema,
+  decideRunToolApprovalInputSchema,
+  decideRunToolApprovalResultSchema,
   inspectAdmittedRunResultSchema,
   inspectRunInputSchema,
   inspectRunResultSchema,
@@ -66,6 +71,8 @@ import {
   type ListAgentsResult,
   type ListConnectionsResult,
   type InspectRunResult,
+  type ListRunToolApprovalsResult,
+  type DecideRunToolApprovalResult,
   type OwnerAuthority,
   type OwnerScope,
   type RecordConnectionAuthorizationReturnResult,
@@ -77,6 +84,9 @@ import {
   type UpdateAgentResult,
   type VerifyActiveRunAdmissionResult,
   type VerifyRunAdmissionResult,
+  type CompleteToolExecutionResult,
+  type EvaluateToolExecutionResult,
+  type ReserveToolExecutionResult,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
 import { and, asc, count, desc, eq, gt, inArray, lt, lte, min } from "drizzle-orm";
@@ -94,12 +104,14 @@ import {
   connections,
   controlPlane,
   controlPlaneSchema,
+  toolApprovals,
   type ControlPlaneDatabaseSchema,
   type StoredConnectionAuthorizationOutcome,
 } from "./control-plane-schema.js";
 
 import { digestRunPrompt, RunAdmissions } from "./run-admission.js";
 import type { CrewAgent } from "./crew-agent.js";
+import { ToolExecutions } from "./tool-execution.js";
 
 const COMPOSIO_CONNECT_ORIGIN = "https://connect.composio.dev";
 const MAXIMUM_PENDING_RUN_RECEIVER_CAPABILITIES = 128;
@@ -145,6 +157,8 @@ type ConnectionAuthorizationReturnFailure = Extract<
 type RunAdmissionRequestFailure = Extract<CreateRunAdmissionResult, { ok: false }>;
 type StartRunRequestFailure = Extract<StartRunResult, { ok: false }>;
 type InspectRunRequestFailure = Extract<InspectRunResult, { ok: false }>;
+type ListRunToolApprovalsFailure = Extract<ListRunToolApprovalsResult, { ok: false }>;
+type DecideRunToolApprovalFailure = Extract<DecideRunToolApprovalResult, { ok: false }>;
 type AuthorityResult =
   | { authority: OwnerAuthority; ok: true }
   | { code: AuthorityErrorCode; ok: false };
@@ -169,7 +183,7 @@ type StoredConnectionSummaryRow = {
   authorizationOutcome: ConnectionSummary["authorizationOutcome"];
   connectionId: string;
   createdAt: number;
-  status: "initiated";
+  status: ConnectionSummary["status"];
 };
 type ControlPlaneWriter = Pick<DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>, "update">;
 
@@ -263,6 +277,7 @@ export class OwnerControlPlane extends DurableObject {
     { canonical: string; expiresAt: number }
   >();
   readonly #runAdmissions: RunAdmissions;
+  readonly #toolExecutions: ToolExecutions;
 
   constructor(state: DurableObjectState, environment: Cloudflare.Env) {
     super(state, environment);
@@ -274,6 +289,7 @@ export class OwnerControlPlane extends DurableObject {
       schema: controlPlaneSchema,
     });
     this.#runAdmissions = new RunAdmissions(this.#objectName, this.#database, this.#storage);
+    this.#toolExecutions = new ToolExecutions(this.#objectName, this.#database);
     this.#storage.sql.exec("PRAGMA foreign_keys = ON");
     void this.ctx.blockConcurrencyWhile(async () => {
       this.#migrationReady = await migrateControlPlane(this.#database, this.#storage);
@@ -446,6 +462,39 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     return this.#runAdmissions.verifyActive(input);
+  }
+
+  evaluateToolExecution(input: unknown): Promise<EvaluateToolExecutionResult> {
+    if (!this.#migrationReady) {
+      return Promise.resolve({
+        error: { code: "invalid_execution", message: "Tool execution denied." },
+        ok: false,
+      });
+    }
+
+    return this.#toolExecutions.evaluate(input);
+  }
+
+  reserveToolExecution(input: unknown): Promise<ReserveToolExecutionResult> {
+    if (!this.#migrationReady) {
+      return Promise.resolve({
+        error: { code: "invalid_execution", message: "Tool execution denied." },
+        ok: false,
+      });
+    }
+
+    return this.#toolExecutions.reserve(input);
+  }
+
+  completeToolExecution(input: unknown): Promise<CompleteToolExecutionResult> {
+    if (!this.#migrationReady) {
+      return Promise.resolve({
+        error: { code: "invalid_execution", message: "Tool execution denied." },
+        ok: false,
+      });
+    }
+
+    return this.#toolExecutions.complete(input);
   }
 
   redeemRunReceiverCapability(input: unknown): RedeemRunReceiverCapabilityResult {
@@ -682,6 +731,208 @@ export class OwnerControlPlane extends DurableObject {
         createdAt: new Date(admission.createdAt).toISOString(),
       },
     });
+  }
+
+  async listRunToolApprovals(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<ListRunToolApprovalsResult> {
+    const authorization = this.#authorize(authorityInput, AGENTS_READ_SCOPE);
+
+    if (!authorization.ok) {
+      return this.#deniedListRunToolApprovals(authorization.code);
+    }
+
+    const request = listRunToolApprovalsInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return this.#deniedListRunToolApprovals("invalid_request");
+    }
+
+    const admission = this.#runAdmissions.read(request.data.runId);
+
+    if (admission === undefined) {
+      return this.#deniedListRunToolApprovals("run_not_found");
+    }
+
+    if (admission.status !== "redeemed") {
+      return listRunToolApprovalsResultSchema.parse({ approvals: [], ok: true });
+    }
+
+    const capability = this.#issueRunReceiverCapability(
+      authorization.authority,
+      admission,
+      "list_approvals",
+    );
+
+    if (capability === undefined) {
+      return this.#deniedListRunToolApprovals("run_unavailable");
+    }
+
+    let result: unknown;
+
+    try {
+      result = await this.#crewAgents
+        .getByName(
+          crewAgentObjectName({
+            agentId: admission.agentId,
+            ownerKey: authorization.authority.ownerKey,
+          }),
+        )
+        .listAdmittedRunToolApprovals({ capability });
+    } catch {
+      return this.#deniedListRunToolApprovals("run_unavailable");
+    }
+
+    const listed = listAdmittedRunToolApprovalsResultSchema.safeParse(result);
+
+    if (!listed.success || !listed.data.ok) {
+      return this.#deniedListRunToolApprovals("run_unavailable");
+    }
+
+    return listRunToolApprovalsResultSchema.parse({
+      approvals: listed.data.approvals,
+      ok: true,
+    });
+  }
+
+  async decideRunToolApproval(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<DecideRunToolApprovalResult> {
+    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+
+    if (!authorization.ok) {
+      return this.#deniedDecideRunToolApproval(authorization.code);
+    }
+
+    const request = decideRunToolApprovalInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return this.#deniedDecideRunToolApproval("invalid_request");
+    }
+
+    const admission = this.#runAdmissions.read(request.data.runId);
+
+    if (admission === undefined) {
+      return this.#deniedDecideRunToolApproval("run_not_found");
+    }
+
+    if (admission.status !== "redeemed") {
+      return this.#deniedDecideRunToolApproval("run_unavailable");
+    }
+
+    const agent = this.#crewAgents.getByName(
+      crewAgentObjectName({
+        agentId: admission.agentId,
+        ownerKey: authorization.authority.ownerKey,
+      }),
+    );
+    const listCapability = this.#issueRunReceiverCapability(
+      authorization.authority,
+      admission,
+      "list_approvals",
+    );
+
+    if (listCapability === undefined) {
+      return this.#deniedDecideRunToolApproval("run_unavailable");
+    }
+
+    let listed: unknown;
+
+    try {
+      listed = await agent.listAdmittedRunToolApprovals({ capability: listCapability });
+    } catch {
+      return this.#deniedDecideRunToolApproval("run_unavailable");
+    }
+
+    const pending = listAdmittedRunToolApprovalsResultSchema.safeParse(listed);
+    const approval =
+      pending.success && pending.data.ok
+        ? pending.data.approvals.find(
+            (candidate) => candidate.executionId === request.data.executionId,
+          )
+        : undefined;
+
+    if (approval === undefined || Date.parse(approval.expiresAt) <= Date.now()) {
+      return this.#deniedDecideRunToolApproval("approval_not_found");
+    }
+
+    const currentTime = Date.now();
+    const storedDecision = request.data.decision === "approve" ? "approved" : "rejected";
+    const existing = this.#database
+      .select()
+      .from(toolApprovals)
+      .where(eq(toolApprovals.executionId, approval.executionId))
+      .get();
+
+    if (
+      existing !== undefined &&
+      (existing.runId !== request.data.runId ||
+        existing.toolCallId !== approval.toolCallId ||
+        existing.actionDigest !== approval.actionDigest ||
+        existing.decision !== storedDecision)
+    ) {
+      return this.#deniedDecideRunToolApproval("approval_not_found");
+    }
+
+    if (existing === undefined) {
+      this.#database
+        .insert(toolApprovals)
+        .values({
+          actionDigest: approval.actionDigest,
+          clientId: authorization.authority.clientId,
+          decidedAt: currentTime,
+          decision: storedDecision,
+          executionId: approval.executionId,
+          expiresAt: Date.parse(approval.expiresAt),
+          requestedAt: Date.parse(approval.requestedAt),
+          runId: request.data.runId,
+          toolCallId: approval.toolCallId,
+        })
+        .run();
+      this.#database
+        .insert(auditEvents)
+        .values({
+          action: `tool.approval_${storedDecision}`,
+          clientId: authorization.authority.clientId,
+          occurredAt: currentTime,
+          subjectId: approval.toolCallId,
+        })
+        .run();
+    }
+
+    const decisionCapability = this.#issueRunReceiverCapability(
+      authorization.authority,
+      admission,
+      request.data.decision === "approve" ? "approve_tool" : "reject_tool",
+      approval.executionId,
+    );
+
+    if (decisionCapability === undefined) {
+      return this.#deniedDecideRunToolApproval("run_unavailable");
+    }
+
+    let decided: unknown;
+
+    try {
+      decided = await agent.decideAdmittedRunToolApproval({
+        capability: decisionCapability,
+      });
+    } catch {
+      return this.#deniedDecideRunToolApproval("run_unavailable");
+    }
+
+    const result = decideRunToolApprovalResultSchema.safeParse({
+      ...(typeof decided === "object" && decided !== null ? decided : {}),
+      decision: request.data.decision,
+    });
+
+    if (!result.success || !result.data.ok) {
+      return this.#deniedDecideRunToolApproval("run_unavailable");
+    }
+
+    return result.data;
   }
 
   async reserveConnectionLink(
@@ -1741,6 +1992,7 @@ export class OwnerControlPlane extends DurableObject {
     authority: OwnerAuthority,
     admission: NonNullable<ReturnType<RunAdmissions["read"]>>,
     action: RunReceiverCapability["action"],
+    executionId?: string,
   ): RunReceiverCapability | undefined {
     const currentTime = Date.now();
 
@@ -1758,13 +2010,20 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     const expiresAt = currentTime + RUN_RECEIVER_CAPABILITY_LIFETIME_MS;
+    const capabilityName = {
+      approve_tool: "run:approvals:approve",
+      inspect: "run:inspect",
+      list_approvals: "run:approvals:read",
+      reject_tool: "run:approvals:reject",
+      resume: "run:resume",
+    }[action];
     const capability = runReceiverCapabilitySchema.parse({
       action,
       agentId: admission.agentId,
       agentRevision: admission.agentRevision,
       audience: "crew_agent",
       budgetReservation: admission.budgetReservation,
-      capability: action === "resume" ? "run:resume" : "run:inspect",
+      capability: capabilityName,
       clientId: authority.clientId,
       connection: "none",
       effect: "none",
@@ -1775,6 +2034,7 @@ export class OwnerControlPlane extends DurableObject {
       promptDigest: admission.promptDigest,
       runId: admission.runId,
       target: "none",
+      ...(["approve_tool", "reject_tool"].includes(action) ? { executionId } : {}),
     });
 
     this.#pendingRunReceiverCapabilities.set(capability.nonce, {
@@ -1905,6 +2165,30 @@ export class OwnerControlPlane extends DurableObject {
       error: {
         code,
         message: "Run request denied.",
+      },
+      ok: false,
+    };
+  }
+
+  #deniedListRunToolApprovals(
+    code: ListRunToolApprovalsFailure["error"]["code"],
+  ): ListRunToolApprovalsFailure {
+    return {
+      error: {
+        code,
+        message: "Tool approval request denied.",
+      },
+      ok: false,
+    };
+  }
+
+  #deniedDecideRunToolApproval(
+    code: DecideRunToolApprovalFailure["error"]["code"],
+  ): DecideRunToolApprovalFailure {
+    return {
+      error: {
+        code,
+        message: "Tool approval request denied.",
       },
       ok: false,
     };

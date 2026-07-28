@@ -37,6 +37,8 @@ import {
   MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
   MCP_LIST_AGENTS_TOOL_NAME,
   MCP_LIST_CONNECTIONS_TOOL_NAME,
+  MCP_LIST_RUN_TOOL_APPROVALS_TOOL_NAME,
+  MCP_DECIDE_RUN_TOOL_APPROVAL_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME,
   MCP_STATUS_TOOL_NAME,
@@ -146,6 +148,12 @@ describe("authenticated MCP handler", () => {
     const inspectRunTool = payload.result.tools.find(
       (tool) => tool.name === MCP_INSPECT_RUN_TOOL_NAME,
     );
+    const listApprovalsTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_LIST_RUN_TOOL_APPROVALS_TOOL_NAME,
+    );
+    const decideApprovalTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_DECIDE_RUN_TOOL_APPROVAL_TOOL_NAME,
+    );
     const revisionTools = payload.result.tools.filter(
       (tool) =>
         tool.name === MCP_GET_AGENT_REVISION_TOOL_NAME ||
@@ -175,6 +183,18 @@ describe("authenticated MCP handler", () => {
       idempotentHint: true,
       openWorldHint: false,
       readOnlyHint: true,
+    });
+    expect(listApprovalsTool?.annotations).toMatchObject({
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+      readOnlyHint: true,
+    });
+    expect(decideApprovalTool?.annotations).toMatchObject({
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+      readOnlyHint: false,
     });
     expect(startRunTool?.annotations).toMatchObject({
       destructiveHint: false,
@@ -227,7 +247,7 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 2,
+        schemaVersion: 3,
         status: "ready",
       },
     });
@@ -309,6 +329,9 @@ describe("authenticated MCP handler", () => {
           inspectRun: async () => {
             throw new Error("do-not-reflect-this");
           },
+          decideRunToolApproval: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           listAgentRevisions: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -316,6 +339,9 @@ describe("authenticated MCP handler", () => {
             throw new Error("do-not-reflect-this");
           },
           listConnections: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          listRunToolApprovals: async () => {
             throw new Error("do-not-reflect-this");
           },
           reserveConnectionLink: async () => {
@@ -1165,9 +1191,11 @@ describe("authenticated MCP handler", () => {
           getAgent: unavailableControlPlane,
           getAgentRevision: unavailableControlPlane,
           inspectRun: unavailableControlPlane,
+          decideRunToolApproval: unavailableControlPlane,
           listAgentRevisions: unavailableControlPlane,
           listAgents: unavailableControlPlane,
           listConnections: unavailableControlPlane,
+          listRunToolApprovals: unavailableControlPlane,
           reserveConnectionLink: async () => ({
             authorizationExpiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
             authorizationToken: "a".repeat(43),
@@ -1260,9 +1288,11 @@ describe("authenticated MCP handler", () => {
           getAgent: unavailableControlPlane,
           getAgentRevision: unavailableControlPlane,
           inspectRun: unavailableControlPlane,
+          decideRunToolApproval: unavailableControlPlane,
           listAgentRevisions: unavailableControlPlane,
           listAgents: unavailableControlPlane,
           listConnections: unavailableControlPlane,
+          listRunToolApprovals: unavailableControlPlane,
           reserveConnectionLink: (authorityInput: unknown, input: unknown) =>
             runInDurableObject(stub, (instance) =>
               instance.reserveConnectionLink(authorityInput, input),
