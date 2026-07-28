@@ -3,6 +3,7 @@ import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
   CONNECTION_CONFIGS_READ_SCOPE,
+  CONNECTION_CONFIGS_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
@@ -12,6 +13,7 @@ import {
   createConnectionLinkResultSchema,
   configureAgentConnectionResultSchema,
   controlPlaneStatusResultSchema,
+  enableIntegrationResultSchema,
   getAgentRevisionResultSchema,
   getAgentResultSchema,
   integrationAuthConfigListResultSchema,
@@ -33,6 +35,7 @@ import * as z from "zod";
 import {
   MCP_CREATE_AGENT_TOOL_NAME,
   MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
+  MCP_ENABLE_INTEGRATION_TOOL_NAME,
   MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME,
   MCP_GET_AGENT_TOOL_NAME,
   MCP_GET_AGENT_REVISION_TOOL_NAME,
@@ -146,6 +149,9 @@ describe("authenticated MCP handler", () => {
     const connectionLinkTool = payload.result.tools.find(
       (tool) => tool.name === MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
     );
+    const enableIntegrationTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_ENABLE_INTEGRATION_TOOL_NAME,
+    );
     const connectionListTool = payload.result.tools.find(
       (tool) => tool.name === MCP_LIST_CONNECTIONS_TOOL_NAME,
     );
@@ -178,6 +184,12 @@ describe("authenticated MCP handler", () => {
       readOnlyHint: false,
     });
     expect(connectionLinkTool?.annotations).toMatchObject({
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+      readOnlyHint: false,
+    });
+    expect(enableIntegrationTool?.annotations).toMatchObject({
       destructiveHint: false,
       idempotentHint: true,
       openWorldHint: true,
@@ -252,7 +264,7 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         status: "ready",
       },
     });
@@ -328,6 +340,9 @@ describe("authenticated MCP handler", () => {
           completeConnectionLink: async () => {
             throw new Error("do-not-reflect-this");
           },
+          completeIntegrationEnablement: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           getAgent: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -356,6 +371,9 @@ describe("authenticated MCP handler", () => {
             throw new Error("do-not-reflect-this");
           },
           reserveConnectionLink: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          reserveIntegrationEnablement: async () => {
             throw new Error("do-not-reflect-this");
           },
           resolveConnectionForAttachment: async () => {
@@ -968,6 +986,135 @@ describe("authenticated MCP handler", () => {
     expect(text).not.toContain("provider-secret");
   });
 
+  it("enables and exactly replays Composio-managed authentication through MCP", async () => {
+    const authority = await ownerAuthority("mcp-enable-github-owner", [
+      CONNECTION_CONFIGS_WRITE_SCOPE,
+    ]);
+    const authConfig = {
+      auth_scheme: "OAUTH2",
+      id: "ac_github_managed",
+      is_composio_managed: true,
+      status: "ENABLED",
+      toolkit: { slug: "github" },
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            auth_config: {
+              auth_scheme: authConfig.auth_scheme,
+              id: authConfig.id,
+              is_composio_managed: authConfig.is_composio_managed,
+            },
+            toolkit: { slug: "github" },
+          },
+          { status: 201 },
+        ),
+      );
+    const requestBody = JSON.stringify({
+      id: 139,
+      jsonrpc: "2.0",
+      method: "tools/call",
+      params: {
+        arguments: {
+          idempotencyKey: "mcp-enable-github",
+          integrationSlug: "github",
+        },
+        name: MCP_ENABLE_INTEGRATION_TOOL_NAME,
+      },
+    });
+    const firstResponse = await handleAuthenticatedMcpRequest(toolRequest(requestBody), env, {
+      authority,
+    });
+    const firstPayload = jsonRpcToolResultSchema.parse(await firstResponse.json()).result;
+    const first = enableIntegrationResultSchema.parse(
+      JSON.parse(firstPayload.content[0]?.text ?? ""),
+    );
+    const replayResponse = await handleAuthenticatedMcpRequest(toolRequest(requestBody), env, {
+      authority,
+    });
+    const replayPayload = jsonRpcToolResultSchema.parse(await replayResponse.json()).result;
+    const replay = enableIntegrationResultSchema.parse(
+      JSON.parse(replayPayload.content[0]?.text ?? ""),
+    );
+
+    expect(firstPayload.isError).toBe(false);
+    expect(first).toEqual({
+      authConfigId: "ac_github_managed",
+      authScheme: "oauth2",
+      created: true,
+      integrationSlug: "github",
+      managed: true,
+      ok: true,
+    });
+    expect(replay).toEqual({ ...first, created: false });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const listEndpoint = fetchMock.mock.calls[0]?.[0];
+
+    if (!(listEndpoint instanceof URL)) {
+      throw new TypeError("Expected a Composio auth-config URL.");
+    }
+
+    expect(listEndpoint.href).toContain("/api/v3.1/auth_configs?is_composio_managed=true");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://backend.composio.dev/api/v3.1/auth_configs");
+  });
+
+  it("does not widen an existing all-scope token into integration enablement", async () => {
+    const authority = await ownerAuthority("mcp-enable-github-denied-owner", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      CONNECTIONS_READ_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+      CONNECTION_CONFIGS_READ_SCOPE,
+      INTEGRATIONS_READ_SCOPE,
+    ]);
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 140,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              idempotencyKey: "mcp-enable-github-denied",
+              integrationSlug: "github",
+            },
+            name: MCP_ENABLE_INTEGRATION_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(payload.isError).toBe(true);
+    expect(enableIntegrationResultSchema.parse(JSON.parse(payload.content[0]?.text ?? ""))).toEqual(
+      {
+        error: {
+          code: "insufficient_scope",
+          message: "Integration enablement request denied.",
+        },
+        ok: false,
+      },
+    );
+    await expect(
+      runInDurableObject(
+        env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+        (_instance, state) =>
+          state.storage.sql
+            .exec("SELECT count(*) AS count FROM integration_enablement_requests")
+            .one(),
+      ),
+    ).resolves.toEqual({ count: 0 });
+  });
+
   it("does not widen an existing all-scope token into auth-config discovery", async () => {
     const authority = await ownerAuthority("mcp-auth-config-denied-owner", [
       OWNER_READ_SCOPE,
@@ -1073,7 +1220,7 @@ describe("authenticated MCP handler", () => {
 
     const [endpoint, init] = fetchMock.mock.calls[0] ?? [];
 
-    expect(endpoint).toBe("https://backend.composio.dev/api/v3/connected_accounts/link");
+    expect(endpoint).toBe("https://backend.composio.dev/api/v3.1/connected_accounts/link");
     if (typeof init?.body !== "string") {
       throw new TypeError("Expected a serialized Composio request body.");
     }
@@ -1300,6 +1447,7 @@ describe("authenticated MCP handler", () => {
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
           completeConnectionLink: unavailableControlPlane,
+          completeIntegrationEnablement: unavailableControlPlane,
           configureAgentConnection: unavailableControlPlane,
           createAgent: unavailableControlPlane,
           getAgent: unavailableControlPlane,
@@ -1318,6 +1466,7 @@ describe("authenticated MCP handler", () => {
             reservationId: "connection_link_00000000-0000-4000-8000-000000000000",
             state: "dispatch",
           }),
+          reserveIntegrationEnablement: unavailableControlPlane,
           resolveConnectionForAttachment: unavailableControlPlane,
           status: unavailableControlPlane,
           startRun: unavailableControlPlane,
@@ -1400,6 +1549,7 @@ describe("authenticated MCP handler", () => {
             runInDurableObject(stub, (instance) =>
               instance.completeConnectionLink(authorityInput, input),
             ),
+          completeIntegrationEnablement: unavailableControlPlane,
           configureAgentConnection: unavailableControlPlane,
           createAgent: unavailableControlPlane,
           getAgent: unavailableControlPlane,
@@ -1415,6 +1565,7 @@ describe("authenticated MCP handler", () => {
             runInDurableObject(stub, (instance) =>
               instance.reserveConnectionLink(authorityInput, input),
             ),
+          reserveIntegrationEnablement: unavailableControlPlane,
           resolveConnectionForAttachment: unavailableControlPlane,
           status: unavailableControlPlane,
           startRun: unavailableControlPlane,

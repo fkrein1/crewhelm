@@ -28,6 +28,13 @@ import * as z from "zod";
 
 import { readBoundedJson } from "./bounded-json.js";
 
+export {
+  createComposioAuthConfigs,
+  type ComposioAuthConfigs,
+  type EnsureManagedIntegrationAuthConfigResult,
+  type ManagedIntegrationAuthConfig,
+} from "./auth-configs.js";
+
 const COMPOSIO_TOOLKITS_URL = "https://backend.composio.dev/api/v3/toolkits";
 const COMPOSIO_TOOLS_URL = "https://backend.composio.dev/api/v3.1/tools";
 const COMPOSIO_AUTH_CONFIGS_URL = "https://backend.composio.dev/api/v3.1/auth_configs";

@@ -30,6 +30,7 @@ function protectedResourceResponse(): Response {
       "connections:read",
       "connections:write",
       "connection-configs:read",
+      "connection-configs:write",
       "integrations:read",
     ],
   });
@@ -55,6 +56,7 @@ function authorizationServerResponse(overrides: Record<string, unknown> = {}): R
       "connections:read",
       "connections:write",
       "connection-configs:read",
+      "connection-configs:write",
       "integrations:read",
     ],
     token_endpoint: `${origin}/api/auth/oauth2/token`,

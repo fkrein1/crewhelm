@@ -81,10 +81,11 @@ The Worker exposes Streamable HTTP MCP at `/mcp`. OAuth clients dynamically regi
 definitions, `agents:read` to inspect full Agent definitions including instructions,
 `agents:write` to replace Agent configuration through immutable revisions, `connections:read` to
 list bounded connection summaries, `connections:write` to create private hosted connection links,
-`connection-configs:read` to list project auth configurations, and `integrations:read` to search
-Composio's catalog and inspect exact tool schemas. Registrations default to all eight scopes; every
-token keeps the exact approved scope set, so adding a capability never widens an issued token. The
-consent page discloses the bounded metadata sent to Composio. The app callback URL must be:
+`connection-configs:read` to list project auth configurations, `connection-configs:write` to
+enable Composio-managed authentication, and `integrations:read` to search Composio's catalog and
+inspect exact tool schemas. Registrations default to all nine scopes; every token keeps the exact
+approved scope set, so adding a capability never widens an issued token. The consent page
+discloses the bounded metadata sent to Composio. The app callback URL must be:
 
 ```text
 https://YOUR_WORKER_HOST/api/auth/callback/github
@@ -142,6 +143,9 @@ The MCP surface exposes:
   configurations for one exact integration; requires both `integrations:read` and
   `connection-configs:read`. Use the returned opaque `authConfigId` with
   `crewhelm_create_connection_link`.
+- `crewhelm_enable_integration` — find or create the enabled Composio-managed authentication
+  configuration for one exact integration; requires `connection-configs:write` and returns only
+  an opaque `authConfigId`. Calls are idempotent and never return provider credentials.
 - `crewhelm_search_integration_tools` — search exact tools and resolved versions across every
   current Composio integration, optionally within one integration; requires `integrations:read`.
 - `crewhelm_inspect_integration_tool` — inspect bounded input and output parameter schemas for one
@@ -190,8 +194,8 @@ owner control-plane state.
 
 Read [AGENTS.md](AGENTS.md) before using an AI coding agent in this repository. Human contribution
 guidance lives in [CONTRIBUTING.md](CONTRIBUTING.md). Shared language is defined in
-[CONTEXT.md](CONTEXT.md), module conventions in
-[docs/engineering/module-design.md](docs/engineering/module-design.md), and security invariants in
+[CONTEXT.md](CONTEXT.md), engineering conventions in
+[docs/engineering/design.md](docs/engineering/design.md), and security invariants in
 [docs/security/invariants.md](docs/security/invariants.md).
 
 ## Architecture and philosophy
@@ -199,8 +203,7 @@ guidance lives in [CONTRIBUTING.md](CONTRIBUTING.md). Shared language is defined
 - [Product philosophy](docs/product/philosophy.md) explains how Crewhelm chooses and shapes work.
 - [System architecture](docs/architecture/system.md) defines ownership, runtime boundaries, and
   dependency direction.
-- [Code philosophy](docs/engineering/code-philosophy.md) defines the project's standard for
-  simple, complete implementations.
+- [Engineering design](docs/engineering/design.md) defines the project's implementation standard.
 
 Repository maintainers should apply the
 [GitHub security and branch settings](docs/maintainers/github-settings.md) after creating the

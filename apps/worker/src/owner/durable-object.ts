@@ -1,6 +1,7 @@
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  CONNECTION_CONFIGS_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   controlPlaneStatusResultSchema,
@@ -10,6 +11,7 @@ import {
   type ControlPlaneStatusResult,
   type CreateAgentResult,
   type CreateConnectionLinkResult,
+  type EnableIntegrationResult,
   type ConfirmRunAdmissionResult,
   type CreateRunAdmissionResult,
   type GetAgentRevisionResult,
@@ -26,6 +28,7 @@ import {
   type RecordConnectionAuthorizationReturnResult,
   type RedeemRunReceiverCapabilityResult,
   type ReserveConnectionLinkResult,
+  type ReserveIntegrationEnablementResult,
   type StartRunResult,
   type UpdateAgentResult,
   type VerifyActiveRunAdmissionResult,
@@ -54,6 +57,7 @@ import {
   deniedConnectionAuthorizationReturn,
   deniedConnectionLink,
   deniedConnectionRead,
+  deniedIntegrationEnablement,
 } from "./connections/module.js";
 import { CONTROL_PLANE_SCHEMA_VERSION, migrateControlPlane } from "./migrations.js";
 import { controlPlane, controlPlaneSchema, type ControlPlaneDatabaseSchema } from "./schema.js";
@@ -270,6 +274,28 @@ export class OwnerControlPlane extends DurableObject {
     return authorization.ok
       ? this.#connections.reserve(authorization.authority, input)
       : deniedConnectionLink(authorization.code);
+  }
+
+  async reserveIntegrationEnablement(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<ReserveIntegrationEnablementResult> {
+    const authorization = this.#authorize(authorityInput, CONNECTION_CONFIGS_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#connections.reserveIntegrationEnablement(authorization.authority, input)
+      : deniedIntegrationEnablement(authorization.code);
+  }
+
+  async completeIntegrationEnablement(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<EnableIntegrationResult> {
+    const authorization = this.#authorize(authorityInput, CONNECTION_CONFIGS_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#connections.completeIntegrationEnablement(authorization.authority, input)
+      : deniedIntegrationEnablement(authorization.code);
   }
 
   async completeConnectionLink(

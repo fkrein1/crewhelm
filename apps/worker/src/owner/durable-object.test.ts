@@ -70,7 +70,7 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toEqual({
       ok: true,
       status: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         status: "ready",
       },
     });
@@ -97,6 +97,11 @@ describe("OwnerControlPlane", () => {
           checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
           name: "0002_cool_rictor",
           version: 3,
+        },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0003_windy_stepford_cuckoos",
+          version: 4,
         },
       ],
       owner: { owner_key: authority.ownerKey },
@@ -148,12 +153,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 3, status: "ready" },
+      status: { schemaVersion: 4, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 3, status: "ready" },
+      status: { schemaVersion: 4, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -266,6 +271,7 @@ describe("OwnerControlPlane", () => {
 
     await runInDurableObject(stub, async (_instance, state) => {
       state.storage.sql.exec("PRAGMA foreign_keys=OFF");
+      state.storage.sql.exec("DROP TABLE integration_enablement_requests");
       state.storage.sql.exec("DROP TABLE tool_executions");
       state.storage.sql.exec("DROP TABLE tool_approvals");
       state.storage.sql.exec("DROP TABLE capability_grants");
@@ -328,7 +334,7 @@ describe("OwnerControlPlane", () => {
          FROM migration_v2_run_rows`,
       );
       state.storage.sql.exec("DROP TABLE migration_v2_run_rows");
-      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version = 3");
+      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 3");
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
 
       await expect(
@@ -356,7 +362,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 3, status: "ready" },
+      status: { schemaVersion: 4, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       const rows = [
@@ -393,7 +399,7 @@ describe("OwnerControlPlane", () => {
         ...state.storage.sql.exec<{ version: number }>(
           "SELECT version FROM control_plane_migrations ORDER BY version",
         ),
-      ]).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
+      ]).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
     });
   });
 

@@ -92,4 +92,4 @@ composition roots --------------> concrete implementations
 
 Contracts import no runtime, provider, database, or environment APIs. Only composition roots read
 the full environment. Provider adapters do not decide authority, and policy modules do not perform
-provider I/O. See [module design](../engineering/module-design.md) for the boundary test.
+provider I/O. See [engineering design](../engineering/design.md) for the boundary test.
