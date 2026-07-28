@@ -9,6 +9,7 @@ import {
   OWNER_WRITE_SCOPE,
   createAgentResultSchema,
   createConnectionLinkResultSchema,
+  configureAgentConnectionResultSchema,
   controlPlaneStatusResultSchema,
   getAgentRevisionResultSchema,
   getAgentResultSchema,
@@ -30,6 +31,7 @@ import * as z from "zod";
 import {
   MCP_CREATE_AGENT_TOOL_NAME,
   MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
+  MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME,
   MCP_GET_AGENT_TOOL_NAME,
   MCP_GET_AGENT_REVISION_TOOL_NAME,
   MCP_INSPECT_INTEGRATION_TOOL_NAME,
@@ -314,6 +316,9 @@ describe("authenticated MCP handler", () => {
       BETTER_AUTH_SECRET: signingSecret,
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
+          configureAgentConnection: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           createAgent: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -344,7 +349,13 @@ describe("authenticated MCP handler", () => {
           listRunToolApprovals: async () => {
             throw new Error("do-not-reflect-this");
           },
+          lookupAgentConnectionConfiguration: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           reserveConnectionLink: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          resolveConnectionForAttachment: async () => {
             throw new Error("do-not-reflect-this");
           },
           status: async () => {
@@ -1187,6 +1198,7 @@ describe("authenticated MCP handler", () => {
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
           completeConnectionLink: unavailableControlPlane,
+          configureAgentConnection: unavailableControlPlane,
           createAgent: unavailableControlPlane,
           getAgent: unavailableControlPlane,
           getAgentRevision: unavailableControlPlane,
@@ -1196,6 +1208,7 @@ describe("authenticated MCP handler", () => {
           listAgents: unavailableControlPlane,
           listConnections: unavailableControlPlane,
           listRunToolApprovals: unavailableControlPlane,
+          lookupAgentConnectionConfiguration: unavailableControlPlane,
           reserveConnectionLink: async () => ({
             authorizationExpiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
             authorizationToken: "a".repeat(43),
@@ -1203,6 +1216,7 @@ describe("authenticated MCP handler", () => {
             reservationId: "connection_link_00000000-0000-4000-8000-000000000000",
             state: "dispatch",
           }),
+          resolveConnectionForAttachment: unavailableControlPlane,
           status: unavailableControlPlane,
           startRun: unavailableControlPlane,
           updateAgent: unavailableControlPlane,
@@ -1284,6 +1298,7 @@ describe("authenticated MCP handler", () => {
             runInDurableObject(stub, (instance) =>
               instance.completeConnectionLink(authorityInput, input),
             ),
+          configureAgentConnection: unavailableControlPlane,
           createAgent: unavailableControlPlane,
           getAgent: unavailableControlPlane,
           getAgentRevision: unavailableControlPlane,
@@ -1293,10 +1308,12 @@ describe("authenticated MCP handler", () => {
           listAgents: unavailableControlPlane,
           listConnections: unavailableControlPlane,
           listRunToolApprovals: unavailableControlPlane,
+          lookupAgentConnectionConfiguration: unavailableControlPlane,
           reserveConnectionLink: (authorityInput: unknown, input: unknown) =>
             runInDurableObject(stub, (instance) =>
               instance.reserveConnectionLink(authorityInput, input),
             ),
+          resolveConnectionForAttachment: unavailableControlPlane,
           status: unavailableControlPlane,
           startRun: unavailableControlPlane,
           updateAgent: unavailableControlPlane,
@@ -1574,6 +1591,230 @@ describe("authenticated MCP handler", () => {
         slug: "FIRECRAWL_SCRAPE",
         version: "20260701_00",
       },
+    });
+  });
+
+  it("configures an Agent from one active Composio connection and exact dynamic schemas", async () => {
+    const authority = await ownerAuthority("mcp-configure-connection-owner", [
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      CONNECTIONS_READ_SCOPE,
+      INTEGRATIONS_READ_SCOPE,
+    ]);
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(authority, {
+      executionLimits: {
+        maxDurationSeconds: 300,
+        maxModelTokens: 20_000,
+        maxToolCalls: 4,
+        maxTurns: 4,
+      },
+      idempotencyKey: "mcp-configure-agent",
+      instructions: "Read project items with the attached connection.",
+      model: "@cf/meta/llama-4-scout-17b-16e-instruct",
+      name: "Project reader",
+    });
+
+    if (!created.ok) {
+      throw new Error("Expected Agent creation to succeed.");
+    }
+
+    const connectionId = "connection_91999999-9999-4999-8999-999999999999";
+
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO connections
+           (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
+         VALUES (?, 'composio', 'ca_project_919', 'ac_project_919', 'initiated', ?)`,
+        connectionId,
+        Date.now(),
+      );
+    });
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({
+          id: "ca_project_919",
+          state: { val: { access_token: "provider-secret" } },
+          status: "ACTIVE",
+          toolkit: { slug: "project_toolkit" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          description: "Read one exact project item.",
+          input_parameters: {
+            itemId: { required: true, type: "string" },
+          },
+          is_deprecated: false,
+          name: "Read item",
+          no_auth: false,
+          output_parameters: { itemId: { type: "string" } },
+          scopes: ["items:read"],
+          slug: "PROJECT_TOOLKIT_READ_ITEM",
+          tags: ["readOnlyHint"],
+          toolkit: {
+            name: "Project toolkit",
+            slug: "project_toolkit",
+          },
+          version: "20260727_00",
+        }),
+      );
+    const configurationArguments = {
+      agentId: created.agent.id,
+      connectionId,
+      expectedRevision: 1,
+      expiresAt: null,
+      idempotencyKey: "mcp-configure-connection",
+      limits: {
+        maxCallsPerRun: 4,
+        maxConcurrency: 1,
+        maxCostMicrousdPerCall: 5_000,
+        maxDurationMs: 20_000,
+        maxOutputBytes: 64_000,
+      },
+      tools: [
+        {
+          slug: "PROJECT_TOOLKIT_READ_ITEM",
+          version: "20260727_00",
+        },
+      ],
+    };
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 20,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: configurationArguments,
+            name: MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload: unknown = await response.json();
+    const result = jsonRpcToolResultSchema.parse(payload).result;
+    const text = result.content[0]?.text;
+    const configured = configureAgentConnectionResultSchema.parse(JSON.parse(text ?? ""));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.isError).toBe(false);
+    expect(configured).toMatchObject({
+      agent: { id: created.agent.id, revision: 2 },
+      configured: true,
+      ok: true,
+    });
+    expect(text).not.toContain("ca_project_919");
+    expect(text).not.toContain("provider-secret");
+
+    fetchMock.mockRejectedValue(new Error("Composio is unavailable."));
+    const replayResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 21,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: configurationArguments,
+            name: MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const replayPayload: unknown = await replayResponse.json();
+    const replayResult = jsonRpcToolResultSchema.parse(replayPayload).result;
+    const replayText = replayResult.content[0]?.text;
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(replayResult.isError).toBe(false);
+    expect(configureAgentConnectionResultSchema.parse(JSON.parse(replayText ?? ""))).toMatchObject({
+      agent: { id: created.agent.id, revision: 2 },
+      configured: false,
+      ok: true,
+    });
+
+    fetchMock
+      .mockReset()
+      .mockResolvedValueOnce(
+        Response.json({
+          id: "ca_project_919",
+          status: "ACTIVE",
+          toolkit: { slug: "project_toolkit" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          description: "Retrieve one stored credential.",
+          input_parameters: { name: { required: true, type: "string" } },
+          is_deprecated: false,
+          name: "Read secret",
+          no_auth: false,
+          output_parameters: { value: { type: "string" } },
+          scopes: ["secrets:read"],
+          slug: "PROJECT_TOOLKIT_GET_SECRET",
+          tags: ["readOnlyHint"],
+          toolkit: {
+            name: "Project toolkit",
+            slug: "project_toolkit",
+          },
+          version: "20260727_00",
+        }),
+      );
+    const credentialToolResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 22,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              ...configurationArguments,
+              expectedRevision: 2,
+              idempotencyKey: "mcp-configure-credential-tool",
+              tools: [
+                {
+                  slug: "PROJECT_TOOLKIT_GET_SECRET",
+                  version: "20260727_00",
+                },
+              ],
+            },
+            name: MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const credentialToolPayload: unknown = await credentialToolResponse.json();
+    const credentialToolResult = jsonRpcToolResultSchema.parse(credentialToolPayload).result;
+    const credentialToolText = credentialToolResult.content[0]?.text;
+    const deniedCredentialTool = configureAgentConnectionResultSchema.parse(
+      JSON.parse(credentialToolText ?? ""),
+    );
+    const unchangedAgent = await controlPlane.getAgent(authority, { id: created.agent.id });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(credentialToolResult.isError).toBe(true);
+    expect(deniedCredentialTool).toEqual({
+      error: {
+        code: "invalid_request",
+        message: "Connection attachment request denied.",
+      },
+      ok: false,
+    });
+    expect(unchangedAgent).toMatchObject({
+      agent: {
+        capabilityGrants: configured.ok ? configured.agent.capabilityGrants : [],
+        revision: 2,
+      },
+      ok: true,
     });
   });
 

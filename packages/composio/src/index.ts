@@ -311,6 +311,11 @@ export function createComposioCatalog(options: ComposioCatalogOptions): Composio
 }
 
 export {
+  createComposioRuntime,
+  type ComposioRuntime,
+  type ComposioRuntimeOptions,
+} from "./execution.js";
+export {
   createComposioConnectionLinks,
   type ComposioConnectionLink,
   type ComposioConnectionLinkResult,

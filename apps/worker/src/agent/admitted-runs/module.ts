@@ -13,6 +13,7 @@ import {
   completeToolExecutionResultSchema,
   evaluateToolExecutionResultSchema,
   reserveToolExecutionResultSchema,
+  resolveToolExecutionConnectionResultSchema,
   classifiedComposioToolActionSchema,
   decideAdmittedRunToolApprovalInputSchema,
   decideAdmittedRunToolApprovalResultSchema,
@@ -34,6 +35,7 @@ import {
   type ToolExecutionPermit,
   type PendingToolApproval,
 } from "@crewhelm/contracts";
+import { createComposioRuntime } from "@crewhelm/composio";
 import {
   Think,
   Session,
@@ -1512,9 +1514,88 @@ export class CrewAgent extends Think {
   }
 
   protected createToolAdapter(
-    _grant: ComposioToolCapabilityGrant,
+    grant: ComposioToolCapabilityGrant,
   ): CrewAgentToolAdapter | undefined {
-    return undefined;
+    if (grant.capabilityId !== "composio.tool.execute") {
+      return undefined;
+    }
+
+    const runtime = createComposioRuntime({ apiKey: this.env.COMPOSIO_API_KEY });
+    let inputSchema: z.ZodType<Record<string, unknown>>;
+
+    try {
+      inputSchema = runtime.createInputSchema(grant.tool.inputParametersJson);
+    } catch {
+      return undefined;
+    }
+
+    const suffix = grant.grantId.slice(-8);
+    const normalizedSlug = grant.toolSlug.toLowerCase().replaceAll(/[^a-z0-9_]/g, "_");
+    const name = `composio_${normalizedSlug.slice(0, 46)}_${suffix}`;
+
+    return {
+      description: grant.tool.description ?? grant.tool.name,
+      grant,
+      inputSchema,
+      name,
+      classify: async (input, context) => {
+        const digest = await crypto.subtle.digest(
+          "SHA-256",
+          new TextEncoder().encode(JSON.stringify(input)),
+        );
+        const inputDigest = Array.from(new Uint8Array(digest), (byte) =>
+          byte.toString(16).padStart(2, "0"),
+        ).join("");
+
+        return {
+          agentId: grant.agentId,
+          agentRevision: grant.agentRevision,
+          capabilityId: grant.capabilityId,
+          connectionId: grant.connectionId,
+          effect: grant.effect,
+          estimatedCostMicrousd: grant.limits.maxCostMicrousdPerCall,
+          grantId: grant.grantId,
+          inputDigest,
+          integrationSlug: grant.integrationSlug,
+          ownerKey: grant.ownerKey,
+          runId: context.runId,
+          targetDigests: grant.targetDigests,
+          toolCallId: context.toolCallId,
+          toolkitVersion: grant.toolkitVersion,
+          toolSlug: grant.toolSlug,
+        };
+      },
+      execute: async (input, context) => {
+        const resolved = resolveToolExecutionConnectionResultSchema.safeParse(
+          await this.env.OWNER_CONTROL_PLANE.getByName(
+            context.permit.action.ownerKey,
+          ).resolveToolExecutionConnection(context.permit),
+        );
+
+        if (!resolved.success || !resolved.data.ok) {
+          throw new Error("Composio tool execution denied.");
+        }
+
+        const verified = await runtime.verifyConnection(
+          resolved.data.providerConnectionId,
+          context.signal,
+        );
+
+        if (!verified.ok || verified.toolkitSlug !== grant.integrationSlug) {
+          throw new Error("Composio tool execution denied.");
+        }
+
+        return runtime.execute({
+          arguments: input,
+          maximumOutputBytes: context.permit.constraints.maxOutputBytes,
+          providerConnectionId: resolved.data.providerConnectionId,
+          signal: context.signal,
+          timeoutMs: context.permit.constraints.maxDurationMs,
+          toolkitVersion: grant.toolkitVersion,
+          toolSlug: grant.toolSlug,
+        });
+      },
+    };
   }
 
   #activeToolAdapters(): CrewAgentToolAdapter[] {
@@ -1636,7 +1717,7 @@ export class CrewAgent extends Think {
 
     let output: unknown;
     let outputBytes = 0;
-    let status: "completed" | "failed" | "unknown" = "failed";
+    let status: "completed" | "failed" | "unknown" = "unknown";
 
     try {
       output = await adapter.execute(input, { permit, signal: context.signal });

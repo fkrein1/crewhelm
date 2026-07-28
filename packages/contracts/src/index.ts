@@ -1,6 +1,7 @@
 export * from "./agent-runtime.js";
 export * from "./capabilities.js";
 export * from "./connections.js";
+export * from "./connection-attachments.js";
 export * from "./control-plane.js";
 export * from "./health.js";
 export * from "./integrations.js";

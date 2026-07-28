@@ -158,10 +158,12 @@ validating the owner-generated Agent ID inside the owner-bound Durable Object. T
 `agents:read` scope permits bounded newest-first revision summaries and one exact historical
 definition; summaries omit instructions, and stable numeric cursors prevent overlap while new
 revisions are appended. Missing, malformed, wrong-owner, and insufficient-scope requests use fixed
-failures, and a read creates no audit mutation. Caller input cannot select a Durable Object name or
-alter capability grants. Starting a run requires the separately consented `agents:write` scope and
-an exact current Agent revision; inspection requires `agents:read`. Instructions and model
-identifiers remain inert until the control plane admits a run against their immutable revision.
+failures, and a read creates no audit mutation. Caller input cannot select a Durable Object name.
+Connection configuration can alter the tools exposed to an Agent only with the separately
+consented `agents:write`, `connections:read`, and `integrations:read` scopes, an exact current
+revision, and a provider-verified connection. Starting a run requires `agents:write` and an exact
+current Agent revision; inspection requires `agents:read`. Instructions and model identifiers
+remain inert until the control plane admits a run against their immutable revision.
 
 Every creation and update carries a bounded idempotency key scoped to the authenticated MCP client
 and its operation class. An exact replay returns the original Agent revision without another
@@ -175,8 +177,10 @@ configuration cannot amplify MCP output. A transactional ceiling of 100 Agents p
 initial Agent storage; exact creation retries still succeed at the ceiling, while new creations
 fail without partial writes. Each Agent retains at most 1,000 immutable revisions; the final
 allowed update and its exact retries succeed, while a distinct update at the ceiling fails without
-partial writes. Agent registry methods have no delete or connection-grant operation; connection
-onboarding and run admission are separate scoped state machines.
+partial writes. A normal Agent update clones active connection tool grants into the new immutable
+revision with new opaque grant IDs. Connection configuration replaces one connection's selected
+tools, and an empty selection detaches that connection without changing its Composio
+authorization. Connection onboarding and run admission remain separate scoped state machines.
 
 ## CrewAgent runtime reachability and defaults
 
@@ -268,7 +272,8 @@ A second reservation for the same tool-call identity is denied, including when t
 outcome is unknown; recovery must reconcile that outcome instead of redispatching it. Completed,
 expired, mismatched, revoked, unavailable, over-budget, or unknown actions fail closed. The adapter
 reports a bounded completion outcome, and late or oversized outcomes become `unknown`. Production
-still exposes no provider tool when the corresponding trusted Composio adapter is unavailable.
+exposes a provider tool only when its bounded dynamic schema can be converted by the trusted
+generic Composio adapter.
 
 Write and destructive actions park in Think before execution. Owner-scoped MCP list and decision
 commands are distinct from model authority; they bind an authenticated client to one run and one
@@ -294,7 +299,8 @@ request cancellation, limits latency and response bytes, validates provider stru
 small normalized summaries. Search omits input and output schemas; exact inspection requires the
 selected tool slug and concrete toolkit version, rejects provider identity substitution, and
 returns only inert JSON parameter maps bounded by raw bytes, nesting depth, node count, container
-width, key length, and string length. A later grant flow can snapshot that reviewed contract.
+width, key length, and string length. Agent connection configuration snapshots that reviewed
+contract for an exact pinned version.
 Provider bodies, errors, request IDs, URLs, and the API key never enter MCP failures, logs, D1, or
 Durable Objects. A successful provider payload is also rejected if any normalized output string
 contains the exact project key. Names and descriptions remain untrusted external text even after
@@ -353,19 +359,65 @@ request a new Connect Link.
 An owner-local alarm normally scrubs an expired capability URL and expires an unused callback at
 its exact expiry while retaining non-secret idempotency and callback tombstones. The
 recovery-deadline alarm is scheduled before provider egress, so cleanup remains bounded by the
-30-minute recovery window even if exact-expiry rescheduling fails. Crewhelm never calls
-credential-bearing connected-account list or get endpoints. Exact retries replay the same
-unexpired link; conflicting key reuse fails. A dispatched request with no validated response
-remains unknown and cannot dispatch again. Another key for the same auth config is blocked for the
-conservative recovery window, after which any unreceived hosted link has expired and a new intent
-may proceed. Link-attempt and connection ceilings bound owner-local storage.
+30-minute recovery window even if exact-expiry rescheduling fails. Connection links never call
+credential-bearing connected-account endpoints. Exact retries replay the same unexpired link;
+conflicting key reuse fails. A dispatched request with no validated response remains unknown and
+cannot dispatch again. Another key for the same auth config is blocked for the conservative
+recovery window, after which any unreceived hosted link has expired and a new intent may proceed.
+Link-attempt and connection ceilings bound owner-local storage.
 
 The Composio browser redirect is not a signed provider assertion. Someone who obtains an unexpired
 callback URL could submit its one-time receipt, and Composio or browser infrastructure may observe
 the bearer URL. The exact account binding, short lifetime, digest-only storage, no-referrer
 response, and lack of execution authority bound that residual risk. Completing consent remains a
-human action; active-account evidence, labels, grants, execution, disablement, and deletion require
-separate reviewed slices.
+human action; active-account evidence is established separately during Agent configuration and
+rechecked at execution time. Disablement, deletion, and changes to provider access remain Composio
+operations.
+
+## Agent connection configuration and Composio execution authority
+
+The connection-configuration MCP tool requires the intersection of `agents:write`,
+`connections:read`, and `integrations:read`. It resolves the opaque connected-account ID only
+inside trusted Worker and owner-object calls, fetches that exact account from Composio, accepts
+only `ACTIVE`, and requires every selected exact tool definition to belong to the verified
+toolkit. Credential-bearing account state is bounded and structurally stripped; it is never
+persisted, logged, returned through MCP, placed in a grant or permit, or shown to the model.
+
+One request replaces at most 20 selected tools for one connection and one exact Agent revision.
+Crewhelm stores their public names, descriptions, tags, bounded input and output parameter maps,
+and pinned versions as inert snapshots. The same generic JSON-Schema conversion path handles
+every structurally valid tool; Crewhelm has no per-tool code or schema registry. Total grants
+remain bounded by the Agent contract. The owner object creates the new Agent revision, grant rows,
+current pointer, idempotency result, connection activation evidence, and audit event in one SQLite
+transaction. An empty selection creates a revision without that connection's grants. Existing
+Composio authorization is unchanged, so reconnecting or changing provider access remains the
+owner's explicit Composio action. Exact idempotent retries are resolved from the committed owner
+record before provider egress, so a lost response can replay successfully even if Composio later
+becomes unavailable; conflicting key reuse still fails closed.
+
+Provider tags and descriptions remain untrusted. Tags can escalate a tool to destructive but
+cannot lower its risk except for the explicit `readOnlyHint`, which applies only when a recognized
+read verb is present and no destructive or mutating verb conflicts. Unknown and ambiguous tools
+default to approval-gated write. Tools whose name, slug, or declared output fields advertise
+credential material cannot be attached. The model cannot select its own effect, connection,
+version, grant, limits, or target digest.
+
+After ToolGate atomically reserves one exact action, the Agent uses the nonce-bound five-second
+permit to atomically claim the connected-account ID once. The stored digest binds the complete
+permit, including its action, expiry, limits, audience, and nonce; a modified or replayed permit
+cannot claim dispatch or complete an execution. After the claim, the adapter verifies the exact
+account is still active and belongs to the expected toolkit, then sends one non-retried POST to
+Composio's fixed direct-execution endpoint with the pinned version and schema-validated arguments.
+It rejects redirects, propagates cancellation, bounds time and response bytes, returns only a
+successful `data` payload, and denies credential-shaped fields and string patterns, the project
+key, or the opaque connected-account ID. The outer Agent boundary independently checks JSON
+serialization and the permit's output limit.
+
+Any error after reservation is recorded as `unknown`, because a provider-side effect may have
+completed even when Crewhelm received no trustworthy response. The same tool-call identity cannot
+reserve again, so Crewhelm does not silently duplicate it. This slice does not yet reconcile an
+unknown outcome through Composio logs or expose a persisted global kill switch; those remain
+explicit follow-up controls rather than implied retry safety.
 
 ## Bootstrap and deployment authority
 

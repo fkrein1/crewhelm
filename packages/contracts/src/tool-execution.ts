@@ -13,6 +13,7 @@ import {
   toolApprovalExecutionIdSchema,
   verifyActiveRunAdmissionInputSchema,
 } from "./run-admission.js";
+import { composioConnectedAccountIdSchema } from "./connections.js";
 
 export const TOOL_EXECUTION_PERMIT_LIFETIME_MS = 5_000;
 export const TOOL_APPROVAL_LIFETIME_MS = 15 * 60 * 1_000;
@@ -79,6 +80,14 @@ export const completeToolExecutionResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     completed: z.boolean(),
     ok: z.literal(true),
+  }),
+  invalidToolExecutionSchema,
+]);
+
+export const resolveToolExecutionConnectionResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    ok: z.literal(true),
+    providerConnectionId: composioConnectedAccountIdSchema,
   }),
   invalidToolExecutionSchema,
 ]);
@@ -196,4 +205,7 @@ export type EvaluateToolExecutionResult = z.infer<typeof evaluateToolExecutionRe
 export type ListRunToolApprovalsResult = z.infer<typeof listRunToolApprovalsResultSchema>;
 export type PendingToolApproval = z.infer<typeof pendingToolApprovalSchema>;
 export type ReserveToolExecutionResult = z.infer<typeof reserveToolExecutionResultSchema>;
+export type ResolveToolExecutionConnectionResult = z.infer<
+  typeof resolveToolExecutionConnectionResultSchema
+>;
 export type ToolExecutionPermit = z.infer<typeof toolExecutionPermitSchema>;

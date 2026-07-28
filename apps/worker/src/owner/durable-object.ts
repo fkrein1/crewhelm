@@ -17,6 +17,7 @@ import {
   type ListAgentRevisionsResult,
   type ListAgentsResult,
   type ListConnectionsResult,
+  type LookupAgentConnectionConfigurationResult,
   type InspectRunResult,
   type ListRunToolApprovalsResult,
   type DecideRunToolApprovalResult,
@@ -30,8 +31,11 @@ import {
   type VerifyActiveRunAdmissionResult,
   type VerifyRunAdmissionResult,
   type CompleteToolExecutionResult,
+  type ConfigureAgentConnectionResult,
   type EvaluateToolExecutionResult,
+  type ResolvedConnectionForAttachment,
   type ReserveToolExecutionResult,
+  type ResolveToolExecutionConnectionResult,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
@@ -44,7 +48,7 @@ import {
   deniedListRunToolApprovals,
   deniedStartRun,
 } from "./agent-channel/module.js";
-import { AgentRegistry, deniedAgent } from "./agents/module.js";
+import { AgentRegistry, deniedAgent, deniedConnectionAttachment } from "./agents/module.js";
 import {
   Connections,
   deniedConnectionAuthorizationReturn,
@@ -204,6 +208,17 @@ export class OwnerControlPlane extends DurableObject {
     return this.#toolExecutions.complete(input);
   }
 
+  resolveToolExecutionConnection(input: unknown): Promise<ResolveToolExecutionConnectionResult> {
+    if (!this.#migrationReady) {
+      return Promise.resolve({
+        error: { code: "invalid_execution", message: "Tool execution denied." },
+        ok: false,
+      });
+    }
+
+    return this.#toolExecutions.resolveConnection(input);
+  }
+
   redeemRunReceiverCapability(input: unknown): RedeemRunReceiverCapabilityResult {
     return this.#migrationReady ? this.#agentChannel.redeem(input) : INVALID_RUN_ADMISSION;
   }
@@ -321,6 +336,69 @@ export class OwnerControlPlane extends DurableObject {
     return authorization.ok
       ? this.#agents.update(authorization.authority, input)
       : deniedAgent(authorization.code);
+  }
+
+  async lookupAgentConnectionConfiguration(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<LookupAgentConnectionConfigurationResult> {
+    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+
+    if (!authorization.ok) {
+      return deniedConnectionAttachment(authorization.code);
+    }
+
+    if (!authorization.authority.scopes.includes(CONNECTIONS_READ_SCOPE)) {
+      return deniedConnectionAttachment("insufficient_scope");
+    }
+
+    return this.#agents.lookupConnectionConfiguration(authorization.authority, input);
+  }
+
+  resolveConnectionForAttachment(
+    authorityInput: unknown,
+    input: unknown,
+  ): ResolvedConnectionForAttachment {
+    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+
+    if (!authorization.ok) {
+      return {
+        error: {
+          code: authorization.code,
+          message: "Connection attachment request denied.",
+        },
+        ok: false,
+      };
+    }
+
+    if (!authorization.authority.scopes.includes(CONNECTIONS_READ_SCOPE)) {
+      return {
+        error: {
+          code: "insufficient_scope",
+          message: "Connection attachment request denied.",
+        },
+        ok: false,
+      };
+    }
+
+    return this.#agents.resolveConnectionForAttachment(input);
+  }
+
+  async configureAgentConnection(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<ConfigureAgentConnectionResult> {
+    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+
+    if (!authorization.ok) {
+      return deniedConnectionAttachment(authorization.code);
+    }
+
+    if (!authorization.authority.scopes.includes(CONNECTIONS_READ_SCOPE)) {
+      return deniedConnectionAttachment("insufficient_scope");
+    }
+
+    return this.#agents.configureConnection(authorization.authority, input);
   }
 
   listAgents(authorityInput: unknown, input: unknown): ListAgentsResult {

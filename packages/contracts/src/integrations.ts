@@ -225,6 +225,19 @@ export const integrationToolInspectionSchema = integrationToolCatalogItemSchema.
   inputParameters: integrationToolParameterMapSchema,
   outputParameters: integrationToolParameterMapSchema,
 });
+export const integrationToolRuntimeDefinitionSchema = z.strictObject({
+  description: z.string().max(2_000).nullable(),
+  inputParametersJson: z
+    .string()
+    .min(2)
+    .max(128 * 1_024),
+  name: z.string().min(1).max(160),
+  outputParametersJson: z
+    .string()
+    .min(2)
+    .max(128 * 1_024),
+  tags: z.array(z.string().min(1).max(64)).max(32),
+});
 export const inspectIntegrationToolResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     ok: z.literal(true),
@@ -246,5 +259,8 @@ export type IntegrationCatalogSearchInput = z.infer<typeof integrationCatalogSea
 export type IntegrationCatalogSearchResult = z.infer<typeof integrationCatalogSearchResultSchema>;
 export type IntegrationToolCatalogItem = z.infer<typeof integrationToolCatalogItemSchema>;
 export type IntegrationToolInspection = z.infer<typeof integrationToolInspectionSchema>;
+export type IntegrationToolRuntimeDefinition = z.infer<
+  typeof integrationToolRuntimeDefinitionSchema
+>;
 export type IntegrationToolSearchInput = z.infer<typeof integrationToolSearchInputSchema>;
 export type IntegrationToolSearchResult = z.infer<typeof integrationToolSearchResultSchema>;

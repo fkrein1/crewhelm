@@ -481,6 +481,13 @@ describe("CrewAgent admitted execution", () => {
       },
       ownerKey: authority.ownerKey,
       targetDigests: [targetDigest],
+      tool: {
+        description: "Read one exact test item.",
+        inputParametersJson: '{"itemId":{"required":true,"type":"string"}}',
+        name: "Read item",
+        outputParametersJson: '{"itemId":{"type":"string"}}',
+        tags: ["readOnlyHint"],
+      },
       toolkitVersion: "20260727_00",
       toolSlug: "PROJECT_TOOLKIT_READ_ITEM",
     };
@@ -786,6 +793,13 @@ describe("CrewAgent admitted execution", () => {
       },
       ownerKey: authority.ownerKey,
       targetDigests: [targetDigest],
+      tool: {
+        description: "Update one exact test item.",
+        inputParametersJson: '{"itemId":{"required":true,"type":"string"}}',
+        name: "Update item",
+        outputParametersJson: '{"itemId":{"type":"string"}}',
+        tags: ["write"],
+      },
       toolkitVersion: "20260727_00",
       toolSlug: "PROJECT_TOOLKIT_UPDATE_ITEM",
     };

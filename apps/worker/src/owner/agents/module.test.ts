@@ -1,6 +1,7 @@
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  CONNECTIONS_READ_SCOPE,
   MAXIMUM_AGENTS_PER_OWNER,
   MAXIMUM_REVISIONS_PER_AGENT,
   OWNER_READ_SCOPE,
@@ -292,6 +293,149 @@ describe("OwnerControlPlane agents", () => {
       { action: "agent.created", subject_id: created.agent.id },
       { action: "agent.updated", subject_id: created.agent.id },
     ]);
+  });
+
+  it("configures dynamic tools from one verified connection and clones them across revisions", async () => {
+    const authority = await authorityFor("223", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      CONNECTIONS_READ_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("create-223"));
+
+    if (!created.ok) {
+      throw new Error("Expected Agent creation to succeed.");
+    }
+
+    const connectionId = "connection_22333333-3333-4333-8333-333333333333";
+    const providerConnectionId = "ca_project_223";
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO connections
+           (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
+         VALUES (?, 'composio', ?, 'ac_project_223', 'initiated', ?)`,
+        connectionId,
+        providerConnectionId,
+        Date.now(),
+      );
+    });
+
+    await expect(
+      stub.resolveConnectionForAttachment(authority, {
+        agentId: created.agent.id,
+        connectionId,
+        expectedRevision: 1,
+      }),
+    ).resolves.toEqual({ ok: true, providerConnectionId });
+
+    const configured = await stub.configureAgentConnection(authority, {
+      agentId: created.agent.id,
+      connectionId,
+      expectedRevision: 1,
+      expiresAt: null,
+      idempotencyKey: "configure-223",
+      limits: {
+        maxCallsPerRun: 4,
+        maxConcurrency: 1,
+        maxCostMicrousdPerCall: 5_000,
+        maxDurationMs: 20_000,
+        maxOutputBytes: 64_000,
+      },
+      providerConnectionId,
+      tools: [
+        {
+          description: "Read one exact project item.",
+          inputParameters: {
+            itemId: { required: true, type: "string" },
+          },
+          integration: { name: "Project toolkit", slug: "project_toolkit" },
+          name: "Read item",
+          noAuth: false,
+          outputParameters: { itemId: { type: "string" } },
+          requiredScopes: ["items:read"],
+          slug: "PROJECT_TOOLKIT_READ_ITEM",
+          tags: ["readOnlyHint"],
+          version: "20260727_00",
+        },
+      ],
+      verifiedToolkitSlug: "project_toolkit",
+    });
+
+    expect(configured).toMatchObject({
+      agent: { revision: 2 },
+      configured: true,
+      ok: true,
+    });
+
+    if (!configured.ok) {
+      throw new Error("Expected connection configuration to succeed.");
+    }
+
+    const updated = await stub.updateAgent(
+      authority,
+      agentUpdate(configured.agent, "update-223", "Project reader"),
+    );
+
+    expect(updated).toMatchObject({
+      agent: { revision: 3 },
+      ok: true,
+      updated: true,
+    });
+
+    if (!updated.ok) {
+      throw new Error("Expected configured Agent update to succeed.");
+    }
+
+    const rows = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec(
+          `SELECT agent_revision, connection_id, grant
+           FROM capability_grants
+           WHERE agent_id = ?
+           ORDER BY agent_revision`,
+          created.agent.id,
+        )
+        .toArray(),
+    );
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.agent_revision)).toEqual([2, 3]);
+    expect(rows.map((row) => row.connection_id)).toEqual([connectionId, connectionId]);
+    expect(JSON.stringify(rows)).not.toContain(providerConnectionId);
+    expect(JSON.stringify(rows)).not.toContain("items:read");
+    expect(JSON.stringify(rows)).toContain("PROJECT_TOOLKIT_READ_ITEM");
+    await expect(stub.listConnections(authority, {})).resolves.toMatchObject({
+      connections: [{ connectionId, status: "active" }],
+      ok: true,
+    });
+
+    const detached = await stub.configureAgentConnection(authority, {
+      agentId: created.agent.id,
+      connectionId,
+      expectedRevision: updated.agent.revision,
+      expiresAt: null,
+      idempotencyKey: "detach-223",
+      limits: {
+        maxCallsPerRun: 1,
+        maxConcurrency: 1,
+        maxCostMicrousdPerCall: 0,
+        maxDurationMs: 1,
+        maxOutputBytes: 1,
+      },
+      providerConnectionId: null,
+      tools: [],
+      verifiedToolkitSlug: null,
+    });
+
+    expect(detached).toMatchObject({
+      agent: { capabilityGrants: [], revision: 4 },
+      configured: true,
+      ok: true,
+    });
   });
 
   it("paginates immutable Agent revisions newest first and reads exact history", async () => {

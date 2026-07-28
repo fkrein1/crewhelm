@@ -6,10 +6,10 @@ shareable agent recipes. Composio supplies the broad app and web integration pla
 toolkits such as Firecrawl.
 
 The implemented surface includes a deployable Worker, an authenticated MCP control plane with an
-owner-scoped Agent registry, bounded no-tool Agent runs on Cloudflare Think, a pure ToolGate policy
-module for classified Composio actions, and local bootstrap and diagnostic commands. Composio
-catalog discovery and connection onboarding are available; granting and executing integration
-tools remain outside the runtime surface.
+owner-scoped Agent registry, bounded Agent runs on Cloudflare Think, a pure ToolGate policy module,
+dynamic Composio tool definitions and execution, and local bootstrap and diagnostic commands.
+Composio remains the credential and account-authorization owner; Crewhelm attaches a connection to
+an immutable Agent revision and applies its own budgets, approvals, and execution permits.
 
 ## Principles
 
@@ -128,8 +128,12 @@ The MCP surface exposes:
 - `crewhelm_update_agent` — replace an Agent's editable configuration as a new immutable revision;
   requires `agents:write`, the expected current revision, and an idempotency key. Each Agent retains
   at most 1,000 revisions.
-- `crewhelm_start_run` — admit and durably start one bounded no-tool turn against an exact immutable
-  Agent revision; requires `agents:write` and an idempotency key.
+- `crewhelm_configure_agent_connection` — replace the version-pinned Composio tools exposed from
+  one authorized connection on an Agent, or detach that connection by selecting no tools; requires
+  `agents:write`, `connections:read`, and `integrations:read`. The operation creates an immutable
+  Agent revision and never returns the Composio connected-account ID.
+- `crewhelm_start_run` — admit and durably start one bounded turn against an exact immutable Agent
+  revision; requires `agents:write` and an idempotency key.
 - `crewhelm_inspect_run` — inspect the status and bounded output of one owner-scoped run; requires
   `agents:read`.
 - `crewhelm_search_integrations` — search and paginate the complete non-deprecated Composio
@@ -158,15 +162,16 @@ preserves access to the underlying Agent framework rather than defining a perman
 facade, while deterministic policy decides which capabilities each Agent may use. Composio
 discovery covers its complete current non-deprecated catalog, including project toolkits, without
 a Crewhelm-maintained integration or tool allowlist. Authentication completes on Composio's hosted
-page, so OAuth tokens and API keys do not pass through Crewhelm or the MCP client. The browser
-return is not a signed provider assertion: Crewhelm records it as lifecycle information and still
-requires a later deterministic grant and execution check before any tool can use the connection.
-The ToolGate policy accepts any valid exact Composio toolkit, tool, and pinned version rather than
-a curated catalog subset. It evaluates only an immutable capability grant, a classified action
-containing digests instead of raw arguments or targets, and a current policy and budget snapshot.
-An allow decision is local policy evidence, not a cross-object execution permit and not permission
-to call Composio; runtime admission, atomic budget reservation, verified permits, approval
-evidence, and connector execution remain separate boundaries.
+page, so OAuth tokens and API keys do not pass through the MCP client. The browser return is not a
+signed provider assertion: configuration and execution each verify the exact opaque account as
+active at Composio. Crewhelm snapshots only bounded public tool metadata for selected, pinned
+versions and converts those provider schemas through one generic runtime adapter; there is no
+per-tool Crewhelm implementation or curated allowlist. Credential-retrieval tools are excluded.
+The ToolGate policy evaluates an immutable capability grant, a classified action containing
+digests instead of raw arguments or targets, and a current policy and budget snapshot. An allow
+decision is local policy evidence, not a cross-object execution permit and not permission to call
+Composio; runtime admission, atomic budget reservation, single-use verified permits, approval
+evidence, account revalidation, and connector execution remain separate boundaries.
 
 Changing `OWNER_GITHUB_USER_ID` or the GitHub client secret blocks new authorization but does not
 revoke an already issued 15-minute access token. For emergency global revocation, create a fresh

@@ -509,7 +509,9 @@ describe("public OAuth to MCP integration", () => {
     expect(consentPage).not.toContain("<script>Integration MCP client</script>");
     expect(consentPage).toContain("View control-plane status and Agent summaries.");
     expect(consentPage).toContain("View full Agent definitions, including instructions.");
-    expect(consentPage).toContain("Update Agent definitions by creating immutable revisions.");
+    expect(consentPage).toContain(
+      "Start runs, decide approvals, and replace Agent definitions or exposed connection tools through immutable revisions.",
+    );
     expect(consentPage).toContain(
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
@@ -826,7 +828,9 @@ describe("public OAuth to MCP integration", () => {
     expect(token.scope).toBe(OWNER_READ_SCOPE);
     expect(consentPage).toContain("View control-plane status and Agent summaries.");
     expect(consentPage).not.toContain("View full Agent definitions, including instructions.");
-    expect(consentPage).not.toContain("Update Agent definitions by creating immutable revisions.");
+    expect(consentPage).not.toContain(
+      "Start runs, decide approvals, and replace Agent definitions or exposed connection tools through immutable revisions.",
+    );
     expect(consentPage).not.toContain(
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
@@ -942,7 +946,9 @@ describe("public OAuth to MCP integration", () => {
     expect(token.scope).toBe(AGENTS_READ_SCOPE);
     expect(consentPage).not.toContain("View control-plane status and Agent summaries.");
     expect(consentPage).toContain("View full Agent definitions, including instructions.");
-    expect(consentPage).not.toContain("Update Agent definitions by creating immutable revisions.");
+    expect(consentPage).not.toContain(
+      "Start runs, decide approvals, and replace Agent definitions or exposed connection tools through immutable revisions.",
+    );
     if (!created.ok) {
       throw new Error("Expected test Agent creation to succeed.");
     }
@@ -988,7 +994,9 @@ describe("public OAuth to MCP integration", () => {
     );
 
     expect(token.scope).toBe(AGENTS_WRITE_SCOPE);
-    expect(consentPage).toContain("Update Agent definitions by creating immutable revisions.");
+    expect(consentPage).toContain(
+      "Start runs, decide approvals, and replace Agent definitions or exposed connection tools through immutable revisions.",
+    );
     expect(consentPage).not.toContain("View control-plane status and Agent summaries.");
     expect(consentPage).not.toContain("View full Agent definitions, including instructions.");
     expect(consentPage).not.toContain(
@@ -1066,7 +1074,9 @@ describe("public OAuth to MCP integration", () => {
     expect(token.scope).toBe(OWNER_WRITE_SCOPE);
     expect(consentPage).not.toContain("View control-plane status and Agent summaries.");
     expect(consentPage).not.toContain("View full Agent definitions, including instructions.");
-    expect(consentPage).not.toContain("Update Agent definitions by creating immutable revisions.");
+    expect(consentPage).not.toContain(
+      "Start runs, decide approvals, and replace Agent definitions or exposed connection tools through immutable revisions.",
+    );
     expect(consentPage).toContain(
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
