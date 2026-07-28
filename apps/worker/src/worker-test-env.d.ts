@@ -1,4 +1,4 @@
-import type { CrewAgent } from "../src/crew-agent.js";
+import type { CrewAgent } from "./crew-agent.js";
 
 declare global {
   namespace Cloudflare {

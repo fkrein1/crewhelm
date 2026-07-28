@@ -8,9 +8,9 @@ import {
 } from "@crewhelm/contracts";
 import { describe, expect, it, vi } from "vitest";
 
-import { createConnectionAuthorizationCallback } from "../src/connection-authorization-return.js";
-import { createWorker } from "../src/index.js";
-import { deriveOwnerKey } from "../src/owner-identity.js";
+import { createConnectionAuthorizationCallback } from "./connection-authorization-return.js";
+import { createWorker } from "./index.js";
+import { deriveOwnerKey } from "./owner-identity.js";
 import { registerAuthTestDatabase } from "./auth-testkit.js";
 
 const origin = "https://crewhelm.test";

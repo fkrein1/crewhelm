@@ -45,8 +45,8 @@ import {
   MCP_START_RUN_TOOL_NAME,
   MCP_UPDATE_AGENT_TOOL_NAME,
   handleAuthenticatedMcpRequest,
-} from "../src/mcp-handler.js";
-import { deriveOwnerKey } from "../src/owner-identity.js";
+} from "./mcp-handler.js";
+import { deriveOwnerKey } from "./owner-identity.js";
 import { TEST_REPLY } from "./test-crew-agent.js";
 
 const origin = "https://crewhelm.test";

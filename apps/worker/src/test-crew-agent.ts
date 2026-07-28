@@ -6,7 +6,7 @@ import type { ThinkModel } from "@cloudflare/think";
 import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
 import * as z from "zod";
 
-import { CrewAgent, type CrewAgentToolAdapter } from "../src/crew-agent.js";
+import { CrewAgent, type CrewAgentToolAdapter } from "./crew-agent.js";
 
 const TEST_REPLY = "Crewhelm completed the admitted test run.";
 const LARGE_TEST_PROMPT = "Return an output larger than the retained character boundary.";

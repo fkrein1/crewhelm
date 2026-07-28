@@ -3,9 +3,9 @@ import { OWNER_READ_SCOPE, OWNER_SCOPES } from "@crewhelm/contracts";
 import { describe, expect, it } from "vitest";
 import * as z from "zod";
 
-import type { WorkerEnv } from "../src/env.js";
-import { createWorker } from "../src/index.js";
-import { hasActiveClientRegistration, purgeExpiredAuthRecords } from "../src/oauth-server.js";
+import type { WorkerEnv } from "./env.js";
+import { createWorker } from "./index.js";
+import { hasActiveClientRegistration, purgeExpiredAuthRecords } from "./oauth-server.js";
 import { readAuthTestMigrations, registerAuthTestDatabase } from "./auth-testkit.js";
 
 const origin = "https://crewhelm.test";

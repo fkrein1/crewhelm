@@ -9,7 +9,7 @@ export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
   plugins: [
     cloudflareTest(async () => ({
-      main: fileURLToPath(new URL("./test/worker-entry.ts", import.meta.url)),
+      main: fileURLToPath(new URL("./src/worker-test-entry.ts", import.meta.url)),
       miniflare: {
         compatibilityDate: "2026-07-22",
         compatibilityFlags: ["nodejs_compat"],
@@ -62,7 +62,7 @@ export default defineConfig({
   ],
   test: {
     clearMocks: true,
-    include: ["test/**/*.test.ts"],
+    include: ["src/**/*.test.ts"],
     name: "worker",
     passWithNoTests: false,
     restoreMocks: true,
