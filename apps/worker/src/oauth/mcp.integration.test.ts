@@ -25,9 +25,8 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as z from "zod";
 
+import { CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX } from "../owner/connections/authorization-return.js";
 import type { WorkerEnv } from "../env.js";
-import { exchangeGithubAuthorizationCode } from "./auth.js";
-import { CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX } from "../http/connection-authorization-return.js";
 import { handleWorkerRequest } from "../http/server.js";
 import {
   MCP_CREATE_AGENT_TOOL_NAME,
@@ -42,6 +41,7 @@ import {
   MCP_UPDATE_AGENT_TOOL_NAME,
 } from "../mcp/server.js";
 import { deriveOwnerKey } from "../owner/identity.js";
+import { exchangeGithubAuthorizationCode } from "./auth.js";
 import { registerAuthTestDatabase } from "./testkit.js";
 
 const origin = "https://crewhelm.test";

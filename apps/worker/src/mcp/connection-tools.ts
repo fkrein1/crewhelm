@@ -12,9 +12,13 @@ import type { ComposioConnectionLinks } from "@crewhelm/composio";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type * as z from "zod";
 
-import { createConnectionAuthorizationCallback } from "../http/connection-authorization-return.js";
+import { createConnectionAuthorizationCallback } from "../owner/connections/authorization-return.js";
 import type { McpToolContext, OwnerControlPlaneClient } from "./context.js";
-import { CONTROL_PLANE_UNAVAILABLE_BODY, controlPlaneToolResult } from "./tool-result.js";
+import {
+  controlPlaneToolResult,
+  unavailableToolResult,
+  validatedToolResult,
+} from "./tool-result.js";
 
 export const MCP_CREATE_CONNECTION_LINK_TOOL_NAME = "crewhelm_create_connection_link";
 export const MCP_LIST_CONNECTIONS_TOOL_NAME = "crewhelm_list_connections";
@@ -26,12 +30,7 @@ interface ConnectionToolConfiguration {
 }
 
 function connectionLinkMcpResult(result: unknown) {
-  const parsed = createConnectionLinkResultSchema.parse(result);
-
-  return {
-    content: [{ text: JSON.stringify(parsed), type: "text" as const }],
-    isError: !parsed.ok,
-  };
+  return validatedToolResult(result, createConnectionLinkResultSchema);
 }
 
 function unknownConnectionLinkMcpResult() {
@@ -77,15 +76,7 @@ async function createConnectionLink(
       await controlPlane.reserveConnectionLink(authority, input),
     );
   } catch {
-    return {
-      content: [
-        {
-          text: CONTROL_PLANE_UNAVAILABLE_BODY,
-          type: "text" as const,
-        },
-      ],
-      isError: true,
-    };
+    return unavailableToolResult();
   }
 
   if (!reservation.ok) {

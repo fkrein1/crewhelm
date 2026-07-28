@@ -82,12 +82,6 @@ async function digestBase64Url(value: string): Promise<string> {
   return encodeBase64Url(await digestBytes(new TextEncoder().encode(value)));
 }
 
-export async function digestRunPrompt(prompt: string): Promise<string> {
-  const digest = await digestBytes(new TextEncoder().encode(prompt));
-
-  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 function createNonce(): string {
   return runAdmissionNonceSchema.parse(encodeBase64Url(crypto.getRandomValues(new Uint8Array(32))));
 }

@@ -12,7 +12,7 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "c
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
-import { digestRunPrompt } from "./module.js";
+import { digestRunPrompt } from "../../agent/admitted-runs/protocol.js";
 import { agentInput, agentUpdate, authorityFor, fixedRunAdmissionFailure } from "../testkit.js";
 
 describe("OwnerControlPlane runs", () => {

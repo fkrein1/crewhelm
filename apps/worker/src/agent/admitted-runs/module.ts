@@ -69,7 +69,7 @@ import type { ToolSet, UIMessage } from "ai";
 import type { RetryOptions, Schedule } from "agents";
 import type * as z from "zod";
 
-import { digestRunPrompt } from "../../owner/runs/module.js";
+import { digestRunPrompt } from "./protocol.js";
 import {
   admittedRunRecordSchema,
   admittedTurnMetadataSchema,
