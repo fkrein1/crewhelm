@@ -65,6 +65,13 @@ describe("admitted tool execution", () => {
       },
       ownerKey: authority.ownerKey,
       targetDigests: [targetDigest],
+      tool: {
+        description: "Read one item.",
+        inputParametersJson: '{"itemId":{"required":true,"type":"string"}}',
+        name: "Read item",
+        outputParametersJson: '{"itemId":{"type":"string"}}',
+        tags: ["readOnlyHint"],
+      },
       toolkitVersion: "20260727_00",
       toolSlug: "PROJECT_TOOLKIT_READ_ITEM",
     };
@@ -165,6 +172,27 @@ describe("admitted tool execution", () => {
       throw new Error("Expected exact tool execution permit.");
     }
 
+    const extendedPermit = {
+      ...reserved.permit,
+      constraints: {
+        ...reserved.permit.constraints,
+        decisionExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    };
+
+    await expect(controlPlane.resolveToolExecutionConnection(extendedPermit)).resolves.toEqual({
+      error: { code: "invalid_execution", message: "Tool execution denied." },
+      ok: false,
+    });
+    await expect(controlPlane.resolveToolExecutionConnection(reserved.permit)).resolves.toEqual({
+      ok: true,
+      providerConnectionId: "ca_tool_execution_701",
+    });
+    await expect(controlPlane.resolveToolExecutionConnection(reserved.permit)).resolves.toEqual({
+      error: { code: "invalid_execution", message: "Tool execution denied." },
+      ok: false,
+    });
+
     const retried = await controlPlane.reserveToolExecution({ ...reference, action });
 
     expect(retried).toEqual({
@@ -174,9 +202,28 @@ describe("admitted tool execution", () => {
     await expect(
       controlPlane.completeToolExecution({
         outcome: { outputBytes: 32, status: "completed" },
+        permit: {
+          ...reserved.permit,
+          constraints: {
+            ...reserved.permit.constraints,
+            maxOutputBytes: reserved.permit.constraints.maxOutputBytes + 1,
+          },
+        },
+      }),
+    ).resolves.toEqual({
+      error: { code: "invalid_execution", message: "Tool execution denied." },
+      ok: false,
+    });
+    await expect(
+      controlPlane.completeToolExecution({
+        outcome: { outputBytes: 32, status: "completed" },
         permit: reserved.permit,
       }),
     ).resolves.toEqual({ completed: true, ok: true });
+    await expect(controlPlane.resolveToolExecutionConnection(reserved.permit)).resolves.toEqual({
+      error: { code: "invalid_execution", message: "Tool execution denied." },
+      ok: false,
+    });
     await expect(controlPlane.reserveToolExecution({ ...reference, action })).resolves.toEqual({
       error: { code: "invalid_execution", message: "Tool execution denied." },
       ok: false,

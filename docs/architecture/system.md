@@ -64,11 +64,15 @@ composition root or external adapter. Split only around a coherent invariant or 
    single-use permit bound to the exact Agent revision, run, prompt, idempotency key, and budget.
 3. `CrewAgent` redeems the permit and claims reserved model work before inference. Think's
    authority-bearing inherited entrypoints remain blocked.
-4. Tool discovery grants no execution authority. `ToolGate` evaluates the exact grant and current
-   policy immediately before a single-use execution reservation. The production tool adapter is
-   not wired yet.
-5. Connect Links create owner-facing setup flows. Browser returns record lifecycle evidence; they
-   do not activate a connection or authorize execution.
+4. Tool discovery grants no execution authority. Configuring an Agent connection verifies the
+   exact active Composio account, snapshots bounded public schemas for selected pinned versions,
+   and creates a new immutable Agent revision.
+5. `ToolGate` evaluates the exact grant and current policy immediately before a single-use
+   execution reservation. The production adapter atomically consumes the complete permit to claim
+   the opaque account once, verifies the account and toolkit again, then executes through
+   Composio's fixed direct-tool endpoint.
+6. Connect Links create owner-facing setup flows. Browser returns record lifecycle evidence; they
+   do not by themselves activate a connection or authorize execution.
 
 Control-plane migrations are ordered and checksummed; incompatible state fails closed before RPC
 admission. Auth D1 remains authoritative only for OAuth protocol state.

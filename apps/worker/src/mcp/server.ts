@@ -3,7 +3,11 @@ import {
   ownerAuthoritySchema,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
-import { createComposioCatalog, createComposioConnectionLinks } from "@crewhelm/composio";
+import {
+  createComposioCatalog,
+  createComposioConnectionLinks,
+  createComposioRuntime,
+} from "@crewhelm/composio";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import * as z from "zod";
@@ -12,11 +16,13 @@ import type { WorkerEnv } from "../env.js";
 import { readBoundedPostRequest } from "../http/request-body.js";
 import { registerAgentTools } from "./agent-tools.js";
 import { registerConnectionTools } from "./connection-tools.js";
+import { registerConnectionAttachmentTools } from "./connection-attachment-tools.js";
 import type { McpEnvironment } from "./context.js";
 import { registerIntegrationTools } from "./integration-tools.js";
 import { registerRunTools } from "./run-tools.js";
 import { controlPlaneToolResult } from "./tool-result.js";
 
+export { MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME } from "./connection-attachment-tools.js";
 export {
   MCP_CREATE_AGENT_TOOL_NAME,
   MCP_GET_AGENT_REVISION_TOOL_NAME,
@@ -132,6 +138,16 @@ function createMcpServer(
     }),
     publicOrigin: env.PUBLIC_ORIGIN,
     signingSecret: env.BETTER_AUTH_SECRET,
+  });
+  registerConnectionAttachmentTools(server, context, {
+    catalog: createComposioCatalog({
+      apiKey: env.COMPOSIO_API_KEY,
+      signal,
+    }),
+    runtime: createComposioRuntime({
+      apiKey: env.COMPOSIO_API_KEY,
+    }),
+    signal,
   });
   registerIntegrationTools(
     server,

@@ -229,7 +229,7 @@ function consentPage(
       ? "<li>View full Agent definitions, including instructions.</li>"
       : "",
     requestedScopes.includes(AGENTS_WRITE_SCOPE)
-      ? "<li>Update Agent definitions by creating immutable revisions.</li>"
+      ? "<li>Start runs, decide approvals, and replace Agent definitions or exposed connection tools through immutable revisions.</li>"
       : "",
     requestedScopes.includes(CONNECTIONS_READ_SCOPE)
       ? "<li>View bounded Crewhelm connection summaries. Provider account identifiers and credentials are not returned.</li>"

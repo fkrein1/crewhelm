@@ -60,6 +60,13 @@ function exactInput(): ComposioToolGateInput {
       },
       ownerKey,
       targetDigests: [targetDigest, otherTargetDigest],
+      tool: {
+        description: "Read one item.",
+        inputParametersJson: '{"itemId":{"required":true,"type":"string"}}',
+        name: "Read item",
+        outputParametersJson: '{"itemId":{"type":"string"}}',
+        tags: ["readOnlyHint"],
+      },
       toolkitVersion: "20260727_00",
       toolSlug: "PROJECT_TOOLKIT_READ_ITEM",
     },

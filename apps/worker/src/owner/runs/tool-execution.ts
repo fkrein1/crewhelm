@@ -7,11 +7,14 @@ import {
   evaluateToolExecutionResultSchema,
   reserveToolExecutionInputSchema,
   reserveToolExecutionResultSchema,
+  resolveToolExecutionConnectionResultSchema,
   runAdmissionNonceSchema,
   toolExecutionPermitSchema,
   type CompleteToolExecutionResult,
   type EvaluateToolExecutionResult,
   type ReserveToolExecutionResult,
+  type ResolveToolExecutionConnectionResult,
+  type ToolExecutionPermit,
 } from "@crewhelm/contracts";
 import { evaluateApprovedComposioToolAction, evaluateComposioToolAction } from "@crewhelm/core";
 import { and, count, eq, gt } from "drizzle-orm";
@@ -54,6 +57,13 @@ function encodeBase64Url(bytes: Uint8Array): string {
 async function digestBase64Url(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return encodeBase64Url(new Uint8Array(digest));
+}
+
+async function digestToolExecutionPermit(
+  permit: ToolExecutionPermit,
+  state: "reserved" | "dispatched",
+): Promise<string> {
+  return digestBase64Url(JSON.stringify({ permit, state }));
 }
 
 function createNonce(): string {
@@ -144,7 +154,22 @@ export class ToolExecutions {
     }
 
     const nonce = createNonce();
-    const nonceDigest = await digestBase64Url(nonce);
+    const permit = toolExecutionPermitSchema.parse({
+      action: request.data.action,
+      actionDigest: decision.actionDigest,
+      audience: "composio_adapter",
+      constraints: {
+        ...decision.constraints,
+        decisionExpiresAt: new Date(
+          Math.min(
+            Date.parse(decision.constraints.decisionExpiresAt),
+            evaluatedAt + TOOL_EXECUTION_PERMIT_LIFETIME_MS,
+          ),
+        ).toISOString(),
+      },
+      nonce,
+    });
+    const permitDigest = await digestToolExecutionPermit(permit, "reserved");
     const result = this.#database.transaction((transaction) => {
       const currentGateInput = this.#gateInput(transaction, request.data, evaluatedAt);
 
@@ -195,7 +220,7 @@ export class ToolExecutions {
           costMicrousd: request.data.action.estimatedCostMicrousd ?? 0,
           expiresAt: executionDeadline,
           grantId: request.data.action.grantId,
-          nonceDigest,
+          nonceDigest: permitDigest,
           runId: request.data.runId,
           startedAt: evaluatedAt,
           status: "reserved",
@@ -214,21 +239,7 @@ export class ToolExecutions {
 
       return reserveToolExecutionResultSchema.parse({
         ok: true,
-        permit: toolExecutionPermitSchema.parse({
-          action: request.data.action,
-          actionDigest: decision.actionDigest,
-          audience: "composio_adapter",
-          constraints: {
-            ...decision.constraints,
-            decisionExpiresAt: new Date(
-              Math.min(
-                Date.parse(decision.constraints.decisionExpiresAt),
-                evaluatedAt + TOOL_EXECUTION_PERMIT_LIFETIME_MS,
-              ),
-            ).toISOString(),
-          },
-          nonce,
-        }),
+        permit,
         state: "allowed",
       });
     });
@@ -243,7 +254,11 @@ export class ToolExecutions {
       return INVALID_TOOL_EXECUTION;
     }
 
-    const nonceDigest = await digestBase64Url(request.data.permit.nonce);
+    const reservedPermitDigest = await digestToolExecutionPermit(request.data.permit, "reserved");
+    const dispatchedPermitDigest = await digestToolExecutionPermit(
+      request.data.permit,
+      "dispatched",
+    );
     const currentTime = Date.now();
 
     return this.#database.transaction((transaction) => {
@@ -255,7 +270,10 @@ export class ToolExecutions {
 
       if (
         row === undefined ||
-        row.nonceDigest !== nonceDigest ||
+        !(
+          row.nonceDigest === dispatchedPermitDigest ||
+          (row.nonceDigest === reservedPermitDigest && request.data.outcome.status !== "completed")
+        ) ||
         row.runId !== request.data.permit.action.runId ||
         row.grantId !== request.data.permit.action.grantId ||
         row.actionDigest !== request.data.permit.actionDigest
@@ -313,6 +331,84 @@ export class ToolExecutions {
       return completeToolExecutionResultSchema.parse({
         completed: true,
         ok: true,
+      });
+    });
+  }
+
+  async resolveConnection(input: unknown): Promise<ResolveToolExecutionConnectionResult> {
+    const permit = toolExecutionPermitSchema.safeParse(input);
+
+    if (
+      !permit.success ||
+      permit.data.action.ownerKey !== this.#objectName ||
+      Date.parse(permit.data.constraints.decisionExpiresAt) <= Date.now()
+    ) {
+      return INVALID_TOOL_EXECUTION;
+    }
+
+    const reservedPermitDigest = await digestToolExecutionPermit(permit.data, "reserved");
+    const dispatchedPermitDigest = await digestToolExecutionPermit(permit.data, "dispatched");
+
+    return this.#database.transaction((transaction) => {
+      const row = transaction
+        .select({
+          actionDigest: toolExecutions.actionDigest,
+          connectionId: capabilityGrants.connectionId,
+          connectionStatus: connections.status,
+          expiresAt: toolExecutions.expiresAt,
+          grant: capabilityGrants.grant,
+          grantId: toolExecutions.grantId,
+          grantStatus: capabilityGrants.status,
+          nonceDigest: toolExecutions.nonceDigest,
+          providerConnectionId: connections.providerConnectionId,
+          runId: toolExecutions.runId,
+          status: toolExecutions.status,
+        })
+        .from(toolExecutions)
+        .innerJoin(capabilityGrants, eq(capabilityGrants.grantId, toolExecutions.grantId))
+        .innerJoin(connections, eq(connections.connectionId, capabilityGrants.connectionId))
+        .where(eq(toolExecutions.toolCallId, permit.data.action.toolCallId))
+        .get();
+      const grant = composioToolCapabilityGrantSchema.safeParse(row?.grant);
+
+      if (
+        row === undefined ||
+        !grant.success ||
+        row.status !== "reserved" ||
+        row.expiresAt <= Date.now() ||
+        row.connectionStatus !== "active" ||
+        row.grantStatus !== "active" ||
+        row.nonceDigest !== reservedPermitDigest ||
+        row.actionDigest !== permit.data.actionDigest ||
+        row.runId !== permit.data.action.runId ||
+        row.grantId !== permit.data.action.grantId ||
+        row.connectionId !== permit.data.action.connectionId ||
+        grant.data.toolSlug !== permit.data.action.toolSlug ||
+        grant.data.toolkitVersion !== permit.data.action.toolkitVersion
+      ) {
+        return INVALID_TOOL_EXECUTION;
+      }
+
+      const claimed = transaction
+        .update(toolExecutions)
+        .set({ nonceDigest: dispatchedPermitDigest })
+        .where(
+          and(
+            eq(toolExecutions.toolCallId, permit.data.action.toolCallId),
+            eq(toolExecutions.status, "reserved"),
+            eq(toolExecutions.nonceDigest, reservedPermitDigest),
+          ),
+        )
+        .returning({ toolCallId: toolExecutions.toolCallId })
+        .all();
+
+      if (claimed.length !== 1) {
+        return INVALID_TOOL_EXECUTION;
+      }
+
+      return resolveToolExecutionConnectionResultSchema.parse({
+        ok: true,
+        providerConnectionId: row.providerConnectionId,
       });
     });
   }

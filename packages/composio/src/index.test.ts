@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { integrationToolParameterMapSchema } from "../../contracts/src/index.js";
-import { createComposioCatalog, createComposioConnectionLinks } from "./index.js";
+import {
+  classifyComposioToolEffect,
+  integrationToolParameterMapSchema,
+  isCredentialBearingComposioTool,
+} from "../../contracts/src/index.js";
+import {
+  createComposioCatalog,
+  createComposioConnectionLinks,
+  createComposioRuntime,
+} from "./index.js";
 
 function catalogResponse(body: unknown, init?: ResponseInit): Response {
   const headers = new Headers(init?.headers);
@@ -649,6 +657,161 @@ describe("Composio catalog adapter", () => {
       ok: false,
     });
     expect(JSON.stringify(result)).not.toContain("secret");
+  });
+});
+
+describe("Composio runtime adapter", () => {
+  it("converts arbitrary provider parameter maps into strict runtime validation", () => {
+    const runtime = createComposioRuntime({ apiKey: "composio-project-secret" });
+    const schema = runtime.createInputSchema(
+      JSON.stringify({
+        count: { minimum: 1, type: "integer" },
+        itemId: { required: true, type: "string" },
+      }),
+    );
+
+    expect(schema.safeParse({ count: 2, itemId: "item-1" }).success).toBe(true);
+    expect(schema.safeParse({ count: 0, itemId: "item-1" }).success).toBe(false);
+    expect(schema.safeParse({ count: 2 }).success).toBe(false);
+    expect(schema.safeParse({ itemId: "item-1", unexpected: true }).success).toBe(false);
+    expect(() => runtime.createInputSchema('{"itemId":null}')).toThrow(
+      "Composio tool schema is unavailable.",
+    );
+  });
+
+  it("classifies only explicit read and destructive hints, defaulting unknown tools to write", () => {
+    expect(classifyComposioToolEffect(["readOnlyHint"], "GITHUB_LIST_ISSUES")).toBe("read");
+    expect(classifyComposioToolEffect(["readOnlyHint"], "GITHUB_CREATE_ISSUE")).toBe("write");
+    expect(classifyComposioToolEffect(["readOnlyHint"], "GITHUB_FETCH_AND_COMMENT")).toBe("write");
+    expect(classifyComposioToolEffect([], "GITHUB_LIST_ISSUES")).toBe("write");
+    expect(classifyComposioToolEffect(["destructiveHint"])).toBe("destructive");
+    expect(classifyComposioToolEffect([], "GITHUB_DELETE_REPOSITORY")).toBe("destructive");
+    expect(classifyComposioToolEffect(["issues", "project-management"])).toBe("write");
+  });
+
+  it("prevents credential-retrieval tools from being attached to an Agent", () => {
+    expect(
+      isCredentialBearingComposioTool({
+        name: "Read secret",
+        outputParameters: { value: { type: "string" } },
+        slug: "VAULT_GET_SECRET",
+      }),
+    ).toBe(true);
+    expect(
+      isCredentialBearingComposioTool({
+        name: "Read item",
+        outputParameters: { client_secret: { type: "string" } },
+        slug: "PROJECT_READ_ITEM",
+      }),
+    ).toBe(true);
+    expect(
+      isCredentialBearingComposioTool({
+        name: "Read item",
+        outputParameters: { itemId: { type: "string" } },
+        slug: "PROJECT_READ_ITEM",
+      }),
+    ).toBe(false);
+  });
+
+  it("verifies an active connected account without retaining its credential state", async () => {
+    const apiKey = "composio-project-secret";
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      catalogResponse({
+        id: "ca_project_123",
+        state: { val: { access_token: "provider-secret" } },
+        status: "ACTIVE",
+        toolkit: { slug: "project_toolkit" },
+      }),
+    );
+    const result = await createComposioRuntime({ apiKey, fetch: fetchMock }).verifyConnection(
+      "ca_project_123",
+    );
+    const request = fetchMock.mock.calls[0];
+
+    expect(request?.[0]).toEqual(
+      new URL("https://backend.composio.dev/api/v3.1/connected_accounts/ca_project_123"),
+    );
+    expect(new Headers(request?.[1]?.headers).get("x-api-key")).toBe(apiKey);
+    expect(result).toEqual({ ok: true, toolkitSlug: "project_toolkit" });
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("executes one pinned tool exactly once and returns only bounded provider data", async () => {
+    const apiKey = "composio-project-secret";
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      catalogResponse({
+        data: { itemId: "item-1", status: "found" },
+        error: null,
+        log_id: "log_123",
+        successful: true,
+      }),
+    );
+    const runtime = createComposioRuntime({ apiKey, fetch: fetchMock });
+    const result = await runtime.execute({
+      arguments: { itemId: "item-1" },
+      maximumOutputBytes: 64_000,
+      providerConnectionId: "ca_project_123",
+      signal: new AbortController().signal,
+      timeoutMs: 20_000,
+      toolkitVersion: "20260727_00",
+      toolSlug: "PROJECT_TOOLKIT_READ_ITEM",
+    });
+    const [endpoint, init] = fetchMock.mock.calls[0] ?? [];
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(endpoint).toEqual(
+      new URL("https://backend.composio.dev/api/v3.1/tools/execute/PROJECT_TOOLKIT_READ_ITEM"),
+    );
+    expect(init?.method).toBe("POST");
+    if (typeof init?.body !== "string") {
+      throw new TypeError("Expected a serialized Composio execution request.");
+    }
+
+    expect(JSON.parse(init.body)).toEqual({
+      arguments: { itemId: "item-1" },
+      connected_account_id: "ca_project_123",
+      version: "20260727_00",
+    });
+    expect(result).toEqual({ itemId: "item-1", status: "found" });
+    expect(JSON.stringify(result)).not.toContain(apiKey);
+  });
+
+  it("rejects credential-shaped or provider-reference output", async () => {
+    for (const data of [
+      { access_token: "provider-secret" },
+      { account: "ca_project_123" },
+      { client_secret: "provider-secret" },
+      { private_key: "provider-secret" },
+      { "set-cookie": "session=provider-secret" },
+      { session_token: "provider-secret" },
+      { name: "client_secret", value: "provider-secret" },
+      { value: "Bearer provider-secret" },
+      { value: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature" },
+      { value: "-----BEGIN PRIVATE KEY-----\nprovider-secret" },
+    ]) {
+      const runtime = createComposioRuntime({
+        apiKey: "composio-project-secret",
+        fetch: vi.fn<typeof fetch>().mockResolvedValue(
+          catalogResponse({
+            data,
+            error: null,
+            successful: true,
+          }),
+        ),
+      });
+
+      await expect(
+        runtime.execute({
+          arguments: {},
+          maximumOutputBytes: 64_000,
+          providerConnectionId: "ca_project_123",
+          signal: new AbortController().signal,
+          timeoutMs: 20_000,
+          toolkitVersion: "20260727_00",
+          toolSlug: "PROJECT_TOOLKIT_READ_ITEM",
+        }),
+      ).rejects.toThrow("Composio tool execution failed.");
+    }
   });
 });
 

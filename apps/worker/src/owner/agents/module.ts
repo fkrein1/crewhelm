@@ -17,6 +17,15 @@ import {
   listAgentsResultSchema,
   updateAgentInputSchema,
   updateAgentResultSchema,
+  classifyComposioToolEffect,
+  composioToolCapabilityGrantSchema,
+  completeAgentConnectionConfigurationInputSchema,
+  configureAgentConnectionInputSchema,
+  configureAgentConnectionResultSchema,
+  lookupAgentConnectionConfigurationResultSchema,
+  isCredentialBearingComposioTool,
+  resolveConnectionForAttachmentInputSchema,
+  resolvedConnectionForAttachmentSchema,
   type Agent,
   type AgentRevision,
   type AgentRevisionSummary,
@@ -30,6 +39,11 @@ import {
   type OwnerAuthority,
   type UpdateAgentInput,
   type UpdateAgentResult,
+  type ConfigureAgentConnectionResult,
+  type ConfigureAgentConnectionInput,
+  type ComposioToolCapabilityGrant,
+  type LookupAgentConnectionConfigurationResult,
+  type ResolvedConnectionForAttachment,
 } from "@crewhelm/contracts";
 import { and, asc, count, desc, eq, gt, lt } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
@@ -40,6 +54,8 @@ import {
   agentUpdates,
   agents,
   auditEvents,
+  capabilityGrants,
+  connections,
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
 
@@ -56,6 +72,7 @@ type StoredAgentRow = {
 };
 type StoredAgentRevisionRow = StoredAgentRow & { revisedAt: number };
 type ControlPlaneDatabase = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
+type ConnectionAttachmentFailure = Extract<ConfigureAgentConnectionResult, { ok: false }>;
 
 function encodeBase64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -107,6 +124,21 @@ async function digestAgentUpdate(input: UpdateAgentInput): Promise<string> {
   );
 }
 
+async function digestConnectionConfiguration(
+  input: ConfigureAgentConnectionInput,
+): Promise<string> {
+  return digestCanonicalRequest(
+    JSON.stringify({
+      agentId: input.agentId,
+      connectionId: input.connectionId,
+      expectedRevision: input.expectedRevision,
+      expiresAt: input.expiresAt,
+      limits: input.limits,
+      tools: input.tools.map((tool) => ({ slug: tool.slug, version: tool.version })),
+    }),
+  );
+}
+
 export function deniedAgent(code: AgentRequestFailure["error"]["code"]): AgentRequestFailure {
   return {
     error: {
@@ -117,11 +149,409 @@ export function deniedAgent(code: AgentRequestFailure["error"]["code"]): AgentRe
   };
 }
 
+export function deniedConnectionAttachment(
+  code: ConnectionAttachmentFailure["error"]["code"],
+): ConnectionAttachmentFailure {
+  return {
+    error: {
+      code,
+      message: "Connection attachment request denied.",
+    },
+    ok: false,
+  };
+}
+
 export class AgentRegistry {
   readonly #database: ControlPlaneDatabase;
 
   constructor(database: ControlPlaneDatabase) {
     this.#database = database;
+  }
+
+  resolveConnectionForAttachment(input: unknown): ResolvedConnectionForAttachment {
+    const request = resolveConnectionForAttachmentInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return resolvedConnectionForAttachmentSchema.parse(
+        deniedConnectionAttachment("invalid_request"),
+      );
+    }
+
+    const row = this.#database
+      .select({
+        currentRevision: agents.currentRevision,
+        providerConnectionId: connections.providerConnectionId,
+        status: connections.status,
+      })
+      .from(agents)
+      .innerJoin(connections, eq(connections.connectionId, request.data.connectionId))
+      .where(eq(agents.agentId, request.data.agentId))
+      .all()[0];
+
+    if (row === undefined) {
+      return resolvedConnectionForAttachmentSchema.parse(
+        this.#agentExists(request.data.agentId)
+          ? deniedConnectionAttachment("connection_not_found")
+          : deniedConnectionAttachment("agent_not_found"),
+      );
+    }
+
+    if (row.currentRevision !== request.data.expectedRevision) {
+      return resolvedConnectionForAttachmentSchema.parse(
+        deniedConnectionAttachment("revision_conflict"),
+      );
+    }
+
+    if (row.status === "revoked" || row.status === "unavailable") {
+      return resolvedConnectionForAttachmentSchema.parse(
+        deniedConnectionAttachment("connection_not_found"),
+      );
+    }
+
+    return resolvedConnectionForAttachmentSchema.parse({
+      ok: true,
+      providerConnectionId: row.providerConnectionId,
+    });
+  }
+
+  async lookupConnectionConfiguration(
+    authority: OwnerAuthority,
+    input: unknown,
+  ): Promise<LookupAgentConnectionConfigurationResult> {
+    const request = configureAgentConnectionInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return deniedConnectionAttachment("invalid_request");
+    }
+
+    const requestDigest = await digestConnectionConfiguration(request.data);
+    const existingUpdate = this.#database
+      .select({
+        agentId: agents.agentId,
+        capabilityGrants: agentRevisions.capabilityGrants,
+        createdAt: agents.createdAt,
+        currentRevision: agentUpdates.revision,
+        executionLimits: agentRevisions.executionLimits,
+        instructions: agentRevisions.instructions,
+        model: agentRevisions.model,
+        name: agentRevisions.name,
+        requestDigest: agentUpdates.requestDigest,
+      })
+      .from(agentUpdates)
+      .innerJoin(agents, eq(agents.agentId, agentUpdates.agentId))
+      .innerJoin(
+        agentRevisions,
+        and(
+          eq(agentRevisions.agentId, agentUpdates.agentId),
+          eq(agentRevisions.revision, agentUpdates.revision),
+        ),
+      )
+      .where(
+        and(
+          eq(agentUpdates.clientId, authority.clientId),
+          eq(agentUpdates.idempotencyKey, request.data.idempotencyKey),
+        ),
+      )
+      .all()[0];
+
+    if (existingUpdate === undefined) {
+      return lookupAgentConnectionConfigurationResultSchema.parse({
+        ok: true,
+        replay: null,
+      });
+    }
+
+    if (
+      existingUpdate.agentId !== request.data.agentId ||
+      existingUpdate.requestDigest !== requestDigest
+    ) {
+      return deniedConnectionAttachment("idempotency_conflict");
+    }
+
+    return lookupAgentConnectionConfigurationResultSchema.parse({
+      ok: true,
+      replay: {
+        agent: this.#agentFromRow(existingUpdate),
+        configured: false,
+        ok: true,
+      },
+    });
+  }
+
+  async configureConnection(
+    authority: OwnerAuthority,
+    input: unknown,
+  ): Promise<ConfigureAgentConnectionResult> {
+    const request = completeAgentConnectionConfigurationInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return deniedConnectionAttachment("invalid_request");
+    }
+
+    const requestDigest = await digestConnectionConfiguration({
+      ...request.data,
+      tools: request.data.tools.map((tool) => ({ slug: tool.slug, version: tool.version })),
+    });
+    const targetDigest = Array.from(
+      new Uint8Array(
+        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(request.data.connectionId)),
+      ),
+      (byte) => byte.toString(16).padStart(2, "0"),
+    ).join("");
+
+    return this.#database.transaction((transaction) => {
+      const existingUpdate = transaction
+        .select({
+          agentId: agents.agentId,
+          capabilityGrants: agentRevisions.capabilityGrants,
+          createdAt: agents.createdAt,
+          currentRevision: agentUpdates.revision,
+          executionLimits: agentRevisions.executionLimits,
+          instructions: agentRevisions.instructions,
+          model: agentRevisions.model,
+          name: agentRevisions.name,
+          requestDigest: agentUpdates.requestDigest,
+        })
+        .from(agentUpdates)
+        .innerJoin(agents, eq(agents.agentId, agentUpdates.agentId))
+        .innerJoin(
+          agentRevisions,
+          and(
+            eq(agentRevisions.agentId, agentUpdates.agentId),
+            eq(agentRevisions.revision, agentUpdates.revision),
+          ),
+        )
+        .where(
+          and(
+            eq(agentUpdates.clientId, authority.clientId),
+            eq(agentUpdates.idempotencyKey, request.data.idempotencyKey),
+          ),
+        )
+        .all()[0];
+
+      if (existingUpdate !== undefined) {
+        if (existingUpdate.requestDigest !== requestDigest) {
+          return deniedConnectionAttachment("idempotency_conflict");
+        }
+
+        return configureAgentConnectionResultSchema.parse({
+          agent: this.#agentFromRow(existingUpdate),
+          configured: false,
+          ok: true,
+        });
+      }
+
+      const currentRow = transaction
+        .select({
+          agentId: agents.agentId,
+          capabilityGrants: agentRevisions.capabilityGrants,
+          createdAt: agents.createdAt,
+          currentRevision: agents.currentRevision,
+          executionLimits: agentRevisions.executionLimits,
+          instructions: agentRevisions.instructions,
+          model: agentRevisions.model,
+          name: agentRevisions.name,
+        })
+        .from(agents)
+        .innerJoin(
+          agentRevisions,
+          and(
+            eq(agentRevisions.agentId, agents.agentId),
+            eq(agentRevisions.revision, agents.currentRevision),
+          ),
+        )
+        .where(eq(agents.agentId, request.data.agentId))
+        .all()[0];
+
+      if (currentRow === undefined) {
+        return deniedConnectionAttachment("agent_not_found");
+      }
+
+      if (currentRow.currentRevision !== request.data.expectedRevision) {
+        return deniedConnectionAttachment("revision_conflict");
+      }
+
+      if (currentRow.currentRevision >= MAXIMUM_REVISIONS_PER_AGENT) {
+        return deniedConnectionAttachment("agent_revision_limit_exceeded");
+      }
+
+      const connection = transaction
+        .select({
+          providerConnectionId: connections.providerConnectionId,
+          status: connections.status,
+        })
+        .from(connections)
+        .where(eq(connections.connectionId, request.data.connectionId))
+        .all()[0];
+
+      if (connection === undefined) {
+        return deniedConnectionAttachment("connection_not_found");
+      }
+
+      const detaching = request.data.tools.length === 0;
+
+      if (
+        (!detaching &&
+          (connection.status === "revoked" ||
+            connection.status === "unavailable" ||
+            request.data.providerConnectionId !== connection.providerConnectionId ||
+            request.data.verifiedToolkitSlug === null)) ||
+        (detaching &&
+          (request.data.providerConnectionId !== null || request.data.verifiedToolkitSlug !== null))
+      ) {
+        return deniedConnectionAttachment("connection_unavailable");
+      }
+
+      const configuredTools = request.data.tools;
+      const selected = configuredTools.map((tool) => `${tool.slug}:${tool.version}`);
+      const canonical = selected.toSorted();
+
+      if (
+        selected.some((value, index) => value !== canonical[index]) ||
+        configuredTools.some(
+          (tool) =>
+            tool.integration.slug !== request.data.verifiedToolkitSlug ||
+            isCredentialBearingComposioTool(tool),
+        )
+      ) {
+        return deniedConnectionAttachment("invalid_request");
+      }
+
+      const previousGrants = transaction
+        .select({ grant: capabilityGrants.grant })
+        .from(capabilityGrants)
+        .where(
+          and(
+            eq(capabilityGrants.agentId, currentRow.agentId),
+            eq(capabilityGrants.agentRevision, currentRow.currentRevision),
+            eq(capabilityGrants.status, "active"),
+          ),
+        )
+        .all()
+        .map((row) => row.grant)
+        .filter((grant) => grant.connectionId !== request.data.connectionId);
+      const revision = currentRow.currentRevision + 1;
+      const createdAt = Date.now();
+      const candidateGrants: ComposioToolCapabilityGrant[] = [
+        ...previousGrants.map((grant) => ({
+          ...grant,
+          agentRevision: revision,
+          grantId: `grant_${crypto.randomUUID()}`,
+        })),
+        ...configuredTools.map((tool) => ({
+          agentId: currentRow.agentId,
+          agentRevision: revision,
+          capabilityId: "composio.tool.execute" as const,
+          connectionId: request.data.connectionId,
+          effect: classifyComposioToolEffect(tool.tags, tool.slug),
+          expiresAt: request.data.expiresAt,
+          grantId: `grant_${crypto.randomUUID()}`,
+          integrationSlug: tool.integration.slug,
+          limits: request.data.limits,
+          ownerKey: authority.ownerKey,
+          targetDigests: [targetDigest],
+          tool: {
+            description: tool.description,
+            inputParametersJson: JSON.stringify(tool.inputParameters),
+            name: tool.name,
+            outputParametersJson: JSON.stringify(tool.outputParameters),
+            tags: tool.tags,
+          },
+          toolkitVersion: tool.version,
+          toolSlug: tool.slug,
+        })),
+      ];
+      const parsedGrants = candidateGrants.map((grant) =>
+        composioToolCapabilityGrantSchema.safeParse(grant),
+      );
+
+      if (parsedGrants.length > 100 || parsedGrants.some((parsedGrant) => !parsedGrant.success)) {
+        return deniedConnectionAttachment("invalid_request");
+      }
+
+      const grants = parsedGrants.flatMap((parsedGrant) =>
+        parsedGrant.success ? [parsedGrant.data] : [],
+      );
+      const grantIds = grants.map((grant) => grant.grantId).toSorted();
+
+      transaction
+        .insert(agentRevisions)
+        .values({
+          agentId: currentRow.agentId,
+          capabilityGrants: grantIds,
+          createdAt,
+          executionLimits: currentRow.executionLimits,
+          instructions: currentRow.instructions,
+          model: currentRow.model,
+          name: currentRow.name,
+          revision,
+        })
+        .run();
+
+      for (const grant of grants) {
+        transaction
+          .insert(capabilityGrants)
+          .values({
+            agentId: grant.agentId,
+            agentRevision: grant.agentRevision,
+            connectionId: grant.connectionId,
+            createdAt,
+            grant,
+            grantId: grant.grantId,
+            status: "active",
+          })
+          .run();
+      }
+
+      transaction
+        .update(agents)
+        .set({ currentRevision: revision })
+        .where(eq(agents.agentId, currentRow.agentId))
+        .run();
+      transaction
+        .insert(agentUpdates)
+        .values({
+          agentId: currentRow.agentId,
+          clientId: authority.clientId,
+          idempotencyKey: request.data.idempotencyKey,
+          requestDigest,
+          revision,
+        })
+        .run();
+
+      if (!detaching) {
+        transaction
+          .update(connections)
+          .set({ status: "active" })
+          .where(eq(connections.connectionId, request.data.connectionId))
+          .run();
+      }
+
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: detaching ? "agent.connection_detached" : "agent.connection_configured",
+          clientId: authority.clientId,
+          occurredAt: createdAt,
+          subjectId: currentRow.agentId,
+        })
+        .run();
+
+      return configureAgentConnectionResultSchema.parse({
+        agent: {
+          capabilityGrants: grantIds,
+          createdAt: new Date(currentRow.createdAt).toISOString(),
+          executionLimits: currentRow.executionLimits,
+          id: currentRow.agentId,
+          instructions: currentRow.instructions,
+          model: currentRow.model,
+          name: currentRow.name,
+          revision,
+        },
+        configured: true,
+        ok: true,
+      });
+    });
   }
 
   async create(authority: OwnerAuthority, input: unknown): Promise<CreateAgentResult> {
@@ -420,12 +850,29 @@ export class AgentRegistry {
 
       const updatedAt = Date.now();
       const revision = currentAgent.revision + 1;
+      const grants = transaction
+        .select({ grant: capabilityGrants.grant })
+        .from(capabilityGrants)
+        .where(
+          and(
+            eq(capabilityGrants.agentId, currentAgent.id),
+            eq(capabilityGrants.agentRevision, currentAgent.revision),
+            eq(capabilityGrants.status, "active"),
+          ),
+        )
+        .all()
+        .map(({ grant }) => ({
+          ...grant,
+          agentRevision: revision,
+          grantId: `grant_${crypto.randomUUID()}`,
+        }));
+      const grantIds = grants.map((grant) => grant.grantId).toSorted();
 
       transaction
         .insert(agentRevisions)
         .values({
           agentId: currentAgent.id,
-          capabilityGrants: currentAgent.capabilityGrants,
+          capabilityGrants: grantIds,
           createdAt: updatedAt,
           executionLimits: request.data.executionLimits,
           instructions: request.data.instructions,
@@ -434,6 +881,21 @@ export class AgentRegistry {
           revision,
         })
         .run();
+
+      for (const grant of grants) {
+        transaction
+          .insert(capabilityGrants)
+          .values({
+            agentId: grant.agentId,
+            agentRevision: grant.agentRevision,
+            connectionId: grant.connectionId,
+            createdAt: updatedAt,
+            grant,
+            grantId: grant.grantId,
+            status: "active",
+          })
+          .run();
+      }
       transaction
         .update(agents)
         .set({ currentRevision: revision })
@@ -461,7 +923,7 @@ export class AgentRegistry {
 
       return updateAgentResultSchema.parse({
         agent: {
-          capabilityGrants: currentAgent.capabilityGrants,
+          capabilityGrants: grantIds,
           createdAt: currentAgent.createdAt,
           executionLimits: request.data.executionLimits,
           id: currentAgent.id,

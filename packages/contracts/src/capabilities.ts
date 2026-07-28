@@ -10,6 +10,7 @@ import {
 import {
   integrationSlugSchema,
   integrationToolkitVersionSchema,
+  integrationToolRuntimeDefinitionSchema,
   integrationToolSlugSchema,
 } from "./integrations.js";
 
@@ -37,6 +38,145 @@ export const sha256DigestSchema = z
   .regex(/^[0-9a-f]{64}$/, "Expected a lowercase SHA-256 digest.");
 export const capabilityEffectSchema = z.enum(["read", "write", "destructive"]);
 
+const credentialMaterialNames = new Set([
+  "accesskey",
+  "accesstoken",
+  "apikey",
+  "apisecret",
+  "authorizationcode",
+  "clientsecret",
+  "cookie",
+  "credential",
+  "credentials",
+  "idtoken",
+  "jwt",
+  "oauthcode",
+  "password",
+  "passphrase",
+  "privatekey",
+  "refreshtoken",
+  "secret",
+  "secrets",
+  "secretkey",
+  "sessioncookie",
+  "sessionid",
+  "sessiontoken",
+]);
+
+export function isCredentialBearingComposioTool(input: {
+  name: string;
+  outputParameters: Record<string, unknown>;
+  slug: string;
+}): boolean {
+  const textTokens = `${input.slug} ${input.name}`
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  const compactText = textTokens.join("");
+  const pending: unknown[] = [input.outputParameters];
+
+  if (
+    textTokens.some((token) => credentialMaterialNames.has(token)) ||
+    [...credentialMaterialNames].some((name) => name.length >= 6 && compactText.includes(name))
+  ) {
+    return true;
+  }
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+
+    if (Array.isArray(current)) {
+      pending.push(...current);
+    } else if (typeof current === "object" && current !== null) {
+      for (const [key, item] of Object.entries(current)) {
+        const normalizedKey = key.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
+
+        if (credentialMaterialNames.has(normalizedKey)) {
+          return true;
+        }
+
+        pending.push(item);
+      }
+    }
+  }
+
+  return false;
+}
+
+export function classifyComposioToolEffect(
+  tags: readonly string[],
+  toolSlug = "",
+): CapabilityEffect {
+  const normalized = new Set(tags.map((tag) => tag.toLowerCase().replaceAll(/[^a-z]/g, "")));
+  const actions = new Set(toolSlug.toLowerCase().split("_"));
+  const destructiveActions = ["cancel", "delete", "remove", "revoke", "terminate"];
+  const mutatingActions = [
+    "add",
+    "archive",
+    "assign",
+    "attach",
+    "comment",
+    "complete",
+    "create",
+    "disable",
+    "edit",
+    "enable",
+    "execute",
+    "invite",
+    "merge",
+    "move",
+    "pause",
+    "post",
+    "publish",
+    "react",
+    "reply",
+    "resolve",
+    "restore",
+    "resume",
+    "send",
+    "set",
+    "share",
+    "start",
+    "submit",
+    "trigger",
+    "unarchive",
+    "unassign",
+    "update",
+    "upload",
+    "write",
+  ];
+  const readActions = [
+    "download",
+    "fetch",
+    "find",
+    "get",
+    "inspect",
+    "list",
+    "lookup",
+    "read",
+    "search",
+  ];
+
+  if (
+    normalized.has("destructive") ||
+    normalized.has("destructivehint") ||
+    normalized.has("delete") ||
+    destructiveActions.some((action) => actions.has(action))
+  ) {
+    return "destructive";
+  }
+
+  if (
+    normalized.has("readonlyhint") &&
+    !mutatingActions.some((action) => actions.has(action)) &&
+    readActions.some((action) => actions.has(action))
+  ) {
+    return "read";
+  }
+
+  return "write";
+}
+
 const canonicalTargetDigestsSchema = z
   .array(sha256DigestSchema)
   .min(1)
@@ -59,15 +199,17 @@ const composioToolBindingSchema = z.strictObject({
   toolkitVersion: integrationToolkitVersionSchema,
   toolSlug: integrationToolSlugSchema,
 });
+export const composioToolLimitsSchema = z.strictObject({
+  maxCallsPerRun: z.number().int().min(1).max(100),
+  maxConcurrency: z.number().int().min(1).max(16),
+  maxCostMicrousdPerCall: z.number().int().min(0).max(MAXIMUM_COST_MICROUSD).safe(),
+  maxDurationMs: z.number().int().min(1).max(MAXIMUM_TOOL_DURATION_MS),
+  maxOutputBytes: z.number().int().min(1).max(MAXIMUM_TOOL_OUTPUT_BYTES),
+});
 export const composioToolCapabilityGrantSchema = composioToolBindingSchema.extend({
   expiresAt: z.iso.datetime().nullable(),
-  limits: z.strictObject({
-    maxCallsPerRun: z.number().int().min(1).max(100),
-    maxConcurrency: z.number().int().min(1).max(16),
-    maxCostMicrousdPerCall: z.number().int().min(0).max(MAXIMUM_COST_MICROUSD).safe(),
-    maxDurationMs: z.number().int().min(1).max(MAXIMUM_TOOL_DURATION_MS),
-    maxOutputBytes: z.number().int().min(1).max(MAXIMUM_TOOL_OUTPUT_BYTES),
-  }),
+  limits: composioToolLimitsSchema,
+  tool: integrationToolRuntimeDefinitionSchema,
 });
 export const classifiedComposioToolActionSchema = composioToolBindingSchema.extend({
   estimatedCostMicrousd: z.number().int().min(0).max(MAXIMUM_COST_MICROUSD).safe().nullable(),
