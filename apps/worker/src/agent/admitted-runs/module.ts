@@ -71,7 +71,10 @@ import type { ToolSet, UIMessage } from "ai";
 import type { RetryOptions, Schedule } from "agents";
 import type * as z from "zod";
 
-import { recordExecutionEvent } from "../../observability/execution.js";
+import {
+  recordExecutionEvent,
+  recordExecutionProviderResponse,
+} from "../../observability/execution.js";
 import { digestRunPrompt } from "./protocol.js";
 import {
   admittedRunRecordSchema,
@@ -1535,11 +1538,11 @@ export class CrewAgent extends Think {
       return undefined;
     }
 
-    const runtime = createComposioRuntime({ apiKey: this.env.COMPOSIO_API_KEY });
+    const schemaRuntime = createComposioRuntime({ apiKey: this.env.COMPOSIO_API_KEY });
     let inputSchema: z.ZodType<Record<string, unknown>>;
 
     try {
-      inputSchema = runtime.createInputSchema(grant.tool.inputParametersJson);
+      inputSchema = schemaRuntime.createInputSchema(grant.tool.inputParametersJson);
     } catch {
       return undefined;
     }
@@ -1581,6 +1584,15 @@ export class CrewAgent extends Think {
         };
       },
       execute: async (input, context) => {
+        const runtime = createComposioRuntime({
+          apiKey: this.env.COMPOSIO_API_KEY,
+          onResponse: (event) =>
+            recordExecutionProviderResponse({
+              ...event,
+              runId: context.permit.action.runId,
+              toolCallId: context.permit.action.toolCallId,
+            }),
+        });
         const resolved = resolveToolExecutionConnectionResultSchema.safeParse(
           await this.env.OWNER_CONTROL_PLANE.getByName(
             context.permit.action.ownerKey,
@@ -1609,6 +1621,7 @@ export class CrewAgent extends Think {
             timeoutMs: context.permit.constraints.maxDurationMs,
             toolkitVersion: grant.toolkitVersion,
             toolSlug: grant.toolSlug,
+            userId: grant.ownerKey,
           });
 
           recordExecutionEvent({

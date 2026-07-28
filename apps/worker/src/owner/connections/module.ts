@@ -32,6 +32,7 @@ import {
 import { and, asc, count, desc, eq, gt, inArray, lte, min } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
+import { recordConnectionLinkCompletion } from "../../observability/integrations.js";
 import {
   auditEvents,
   connectionAuthorizationReturns,
@@ -101,7 +102,7 @@ function isCanonicalComposioConnectUrl(value: string): boolean {
 
   return (
     url.origin === COMPOSIO_CONNECT_ORIGIN &&
-    /^\/link\/ln_[A-Za-z0-9_-]+$/.test(url.pathname) &&
+    /^\/link\/[A-Za-z0-9._~-]{4,512}$/.test(url.pathname) &&
     url.search === "" &&
     url.hash === ""
   );
@@ -510,7 +511,16 @@ export class Connections {
   async complete(authority: OwnerAuthority, input: unknown): Promise<CreateConnectionLinkResult> {
     const request = completeConnectionLinkInputSchema.safeParse(input);
 
-    if (!request.success || !isCanonicalComposioConnectUrl(request.data.url)) {
+    if (!request.success) {
+      recordConnectionLinkCompletion({ outcome: "invalid_schema" });
+      return deniedConnectionLink("invalid_request");
+    }
+
+    if (!isCanonicalComposioConnectUrl(request.data.url)) {
+      recordConnectionLinkCompletion({
+        correlationId: request.data.reservationId,
+        outcome: "invalid_url",
+      });
       return deniedConnectionLink("invalid_request");
     }
 
@@ -547,6 +557,10 @@ export class Connections {
         .all()[0];
 
       if (row === undefined || row.authorizationTokenDigest !== authorizationTokenDigest) {
+        recordConnectionLinkCompletion({
+          correlationId: request.data.reservationId,
+          outcome: "invalid_reservation",
+        });
         return deniedConnectionLink("invalid_request");
       }
 
@@ -560,9 +574,17 @@ export class Connections {
           row.redirectUrl !== request.data.url ||
           row.expiresAt !== Date.parse(request.data.expiresAt)
         ) {
+          recordConnectionLinkCompletion({
+            correlationId: request.data.reservationId,
+            outcome: "invalid_reservation",
+          });
           return deniedConnectionLink("invalid_request");
         }
 
+        recordConnectionLinkCompletion({
+          correlationId: request.data.reservationId,
+          outcome: "replayed",
+        });
         return createConnectionLinkResultSchema.parse({
           connectionLink: this.#linkFromRow(row),
           created: false,
@@ -580,6 +602,10 @@ export class Connections {
         expiresAt <= currentTime ||
         expiresAt > recoverAfter
       ) {
+        recordConnectionLinkCompletion({
+          correlationId: request.data.reservationId,
+          outcome: "invalid_state",
+        });
         return deniedConnectionLink("connection_link_outcome_unknown");
       }
 
@@ -652,7 +678,7 @@ export class Connections {
         })
         .run();
 
-      return createConnectionLinkResultSchema.parse({
+      const completion = createConnectionLinkResultSchema.parse({
         connectionLink: {
           connectionId,
           expiresAt: request.data.expiresAt,
@@ -661,6 +687,11 @@ export class Connections {
         created: true,
         ok: true,
       });
+      recordConnectionLinkCompletion({
+        correlationId: request.data.reservationId,
+        outcome: "accepted",
+      });
+      return completion;
     });
 
     if (result.ok) {

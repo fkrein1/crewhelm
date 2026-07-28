@@ -225,10 +225,12 @@ describe("Crewhelm Worker", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(response.headers.get("content-security-policy")).toContain("style-src 'self'");
     expect(response.headers.get("referrer-policy")).toBe("no-referrer");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     expect(response.headers.get("x-frame-options")).toBe("DENY");
     expect(body).toContain("Authorization returned to Crewhelm");
+    expect(body).toContain('href="/oauth/styles.css"');
     expect(body).not.toMatch(/active|connected/i);
     expect(body).not.toContain(fixture.providerConnectionId);
     expect(body).not.toContain(fixture.reservation.authorizationToken);

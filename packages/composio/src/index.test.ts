@@ -748,12 +748,16 @@ describe("Composio catalog adapter", () => {
 });
 
 describe("Composio runtime adapter", () => {
-  it("converts arbitrary provider parameter maps into strict runtime validation", () => {
+  it("converts a provider root object schema into strict runtime validation", () => {
     const runtime = createComposioRuntime({ apiKey: "composio-project-secret" });
     const schema = runtime.createInputSchema(
       JSON.stringify({
-        count: { minimum: 1, type: "integer" },
-        itemId: { required: true, type: "string" },
+        properties: {
+          count: { minimum: 1, type: "integer" },
+          itemId: { type: "string" },
+        },
+        required: ["itemId"],
+        type: "object",
       }),
     );
 
@@ -761,9 +765,56 @@ describe("Composio runtime adapter", () => {
     expect(schema.safeParse({ count: 0, itemId: "item-1" }).success).toBe(false);
     expect(schema.safeParse({ count: 2 }).success).toBe(false);
     expect(schema.safeParse({ itemId: "item-1", unexpected: true }).success).toBe(false);
-    expect(() => runtime.createInputSchema('{"itemId":null}')).toThrow(
+    expect(() => runtime.createInputSchema('{"itemId":{"required":true,"type":"string"}}')).toThrow(
       "Composio tool schema is unavailable.",
     );
+    expect(() => runtime.createInputSchema('{"properties":{},"type":"array"}')).toThrow(
+      "Composio tool schema is unavailable.",
+    );
+  });
+
+  it("passes through bounded provider root object schemas with strict top-level inputs", () => {
+    const runtime = createComposioRuntime({ apiKey: "composio-project-secret" });
+    const schema = runtime.createInputSchema(
+      JSON.stringify({
+        $defs: {
+          filter: {
+            properties: {
+              name: { type: "string" },
+            },
+            required: ["name"],
+            type: "object",
+          },
+        },
+        properties: {
+          filter: { $ref: "#/$defs/filter" },
+        },
+        required: ["filter"],
+        title: "ProviderRequest",
+        type: "object",
+      }),
+    );
+
+    expect(schema.safeParse({ filter: { name: "crewhelm" } }).success).toBe(true);
+    expect(schema.safeParse({}).success).toBe(false);
+    expect(schema.safeParse({ filter: { name: "crewhelm" }, unexpected: true }).success).toBe(
+      false,
+    );
+  });
+
+  it("accepts an empty provider root object schema", () => {
+    const runtime = createComposioRuntime({ apiKey: "composio-project-secret" });
+    const schema = runtime.createInputSchema(
+      JSON.stringify({
+        description: "Request with no arguments.",
+        properties: {},
+        title: "EmptyRequest",
+        type: "object",
+      }),
+    );
+
+    expect(schema.safeParse({}).success).toBe(true);
+    expect(schema.safeParse({ unexpected: true }).success).toBe(false);
   });
 
   it("classifies only explicit read and destructive hints, defaulting unknown tools to write", () => {
@@ -802,6 +853,7 @@ describe("Composio runtime adapter", () => {
 
   it("verifies an active connected account without retaining its credential state", async () => {
     const apiKey = "composio-project-secret";
+    const onResponse = vi.fn<(event: unknown) => void>();
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       catalogResponse({
         id: "ca_project_123",
@@ -810,9 +862,11 @@ describe("Composio runtime adapter", () => {
         toolkit: { slug: "project_toolkit" },
       }),
     );
-    const result = await createComposioRuntime({ apiKey, fetch: fetchMock }).verifyConnection(
-      "ca_project_123",
-    );
+    const result = await createComposioRuntime({
+      apiKey,
+      fetch: fetchMock,
+      onResponse,
+    }).verifyConnection("ca_project_123");
     const request = fetchMock.mock.calls[0];
 
     expect(request?.[0]).toEqual(
@@ -821,10 +875,17 @@ describe("Composio runtime adapter", () => {
     expect(new Headers(request?.[1]?.headers).get("x-api-key")).toBe(apiKey);
     expect(result).toEqual({ ok: true, toolkitSlug: "project_toolkit" });
     expect(JSON.stringify(result)).not.toContain("provider-secret");
+    expect(onResponse).toHaveBeenCalledExactlyOnceWith({
+      durationMs: expect.any(Number),
+      operation: "verify",
+      outcome: "accepted",
+      status: 200,
+    });
   });
 
   it("executes one pinned tool exactly once and returns only bounded provider data", async () => {
     const apiKey = "composio-project-secret";
+    const onResponse = vi.fn<(event: unknown) => void>();
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       catalogResponse({
         data: { itemId: "item-1", status: "found" },
@@ -833,7 +894,7 @@ describe("Composio runtime adapter", () => {
         successful: true,
       }),
     );
-    const runtime = createComposioRuntime({ apiKey, fetch: fetchMock });
+    const runtime = createComposioRuntime({ apiKey, fetch: fetchMock, onResponse });
     const result = await runtime.execute({
       arguments: { itemId: "item-1" },
       maximumOutputBytes: 64_000,
@@ -842,12 +903,13 @@ describe("Composio runtime adapter", () => {
       timeoutMs: 20_000,
       toolkitVersion: "20260727_00",
       toolSlug: "PROJECT_TOOLKIT_READ_ITEM",
+      userId: "owner_1111111111111111111111111111111111111111111",
     });
     const [endpoint, init] = fetchMock.mock.calls[0] ?? [];
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(endpoint).toEqual(
-      new URL("https://backend.composio.dev/api/v3.1/tools/execute/PROJECT_TOOLKIT_READ_ITEM"),
+      new URL("https://backend.composio.dev/api/v3/tools/execute/PROJECT_TOOLKIT_READ_ITEM"),
     );
     expect(init?.method).toBe("POST");
     if (typeof init?.body !== "string") {
@@ -857,10 +919,95 @@ describe("Composio runtime adapter", () => {
     expect(JSON.parse(init.body)).toEqual({
       arguments: { itemId: "item-1" },
       connected_account_id: "ca_project_123",
+      user_id: "owner_1111111111111111111111111111111111111111111",
       version: "20260727_00",
     });
     expect(result).toEqual({ itemId: "item-1", status: "found" });
     expect(JSON.stringify(result)).not.toContain(apiKey);
+    expect(onResponse).toHaveBeenCalledExactlyOnceWith({
+      durationMs: expect.any(Number),
+      operation: "execute",
+      outcome: "accepted",
+      status: 200,
+      toolSlug: "PROJECT_TOOLKIT_READ_ITEM",
+    });
+  });
+
+  it("reports a bounded provider rejection without response content", async () => {
+    const secret = "provider-secret-that-must-not-be-logged";
+    const onResponse = vi.fn<(event: unknown) => void>();
+    const runtime = createComposioRuntime({
+      apiKey: "composio-project-secret",
+      fetch: vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(catalogResponse({ error: secret }, { status: 403 })),
+      onResponse,
+    });
+
+    await expect(
+      runtime.execute({
+        arguments: {},
+        maximumOutputBytes: 64_000,
+        providerConnectionId: "ca_project_123",
+        signal: new AbortController().signal,
+        timeoutMs: 20_000,
+        toolkitVersion: "20260727_00",
+        toolSlug: "PROJECT_TOOLKIT_READ_ITEM",
+        userId: "owner_1111111111111111111111111111111111111111111",
+      }),
+    ).rejects.toThrow("Composio tool execution failed.");
+    expect(onResponse).toHaveBeenCalledExactlyOnceWith({
+      durationMs: expect.any(Number),
+      operation: "execute",
+      outcome: "provider_rejected",
+      status: 403,
+      toolSlug: "PROJECT_TOOLKIT_READ_ITEM",
+    });
+    expect(JSON.stringify(onResponse.mock.calls)).not.toContain(secret);
+  });
+
+  it("reports only structured provider error identifiers", async () => {
+    const onResponse = vi.fn<(event: unknown) => void>();
+    const runtime = createComposioRuntime({
+      apiKey: "composio-project-secret",
+      fetch: vi.fn<typeof fetch>().mockResolvedValue(
+        catalogResponse(
+          {
+            error: {
+              code: 4001,
+              message: "Untrusted provider detail",
+              slug: "invalid_tool_input",
+              status: 400,
+            },
+          },
+          { status: 400 },
+        ),
+      ),
+      onResponse,
+    });
+
+    await expect(
+      runtime.execute({
+        arguments: {},
+        maximumOutputBytes: 64_000,
+        providerConnectionId: "ca_project_123",
+        signal: new AbortController().signal,
+        timeoutMs: 20_000,
+        toolkitVersion: "20260727_00",
+        toolSlug: "PROJECT_TOOLKIT_READ_ITEM",
+        userId: "owner_1111111111111111111111111111111111111111111",
+      }),
+    ).rejects.toThrow("Composio tool execution failed.");
+    expect(onResponse).toHaveBeenCalledExactlyOnceWith({
+      durationMs: expect.any(Number),
+      operation: "execute",
+      outcome: "provider_rejected",
+      providerErrorCode: 4001,
+      providerErrorSlug: "invalid_tool_input",
+      status: 400,
+      toolSlug: "PROJECT_TOOLKIT_READ_ITEM",
+    });
+    expect(JSON.stringify(onResponse.mock.calls)).not.toContain("Untrusted provider detail");
   });
 
   it("rejects credential-shaped or provider-reference output", async () => {
@@ -896,6 +1043,7 @@ describe("Composio runtime adapter", () => {
           timeoutMs: 20_000,
           toolkitVersion: "20260727_00",
           toolSlug: "PROJECT_TOOLKIT_READ_ITEM",
+          userId: "owner_1111111111111111111111111111111111111111111",
         }),
       ).rejects.toThrow("Composio tool execution failed.");
     }
@@ -916,16 +1064,14 @@ describe("Composio connection-link adapter", () => {
   const providerResponse = {
     connected_account_id: "ca_connection_123",
     expires_at: "2026-07-27T12:10:00.000Z",
-    experimental: {
-      account_type: "PRIVATE",
-    },
-    link_token: "ln_secure_link_123",
-    redirect_url: "https://connect.composio.dev/link/ln_secure_link_123",
+    link_token: "link_secure_link_123",
+    redirect_url: "https://connect.composio.dev/link/link_secure_link_123",
   };
 
   it("creates a private hosted link through one fixed, bounded request", async () => {
     const apiKey = "composio-project-secret";
     const cancellation = new AbortController();
+    const onResponse = vi.fn<(event: unknown) => void>();
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValue(catalogResponse(providerResponse, { status: 201 }));
@@ -933,6 +1079,7 @@ describe("Composio connection-link adapter", () => {
       apiKey,
       fetch: fetchMock,
       now: () => now,
+      onResponse,
       signal: cancellation.signal,
     });
 
@@ -946,6 +1093,12 @@ describe("Composio connection-link adapter", () => {
     });
     expect(connectionLinks.isAvailable()).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(onResponse).toHaveBeenCalledExactlyOnceWith({
+      durationMs: expect.any(Number),
+      operation: "link",
+      outcome: "accepted",
+      status: 201,
+    });
 
     const [endpoint, init] = fetchMock.mock.calls[0] ?? [];
 
@@ -1061,17 +1214,6 @@ describe("Composio connection-link adapter", () => {
             ...providerResponse,
             link_token: `ln_${input.callbackSecrets[1]}`,
             redirect_url: `https://connect.composio.dev/link/ln_${input.callbackSecrets[1]}`,
-          },
-          { status: 201 },
-        ),
-    ],
-    [
-      "a missing private-account confirmation",
-      () =>
-        catalogResponse(
-          {
-            ...providerResponse,
-            experimental: undefined,
           },
           { status: 201 },
         ),

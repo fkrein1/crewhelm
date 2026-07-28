@@ -16,29 +16,53 @@ const providerStatusSchema = z.enum(["success", "failed"]);
 
 const RETURNED_BODY = `<!doctype html>
 <html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Authorization returned</title>
-<h1>Authorization returned to Crewhelm</h1>
-<p>You can close this window and return to your MCP client.</p>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Authorization returned</title>
+    <link rel="stylesheet" href="/oauth/styles.css">
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Crewhelm</p>
+      <h1>Authorization returned to Crewhelm</h1>
+      <p>You can close this window and return to your MCP client.</p>
+    </main>
+  </body>
 </html>
 `;
 const FAILED_BODY = `<!doctype html>
 <html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Authorization not completed</title>
-<h1>Authorization was not completed</h1>
-<p>Return to your MCP client to try again.</p>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Authorization not completed</title>
+    <link rel="stylesheet" href="/oauth/styles.css">
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Crewhelm</p>
+      <h1>Authorization was not completed</h1>
+      <p>Return to your MCP client to try again.</p>
+    </main>
+  </body>
 </html>
 `;
 const DENIED_BODY = `<!doctype html>
 <html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Authorization return denied</title>
-<h1>Authorization return denied</h1>
-<p>Return to your MCP client and request a new connection link.</p>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Authorization return denied</title>
+    <link rel="stylesheet" href="/oauth/styles.css">
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Crewhelm</p>
+      <h1>Authorization return denied</h1>
+      <p>Return to your MCP client and request a new connection link.</p>
+    </main>
+  </body>
 </html>
 `;
 
@@ -46,7 +70,7 @@ function htmlResponse(body: string | null, status: number): Response {
   const headers = new Headers({
     "cache-control": "no-store",
     "content-security-policy":
-      "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; style-src 'self'",
     "content-type": "text/html; charset=utf-8",
     "referrer-policy": "no-referrer",
     "x-content-type-options": "nosniff",

@@ -70,7 +70,15 @@ export interface ComposioAuthConfigs {
 export interface ComposioAuthConfigsOptions {
   apiKey: string | undefined;
   fetch?: typeof globalThis.fetch;
+  onResponse?: (event: ComposioAuthConfigResponseEvent) => void;
   signal?: AbortSignal;
+}
+
+export interface ComposioAuthConfigResponseEvent {
+  durationMs: number;
+  integrationSlug: string;
+  operation: "create" | "lookup" | "recovery";
+  status: number;
 }
 
 function outcomeUnknown(): EnsureManagedIntegrationAuthConfigResult {
@@ -130,6 +138,24 @@ export function createComposioAuthConfigs(
   const apiKey = composioApiKeySchema.safeParse(options.apiKey);
   const fetchImplementation = options.fetch ?? globalThis.fetch;
 
+  function recordResponse(
+    operation: ComposioAuthConfigResponseEvent["operation"],
+    status: number,
+    integrationSlug: string,
+    startedAt: number,
+  ) {
+    try {
+      options.onResponse?.({
+        durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+        integrationSlug,
+        operation,
+        status,
+      });
+    } catch {
+      // Diagnostic telemetry must not alter provider behavior.
+    }
+  }
+
   function signal(): AbortSignal {
     return options.signal === undefined
       ? AbortSignal.timeout(AUTH_CONFIG_TIMEOUT_MS)
@@ -138,12 +164,14 @@ export function createComposioAuthConfigs(
 
   async function findManaged(
     integrationSlug: string,
+    operation: Extract<ComposioAuthConfigResponseEvent["operation"], "lookup" | "recovery">,
   ): Promise<ManagedIntegrationAuthConfig | null | undefined> {
     const endpoint = new URL(COMPOSIO_AUTH_CONFIGS_URL);
     endpoint.searchParams.set("is_composio_managed", "true");
     endpoint.searchParams.set("limit", "50");
     endpoint.searchParams.set("show_disabled", "false");
     endpoint.searchParams.set("toolkit_slug", integrationSlug);
+    const startedAt = performance.now();
     const response = await fetchImplementation(endpoint, {
       headers: {
         accept: "application/json",
@@ -153,6 +181,7 @@ export function createComposioAuthConfigs(
       redirect: "manual",
       signal: signal(),
     });
+    recordResponse(operation, response.status, integrationSlug, startedAt);
 
     if (
       response.status !== 200 ||
@@ -189,7 +218,7 @@ export function createComposioAuthConfigs(
       }
 
       try {
-        const existing = await findManaged(integrationSlug.data);
+        const existing = await findManaged(integrationSlug.data, "lookup");
 
         if (existing === undefined) {
           return outcomeUnknown();
@@ -201,6 +230,7 @@ export function createComposioAuthConfigs(
             : { authConfig: existing, created: false, ok: true };
         }
 
+        const startedAt = performance.now();
         const response = await fetchImplementation(COMPOSIO_AUTH_CONFIGS_URL, {
           body: JSON.stringify({
             auth_config: {
@@ -219,6 +249,7 @@ export function createComposioAuthConfigs(
           redirect: "manual",
           signal: signal(),
         });
+        recordResponse("create", response.status, integrationSlug.data, startedAt);
 
         if (
           response.status === 201 &&
@@ -237,7 +268,7 @@ export function createComposioAuthConfigs(
           }
         }
 
-        const recovered = await findManaged(integrationSlug.data);
+        const recovered = await findManaged(integrationSlug.data, "recovery");
 
         return recovered === null ||
           recovered === undefined ||

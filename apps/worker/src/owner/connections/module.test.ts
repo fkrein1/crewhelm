@@ -118,7 +118,7 @@ describe("OwnerControlPlane connections", () => {
       expiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
       providerConnectionId: "ca_owner_112",
       reservationId: reservation.reservationId,
-      url: "https://connect.composio.dev/link/ln_owner_112",
+      url: "https://connect.composio.dev/link/link_owner_112",
     };
     const created = await stub.completeConnectionLink(authority, completion);
 

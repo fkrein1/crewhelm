@@ -15,6 +15,7 @@ import * as z from "zod";
 
 import type { WorkerEnv } from "../env.js";
 import { readBoundedPostRequest } from "../http/request-body.js";
+import { recordIntegrationProviderResponse } from "../observability/integrations.js";
 import { registerAgentTools } from "./agent-tools.js";
 import { registerConnectionTools } from "./connection-tools.js";
 import { registerConnectionAttachmentTools } from "./connection-attachment-tools.js";
@@ -137,6 +138,7 @@ function createMcpServer(
   registerConnectionTools(server, context, {
     connectionLinks: createComposioConnectionLinks({
       apiKey: env.COMPOSIO_API_KEY,
+      onResponse: recordIntegrationProviderResponse,
       signal,
     }),
     publicOrigin: env.PUBLIC_ORIGIN,
@@ -155,6 +157,7 @@ function createMcpServer(
   registerIntegrationTools(server, context, {
     authConfigs: createComposioAuthConfigs({
       apiKey: env.COMPOSIO_API_KEY,
+      onResponse: recordIntegrationProviderResponse,
       signal,
     }),
     catalog: createComposioCatalog({

@@ -1413,6 +1413,7 @@ describe("public OAuth to MCP integration", () => {
 
     expect(callbackResponse.status).toBe(200);
     expect(callbackBody).toContain("Authorization returned to Crewhelm");
+    expect(callbackBody).toContain('href="/oauth/styles.css"');
     expect(callbackBody).not.toContain("ca_oauth_connection");
     for (const callbackSecret of callbackSecrets) {
       expect(callbackBody).not.toContain(callbackSecret);

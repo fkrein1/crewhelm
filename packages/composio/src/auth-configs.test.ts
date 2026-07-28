@@ -55,6 +55,7 @@ describe("Composio managed auth configurations", () => {
   });
 
   it("creates a managed configuration through one fixed bounded write", async () => {
+    const onResponse = vi.fn<(event: unknown) => void>();
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse({ items: [], next_cursor: null }))
@@ -71,7 +72,7 @@ describe("Composio managed auth configurations", () => {
           201,
         ),
       );
-    const authConfigs = createComposioAuthConfigs({ apiKey, fetch: fetchMock });
+    const authConfigs = createComposioAuthConfigs({ apiKey, fetch: fetchMock, onResponse });
 
     await expect(authConfigs.ensureManaged({ integrationSlug: "github" })).resolves.toMatchObject({
       authConfig: { authConfigId: existingConfig.id, integrationSlug: "github", managed: true },
@@ -79,6 +80,18 @@ describe("Composio managed auth configurations", () => {
       ok: true,
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onResponse).toHaveBeenNthCalledWith(1, {
+      durationMs: expect.any(Number),
+      integrationSlug: "github",
+      operation: "lookup",
+      status: 200,
+    });
+    expect(onResponse).toHaveBeenNthCalledWith(2, {
+      durationMs: expect.any(Number),
+      integrationSlug: "github",
+      operation: "create",
+      status: 201,
+    });
 
     const [endpoint, init] = fetchMock.mock.calls[1] ?? [];
 
@@ -100,6 +113,7 @@ describe("Composio managed auth configurations", () => {
   });
 
   it("recovers a provider success after an ambiguous create response", async () => {
+    const onResponse = vi.fn<(event: unknown) => void>();
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse({ items: [], next_cursor: null }))
@@ -107,7 +121,7 @@ describe("Composio managed auth configurations", () => {
       .mockResolvedValueOnce(jsonResponse({ items: [existingConfig], next_cursor: null }));
 
     await expect(
-      createComposioAuthConfigs({ apiKey, fetch: fetchMock }).ensureManaged({
+      createComposioAuthConfigs({ apiKey, fetch: fetchMock, onResponse }).ensureManaged({
         integrationSlug: "github",
       }),
     ).resolves.toMatchObject({
@@ -116,6 +130,24 @@ describe("Composio managed auth configurations", () => {
       ok: true,
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(onResponse).toHaveBeenNthCalledWith(1, {
+      durationMs: expect.any(Number),
+      integrationSlug: "github",
+      operation: "lookup",
+      status: 200,
+    });
+    expect(onResponse).toHaveBeenNthCalledWith(2, {
+      durationMs: expect.any(Number),
+      integrationSlug: "github",
+      operation: "create",
+      status: 503,
+    });
+    expect(onResponse).toHaveBeenNthCalledWith(3, {
+      durationMs: expect.any(Number),
+      integrationSlug: "github",
+      operation: "recovery",
+      status: 200,
+    });
   });
 
   it("fails closed for invalid configuration, substituted toolkits, and unbounded responses", async () => {
