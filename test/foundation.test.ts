@@ -1,4 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
+import { posix } from "node:path";
 
 import { describe, expect, it } from "vitest";
 import { parseDocument } from "yaml";
@@ -313,68 +314,55 @@ describe("repository foundation", () => {
     );
   });
 
-  it("keeps Worker behavior inside capability-owned deep modules", async () => {
-    const sourceRootFiles = await readdir(new URL("apps/worker/src/", root));
-    const ownerRoot = await read("apps/worker/src/owner/durable-object.ts");
-    const agentRoot = await read("apps/worker/src/agent/durable-object.ts");
-    const mcpRoot = await read("apps/worker/src/mcp/server.ts");
-    const capabilityPaths = [
-      "apps/worker/src/owner/agents/module.ts",
-      "apps/worker/src/owner/agents/module.test.ts",
-      "apps/worker/src/owner/runs/module.ts",
-      "apps/worker/src/owner/runs/module.test.ts",
-      "apps/worker/src/owner/runs/tool-execution.ts",
-      "apps/worker/src/owner/runs/tool-execution.test.ts",
-      "apps/worker/src/owner/connections/module.ts",
-      "apps/worker/src/owner/connections/module.test.ts",
-      "apps/worker/src/owner/agent-channel/module.ts",
-      "apps/worker/src/owner/agent-channel/protocol.ts",
-      "apps/worker/src/agent/admitted-runs/module.ts",
-      "apps/worker/src/agent/admitted-runs/schema.ts",
-      "apps/worker/src/agent/admitted-runs/module.test.ts",
-      "apps/worker/src/mcp/agent-tools.ts",
-      "apps/worker/src/mcp/run-tools.ts",
-      "apps/worker/src/mcp/connection-tools.ts",
-      "apps/worker/src/mcp/integration-tools.ts",
-      "apps/worker/src/http/server.ts",
-      "apps/worker/src/http/server.test.ts",
-      "apps/worker/src/oauth/server.ts",
-      "apps/worker/src/oauth/server.test.ts",
-      "apps/worker/src/oauth/mcp.integration.test.ts",
-    ];
-    const capabilitySources = await Promise.all(capabilityPaths.map((path) => read(path)));
+  it("keeps Worker capability modules behind their composition roots", async () => {
+    const sourcePaths = (await readdir(new URL("apps/worker/src/", root), { recursive: true })).map(
+      (path) => path.replaceAll("\\", "/"),
+    );
+    const productionPaths = sourcePaths.filter((path) => {
+      const fileName = posix.basename(path);
 
-    expect(sourceRootFiles.filter((path) => path.endsWith(".test.ts"))).toEqual([]);
-    for (const moduleName of [
-      "AgentRegistry",
-      "RunAdmissions",
-      "ToolExecutions",
-      "Connections",
-      "AgentChannel",
-    ]) {
-      expect(ownerRoot).toContain(moduleName);
-    }
-    expect(agentRoot).toContain('from "./admitted-runs/module.js"');
-    for (const registrarName of [
-      "registerAgentTools",
-      "registerRunTools",
-      "registerConnectionTools",
-      "registerIntegrationTools",
-    ]) {
-      expect(mcpRoot).toContain(registrarName);
-    }
-    const boundaryViolations = capabilityPaths.flatMap((path, index) => {
-      if (path.endsWith(".test.ts")) {
-        return [];
-      }
+      return (
+        path.endsWith(".ts") &&
+        !fileName.endsWith(".test.ts") &&
+        !fileName.startsWith("test") &&
+        !fileName.includes("-test-")
+      );
+    });
+    const productionSources = await Promise.all(
+      productionPaths.map((path) => read(`apps/worker/src/${path}`)),
+    );
+    const boundaryViolations = productionPaths.flatMap((path, index) => {
+      const source = productionSources[index] ?? "";
+      const importedPaths = [
+        ...source.matchAll(/(?:\bfrom\s+|\bimport\s+)["'](\.{1,2}\/[^"']+)["']/g),
+      ].flatMap((match) => {
+        const specifier = match[1];
 
-      const forbiddenImport = path.includes("/mcp/")
-        ? 'from "./server.js"'
-        : 'from "../durable-object.js"';
+        return specifier === undefined
+          ? []
+          : [posix.normalize(posix.join(posix.dirname(path), specifier)).replace(/\.js$/, ".ts")];
+      });
+      const importsOwnCompositionRoot =
+        (/^owner\/[^/]+\//.test(path) && importedPaths.includes("owner/durable-object.ts")) ||
+        (/^agent\/[^/]+\//.test(path) && importedPaths.includes("agent/durable-object.ts"));
+      const crossesAdmittedRunOwnership =
+        path.startsWith("agent/admitted-runs/") &&
+        importedPaths.some((importedPath) => importedPath.startsWith("owner/"));
+      const bypassesMcpComposition =
+        path.startsWith("mcp/") &&
+        path !== "mcp/server.ts" &&
+        importedPaths.some(
+          (importedPath) => importedPath === "mcp/server.ts" || importedPath.startsWith("http/"),
+        );
 
-      return capabilitySources[index]?.includes(forbiddenImport) ? [path] : [];
+      return importsOwnCompositionRoot || crossesAdmittedRunOwnership || bypassesMcpComposition
+        ? [path]
+        : [];
     });
 
+    expect(sourcePaths.filter((path) => !path.includes("/") && path.endsWith(".test.ts"))).toEqual(
+      [],
+    );
     expect(boundaryViolations).toEqual([]);
   });
 

@@ -21,7 +21,7 @@ import {
   isToolExecutionPermitFresh,
 } from "./module.js";
 import { deriveOwnerKey } from "../../owner/identity.js";
-import { digestRunPrompt } from "../../owner/runs/module.js";
+import { digestRunPrompt } from "./protocol.js";
 import {
   LARGE_TEST_PROMPT,
   SLOW_TEST_PROMPT,

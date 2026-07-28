@@ -21,9 +21,10 @@ import {
 import { eq } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
+import { digestRunPrompt } from "../../agent/admitted-runs/protocol.js";
 import type { CrewAgent } from "../../agent/durable-object.js";
 import { auditEvents, toolApprovals, type ControlPlaneDatabaseSchema } from "../schema.js";
-import { digestRunPrompt, type RunAdmissions } from "../runs/module.js";
+import type { RunAdmissions } from "../runs/module.js";
 import { RunReceiverCapabilities } from "./protocol.js";
 
 type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
@@ -31,6 +32,8 @@ type StartRunFailure = Extract<StartRunResult, { ok: false }>;
 type InspectRunFailure = Extract<InspectRunResult, { ok: false }>;
 type ListApprovalsFailure = Extract<ListRunToolApprovalsResult, { ok: false }>;
 type DecideApprovalFailure = Extract<DecideRunToolApprovalResult, { ok: false }>;
+type StoredRunAdmission = NonNullable<ReturnType<RunAdmissions["read"]>>;
+type CrewAgentStub = ReturnType<DurableObjectNamespace<CrewAgent>["getByName"]>;
 
 export function deniedStartRun(code: StartRunFailure["error"]["code"]): StartRunFailure {
   return {
@@ -86,6 +89,69 @@ export class AgentChannel {
     return this.#capabilities.redeem(input);
   }
 
+  #agent(authority: OwnerAuthority, admission: StoredRunAdmission) {
+    return this.#crewAgents.getByName(
+      crewAgentObjectName({
+        agentId: admission.agentId,
+        ownerKey: authority.ownerKey,
+      }),
+    );
+  }
+
+  async #inspectAdmittedRun(
+    authority: OwnerAuthority,
+    admission: StoredRunAdmission,
+    agent: CrewAgentStub,
+  ) {
+    try {
+      const capability = this.#capabilities.issue(authority, admission, "inspect");
+
+      if (capability === undefined) {
+        return undefined;
+      }
+
+      const result = inspectAdmittedRunResultSchema.safeParse(
+        await agent.inspectAdmittedRun({ capability }),
+      );
+
+      return result.success &&
+        result.data.ok &&
+        result.data.run.runId === admission.runId &&
+        result.data.run.agentId === admission.agentId &&
+        result.data.run.agentRevision === admission.agentRevision
+        ? result.data
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async #pendingApprovals(
+    authority: OwnerAuthority,
+    admission: StoredRunAdmission,
+    agent?: CrewAgentStub,
+  ) {
+    const capability = this.#capabilities.issue(authority, admission, "list_approvals");
+
+    if (capability === undefined) {
+      return { state: "unavailable" } as const;
+    }
+
+    try {
+      const result = listAdmittedRunToolApprovalsResultSchema.safeParse(
+        await (agent ?? this.#agent(authority, admission)).listAdmittedRunToolApprovals({
+          capability,
+        }),
+      );
+
+      return result.success && result.data.ok
+        ? { approvals: result.data.approvals, state: "available" as const }
+        : { state: "invalid" as const };
+    } catch {
+      return { state: "unavailable" } as const;
+    }
+  }
+
   async start(authority: OwnerAuthority, input: unknown): Promise<StartRunResult> {
     const request = startRunInputSchema.safeParse(input);
 
@@ -113,12 +179,7 @@ export class AgentChannel {
     }
 
     const { agentId, agentRevision } = storedAdmission;
-    const agent = this.#crewAgents.getByName(
-      crewAgentObjectName({
-        agentId,
-        ownerKey: authority.ownerKey,
-      }),
-    );
+    const agent = this.#agent(authority, storedAdmission);
 
     if (admission.state === "expired") {
       return startRunResultSchema.parse({
@@ -170,29 +231,9 @@ export class AgentChannel {
       return deniedStartRun("run_unavailable");
     }
 
-    let inspected: unknown;
+    const inspected = await this.#inspectAdmittedRun(authority, storedAdmission, agent);
 
-    try {
-      const capability = this.#capabilities.issue(authority, storedAdmission, "inspect");
-
-      if (capability === undefined) {
-        return deniedStartRun("run_unavailable");
-      }
-
-      inspected = await agent.inspectAdmittedRun({ capability });
-    } catch {
-      return deniedStartRun("run_unavailable");
-    }
-
-    const result = inspectAdmittedRunResultSchema.safeParse(inspected);
-
-    if (
-      !result.success ||
-      !result.data.ok ||
-      result.data.run.runId !== runId ||
-      result.data.run.agentId !== agentId ||
-      result.data.run.agentRevision !== agentRevision
-    ) {
+    if (inspected === undefined) {
       return deniedStartRun("run_unavailable");
     }
 
@@ -200,7 +241,7 @@ export class AgentChannel {
       created: admission.state === "issued" && admission.created,
       ok: true,
       run: {
-        ...result.data.run,
+        ...inspected.run,
         createdAt: new Date(storedAdmission.createdAt).toISOString(),
       },
     });
@@ -232,42 +273,17 @@ export class AgentChannel {
       });
     }
 
-    const agent = this.#crewAgents.getByName(
-      crewAgentObjectName({
-        agentId: admission.agentId,
-        ownerKey: authority.ownerKey,
-      }),
-    );
-    let inspected: unknown;
+    const agent = this.#agent(authority, admission);
+    const inspected = await this.#inspectAdmittedRun(authority, admission, agent);
 
-    try {
-      const capability = this.#capabilities.issue(authority, admission, "inspect");
-
-      if (capability === undefined) {
-        return deniedInspectRun("run_unavailable");
-      }
-
-      inspected = await agent.inspectAdmittedRun({ capability });
-    } catch {
-      return deniedInspectRun("run_unavailable");
-    }
-
-    const result = inspectAdmittedRunResultSchema.safeParse(inspected);
-
-    if (
-      !result.success ||
-      !result.data.ok ||
-      result.data.run.runId !== admission.runId ||
-      result.data.run.agentId !== admission.agentId ||
-      result.data.run.agentRevision !== admission.agentRevision
-    ) {
+    if (inspected === undefined) {
       return deniedInspectRun("run_unavailable");
     }
 
     return inspectRunResultSchema.parse({
       ok: true,
       run: {
-        ...result.data.run,
+        ...inspected.run,
         createdAt: new Date(admission.createdAt).toISOString(),
       },
     });
@@ -293,35 +309,14 @@ export class AgentChannel {
       return listRunToolApprovalsResultSchema.parse({ approvals: [], ok: true });
     }
 
-    const capability = this.#capabilities.issue(authority, admission, "list_approvals");
+    const listed = await this.#pendingApprovals(authority, admission);
 
-    if (capability === undefined) {
-      return deniedListRunToolApprovals("run_unavailable");
-    }
-
-    let result: unknown;
-
-    try {
-      result = await this.#crewAgents
-        .getByName(
-          crewAgentObjectName({
-            agentId: admission.agentId,
-            ownerKey: authority.ownerKey,
-          }),
-        )
-        .listAdmittedRunToolApprovals({ capability });
-    } catch {
-      return deniedListRunToolApprovals("run_unavailable");
-    }
-
-    const listed = listAdmittedRunToolApprovalsResultSchema.safeParse(result);
-
-    if (!listed.success || !listed.data.ok) {
+    if (listed.state !== "available") {
       return deniedListRunToolApprovals("run_unavailable");
     }
 
     return listRunToolApprovalsResultSchema.parse({
-      approvals: listed.data.approvals,
+      approvals: listed.approvals,
       ok: true,
     });
   }
@@ -346,32 +341,16 @@ export class AgentChannel {
       return deniedDecideRunToolApproval("run_unavailable");
     }
 
-    const agent = this.#crewAgents.getByName(
-      crewAgentObjectName({
-        agentId: admission.agentId,
-        ownerKey: authority.ownerKey,
-      }),
-    );
-    const listCapability = this.#capabilities.issue(authority, admission, "list_approvals");
+    const agent = this.#agent(authority, admission);
+    const pending = await this.#pendingApprovals(authority, admission, agent);
 
-    if (listCapability === undefined) {
+    if (pending.state === "unavailable") {
       return deniedDecideRunToolApproval("run_unavailable");
     }
 
-    let listed: unknown;
-
-    try {
-      listed = await agent.listAdmittedRunToolApprovals({ capability: listCapability });
-    } catch {
-      return deniedDecideRunToolApproval("run_unavailable");
-    }
-
-    const pending = listAdmittedRunToolApprovalsResultSchema.safeParse(listed);
     const approval =
-      pending.success && pending.data.ok
-        ? pending.data.approvals.find(
-            (candidate) => candidate.executionId === request.data.executionId,
-          )
+      pending.state === "available"
+        ? pending.approvals.find((candidate) => candidate.executionId === request.data.executionId)
         : undefined;
 
     if (approval === undefined || Date.parse(approval.expiresAt) <= Date.now()) {

@@ -3,11 +3,8 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { Hono, type Context } from "hono";
 import * as z from "zod";
 
+import { CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX } from "../owner/connections/authorization-return.js";
 import { createCrewhelmAuth, verifyMcpAccessToken } from "../oauth/auth.js";
-import {
-  CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX,
-  registerConnectionAuthorizationReturnRoutes,
-} from "./connection-authorization-return.js";
 import type { WorkerEnv } from "../env.js";
 import { handleAuthenticatedMcpRequest } from "../mcp/server.js";
 import {
@@ -16,6 +13,7 @@ import {
   registerAuthServerRoutes,
 } from "../oauth/server.js";
 import { registerOAuthUiRoutes } from "../oauth/ui.js";
+import { registerConnectionAuthorizationReturnRoutes } from "./connection-authorization-return.js";
 
 const HEALTH_REPORT = healthReportSchema.parse({
   service: "crewhelm",
