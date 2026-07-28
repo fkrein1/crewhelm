@@ -21,8 +21,7 @@ Ship one observable pull-request objective as a complete, green slice.
    - R2/R3: `references/security-review.md`.
    - New capability: `docs/product/philosophy.md`.
    - Authority or execution: `docs/security/invariants.md`.
-   - State, trust, dependency, or contract boundary: `docs/architecture/system.md` and the relevant
-     decision record.
+   - State, trust, dependency, or contract boundary: `docs/architecture/system.md`.
    - Module interface or refactor: `docs/engineering/module-design.md` and
      `docs/engineering/code-philosophy.md`.
 3. State:
