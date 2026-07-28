@@ -46,6 +46,7 @@ export const ownerScopeClaimSchema = z
 export const ownerKeySchema = z
   .string()
   .regex(/^owner_[A-Za-z0-9_-]{43}$/, "Expected an opaque Crewhelm owner key.");
+export const ownerClientIdSchema = z.string().min(1).max(2_048);
 
 export const verifiedOwnerIdentitySchema = z.strictObject({
   issuer: z.url().max(2_048),
@@ -54,7 +55,7 @@ export const verifiedOwnerIdentitySchema = z.strictObject({
 });
 
 export const ownerAuthoritySchema = z.strictObject({
-  clientId: z.string().min(1).max(2_048),
+  clientId: ownerClientIdSchema,
   ownerKey: ownerKeySchema,
   scopes: ownerScopesSchema,
 });

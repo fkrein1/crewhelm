@@ -54,16 +54,43 @@ The control plane owns admission and administration, the agent owns turns, and a
 steps. Any control-plane runtime status is a timestamped projection, never a second source of
 truth. Cross-object work is idempotent because Durable Objects do not share transactions.
 
-The Worker source includes one data-driven `CrewAgent` class based on Think. Its persisted runtime
-configuration is a closed exact Agent-revision contract bound to the canonical owner-plus-Agent
-object name. The initial runtime foundation is deliberately absent from the production Worker
-exports, Durable Object bindings, and Workers AI bindings; a test-only Worker entry binds it under
-Miniflare. Direct Think configuration, fetch, and turn-submission entrypoints fail closed. The class
-keeps Think's durable sessions, recovery, sub-agent, scheduling, and extension seams available for
-a future permit-verifying receiver while defaulting every grant-free turn to no active tools, no
-action authority, no automatic MCP tool materialization, no workspace Bash, and no model reasoning
-or tool payload telemetry. Production wiring must install the exact configuration and start the
-turn only after verifying a short-lived cross-object permit.
+The production Worker exports and binds one data-driven `CrewAgent` class based on Think, together
+with Workers AI. Each run carries a closed exact Agent-revision configuration bound to the canonical
+owner-plus-Agent object name; mutable object-global configuration does not select a queued turn's
+model or instructions. `OwnerControlPlane` issues a 30-second, single-use admission permit binding
+the owner, MCP client, Agent revision, run, prompt digest, expiry, nonce, idempotency key, and an
+explicit budget reservation. The initial reservation allows exactly one model call, one turn, no
+tools, the exact instruction-plus-prompt character count, a bounded model-output token count, and a
+total wall-clock duration. The control plane admits only explicitly classified runnable models and
+reserves the envelope against finite rolling 24-hour owner limits for input characters, model
+calls, and output tokens. `CrewAgent` verifies and redeems the permit before durably submitting the
+turn, then rechecks the authoritative current Agent revision and atomically consumes the one-call
+reservation immediately before inference. A crash after that claim is treated as spent and cannot
+replay the provider call. The submission ID and idempotency key are the run ID. Resume and
+inspection use separate five-second, single-use receiver capabilities minted only inside an
+already authorized owner-object request.
+
+MCP and HTTP callers never receive the `CrewAgent` namespace or an object stub. Only the production
+Worker and `OwnerControlPlane` hold that internal capability, and their call sites use the three
+Crewhelm receiver methods. Crewhelm also shadows authority-bearing inherited Think entrypoints for
+configuration, fetch, transcript, approval, cancellation, MCP, host, workflow, fiber, agent-tool,
+sub-agent routing, facet scheduling, and submission management. Framework-internal transcript and
+alarm helpers remain available to Think and are not routed from untrusted requests; a pinned
+inherited-method fingerprint forces review when that upstream surface changes.
+
+Framework lifecycle reads that Think invokes internally return sealed empty inventories. Grant-free
+turns expose no tools or action authority and disable automatic MCP tool materialization, fetch
+tools, workspace Bash, reasoning emission, and tool payload telemetry. A persisted deadline cancels
+a submission even after eviction, and terminal run records, transcript branches, submissions, and
+materialized output are removed after 24 hours. Status reads materialize at most 64 KiB of text
+through the owner-authorized control plane.
+
+The durable submission can resume safely after a cross-object failure that occurs before provider
+execution starts. Automatic provider-turn recovery is disabled because replaying an interrupted
+paid inference could duplicate spend; an interrupted provider call becomes terminal instead of
+being silently reissued. This is a recovery policy on top of Think, not a replacement for its
+framework or extension seams. Later tool, workflow, and child-agent capabilities can re-enable
+those seams only through equivalent deterministic Crewhelm admission and policy adapters.
 
 Use one SQLite-backed control-plane object per owner and one name-addressed agent object per
 logical agent. Never use a global control-plane object. D1 is not an authoritative store for

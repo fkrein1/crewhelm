@@ -4,6 +4,9 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-22",
   "compatibility_flags": ["nodejs_compat"],
+  "ai": {
+    "binding": "AI",
+  },
   "rules": [
     {
       "type": "Text",
@@ -25,9 +28,17 @@
         "name": "OWNER_CONTROL_PLANE",
         "class_name": "OwnerControlPlane",
       },
+      {
+        "name": "CREW_AGENT",
+        "class_name": "CrewAgent",
+      },
     ],
   },
   "exports": {
+    "CrewAgent": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
     "OwnerControlPlane": {
       "type": "durable-object",
       "storage": "sqlite",

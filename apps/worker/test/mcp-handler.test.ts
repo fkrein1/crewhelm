@@ -14,11 +14,13 @@ import {
   getAgentResultSchema,
   integrationCatalogSearchResultSchema,
   inspectIntegrationToolResultSchema,
+  inspectRunResultSchema,
   integrationToolSearchResultSchema,
   listAgentRevisionsResultSchema,
   listAgentsResultSchema,
   listConnectionsResultSchema,
   ownerAuthoritySchema,
+  startRunResultSchema,
   updateAgentResultSchema,
   type OwnerScope,
 } from "@crewhelm/contracts";
@@ -31,16 +33,19 @@ import {
   MCP_GET_AGENT_TOOL_NAME,
   MCP_GET_AGENT_REVISION_TOOL_NAME,
   MCP_INSPECT_INTEGRATION_TOOL_NAME,
+  MCP_INSPECT_RUN_TOOL_NAME,
   MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
   MCP_LIST_AGENTS_TOOL_NAME,
   MCP_LIST_CONNECTIONS_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME,
   MCP_STATUS_TOOL_NAME,
+  MCP_START_RUN_TOOL_NAME,
   MCP_UPDATE_AGENT_TOOL_NAME,
   handleAuthenticatedMcpRequest,
 } from "../src/mcp-handler.js";
 import { deriveOwnerKey } from "../src/owner-identity.js";
+import { TEST_REPLY } from "./test-crew-agent.js";
 
 const origin = "https://crewhelm.test";
 const signingSecret = "test-better-auth-secret-that-is-at-least-32-bytes";
@@ -137,6 +142,10 @@ describe("authenticated MCP handler", () => {
     const connectionListTool = payload.result.tools.find(
       (tool) => tool.name === MCP_LIST_CONNECTIONS_TOOL_NAME,
     );
+    const startRunTool = payload.result.tools.find((tool) => tool.name === MCP_START_RUN_TOOL_NAME);
+    const inspectRunTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_INSPECT_RUN_TOOL_NAME,
+    );
     const revisionTools = payload.result.tools.filter(
       (tool) =>
         tool.name === MCP_GET_AGENT_REVISION_TOOL_NAME ||
@@ -162,6 +171,18 @@ describe("authenticated MCP handler", () => {
       readOnlyHint: false,
     });
     expect(connectionListTool?.annotations).toMatchObject({
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+      readOnlyHint: true,
+    });
+    expect(startRunTool?.annotations).toMatchObject({
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+      readOnlyHint: false,
+    });
+    expect(inspectRunTool?.annotations).toMatchObject({
       destructiveHint: false,
       idempotentHint: true,
       openWorldHint: false,
@@ -206,7 +227,7 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         status: "ready",
       },
     });
@@ -285,6 +306,9 @@ describe("authenticated MCP handler", () => {
           getAgentRevision: async () => {
             throw new Error("do-not-reflect-this");
           },
+          inspectRun: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           listAgentRevisions: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -298,6 +322,9 @@ describe("authenticated MCP handler", () => {
             throw new Error("do-not-reflect-this");
           },
           status: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          startRun: async () => {
             throw new Error("do-not-reflect-this");
           },
           updateAgent: async () => {
@@ -546,6 +573,129 @@ describe("authenticated MCP handler", () => {
         revisedAt: created.agent.createdAt,
       },
       ok: true,
+    });
+  });
+
+  it("starts and inspects a durable Agent run through MCP", async () => {
+    const authority = await ownerAuthority("mcp-run-owner", [
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+    ]);
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(authority, {
+      executionLimits: {
+        maxDurationSeconds: 45,
+        maxModelTokens: 2_000,
+        maxToolCalls: 0,
+        maxTurns: 4,
+      },
+      idempotencyKey: "mcp-run-agent",
+      instructions: "Return one concise, plain-text answer.",
+      model: "@cf/meta/llama-4-scout-17b-16e-instruct",
+      name: "MCP run Agent",
+    });
+
+    if (!created.ok) {
+      throw new Error("Expected MCP run fixture Agent.");
+    }
+
+    const runInput = {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "mcp-run-1",
+      prompt: "Complete this bounded MCP run.",
+    };
+    const startResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 30,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: runInput,
+            name: MCP_START_RUN_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const startPayload = jsonRpcToolResultSchema.parse(await startResponse.json()).result;
+    const started = startRunResultSchema.parse(JSON.parse(startPayload.content[0]?.text ?? ""));
+
+    expect(startPayload.isError).toBe(false);
+    expect(started).toMatchObject({
+      created: true,
+      ok: true,
+      run: {
+        agentId: created.agent.id,
+        agentRevision: created.agent.revision,
+      },
+    });
+
+    if (!started.ok) {
+      throw new Error("Expected MCP run to start.");
+    }
+
+    const inspected = await vi.waitFor(
+      async () => {
+        const response = await handleAuthenticatedMcpRequest(
+          toolRequest(
+            JSON.stringify({
+              id: 31,
+              jsonrpc: "2.0",
+              method: "tools/call",
+              params: {
+                arguments: { runId: started.run.runId },
+                name: MCP_INSPECT_RUN_TOOL_NAME,
+              },
+            }),
+          ),
+          env,
+          { authority },
+        );
+        const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+        const result = inspectRunResultSchema.parse(JSON.parse(payload.content[0]?.text ?? ""));
+
+        expect(payload.isError).toBe(false);
+        expect(result).toMatchObject({
+          ok: true,
+          run: {
+            output: TEST_REPLY,
+            outputTruncated: false,
+            runId: started.run.runId,
+            status: "completed",
+          },
+        });
+
+        return result;
+      },
+      { interval: 25, timeout: 5_000 },
+    );
+    const replayResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 32,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: runInput,
+            name: MCP_START_RUN_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const replayPayload = jsonRpcToolResultSchema.parse(await replayResponse.json()).result;
+    const replay = startRunResultSchema.parse(JSON.parse(replayPayload.content[0]?.text ?? ""));
+
+    expect(replayPayload.isError).toBe(false);
+    expect(replay).toEqual({
+      created: false,
+      ok: true,
+      run: inspected.ok ? inspected.run : undefined,
     });
   });
 
@@ -1014,6 +1164,7 @@ describe("authenticated MCP handler", () => {
           createAgent: unavailableControlPlane,
           getAgent: unavailableControlPlane,
           getAgentRevision: unavailableControlPlane,
+          inspectRun: unavailableControlPlane,
           listAgentRevisions: unavailableControlPlane,
           listAgents: unavailableControlPlane,
           listConnections: unavailableControlPlane,
@@ -1025,6 +1176,7 @@ describe("authenticated MCP handler", () => {
             state: "dispatch",
           }),
           status: unavailableControlPlane,
+          startRun: unavailableControlPlane,
           updateAgent: unavailableControlPlane,
         }),
       },
@@ -1107,6 +1259,7 @@ describe("authenticated MCP handler", () => {
           createAgent: unavailableControlPlane,
           getAgent: unavailableControlPlane,
           getAgentRevision: unavailableControlPlane,
+          inspectRun: unavailableControlPlane,
           listAgentRevisions: unavailableControlPlane,
           listAgents: unavailableControlPlane,
           listConnections: unavailableControlPlane,
@@ -1115,6 +1268,7 @@ describe("authenticated MCP handler", () => {
               instance.reserveConnectionLink(authorityInput, input),
             ),
           status: unavailableControlPlane,
+          startRun: unavailableControlPlane,
           updateAgent: unavailableControlPlane,
         }),
       },

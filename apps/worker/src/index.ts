@@ -17,6 +17,7 @@ import {
 } from "./oauth-server.js";
 import { registerOAuthUiRoutes } from "./oauth-ui.js";
 
+export { CrewAgent } from "./crew-agent.js";
 export { OwnerControlPlane } from "./owner-control-plane.js";
 
 const HEALTH_REPORT = healthReportSchema.parse({

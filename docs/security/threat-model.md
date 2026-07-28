@@ -158,10 +158,10 @@ validating the owner-generated Agent ID inside the owner-bound Durable Object. T
 `agents:read` scope permits bounded newest-first revision summaries and one exact historical
 definition; summaries omit instructions, and stable numeric cursors prevent overlap while new
 revisions are appended. Missing, malformed, wrong-owner, and insufficient-scope requests use fixed
-failures, and a read creates no audit mutation. Caller input cannot select a Durable Object name,
-alter capability grants, or start execution. Instructions and model identifiers are stored as
-inert validated data; using them in a run requires a separately reviewed runtime authorization
-boundary.
+failures, and a read creates no audit mutation. Caller input cannot select a Durable Object name or
+alter capability grants. Starting a run requires the separately consented `agents:write` scope and
+an exact current Agent revision; inspection requires `agents:read`. Instructions and model
+identifiers remain inert until the control plane admits a run against their immutable revision.
 
 Every creation and update carries a bounded idempotency key scoped to the authenticated MCP client
 and its operation class. An exact replay returns the original Agent revision without another
@@ -175,26 +175,60 @@ configuration cannot amplify MCP output. A transactional ceiling of 100 Agents p
 initial Agent storage; exact creation retries still succeed at the ceiling, while new creations
 fail without partial writes. Each Agent retains at most 1,000 immutable revisions; the final
 allowed update and its exact retries succeed, while a distinct update at the ceiling fails without
-partial writes. Agent registry methods have no delete, run, connection-grant, or execution
-operation; connection onboarding is a separate scope and state machine.
+partial writes. Agent registry methods have no delete or connection-grant operation; connection
+onboarding and run admission are separate scoped state machines.
 
 ## CrewAgent runtime reachability and defaults
 
-The source contains a `CrewAgent` class based on Cloudflare Think, but the production Worker does
-not export or bind that class and has no Workers AI binding. A test-only Worker entry supplies the
-SQLite Durable Object binding under Miniflare. Even there, inherited Think configuration, fetch,
-and turn-submission entrypoints fail closed. Persisted configuration is accepted only when its
-validated owner and Agent identifiers derive the exact Durable Object name. Missing, malformed, or
-wrong-object configuration fails before model selection or prompt assembly.
+The production Worker exports and binds the SQLite-backed `CrewAgent` class and Workers AI.
+`OwnerControlPlane` derives the exact Agent object name and issues a 30-second, single-use permit
+that binds the owner, MCP client, Agent revision, run, prompt digest, expiry, nonce, idempotency
+key, and an explicit budget reservation. The reservation permits one model call, one turn, no
+tools, the exact instruction-plus-prompt character count, bounded output tokens, and a total
+wall-clock duration. Admission accepts only explicitly classified runnable models and reserves
+against finite rolling 24-hour per-owner ceilings for input characters, model calls, and output
+tokens. Only the nonce digest is stored. Verification and redemption occur in the owner object
+before `CrewAgent` calls Think submission APIs. Immediately before inference, the Agent asks the
+owner object to verify the exact redeemed reservation and current Agent revision again; that
+transaction atomically claims the one permitted model call. A concurrent verification, retry, or
+crash recovery cannot claim it again, and a crash after the claim is deliberately charged as spent.
+The accepted runtime record stores the validated configuration and prompt digest, not the prompt
+or nonce.
 
-Grant-free turns expose no active tools and deny Think action authority. Workspace Bash, automatic
-MCP tool materialization, fetch tools, reasoning emission, and model or tool payload telemetry are
-disabled. These are deny-by-default policy settings, not a replacement for Think's durable
-framework features. Production Durable Object and Workers AI bindings remain denied until the
-control plane can issue a short-lived verified permit that binds owner, Agent revision, run, prompt
-digest, budget reservation, expiry, nonce, and idempotency key, and the receiver can verify that
-permit before calling the superclass configuration and turn APIs. A future execution path must
-enforce a total deadline in addition to the configured stream-stall timeout.
+Run admission is retry-safe across the cross-object boundary. Reissuing an unredeemed idempotent
+request rotates the nonce but preserves the original expiry and retention window, so retries cannot
+keep a reservation alive after it falls out of budget accounting; reusing the key with different
+input fails closed. A run ID is also the Think submission ID and idempotency key. If the owner
+records redemption before the Agent submits, a retry can resume only through a five-second,
+single-use receiver capability minted inside the original client's authorized owner request.
+Inspection uses a distinct capability bound to the inspecting client; a raw run ID cannot call the
+Agent receiver. Stale, malformed, replayed, expired, cross-owner, wrong-client, wrong-object,
+wrong-prompt, and wrong-revision inputs return fixed failures without exposing model or provider
+errors.
+
+MCP and HTTP callers never receive a `CrewAgent` namespace or stub. The production Worker and
+`OwnerControlPlane` are the only holders of that internal object capability, and their call sites
+use the three Crewhelm receiver methods. Crewhelm additionally shadows the inherited Think
+configuration, fetch, transcript, cancellation, approval, submission-management, MCP, host,
+workflow, fiber, agent-tool, sub-agent-routing, and facet-scheduling entrypoints that carry
+authority outside the admitted execution path. Think's internal transcript and alarm helpers
+remain available to the framework; they are not an authentication boundary and are not routed from
+untrusted requests. A pinned inherited-method fingerprint and explicit override checks make an
+upstream surface change fail tests for review.
+
+Safe lifecycle reads return empty inventories so Think can initialize without creating ambient
+authority. Grant-free turns expose no active tools and deny Think action authority. Workspace Bash,
+automatic MCP tool materialization, fetch tools, reasoning emission, and model or tool payload
+telemetry are disabled. These are deny-by-default policy settings, not a replacement for Think's
+framework features or the namespace capability boundary.
+
+A persisted total wall-clock deadline schedules cancellation before submission and remains
+effective after Durable Object eviction; cancellation failures propagate so the durable schedule
+can retry. Automatic provider-turn recovery is disabled because an interrupted inference cannot be
+proven unspent and must not be silently duplicated. Pre-provider submission recovery remains
+idempotent. Terminal Agent records, transcript branches, submissions, and materialized output are
+deleted after 24 hours. Inspection passes through the owner-authorized control plane, reads output
+incrementally, and returns at most 64 KiB of text.
 
 ## ToolGate policy authority and residual risk
 

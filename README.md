@@ -6,9 +6,10 @@ shareable agent recipes. Composio supplies the broad app and web integration pla
 toolkits such as Firecrawl.
 
 The implemented surface includes a deployable Worker, an authenticated MCP control plane with an
-owner-scoped Agent registry, an unbound fail-closed CrewAgent runtime foundation based on Cloudflare
-Think, a pure ToolGate policy module for classified Composio actions, and local bootstrap and
-diagnostic commands. Run admission and Agent execution remain outside this surface.
+owner-scoped Agent registry, bounded no-tool Agent runs on Cloudflare Think, a pure ToolGate policy
+module for classified Composio actions, and local bootstrap and diagnostic commands. Composio
+catalog discovery and connection onboarding are available; granting and executing integration
+tools remain outside the runtime surface.
 
 ## Principles
 
@@ -127,6 +128,10 @@ The MCP surface exposes:
 - `crewhelm_update_agent` — replace an Agent's editable configuration as a new immutable revision;
   requires `agents:write`, the expected current revision, and an idempotency key. Each Agent retains
   at most 1,000 revisions.
+- `crewhelm_start_run` — admit and durably start one bounded no-tool turn against an exact immutable
+  Agent revision; requires `agents:write` and an idempotency key.
+- `crewhelm_inspect_run` — inspect the status and bounded output of one owner-scoped run; requires
+  `agents:read`.
 - `crewhelm_search_integrations` — search and paginate the complete non-deprecated Composio
   integration catalog, including Composio-managed and project toolkits; requires
   `integrations:read`.

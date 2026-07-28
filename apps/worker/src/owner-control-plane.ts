@@ -4,6 +4,7 @@ import {
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   CONNECTION_LINK_UNKNOWN_RECOVERY_MS,
+  acceptRunAdmissionResultSchema,
   agentRevisionSchema,
   agentRevisionSummarySchema,
   agentSchema,
@@ -16,6 +17,7 @@ import {
   createAgentResultSchema,
   createConnectionLinkInputSchema,
   createConnectionLinkResultSchema,
+  crewAgentObjectName,
   getAgentInputSchema,
   getAgentRevisionInputSchema,
   getAgentRevisionResultSchema,
@@ -26,6 +28,9 @@ import {
   listAgentsResultSchema,
   listConnectionsInputSchema,
   listConnectionsResultSchema,
+  inspectAdmittedRunResultSchema,
+  inspectRunInputSchema,
+  inspectRunResultSchema,
   MAXIMUM_CONNECTION_LINK_REQUESTS_PER_OWNER,
   MAXIMUM_CONNECTIONS_PER_OWNER,
   MAXIMUM_AGENTS_PER_OWNER,
@@ -35,7 +40,12 @@ import {
   ownerAuthoritySchema,
   recordConnectionAuthorizationReturnInputSchema,
   recordConnectionAuthorizationReturnResultSchema,
+  RUN_RECEIVER_CAPABILITY_LIFETIME_MS,
+  runAdmissionNonceSchema,
+  runReceiverCapabilitySchema,
   reserveConnectionLinkResultSchema,
+  startRunInputSchema,
+  startRunResultSchema,
   updateAgentInputSchema,
   updateAgentResultSchema,
   type Agent,
@@ -48,17 +58,25 @@ import {
   type CreateConnectionLinkInput,
   type CreateConnectionLinkResult,
   type ConnectionSummary,
+  type ConfirmRunAdmissionResult,
+  type CreateRunAdmissionResult,
   type GetAgentRevisionResult,
   type GetAgentResult,
   type ListAgentRevisionsResult,
   type ListAgentsResult,
   type ListConnectionsResult,
+  type InspectRunResult,
   type OwnerAuthority,
   type OwnerScope,
   type RecordConnectionAuthorizationReturnResult,
+  type RedeemRunReceiverCapabilityResult,
   type ReserveConnectionLinkResult,
+  type RunReceiverCapability,
+  type StartRunResult,
   type UpdateAgentInput,
   type UpdateAgentResult,
+  type VerifyActiveRunAdmissionResult,
+  type VerifyRunAdmissionResult,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
 import { and, asc, count, desc, eq, gt, inArray, lt, lte, min } from "drizzle-orm";
@@ -80,7 +98,18 @@ import {
   type StoredConnectionAuthorizationOutcome,
 } from "./control-plane-schema.js";
 
+import { digestRunPrompt, RunAdmissions } from "./run-admission.js";
+import type { CrewAgent } from "./crew-agent.js";
+
 const COMPOSIO_CONNECT_ORIGIN = "https://connect.composio.dev";
+const MAXIMUM_PENDING_RUN_RECEIVER_CAPABILITIES = 128;
+const INVALID_RUN_ADMISSION = {
+  error: {
+    code: "invalid_admission",
+    message: "Run admission denied.",
+  },
+  ok: false,
+} as const;
 type AuthorityErrorCode =
   | "incompatible_schema"
   | "insufficient_scope"
@@ -113,6 +142,9 @@ type ConnectionAuthorizationReturnFailure = Extract<
   RecordConnectionAuthorizationReturnResult,
   { ok: false }
 >;
+type RunAdmissionRequestFailure = Extract<CreateRunAdmissionResult, { ok: false }>;
+type StartRunRequestFailure = Extract<StartRunResult, { ok: false }>;
+type InspectRunRequestFailure = Extract<InspectRunResult, { ok: false }>;
 type AuthorityResult =
   | { authority: OwnerAuthority; ok: true }
   | { code: AuthorityErrorCode; ok: false };
@@ -161,6 +193,10 @@ function createConnectionAuthorizationToken(): string {
   return connectionAuthorizationTokenSchema.parse(
     encodeBase64Url(crypto.getRandomValues(new Uint8Array(32))),
   );
+}
+
+function createRunReceiverNonce(): string {
+  return runAdmissionNonceSchema.parse(encodeBase64Url(crypto.getRandomValues(new Uint8Array(32))));
 }
 
 async function digestAgentCreation(input: CreateAgentInput): Promise<string> {
@@ -218,18 +254,26 @@ function isCanonicalComposioConnectUrl(value: string): boolean {
 
 export class OwnerControlPlane extends DurableObject {
   readonly #database: DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
+  readonly #crewAgents: DurableObjectNamespace<CrewAgent>;
   readonly #objectName: string | undefined;
   readonly #storage: DurableObjectStorage;
   #migrationReady = false;
+  readonly #pendingRunReceiverCapabilities = new Map<
+    string,
+    { canonical: string; expiresAt: number }
+  >();
+  readonly #runAdmissions: RunAdmissions;
 
   constructor(state: DurableObjectState, environment: Cloudflare.Env) {
     super(state, environment);
+    this.#crewAgents = environment.CREW_AGENT;
     this.#objectName = state.id.name;
     this.#storage = state.storage;
     this.#database = drizzle(this.#storage, {
       logger: false,
       schema: controlPlaneSchema,
     });
+    this.#runAdmissions = new RunAdmissions(this.#objectName, this.#database, this.#storage);
     this.#storage.sql.exec("PRAGMA foreign_keys = ON");
     void this.ctx.blockConcurrencyWhile(async () => {
       this.#migrationReady = await migrateControlPlane(this.#database, this.#storage);
@@ -364,6 +408,279 @@ export class OwnerControlPlane extends DurableObject {
       });
 
       return createAgentResultSchema.parse({ agent, created: true, ok: true });
+    });
+  }
+
+  async createRunAdmission(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<CreateRunAdmissionResult> {
+    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+
+    if (!authorization.ok) {
+      return this.#deniedRunAdmission(authorization.code);
+    }
+
+    return this.#runAdmissions.create(authorization.authority, input);
+  }
+
+  verifyRunAdmission(input: unknown): Promise<VerifyRunAdmissionResult> {
+    if (!this.#migrationReady) {
+      return Promise.resolve(INVALID_RUN_ADMISSION);
+    }
+
+    return this.#runAdmissions.verify(input);
+  }
+
+  confirmRunAdmission(input: unknown): Promise<ConfirmRunAdmissionResult> {
+    if (!this.#migrationReady) {
+      return Promise.resolve(INVALID_RUN_ADMISSION);
+    }
+
+    return this.#runAdmissions.confirm(input);
+  }
+
+  verifyActiveRunAdmission(input: unknown): VerifyActiveRunAdmissionResult {
+    if (!this.#migrationReady) {
+      return INVALID_RUN_ADMISSION;
+    }
+
+    return this.#runAdmissions.verifyActive(input);
+  }
+
+  redeemRunReceiverCapability(input: unknown): RedeemRunReceiverCapabilityResult {
+    if (!this.#migrationReady) {
+      return INVALID_RUN_ADMISSION;
+    }
+
+    const capability = runReceiverCapabilitySchema.safeParse(input);
+
+    if (!capability.success || capability.data.ownerKey !== this.#objectName) {
+      return INVALID_RUN_ADMISSION;
+    }
+
+    const pending = this.#pendingRunReceiverCapabilities.get(capability.data.nonce);
+    this.#pendingRunReceiverCapabilities.delete(capability.data.nonce);
+
+    if (
+      pending === undefined ||
+      pending.expiresAt <= Date.now() ||
+      pending.canonical !== JSON.stringify(capability.data)
+    ) {
+      return INVALID_RUN_ADMISSION;
+    }
+
+    return this.#runAdmissions.verifyReceiverCapability(capability.data);
+  }
+
+  async startRun(authorityInput: unknown, input: unknown): Promise<StartRunResult> {
+    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+
+    if (!authorization.ok) {
+      return this.#deniedStartRun(authorization.code);
+    }
+
+    const request = startRunInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return this.#deniedStartRun("invalid_request");
+    }
+
+    const admission = await this.#runAdmissions.create(authorization.authority, {
+      agentId: request.data.agentId,
+      expectedRevision: request.data.expectedRevision,
+      idempotencyKey: request.data.idempotencyKey,
+      promptCharacters: request.data.prompt.length,
+      promptDigest: await digestRunPrompt(request.data.prompt),
+    });
+
+    if (!admission.ok) {
+      return this.#deniedStartRun(admission.error.code);
+    }
+
+    const runId = admission.state === "issued" ? admission.permit.runId : admission.admission.runId;
+    const storedAdmission = this.#runAdmissions.read(runId);
+
+    if (storedAdmission === undefined) {
+      return this.#deniedStartRun("run_unavailable");
+    }
+
+    const { agentId, agentRevision } = storedAdmission;
+    const agent = this.#crewAgents.getByName(
+      crewAgentObjectName({
+        agentId,
+        ownerKey: authorization.authority.ownerKey,
+      }),
+    );
+
+    if (admission.state === "expired") {
+      return startRunResultSchema.parse({
+        created: false,
+        ok: true,
+        run: {
+          agentId,
+          agentRevision,
+          createdAt: new Date(storedAdmission.createdAt).toISOString(),
+          runId,
+          status: "failed",
+        },
+      });
+    }
+
+    let accepted: unknown;
+
+    try {
+      if (admission.state === "issued") {
+        accepted = await agent.acceptRunAdmission({
+          permit: admission.permit,
+          prompt: request.data.prompt,
+        });
+      } else {
+        const capability = this.#issueRunReceiverCapability(
+          authorization.authority,
+          storedAdmission,
+          "resume",
+        );
+
+        if (capability === undefined) {
+          return this.#deniedStartRun("run_unavailable");
+        }
+
+        accepted = await agent.resumeRunAdmission({
+          capability,
+          prompt: request.data.prompt,
+        });
+      }
+    } catch {
+      return this.#deniedStartRun("run_unavailable");
+    }
+
+    const acceptance = acceptRunAdmissionResultSchema.safeParse(accepted);
+
+    if (
+      !acceptance.success ||
+      !acceptance.data.ok ||
+      acceptance.data.runId !== runId ||
+      acceptance.data.agentId !== agentId ||
+      acceptance.data.agentRevision !== agentRevision
+    ) {
+      return this.#deniedStartRun("run_unavailable");
+    }
+
+    let inspected: unknown;
+
+    try {
+      const capability = this.#issueRunReceiverCapability(
+        authorization.authority,
+        storedAdmission,
+        "inspect",
+      );
+
+      if (capability === undefined) {
+        return this.#deniedStartRun("run_unavailable");
+      }
+
+      inspected = await agent.inspectAdmittedRun({ capability });
+    } catch {
+      return this.#deniedStartRun("run_unavailable");
+    }
+
+    const result = inspectAdmittedRunResultSchema.safeParse(inspected);
+
+    if (
+      !result.success ||
+      !result.data.ok ||
+      result.data.run.runId !== runId ||
+      result.data.run.agentId !== agentId ||
+      result.data.run.agentRevision !== agentRevision
+    ) {
+      return this.#deniedStartRun("run_unavailable");
+    }
+
+    return startRunResultSchema.parse({
+      created: admission.state === "issued" && admission.created,
+      ok: true,
+      run: {
+        ...result.data.run,
+        createdAt: new Date(storedAdmission.createdAt).toISOString(),
+      },
+    });
+  }
+
+  async inspectRun(authorityInput: unknown, input: unknown): Promise<InspectRunResult> {
+    const authorization = this.#authorize(authorityInput, AGENTS_READ_SCOPE);
+
+    if (!authorization.ok) {
+      return this.#deniedInspectRun(authorization.code);
+    }
+
+    const request = inspectRunInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return this.#deniedInspectRun("invalid_request");
+    }
+
+    const admission = this.#runAdmissions.read(request.data.runId);
+
+    if (admission === undefined) {
+      return this.#deniedInspectRun("run_not_found");
+    }
+
+    if (admission.status !== "redeemed") {
+      return inspectRunResultSchema.parse({
+        ok: true,
+        run: {
+          agentId: admission.agentId,
+          agentRevision: admission.agentRevision,
+          createdAt: new Date(admission.createdAt).toISOString(),
+          runId: admission.runId,
+          status: admission.status === "expired" ? "failed" : "queued",
+        },
+      });
+    }
+
+    const agent = this.#crewAgents.getByName(
+      crewAgentObjectName({
+        agentId: admission.agentId,
+        ownerKey: authorization.authority.ownerKey,
+      }),
+    );
+    let inspected: unknown;
+
+    try {
+      const capability = this.#issueRunReceiverCapability(
+        authorization.authority,
+        admission,
+        "inspect",
+      );
+
+      if (capability === undefined) {
+        return this.#deniedInspectRun("run_unavailable");
+      }
+
+      inspected = await agent.inspectAdmittedRun({ capability });
+    } catch {
+      return this.#deniedInspectRun("run_unavailable");
+    }
+
+    const result = inspectAdmittedRunResultSchema.safeParse(inspected);
+
+    if (
+      !result.success ||
+      !result.data.ok ||
+      result.data.run.runId !== admission.runId ||
+      result.data.run.agentId !== admission.agentId ||
+      result.data.run.agentRevision !== admission.agentRevision
+    ) {
+      return this.#deniedInspectRun("run_unavailable");
+    }
+
+    return inspectRunResultSchema.parse({
+      ok: true,
+      run: {
+        ...result.data.run,
+        createdAt: new Date(admission.createdAt).toISOString(),
+      },
     });
   }
 
@@ -830,6 +1147,7 @@ export class OwnerControlPlane extends DurableObject {
       return;
     }
 
+    this.#runAdmissions.cleanup(Date.now());
     const nextCleanupAt = this.#database.transaction((transaction) => {
       const currentTime = Date.now();
 
@@ -851,11 +1169,20 @@ export class OwnerControlPlane extends DurableObject {
         (value): value is number => value !== null,
       );
 
-      return scheduled.length === 0 ? null : Math.min(...scheduled);
-    });
+      const nextConnectionCleanup = scheduled.length === 0 ? null : Math.min(...scheduled);
 
-    if (nextCleanupAt !== null) {
-      await this.#storage.setAlarm(nextCleanupAt);
+      return nextConnectionCleanup;
+    });
+    const nextRunCleanup = this.#runAdmissions.nextCleanupAt();
+    const nextAlarm =
+      nextCleanupAt === null
+        ? nextRunCleanup
+        : nextRunCleanup === null
+          ? nextCleanupAt
+          : Math.min(nextCleanupAt, nextRunCleanup);
+
+    if (nextAlarm !== null) {
+      await this.#storage.setAlarm(nextAlarm);
     }
   }
 
@@ -1410,6 +1737,54 @@ export class OwnerControlPlane extends DurableObject {
     }
   }
 
+  #issueRunReceiverCapability(
+    authority: OwnerAuthority,
+    admission: NonNullable<ReturnType<RunAdmissions["read"]>>,
+    action: RunReceiverCapability["action"],
+  ): RunReceiverCapability | undefined {
+    const currentTime = Date.now();
+
+    for (const [nonce, pending] of this.#pendingRunReceiverCapabilities) {
+      if (pending.expiresAt <= currentTime) {
+        this.#pendingRunReceiverCapabilities.delete(nonce);
+      }
+    }
+
+    if (
+      this.#objectName === undefined ||
+      this.#pendingRunReceiverCapabilities.size >= MAXIMUM_PENDING_RUN_RECEIVER_CAPABILITIES
+    ) {
+      return undefined;
+    }
+
+    const expiresAt = currentTime + RUN_RECEIVER_CAPABILITY_LIFETIME_MS;
+    const capability = runReceiverCapabilitySchema.parse({
+      action,
+      agentId: admission.agentId,
+      agentRevision: admission.agentRevision,
+      audience: "crew_agent",
+      budgetReservation: admission.budgetReservation,
+      capability: action === "resume" ? "run:resume" : "run:inspect",
+      clientId: authority.clientId,
+      connection: "none",
+      effect: "none",
+      expiresAt: new Date(expiresAt).toISOString(),
+      idempotencyKey: admission.idempotencyKey,
+      nonce: createRunReceiverNonce(),
+      ownerKey: this.#objectName,
+      promptDigest: admission.promptDigest,
+      runId: admission.runId,
+      target: "none",
+    });
+
+    this.#pendingRunReceiverCapabilities.set(capability.nonce, {
+      canonical: JSON.stringify(capability),
+      expiresAt,
+    });
+
+    return capability;
+  }
+
   #authorize(authorityInput: unknown, requiredScope: OwnerScope): AuthorityResult {
     if (!this.#migrationReady) {
       return { code: "incompatible_schema", ok: false };
@@ -1500,6 +1875,36 @@ export class OwnerControlPlane extends DurableObject {
       error: {
         code: "invalid_return",
         message: "Connection authorization return denied.",
+      },
+      ok: false,
+    };
+  }
+
+  #deniedRunAdmission(code: AuthorityErrorCode): RunAdmissionRequestFailure {
+    return {
+      error: {
+        code,
+        message: "Run admission denied.",
+      },
+      ok: false,
+    };
+  }
+
+  #deniedStartRun(code: StartRunRequestFailure["error"]["code"]): StartRunRequestFailure {
+    return {
+      error: {
+        code,
+        message: "Run request denied.",
+      },
+      ok: false,
+    };
+  }
+
+  #deniedInspectRun(code: InspectRunRequestFailure["error"]["code"]): InspectRunRequestFailure {
+    return {
+      error: {
+        code,
+        message: "Run request denied.",
       },
       ok: false,
     };

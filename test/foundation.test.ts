@@ -301,13 +301,16 @@ describe("repository foundation", () => {
     expect(ownerControlPlane).toContain('this.#storage.sql.exec("PRAGMA foreign_keys = ON");');
   });
 
-  it("keeps the unadmitted CrewAgent runtime out of production bindings and exports", async () => {
+  it("wires the admitted CrewAgent runtime into production bindings and exports", async () => {
     const workerEntry = await read("apps/worker/src/index.ts");
     const wrangler = await read("apps/worker/wrangler.jsonc");
 
-    expect(workerEntry).not.toContain("CrewAgent");
-    expect(wrangler).not.toContain('"CREW_AGENT"');
-    expect(wrangler).not.toMatch(/^\s*"ai"\s*:/m);
+    expect(workerEntry).toContain('export { CrewAgent } from "./crew-agent.js";');
+    expect(wrangler).toMatch(/"ai"\s*:\s*\{\s*"binding"\s*:\s*"AI"/);
+    expect(wrangler).toMatch(/"name"\s*:\s*"CREW_AGENT"\s*,\s*"class_name"\s*:\s*"CrewAgent"/);
+    expect(wrangler).toMatch(
+      /"CrewAgent"\s*:\s*\{\s*"type"\s*:\s*"durable-object"\s*,\s*"storage"\s*:\s*"sqlite"/,
+    );
   });
 
   it("pins the bootstrap CLI and shared provider and contract workspaces", async () => {

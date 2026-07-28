@@ -1,11 +1,14 @@
+import type { CrewAgent } from "./crew-agent.js";
 import type { OwnerControlPlane } from "./owner-control-plane.js";
 
 declare global {
   namespace Cloudflare {
     interface Env {
+      AI: Ai;
       AUTH_DB: D1Database;
       BETTER_AUTH_SECRET: string;
       COMPOSIO_API_KEY?: string;
+      CREW_AGENT: DurableObjectNamespace<CrewAgent>;
       GITHUB_CLIENT_ID: string;
       GITHUB_CLIENT_SECRET: string;
       AUTH_RATE_LIMIT: RateLimit;
