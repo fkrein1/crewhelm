@@ -89,10 +89,12 @@ function integrationEnv(
   configuredOwnerGithubUserId = ownerGithubUserId,
 ): WorkerEnv {
   return {
+    AI: env.AI,
     AUTH_DB: env.AUTH_DB,
     AUTH_RATE_LIMIT: rateLimit,
     BETTER_AUTH_SECRET: "test-better-auth-secret-that-is-at-least-32-bytes",
     COMPOSIO_API_KEY: "test-composio-api-key",
+    CREW_AGENT: env.CREW_AGENT,
     GITHUB_CLIENT_ID: "github-client-id",
     GITHUB_CLIENT_SECRET: "github-client-secret",
     MCP_RATE_LIMIT: rateLimit,
@@ -643,7 +645,7 @@ describe("public OAuth to MCP integration", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(toolResult.content[0].text))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         status: "ready",
       },
     });

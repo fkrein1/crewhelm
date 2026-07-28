@@ -2,6 +2,7 @@ import type {
   Agent,
   AgentExecutionLimits,
   ConnectionAuthorizationOutcome,
+  RunBudgetReservation,
 } from "@crewhelm/contracts";
 import {
   check,
@@ -104,6 +105,68 @@ export const agentUpdates = sqliteTable(
     }).onDelete("restrict"),
     check("agent_updates_request_digest_length", sql`length(${table.requestDigest}) = 43`),
     check("agent_updates_revision_after_initial", sql`${table.revision} > 1`),
+  ],
+);
+
+export const runAdmissions = sqliteTable(
+  "run_admissions",
+  {
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    runId: text("run_id").notNull(),
+    agentId: text("agent_id").notNull(),
+    agentRevision: integer("agent_revision").notNull(),
+    promptDigest: text("prompt_digest").notNull(),
+    budgetReservation: text("budget_reservation", { mode: "json" })
+      .$type<RunBudgetReservation>()
+      .notNull(),
+    nonceDigest: text("nonce_digest").notNull(),
+    status: text("status", { enum: ["issued", "redeemed", "expired"] }).notNull(),
+    expiresAt: integer("expires_at").notNull(),
+    cleanupAt: integer("cleanup_at").notNull(),
+    createdAt: integer("created_at").notNull(),
+    redeemedAt: integer("redeemed_at"),
+    modelCallConsumedAt: integer("model_call_consumed_at"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.clientId, table.idempotencyKey] }),
+    uniqueIndex("run_admissions_run_id").on(table.runId),
+    foreignKey({
+      columns: [table.agentId, table.agentRevision],
+      foreignColumns: [agentRevisions.agentId, agentRevisions.revision],
+    }).onDelete("restrict"),
+    index("run_admissions_cleanup").on(table.cleanupAt),
+    index("run_admissions_expiry")
+      .on(table.expiresAt)
+      .where(sql`${table.status} = 'issued'`),
+    check("run_admissions_request_digest_length", sql`length(${table.requestDigest}) = 43`),
+    check("run_admissions_agent_revision_positive", sql`${table.agentRevision} > 0`),
+    check("run_admissions_prompt_digest_length", sql`length(${table.promptDigest}) = 64`),
+    check("run_admissions_nonce_digest_length", sql`length(${table.nonceDigest}) = 43`),
+    check("run_admissions_status", sql`${table.status} IN ('issued', 'redeemed', 'expired')`),
+    check("run_admissions_expires_at_positive", sql`${table.expiresAt} > 0`),
+    check("run_admissions_cleanup_after_expiry", sql`${table.cleanupAt} > ${table.expiresAt}`),
+    check("run_admissions_created_at_positive", sql`${table.createdAt} > 0`),
+    check(
+      "run_admissions_model_call_consumed_at_positive",
+      sql`${table.modelCallConsumedAt} IS NULL OR ${table.modelCallConsumedAt} > 0`,
+    ),
+    check(
+      "run_admissions_state",
+      sql`(
+        (${table.status} = 'issued'
+          AND ${table.redeemedAt} IS NULL
+          AND ${table.modelCallConsumedAt} IS NULL)
+        OR (${table.status} = 'redeemed'
+          AND ${table.redeemedAt} IS NOT NULL
+          AND (${table.modelCallConsumedAt} IS NULL
+            OR ${table.modelCallConsumedAt} >= ${table.redeemedAt}))
+        OR (${table.status} = 'expired'
+          AND ${table.redeemedAt} IS NULL
+          AND ${table.modelCallConsumedAt} IS NULL)
+      )`,
+    ),
   ],
 );
 
@@ -271,6 +334,7 @@ export const controlPlaneSchema = {
   connections,
   controlPlane,
   controlPlaneMigrations,
+  runAdmissions,
 };
 
 export type ControlPlaneDatabaseSchema = typeof controlPlaneSchema;

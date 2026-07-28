@@ -15,6 +15,8 @@ import {
   integrationCatalogSearchResultSchema,
   inspectIntegrationToolInputSchema,
   inspectIntegrationToolResultSchema,
+  inspectRunInputSchema,
+  inspectRunResultSchema,
   integrationToolSearchInputSchema,
   integrationToolSearchResultSchema,
   listAgentRevisionsInputSchema,
@@ -25,6 +27,8 @@ import {
   listConnectionsResultSchema,
   ownerAuthoritySchema,
   reserveConnectionLinkResultSchema,
+  startRunInputSchema,
+  startRunResultSchema,
   updateAgentInputSchema,
   updateAgentResultSchema,
   type OwnerAuthority,
@@ -52,11 +56,13 @@ interface McpEnvironment {
       completeConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;
       getAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
       getAgentRevision(authorityInput: unknown, input: unknown): Promise<unknown>;
+      inspectRun(authorityInput: unknown, input: unknown): Promise<unknown>;
       listAgentRevisions(authorityInput: unknown, input: unknown): Promise<unknown>;
       listAgents(authorityInput: unknown, input: unknown): Promise<unknown>;
       listConnections(authorityInput: unknown, input: unknown): Promise<unknown>;
       reserveConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;
       status(authorityInput: unknown): Promise<unknown>;
+      startRun(authorityInput: unknown, input: unknown): Promise<unknown>;
       updateAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
     };
   };
@@ -109,12 +115,14 @@ export const MCP_CREATE_CONNECTION_LINK_TOOL_NAME = "crewhelm_create_connection_
 export const MCP_GET_AGENT_TOOL_NAME = "crewhelm_get_agent";
 export const MCP_GET_AGENT_REVISION_TOOL_NAME = "crewhelm_get_agent_revision";
 export const MCP_INSPECT_INTEGRATION_TOOL_NAME = "crewhelm_inspect_integration_tool";
+export const MCP_INSPECT_RUN_TOOL_NAME = "crewhelm_inspect_run";
 export const MCP_LIST_AGENT_REVISIONS_TOOL_NAME = "crewhelm_list_agent_revisions";
 export const MCP_LIST_AGENTS_TOOL_NAME = "crewhelm_list_agents";
 export const MCP_LIST_CONNECTIONS_TOOL_NAME = "crewhelm_list_connections";
 export const MCP_SEARCH_INTEGRATIONS_TOOL_NAME = "crewhelm_search_integrations";
 export const MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME = "crewhelm_search_integration_tools";
 export const MCP_STATUS_TOOL_NAME = "crewhelm_status";
+export const MCP_START_RUN_TOOL_NAME = "crewhelm_start_run";
 export const MCP_UPDATE_AGENT_TOOL_NAME = "crewhelm_update_agent";
 
 export const mcpAuthPropsSchema = z.strictObject({
@@ -432,6 +440,27 @@ function createMcpServer(
   );
 
   server.registerTool(
+    MCP_INSPECT_RUN_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: true,
+      },
+      description:
+        "Inspect the bounded status and completed text output of one authenticated-owner Crewhelm Agent run.",
+      inputSchema: inspectRunInputSchema,
+      title: "Inspect Crewhelm run",
+    },
+    async (input) =>
+      controlPlaneToolResult(
+        () => controlPlane.inspectRun(authority, input),
+        inspectRunResultSchema,
+      ),
+  );
+
+  server.registerTool(
     MCP_LIST_AGENTS_TOOL_NAME,
     {
       annotations: {
@@ -596,6 +625,24 @@ function createMcpServer(
     },
     async () =>
       controlPlaneToolResult(() => controlPlane.status(authority), controlPlaneStatusResultSchema),
+  );
+
+  server.registerTool(
+    MCP_START_RUN_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: false,
+      },
+      description:
+        "Durably start one bounded, no-tool turn for an exact authenticated-owner Crewhelm Agent revision.",
+      inputSchema: startRunInputSchema,
+      title: "Start Crewhelm run",
+    },
+    async (input) =>
+      controlPlaneToolResult(() => controlPlane.startRun(authority, input), startRunResultSchema),
   );
 
   return server;
