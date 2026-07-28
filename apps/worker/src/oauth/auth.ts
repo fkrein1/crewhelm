@@ -15,9 +15,9 @@ import { and, eq, gt } from "drizzle-orm/sql/expressions/conditions";
 import { drizzle } from "drizzle-orm/d1";
 import * as z from "zod";
 
-import { authSchema, mcpTokenRevocation } from "./auth-schema.js";
-import type { WorkerEnv } from "./env.js";
-import { deriveOwnerKey } from "./owner-identity.js";
+import { authSchema, mcpTokenRevocation } from "./schema.js";
+import type { WorkerEnv } from "../env.js";
+import { deriveOwnerKey } from "../owner/identity.js";
 
 const GITHUB_ISSUER = "https://github.com";
 const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";

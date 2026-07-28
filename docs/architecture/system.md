@@ -47,18 +47,66 @@ The control plane owns admission and administration; the agent owns execution. C
 carry explicit authority and are idempotent because Durable Objects do not share transactions.
 D1 is not an authoritative store for agent or control-plane domain state.
 
-The control-plane composition root delegates cohesive behavior to deep modules:
+The Worker is organized by capability rather than technical layer:
 
-| Module                   | Responsibility                                                            |
-| ------------------------ | ------------------------------------------------------------------------- |
-| `agent-registry.ts`      | Agent creation, immutable revisions, reads, and pagination                |
-| `run-admission.ts`       | Run permits, budget reservations, replay protection, and cleanup          |
-| `tool-execution.ts`      | Execution-time policy evaluation, reservations, approvals, and completion |
-| `owner-control-plane.ts` | Owner authorization, cross-object coordination, and module composition    |
-| `crew-agent.ts`          | Admitted Think execution and durable run lifecycle                        |
+```text
+apps/worker/src/
+  owner/
+    durable-object.ts
+    agents/
+      module.ts
+      module.test.ts
+    runs/
+      module.ts
+      module.test.ts
+      tool-execution.ts
+      tool-execution.test.ts
+    connections/
+      module.ts
+      module.test.ts
+    agent-channel/
+      module.ts
+      protocol.ts
+  agent/
+    durable-object.ts
+    admitted-runs/
+      module.ts
+      schema.ts
+      module.test.ts
+  http/
+    server.ts
+    server.test.ts
+    connection-authorization-return.ts
+    request-body.ts
+  mcp/
+    server.ts
+    agent-tools.ts
+    run-tools.ts
+    connection-tools.ts
+    integration-tools.ts
+  oauth/
+    auth.ts
+    schema.ts
+    server.ts
+    server.test.ts
+    ui.ts
+```
+
+`index.ts`, `owner/durable-object.ts`, `agent/durable-object.ts`, `http/server.ts`, and
+`mcp/server.ts` are composition or protocol roots. They select authority, connect modules, and
+translate external protocols; capability behavior stays inside the owning folder. `owner/agents/`
+owns immutable revisions and reads. `owner/runs/` owns admission, budget reservations, execution
+policy, and replay protection. `owner/connections/` owns connection lifecycle.
+`owner/agent-channel/` owns single-use cross-object capabilities and run coordination.
+`agent/admitted-runs/` owns Think execution and its durable lifecycle. MCP tool files own only
+protocol presentation for their matching capability. `http/` owns public routing and bounded HTTP
+input, while `oauth/` owns OAuth persistence and protocol behavior. Their tests live with those
+boundaries rather than at the source root.
 
 Keep focused tests beside these implementations. Add a module when it hides a coherent policy or
-state transition behind a small interface—not merely to shorten a file.
+state transition behind a small interface—not merely to shorten a file. A routine change should
+require the owning module, its boundary contract, its tests, and at most one composition root or
+external adapter.
 
 ## Authority boundaries
 

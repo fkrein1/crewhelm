@@ -3,10 +3,10 @@ import { OWNER_READ_SCOPE, OWNER_SCOPES } from "@crewhelm/contracts";
 import { describe, expect, it } from "vitest";
 import * as z from "zod";
 
-import type { WorkerEnv } from "./env.js";
-import { createWorker } from "./index.js";
-import { hasActiveClientRegistration, purgeExpiredAuthRecords } from "./oauth-server.js";
-import { readAuthTestMigrations, registerAuthTestDatabase } from "./auth-testkit.js";
+import type { WorkerEnv } from "../env.js";
+import { createWorker } from "../http/server.js";
+import { hasActiveClientRegistration, purgeExpiredAuthRecords } from "./server.js";
+import { readAuthTestMigrations, registerAuthTestDatabase } from "./testkit.js";
 
 const origin = "https://crewhelm.test";
 const registrationSchema = z.looseObject({

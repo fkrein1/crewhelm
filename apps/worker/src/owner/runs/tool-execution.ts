@@ -26,7 +26,7 @@ import {
   toolApprovals,
   toolExecutions,
   type ControlPlaneDatabaseSchema,
-} from "./control-plane-schema.js";
+} from "../schema.js";
 
 const INVALID_TOOL_EXECUTION = {
   error: {

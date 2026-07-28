@@ -41,7 +41,7 @@ import {
   agents,
   auditEvents,
   type ControlPlaneDatabaseSchema,
-} from "./control-plane-schema.js";
+} from "../schema.js";
 
 type AgentRequestFailure = Extract<CreateAgentResult, { ok: false }>;
 type StoredAgentRow = {

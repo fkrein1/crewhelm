@@ -10,8 +10,8 @@
   "include": ["control-plane-migrations/**/*.ts", "sql.d.ts", "src/**/*.ts"],
   "exclude": [
     "src/**/*.test.ts",
-    "src/auth-testkit.ts",
-    "src/test-crew-agent.ts",
+    "src/oauth/testkit.ts",
+    "src/agent/admitted-runs/test-agent.ts",
     "src/worker-test-env.d.ts",
     "src/worker-test-entry.ts"
   ]

@@ -26,9 +26,9 @@ import {
   oauthRefreshToken,
   session,
   verification,
-} from "./auth-schema.js";
-import type { WorkerEnv } from "./env.js";
-import { readBoundedPostRequest } from "./request-body.js";
+} from "./schema.js";
+import type { WorkerEnv } from "../env.js";
+import { readBoundedPostRequest } from "../http/request-body.js";
 
 const MAX_OAUTH_REQUEST_BYTES = 8 * 1024;
 const CLIENT_REGISTRATION_TTL_SECONDS = 24 * 60 * 60;

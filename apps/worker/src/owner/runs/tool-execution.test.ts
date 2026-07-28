@@ -11,8 +11,8 @@ import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
-import { deriveOwnerKey } from "./owner-identity.js";
-import { digestRunPrompt } from "./run-admission.js";
+import { deriveOwnerKey } from "../identity.js";
+import { digestRunPrompt } from "./module.js";
 
 const connectionId = "connection_22222222-2222-4222-8222-222222222222";
 const grantId = "grant_33333333-3333-4333-8333-333333333333";

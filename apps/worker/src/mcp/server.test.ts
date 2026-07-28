@@ -45,9 +45,9 @@ import {
   MCP_START_RUN_TOOL_NAME,
   MCP_UPDATE_AGENT_TOOL_NAME,
   handleAuthenticatedMcpRequest,
-} from "./mcp-handler.js";
-import { deriveOwnerKey } from "./owner-identity.js";
-import { TEST_REPLY } from "./test-crew-agent.js";
+} from "./server.js";
+import { TEST_REPLY } from "../agent/admitted-runs/test-agent.js";
+import { deriveOwnerKey } from "../owner/identity.js";
 
 const origin = "https://crewhelm.test";
 const signingSecret = "test-better-auth-secret-that-is-at-least-32-bytes";

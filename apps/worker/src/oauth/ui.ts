@@ -12,8 +12,8 @@ import type { Context, Hono } from "hono";
 import * as z from "zod";
 
 import type { CrewhelmAuth } from "./auth.js";
-import type { WorkerEnv } from "./env.js";
-import { readBoundedPostRequest } from "./request-body.js";
+import type { WorkerEnv } from "../env.js";
+import { readBoundedPostRequest } from "../http/request-body.js";
 
 const MAX_OAUTH_FORM_BYTES = 8 * 1024;
 const SIGNED_QUERY_PATTERN = /^[A-Za-z0-9%._~!$&'()*+,;=:@/?-]+$/;

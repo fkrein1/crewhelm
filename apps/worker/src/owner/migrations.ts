@@ -5,12 +5,12 @@ import { getTableConfig, SQLiteSyncDialect, type IndexColumn } from "drizzle-orm
 import {
   CONTROL_PLANE_SCHEMA_VERSION,
   controlPlaneMigrations,
-} from "../control-plane-migrations/index.js";
+} from "../../control-plane-migrations/index.js";
 import {
   controlPlaneSchema,
   controlPlaneMigrations as migrationJournal,
   type ControlPlaneDatabaseSchema,
-} from "./control-plane-schema.js";
+} from "./schema.js";
 
 export { CONTROL_PLANE_SCHEMA_VERSION };
 

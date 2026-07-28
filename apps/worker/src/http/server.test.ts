@@ -9,9 +9,9 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { createConnectionAuthorizationCallback } from "./connection-authorization-return.js";
-import { createWorker } from "./index.js";
-import { deriveOwnerKey } from "./owner-identity.js";
-import { registerAuthTestDatabase } from "./auth-testkit.js";
+import { createWorker } from "./server.js";
+import { deriveOwnerKey } from "../owner/identity.js";
+import { registerAuthTestDatabase } from "../oauth/testkit.js";
 
 const origin = "https://crewhelm.test";
 const worker = createWorker();

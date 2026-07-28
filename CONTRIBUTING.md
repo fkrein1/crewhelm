@@ -34,7 +34,7 @@ checks are sufficient unless executable configuration, tests, generated artifact
 automation changed. Keep successful output compact and expand logs when diagnosing a failure.
 
 For an `OwnerControlPlane` schema change, edit
-`apps/worker/src/control-plane-schema.ts`, then run:
+`apps/worker/src/owner/schema.ts`, then run:
 
 ```sh
 pnpm --filter @crewhelm/worker db:control-plane:generate

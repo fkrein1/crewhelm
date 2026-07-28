@@ -7,7 +7,7 @@ export default defineConfig({
       {
         test: {
           clearMocks: true,
-          include: ["test/**/*.test.ts"],
+          include: ["packages/**/*.test.ts", "test/**/*.test.ts"],
           name: "foundation",
           restoreMocks: true,
           unstubEnvs: true,
