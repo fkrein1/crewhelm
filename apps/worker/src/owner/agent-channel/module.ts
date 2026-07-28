@@ -23,6 +23,7 @@ import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import { digestRunPrompt } from "../../agent/admitted-runs/protocol.js";
 import type { CrewAgent } from "../../agent/durable-object.js";
+import { recordExecutionEvent } from "../../observability/execution.js";
 import { auditEvents, toolApprovals, type ControlPlaneDatabaseSchema } from "../schema.js";
 import type { RunAdmissions } from "../runs/module.js";
 import { RunReceiverCapabilities } from "./protocol.js";
@@ -375,6 +376,8 @@ export class AgentChannel {
       return deniedDecideRunToolApproval("approval_not_found");
     }
 
+    let decisionRecorded = false;
+
     if (existing === undefined) {
       this.#database
         .insert(toolApprovals)
@@ -399,6 +402,16 @@ export class AgentChannel {
           subjectId: approval.toolCallId,
         })
         .run();
+      decisionRecorded = true;
+    }
+
+    if (decisionRecorded) {
+      recordExecutionEvent({
+        outcome: storedDecision,
+        phase: "tool.approval",
+        runId: request.data.runId,
+        toolCallId: approval.toolCallId,
+      });
     }
 
     const decisionCapability = this.#capabilities.issue(

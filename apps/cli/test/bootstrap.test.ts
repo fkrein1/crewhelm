@@ -44,6 +44,7 @@ const WORKER_SECRET_NAMES = [
 const WORKER_SECRET_NAMES_WITHOUT_COMPOSIO = WORKER_SECRET_NAMES.filter(
   (name) => name !== "COMPOSIO_API_KEY",
 );
+const WORKER_TEXT_MODULE = "0000000000000000000000000000000000000000-0000_test.sql";
 const OPTIONS: BootstrapOptions = {
   databaseName: "crewhelm-auth",
   origin: new URL("https://crewhelm.example"),
@@ -56,7 +57,30 @@ const REUSE_OPTIONS: BootstrapOptions = {
 };
 const stagedConfigSchema = z.looseObject({
   account_id: z.string(),
+  ai: z.looseObject({ binding: z.literal("AI") }),
   d1_databases: z.tuple([z.looseObject({ database_id: z.uuid() })]),
+  durable_objects: z.looseObject({
+    bindings: z.tuple([
+      z.looseObject({
+        class_name: z.literal("OwnerControlPlane"),
+        name: z.literal("OWNER_CONTROL_PLANE"),
+      }),
+      z.looseObject({
+        class_name: z.literal("CrewAgent"),
+        name: z.literal("CREW_AGENT"),
+      }),
+    ]),
+  }),
+  observability: z.looseObject({
+    logs: z.looseObject({ invocation_logs: z.literal(false) }),
+    traces: z.looseObject({ enabled: z.literal(false) }),
+  }),
+  rules: z.tuple([
+    z.looseObject({
+      globs: z.tuple([z.literal("**/*.sql")]),
+      type: z.literal("Text"),
+    }),
+  ]),
   secrets: z.looseObject({ required: z.array(z.string()) }),
   vars: z.looseObject({ PUBLIC_ORIGIN: z.url() }),
 });
@@ -106,6 +130,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "agents:write",
           "connections:read",
           "connections:write",
+          "connection-configs:read",
           "integrations:read",
         ],
       };
@@ -128,6 +153,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "agents:write",
           "connections:read",
           "connections:write",
+          "connection-configs:read",
           "integrations:read",
         ],
         token_endpoint: "https://crewhelm.example/api/auth/oauth2/token",
@@ -143,8 +169,12 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
   const root = await mkdtemp(resolve(tmpdir(), "crewhelm-bootstrap-test-"));
   const assets = resolve(root, "deployment");
   await mkdir(resolve(assets, "migrations"), { recursive: true });
-  await writeFile(resolve(assets, "index.js"), "export default {};\n");
+  await writeFile(
+    resolve(assets, "index.js"),
+    `import migration from "./${WORKER_TEXT_MODULE}";\nexport default migration;\n`,
+  );
   await writeFile(resolve(assets, "index.js.map"), "{}\n");
+  await writeFile(resolve(assets, WORKER_TEXT_MODULE), "SELECT 1;\n");
   await writeFile(resolve(assets, "migrations", "0001_better_auth.sql"), "SELECT 1;\n");
   await writeFile(resolve(assets, "migrations", "0002_control_write_scope.sql"), "SELECT 1;\n");
   await writeFile(
@@ -159,8 +189,13 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
   await writeFile(resolve(assets, "migrations", "0006_connection_write_scope.sql"), "SELECT 1;\n");
   await writeFile(resolve(assets, "migrations", "0007_connection_read_scope.sql"), "SELECT 1;\n");
   await writeFile(
+    resolve(assets, "migrations", "0008_connection_config_read_scope.sql"),
+    "SELECT 1;\n",
+  );
+  await writeFile(
     resolve(assets, "wrangler-template.json"),
     JSON.stringify({
+      ai: { binding: "AI" },
       compatibility_date: "2026-07-22",
       compatibility_flags: ["nodejs_compat"],
       d1_databases: [
@@ -172,9 +207,16 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
         },
       ],
       durable_objects: {
-        bindings: [{ class_name: "OwnerControlPlane", name: "OWNER_CONTROL_PLANE" }],
+        bindings: [
+          { class_name: "OwnerControlPlane", name: "OWNER_CONTROL_PLANE" },
+          { class_name: "CrewAgent", name: "CREW_AGENT" },
+        ],
       },
       exports: {
+        CrewAgent: {
+          storage: "sqlite",
+          type: "durable-object",
+        },
         OwnerControlPlane: {
           storage: "sqlite",
           type: "durable-object",
@@ -182,6 +224,17 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
       },
       main: "./index.js",
       name: "crewhelm",
+      observability: {
+        enabled: true,
+        logs: {
+          enabled: true,
+          head_sampling_rate: 1,
+          invocation_logs: false,
+        },
+        traces: {
+          enabled: false,
+        },
+      },
       ratelimits: [
         {
           name: "AUTH_RATE_LIMIT",
@@ -194,6 +247,7 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
           simple: { limit: 60, period: 60 },
         },
       ],
+      rules: [{ fallthrough: true, globs: ["**/*.sql"], type: "Text" }],
       triggers: { crons: ["17 * * * *"] },
       vars: { PUBLIC_ORIGIN: "https://template.example" },
     }),
@@ -215,6 +269,26 @@ function createDependencies(
 }
 
 describe("Cloudflare bootstrap", () => {
+  it("rejects an unreferenced Worker text module", async () => {
+    const fixture = await createDeploymentAssets();
+    const unreferencedModule = "1111111111111111111111111111111111111111-0001_extra.sql";
+    const runWrangler = vi.fn<RunWrangler>();
+
+    try {
+      await writeFile(resolve(fixture.assets, unreferencedModule), "SELECT 1;\n");
+      await expect(
+        bootstrapDeployment(REUSE_OPTIONS, createDependencies(fixture.assets, runWrangler)),
+      ).rejects.toMatchObject({
+        message: "Packaged deployment assets are invalid.",
+        name: "BootstrapError",
+        stage: "assets",
+      });
+      expect(runWrangler).not.toHaveBeenCalled();
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
   it("stops before D1 mutation when an existing Worker is missing a required secret", async () => {
     const fixture = await createDeploymentAssets();
     const runWrangler = vi.fn<RunWrangler>(async (arguments_) => {
@@ -291,6 +365,7 @@ describe("Cloudflare bootstrap", () => {
               "0005_agent_update_scope.sql",
               "0006_connection_write_scope.sql",
               "0007_connection_read_scope.sql",
+              "0008_connection_config_read_scope.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
@@ -411,6 +486,7 @@ describe("Cloudflare bootstrap", () => {
     const fixture = await createDeploymentAssets();
     let stagedDirectory: string | undefined;
     let stagedConfig: z.infer<typeof stagedConfigSchema> | undefined;
+    let stagedTextModule = false;
     let deployArguments: readonly string[] | undefined;
     const runWrangler = vi.fn<RunWrangler>(async (arguments_) => {
       if (arguments_[0] === "whoami") {
@@ -439,6 +515,7 @@ describe("Cloudflare bootstrap", () => {
               "0005_agent_update_scope.sql",
               "0006_connection_write_scope.sql",
               "0007_connection_read_scope.sql",
+              "0008_connection_config_read_scope.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
@@ -455,6 +532,8 @@ describe("Cloudflare bootstrap", () => {
 
       if (arguments_[0] === "deploy") {
         deployArguments = arguments_;
+        await access(resolve(stagedDirectory, WORKER_TEXT_MODULE));
+        stagedTextModule = true;
       }
 
       return success();
@@ -471,7 +550,18 @@ describe("Cloudflare bootstrap", () => {
       expect(report.database.action).toBe("reused");
       expect(report.deployment.action).toBe("updated");
       expect(stagedConfig?.account_id).toBe(ACCOUNT_ID);
+      expect(stagedConfig?.ai.binding).toBe("AI");
       expect(stagedConfig?.d1_databases[0].database_id).toBe(DATABASE_ID);
+      expect(stagedConfig?.durable_objects.bindings).toEqual([
+        { class_name: "OwnerControlPlane", name: "OWNER_CONTROL_PLANE" },
+        { class_name: "CrewAgent", name: "CREW_AGENT" },
+      ]);
+      expect(stagedConfig?.observability.logs.invocation_logs).toBe(false);
+      expect(stagedConfig?.observability.traces.enabled).toBe(false);
+      expect(stagedConfig?.rules).toEqual([
+        { fallthrough: true, globs: ["**/*.sql"], type: "Text" },
+      ]);
+      expect(stagedTextModule).toBe(true);
       expect(stagedConfig?.secrets.required).toEqual([
         "BETTER_AUTH_SECRET",
         "COMPOSIO_API_KEY",
@@ -765,6 +855,7 @@ describe("Cloudflare bootstrap", () => {
               "0005_agent_update_scope.sql",
               "0006_connection_write_scope.sql",
               "0007_connection_read_scope.sql",
+              "0008_connection_config_read_scope.sql",
             ])
           : queryResult(AUTH_TABLES);
       }

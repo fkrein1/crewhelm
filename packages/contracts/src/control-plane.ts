@@ -4,6 +4,7 @@ export const AGENTS_READ_SCOPE = "agents:read";
 export const AGENTS_WRITE_SCOPE = "agents:write";
 export const CONNECTIONS_READ_SCOPE = "connections:read";
 export const CONNECTIONS_WRITE_SCOPE = "connections:write";
+export const CONNECTION_CONFIGS_READ_SCOPE = "connection-configs:read";
 export const INTEGRATIONS_READ_SCOPE = "integrations:read";
 export const OWNER_READ_SCOPE = "control:read";
 export const OWNER_WRITE_SCOPE = "control:write";
@@ -14,10 +15,11 @@ export const OWNER_SCOPES = [
   AGENTS_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
+  CONNECTION_CONFIGS_READ_SCOPE,
   INTEGRATIONS_READ_SCOPE,
 ] as const;
 export const OWNER_DEFAULT_SCOPE_CLAIM =
-  "control:read control:write agents:read agents:write connections:read connections:write integrations:read";
+  "control:read control:write agents:read agents:write connections:read connections:write connection-configs:read integrations:read";
 
 export const ownerScopeSchema = z.enum(OWNER_SCOPES);
 export const ownerScopesSchema = z

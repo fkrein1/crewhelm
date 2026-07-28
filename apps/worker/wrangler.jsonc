@@ -4,6 +4,17 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-22",
   "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": false,
+    },
+    "traces": {
+      "enabled": false,
+    },
+  },
   "ai": {
     "binding": "AI",
   },
@@ -18,7 +29,7 @@
     {
       "binding": "AUTH_DB",
       "database_name": "crewhelm-development-auth",
-      "database_id": "c58217fd-fe09-447b-b79c-5d63ed1cedc0",
+      "database_id": "8a55da9e-28d1-4687-890f-78c0099ed3ad",
       "migrations_dir": "migrations",
     },
   ],

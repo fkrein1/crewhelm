@@ -1,5 +1,7 @@
 import * as z from "zod";
 
+import { connectionAuthConfigIdSchema } from "./connections.js";
+
 const MAXIMUM_TOOL_PARAMETER_CONTAINER_ENTRIES = 512;
 const MAXIMUM_TOOL_PARAMETER_DEPTH = 24;
 const MAXIMUM_TOOL_PARAMETER_KEY_LENGTH = 256;
@@ -184,6 +186,31 @@ export const integrationCatalogSearchResultSchema = z.discriminatedUnion("ok", [
     ok: z.literal(false),
   }),
 ]);
+export const integrationAuthConfigListInputSchema = z.strictObject({
+  cursor: integrationCatalogCursorSchema.optional(),
+  integrationSlug: integrationSlugSchema,
+  limit: z.number().int().min(1).max(50).default(20),
+});
+export const integrationAuthConfigSchema = z.strictObject({
+  authConfigId: connectionAuthConfigIdSchema,
+  authScheme: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
+  managed: z.boolean().nullable(),
+  name: z.string().min(1).max(160),
+});
+export const integrationAuthConfigListResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    authConfigs: z.array(integrationAuthConfigSchema).max(50),
+    nextCursor: integrationCatalogCursorSchema.nullable(),
+    ok: z.literal(true),
+  }),
+  z.strictObject({
+    error: z.strictObject({
+      code: z.enum(["insufficient_scope", "integration_catalog_unavailable"]),
+      message: z.literal("Integration catalog request denied."),
+    }),
+    ok: z.literal(false),
+  }),
+]);
 export const integrationToolSearchInputSchema = z.strictObject({
   cursor: integrationCatalogCursorSchema.optional(),
   integrationSlug: integrationSlugSchema.optional(),
@@ -254,6 +281,9 @@ export const inspectIntegrationToolResultSchema = z.discriminatedUnion("ok", [
 
 export type InspectIntegrationToolInput = z.infer<typeof inspectIntegrationToolInputSchema>;
 export type InspectIntegrationToolResult = z.infer<typeof inspectIntegrationToolResultSchema>;
+export type IntegrationAuthConfig = z.infer<typeof integrationAuthConfigSchema>;
+export type IntegrationAuthConfigListInput = z.infer<typeof integrationAuthConfigListInputSchema>;
+export type IntegrationAuthConfigListResult = z.infer<typeof integrationAuthConfigListResultSchema>;
 export type IntegrationCatalogItem = z.infer<typeof integrationCatalogItemSchema>;
 export type IntegrationCatalogSearchInput = z.infer<typeof integrationCatalogSearchInputSchema>;
 export type IntegrationCatalogSearchResult = z.infer<typeof integrationCatalogSearchResultSchema>;

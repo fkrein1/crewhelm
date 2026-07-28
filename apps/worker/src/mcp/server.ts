@@ -37,6 +37,7 @@ export {
 } from "./connection-tools.js";
 export {
   MCP_INSPECT_INTEGRATION_TOOL_NAME,
+  MCP_LIST_INTEGRATION_AUTH_CONFIGS_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME,
 } from "./integration-tools.js";

@@ -81,11 +81,10 @@ The Worker exposes Streamable HTTP MCP at `/mcp`. OAuth clients dynamically regi
 definitions, `agents:read` to inspect full Agent definitions including instructions,
 `agents:write` to replace Agent configuration through immutable revisions, `connections:read` to
 list bounded connection summaries, `connections:write` to create private hosted connection links,
-and `integrations:read` to search Composio's catalog and inspect exact tool schemas. Registrations
-default to all seven
-scopes; every token keeps the exact approved scope set, so adding a capability never widens an
-issued token. The consent page discloses that integration searches send terms to Composio. The app
-callback URL must be:
+`connection-configs:read` to list project auth configurations, and `integrations:read` to search
+Composio's catalog and inspect exact tool schemas. Registrations default to all eight scopes; every
+token keeps the exact approved scope set, so adding a capability never widens an issued token. The
+consent page discloses the bounded metadata sent to Composio. The app callback URL must be:
 
 ```text
 https://YOUR_WORKER_HOST/api/auth/callback/github
@@ -139,6 +138,10 @@ The MCP surface exposes:
 - `crewhelm_search_integrations` — search and paginate the complete non-deprecated Composio
   integration catalog, including Composio-managed and project toolkits; requires
   `integrations:read`.
+- `crewhelm_list_integration_auth_configs` — list bounded enabled Composio authentication
+  configurations for one exact integration; requires both `integrations:read` and
+  `connection-configs:read`. Use the returned opaque `authConfigId` with
+  `crewhelm_create_connection_link`.
 - `crewhelm_search_integration_tools` — search exact tools and resolved versions across every
   current Composio integration, optionally within one integration; requires `integrations:read`.
 - `crewhelm_inspect_integration_tool` — inspect bounded input and output parameter schemas for one
@@ -167,6 +170,8 @@ signed provider assertion: configuration and execution each verify the exact opa
 active at Composio. Crewhelm snapshots only bounded public tool metadata for selected, pinned
 versions and converts those provider schemas through one generic runtime adapter; there is no
 per-tool Crewhelm implementation or curated allowlist. Credential-retrieval tools are excluded.
+Auth-config discovery returns only bounded display metadata and opaque IDs; credentials and
+provider errors are excluded.
 The ToolGate policy evaluates an immutable capability grant, a classified action containing
 digests instead of raw arguments or targets, and a current policy and budget snapshot. An allow
 decision is local policy evidence, not a cross-object execution permit and not permission to call

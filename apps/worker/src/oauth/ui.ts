@@ -1,6 +1,7 @@
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  CONNECTION_CONFIGS_READ_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
@@ -38,6 +39,200 @@ const navigationResultSchema = z.looseObject({
   redirect_uri: z.url().max(2_048).optional(),
   url: z.url().max(2_048).optional(),
 });
+const navigationJsonSchema = z.strictObject({
+  redirectUrl: z.url().max(2_048),
+});
+const OAUTH_STYLES = `
+:root {
+  color-scheme: light;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #18212f;
+  background: #f4f6f8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top, #ffffff 0, #f4f6f8 52%),
+    #f4f6f8;
+}
+
+main {
+  width: min(100%, 560px);
+  padding: 36px;
+  border: 1px solid #dfe4ea;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 18px 50px rgb(25 35 50 / 9%);
+}
+
+.eyebrow {
+  margin: 0 0 12px;
+  color: #526071;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0 0 12px;
+  color: #111827;
+  font-size: clamp(28px, 5vw, 36px);
+  line-height: 1.12;
+  letter-spacing: -0.025em;
+}
+
+p,
+li {
+  color: #526071;
+  line-height: 1.6;
+}
+
+ul {
+  margin: 20px 0;
+  padding: 18px 18px 18px 38px;
+  border-radius: 10px;
+  background: #f7f8fa;
+}
+
+li + li {
+  margin-top: 8px;
+}
+
+.meta {
+  padding-top: 16px;
+  border-top: 1px solid #e6e9ee;
+  font-size: 14px;
+}
+
+code {
+  overflow-wrap: anywhere;
+  color: #263244;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 26px;
+}
+
+.actions form {
+  margin: 0;
+}
+
+button,
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  text-decoration: none;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+button:hover,
+.button:hover {
+  transform: translateY(-1px);
+}
+
+button:focus-visible,
+.button:focus-visible {
+  outline: 3px solid rgb(37 99 235 / 28%);
+  outline-offset: 2px;
+}
+
+.primary {
+  color: #ffffff;
+  background: #18212f;
+  box-shadow: 0 6px 16px rgb(24 33 47 / 18%);
+}
+
+.secondary {
+  color: #344054;
+  border-color: #d0d5dd;
+  background: #ffffff;
+}
+
+@media (max-width: 520px) {
+  body {
+    padding: 14px;
+  }
+
+  main {
+    padding: 26px 22px;
+    border-radius: 13px;
+  }
+
+  .actions button,
+  .actions .button,
+  .actions form {
+    width: 100%;
+  }
+}
+`.trim();
+const OAUTH_ACTIONS_SCRIPT = `
+const consentForms = document.querySelectorAll("[data-consent-form]");
+const navigationLink = document.querySelector("[data-navigation-link]");
+
+consentForms.forEach((consentForm) => {
+  consentForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    const buttons = document.querySelectorAll("[data-consent-form] button");
+    buttons.forEach((button) => {
+      button.disabled = true;
+    });
+
+    try {
+      const response = await fetch(consentForm.action, {
+        body: new URLSearchParams(new FormData(consentForm)),
+        headers: { accept: "application/json" },
+        method: "POST",
+      });
+      const result = await response.json();
+
+      if (
+        !response.ok ||
+        typeof result !== "object" ||
+        result === null ||
+        typeof result.redirectUrl !== "string" ||
+        navigationLink?.tagName !== "A"
+      ) {
+        throw new Error("Authorization failed.");
+      }
+
+      navigationLink.href = result.redirectUrl;
+      navigationLink.hidden = false;
+      consentForms.forEach((form) => {
+        form.hidden = true;
+      });
+      navigationLink.focus();
+    } catch {
+      window.location.assign("/oauth/error");
+    }
+  });
+});
+`.trim();
 
 type OAuthApp = Hono<{ Bindings: WorkerEnv }>;
 type WorkerContext = Context<{ Bindings: WorkerEnv }>;
@@ -57,11 +252,31 @@ function htmlResponse(body: string): Response {
     headers: {
       "cache-control": "no-store",
       "content-security-policy":
-        "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+        "default-src 'none'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; script-src 'self'; style-src 'self'",
       "content-type": "text/html; charset=utf-8",
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
       "x-frame-options": "DENY",
+    },
+  });
+}
+
+function actionsScriptResponse(): Response {
+  return new Response(`${OAUTH_ACTIONS_SCRIPT}\n`, {
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "text/javascript; charset=utf-8",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+function stylesheetResponse(): Response {
+  return new Response(`${OAUTH_STYLES}\n`, {
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "text/css; charset=utf-8",
+      "x-content-type-options": "nosniff",
     },
   });
 }
@@ -98,9 +313,17 @@ function signedQuery(request: Request): string | null {
   return result.success ? result.data : null;
 }
 
-function isSameOrigin(request: Request): boolean {
+function isTrustedFormNavigation(request: Request): boolean {
   const origin = request.headers.get("origin");
-  return origin !== null && origin === new URL(request.url).origin;
+
+  if (origin !== null) {
+    return origin === new URL(request.url).origin;
+  }
+
+  return (
+    request.headers.get("sec-fetch-site") === "same-origin" &&
+    request.headers.get("sec-fetch-mode") === "navigate"
+  );
 }
 
 async function readForm(
@@ -108,7 +331,7 @@ async function readForm(
   allowedKeys: ReadonlySet<string>,
 ): Promise<Record<string, string> | null> {
   if (
-    !isSameOrigin(request) ||
+    !isTrustedFormNavigation(request) ||
     !request.headers.get("content-type")?.startsWith("application/x-www-form-urlencoded")
   ) {
     return null;
@@ -149,6 +372,7 @@ function navigationHeaders(request: Request): Headers {
   const headers = new Headers(request.headers);
   headers.set("accept", "text/html");
   headers.set("content-type", "application/json");
+  headers.set("origin", new URL(request.url).origin);
   return headers;
 }
 
@@ -156,12 +380,8 @@ function authUrl(request: Request, path: string): string {
   return new URL(`/api/auth${path}`, request.url).toString();
 }
 
-async function navigationResponse(response: Response): Promise<Response> {
+async function navigationTarget(response: Response, request: Request): Promise<URL | null> {
   const location = response.headers.get("location");
-
-  if (location !== null && response.status >= 300 && response.status < 400) {
-    return response;
-  }
 
   let target = location;
 
@@ -175,18 +395,43 @@ async function navigationResponse(response: Response): Promise<Response> {
   }
 
   if (target === null) {
-    return response;
+    return null;
   }
 
-  const targetUrl = new URL(target);
+  const targetUrl = new URL(target, request.url);
 
   if (targetUrl.protocol !== "https:" && targetUrl.protocol !== "http:") {
-    return authorizationDenied();
+    return null;
+  }
+
+  return targetUrl;
+}
+
+async function navigationResponse(response: Response, request: Request): Promise<Response> {
+  const targetUrl = await navigationTarget(response, request);
+
+  if (targetUrl === null) {
+    return response;
   }
 
   const headers = new Headers(response.headers);
   headers.set("location", targetUrl.toString());
   return new Response(null, { headers, status: 302 });
+}
+
+async function navigationJsonResponse(response: Response, request: Request): Promise<Response> {
+  const targetUrl = await navigationTarget(response, request);
+
+  if (targetUrl === null) {
+    return response;
+  }
+
+  return Response.json(navigationJsonSchema.parse({ redirectUrl: targetUrl.toString() }), {
+    headers: {
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+    },
+  });
 }
 
 function loginPage(query: string): string {
@@ -196,15 +441,17 @@ function loginPage(query: string): string {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Sign in to Crewhelm</title>
+    <link rel="stylesheet" href="/oauth/styles.css">
   </head>
   <body>
     <main>
+      <p class="eyebrow">Crewhelm</p>
       <h1>Sign in to Crewhelm</h1>
       <p>Continue with the GitHub account configured as this Crewhelm deployment's owner.</p>
-      <form method="post" action="/oauth/login">
-        <input type="hidden" name="oauth_query" value="${escapeHtml(query)}">
-        <button type="submit">Continue with GitHub</button>
-      </form>
+      <input type="hidden" name="oauth_query" value="${escapeHtml(query)}">
+      <div class="actions">
+        <a class="button primary" href="/oauth/login/continue?${escapeHtml(query)}">Continue with GitHub</a>
+      </div>
     </main>
   </body>
 </html>
@@ -237,8 +484,12 @@ function consentPage(
     requestedScopes.includes(CONNECTIONS_WRITE_SCOPE)
       ? "<li>Create private, short-lived Composio Connect Links. The selected auth configuration and an opaque owner key are sent to Composio; provider credentials stay with Composio.</li>"
       : "",
+    requestedScopes.includes(CONNECTION_CONFIGS_READ_SCOPE) &&
     requestedScopes.includes(INTEGRATIONS_READ_SCOPE)
-      ? "<li>Search the Composio integration catalog and inspect exact tool schemas. Search terms are sent to Composio.</li>"
+      ? "<li>List enabled Composio auth configurations for a selected integration. The integration slug is sent to Composio; provider credentials are not returned.</li>"
+      : "",
+    requestedScopes.includes(INTEGRATIONS_READ_SCOPE)
+      ? "<li>Search the Composio integration catalog and inspect exact tool schemas. Search terms and selected integration slugs are sent to Composio.</li>"
       : "",
   ].join("");
 
@@ -248,19 +499,32 @@ function consentPage(
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Authorize Crewhelm</title>
+    <link rel="stylesheet" href="/oauth/styles.css">
+    <script src="/oauth/actions.js" defer></script>
   </head>
   <body>
     <main>
+      <p class="eyebrow">Crewhelm</p>
       <h1>Authorize Crewhelm</h1>
       <p><strong>${escapeHtml(client.name)}</strong> is requesting these permissions:</p>
       <ul>${permissions}</ul>
-      <p>Client: <code>${escapeHtml(client.id)}</code></p>
-      <p>After authorization, Crewhelm will return you to <code>${escapeHtml(redirectOrigin)}</code>.</p>
-      <form method="post" action="/oauth/consent">
-        <input type="hidden" name="oauth_query" value="${escapeHtml(query)}">
-        <button type="submit" name="decision" value="approve">Authorize</button>
-        <button type="submit" name="decision" value="deny">Deny</button>
-      </form>
+      <div class="meta">
+        <p>Client: <code>${escapeHtml(client.id)}</code></p>
+        <p>After authorization, Crewhelm will return you to <code>${escapeHtml(redirectOrigin)}</code>.</p>
+      </div>
+      <div class="actions">
+        <form method="post" action="/oauth/consent" data-consent-form>
+          <input type="hidden" name="oauth_query" value="${escapeHtml(query)}">
+          <input type="hidden" name="decision" value="approve">
+          <button class="primary" type="submit">Authorize</button>
+        </form>
+        <form method="post" action="/oauth/consent" data-consent-form>
+          <input type="hidden" name="oauth_query" value="${escapeHtml(query)}">
+          <input type="hidden" name="decision" value="deny">
+          <button class="secondary" type="submit">Deny</button>
+        </form>
+        <a class="button primary" data-navigation-link hidden>Continue to client</a>
+      </div>
     </main>
   </body>
 </html>
@@ -280,19 +544,33 @@ async function submitLogin(context: WorkerContext, createAuth: AuthFactory): Pro
     return authorizationDenied();
   }
 
+  return startLogin(context, createAuth, form.data.oauth_query);
+}
+
+async function continueLogin(context: WorkerContext, createAuth: AuthFactory): Promise<Response> {
+  const query = signedQuery(context.req.raw);
+  return query === null ? authorizationDenied() : startLogin(context, createAuth, query);
+}
+
+async function startLogin(
+  context: WorkerContext,
+  createAuth: AuthFactory,
+  oauthQuery: string,
+): Promise<Response> {
   try {
     return navigationResponse(
       await createAuth(context).handler(
         new Request(authUrl(context.req.raw, "/sign-in/social"), {
           body: JSON.stringify({
             callbackURL: "/",
-            oauth_query: form.data.oauth_query,
+            oauth_query: oauthQuery,
             provider: "github",
           }),
           headers: navigationHeaders(context.req.raw),
           method: "POST",
         }),
       ),
+      context.req.raw,
     );
   } catch {
     return authorizationUnavailable("login");
@@ -362,7 +640,23 @@ async function submitConsent(context: WorkerContext, createAuth: AuthFactory): P
     return authorizationDenied();
   }
 
-  const scopeValues = new URLSearchParams(form.data.oauth_query).getAll("scope");
+  return startConsent(
+    context,
+    createAuth,
+    form.data.oauth_query,
+    form.data.decision,
+    context.req.raw.headers.get("accept") === "application/json",
+  );
+}
+
+async function startConsent(
+  context: WorkerContext,
+  createAuth: AuthFactory,
+  oauthQuery: string,
+  decision: "approve" | "deny",
+  jsonNavigation = false,
+): Promise<Response> {
+  const scopeValues = new URLSearchParams(oauthQuery).getAll("scope");
   const requestedScope = ownerScopeClaimSchema.safeParse(
     scopeValues.length === 1 ? scopeValues[0] : undefined,
   );
@@ -372,19 +666,21 @@ async function submitConsent(context: WorkerContext, createAuth: AuthFactory): P
   }
 
   try {
-    return navigationResponse(
-      await createAuth(context).handler(
-        new Request(authUrl(context.req.raw, "/oauth2/consent"), {
-          body: JSON.stringify({
-            accept: form.data.decision === "approve",
-            oauth_query: form.data.oauth_query,
-            scope: requestedScope.data,
-          }),
-          headers: navigationHeaders(context.req.raw),
-          method: "POST",
+    const response = await createAuth(context).handler(
+      new Request(authUrl(context.req.raw, "/oauth2/consent"), {
+        body: JSON.stringify({
+          accept: decision === "approve",
+          oauth_query: oauthQuery,
+          scope: requestedScope.data,
         }),
-      ),
+        headers: navigationHeaders(context.req.raw),
+        method: "POST",
+      }),
     );
+
+    return jsonNavigation
+      ? navigationJsonResponse(response, context.req.raw)
+      : navigationResponse(response, context.req.raw);
   } catch {
     return authorizationUnavailable("consent");
   }
@@ -393,6 +689,12 @@ async function submitConsent(context: WorkerContext, createAuth: AuthFactory): P
 export function registerOAuthUiRoutes(worker: OAuthApp, createAuth: AuthFactory): void {
   worker.get("/oauth/error", authorizationError);
   worker.all("/oauth/error", () => fixedResponse("Method not allowed.\n", 405));
+  worker.get("/oauth/styles.css", stylesheetResponse);
+  worker.all("/oauth/styles.css", () => fixedResponse("Method not allowed.\n", 405));
+  worker.get("/oauth/actions.js", actionsScriptResponse);
+  worker.all("/oauth/actions.js", () => fixedResponse("Method not allowed.\n", 405));
+  worker.get("/oauth/login/continue", (context) => continueLogin(context, createAuth));
+  worker.all("/oauth/login/continue", () => fixedResponse("Method not allowed.\n", 405));
   worker.get("/oauth/login", showLogin);
   worker.post("/oauth/login", (context) => submitLogin(context, createAuth));
   worker.all("/oauth/login", () => fixedResponse("Method not allowed.\n", 405));

@@ -35,6 +35,11 @@ The control plane owns admission and administration; the Agent owns execution. C
 carry explicit authority because Durable Objects do not share transactions. D1 is not an
 authoritative store for control-plane or Agent domain state.
 
+Cloudflare Workers Logs provide diagnostic execution telemetry. Persisted custom events correlate
+allowlisted run and tool-call identifiers, but they do not authorize work or replace the
+owner-local audit record. Invocation logs and automatic traces remain disabled because this Worker
+also handles secret-bearing OAuth and connection callback URLs.
+
 ## Module map
 
 | Change                                | Owning path               |

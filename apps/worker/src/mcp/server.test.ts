@@ -2,6 +2,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  CONNECTION_CONFIGS_READ_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
@@ -13,6 +14,7 @@ import {
   controlPlaneStatusResultSchema,
   getAgentRevisionResultSchema,
   getAgentResultSchema,
+  integrationAuthConfigListResultSchema,
   integrationCatalogSearchResultSchema,
   inspectIntegrationToolResultSchema,
   inspectRunResultSchema,
@@ -36,6 +38,7 @@ import {
   MCP_GET_AGENT_REVISION_TOOL_NAME,
   MCP_INSPECT_INTEGRATION_TOOL_NAME,
   MCP_INSPECT_RUN_TOOL_NAME,
+  MCP_LIST_INTEGRATION_AUTH_CONFIGS_TOOL_NAME,
   MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
   MCP_LIST_AGENTS_TOOL_NAME,
   MCP_LIST_CONNECTIONS_TOOL_NAME,
@@ -905,6 +908,105 @@ describe("authenticated MCP handler", () => {
       ],
       nextCursor: null,
       ok: true,
+    });
+  });
+
+  it("lists enabled Composio auth configurations for connection configuration", async () => {
+    const authority = await ownerAuthority("mcp-auth-config-owner", [
+      CONNECTION_CONFIGS_READ_SCOPE,
+      INTEGRATIONS_READ_SCOPE,
+    ]);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        items: [
+          {
+            auth_scheme: "API_KEY",
+            credentials: { api_key: "provider-secret" },
+            id: "ac_posthog_project",
+            is_composio_managed: false,
+            name: "PostHog project",
+            status: "ENABLED",
+            toolkit: { slug: "posthog" },
+          },
+        ],
+        next_cursor: null,
+      }),
+    );
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 14,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { integrationSlug: "posthog", limit: 20 },
+            name: MCP_LIST_INTEGRATION_AUTH_CONFIGS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload: unknown = await response.json();
+    const result = jsonRpcToolResultSchema.parse(payload).result;
+    const text = result.content[0]?.text ?? "";
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(result.isError).toBe(false);
+    expect(integrationAuthConfigListResultSchema.parse(JSON.parse(text))).toEqual({
+      authConfigs: [
+        {
+          authConfigId: "ac_posthog_project",
+          authScheme: "api_key",
+          managed: false,
+          name: "PostHog project",
+        },
+      ],
+      nextCursor: null,
+      ok: true,
+    });
+    expect(text).not.toContain("provider-secret");
+  });
+
+  it("does not widen an existing all-scope token into auth-config discovery", async () => {
+    const authority = await ownerAuthority("mcp-auth-config-denied-owner", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      CONNECTIONS_READ_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+      INTEGRATIONS_READ_SCOPE,
+    ]);
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 15,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { integrationSlug: "posthog", limit: 20 },
+            name: MCP_LIST_INTEGRATION_AUTH_CONFIGS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload: unknown = await response.json();
+    const result = jsonRpcToolResultSchema.parse(payload).result;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.isError).toBe(true);
+    expect(
+      integrationAuthConfigListResultSchema.parse(JSON.parse(result.content[0]?.text ?? "")),
+    ).toEqual({
+      error: {
+        code: "insufficient_scope",
+        message: "Integration catalog request denied.",
+      },
+      ok: false,
     });
   });
 

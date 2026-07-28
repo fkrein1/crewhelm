@@ -213,7 +213,9 @@ function isRateLimitedPath(path: string): "auth" | "mcp" | null {
     path.startsWith("/api/auth/") ||
     path.startsWith(CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX) ||
     path === "/oauth/login" ||
+    path === "/oauth/login/continue" ||
     path === "/oauth/consent" ||
+    path === "/oauth/consent/decision" ||
     path === "/.well-known/oauth-authorization-server/api/auth"
   ) {
     return "auth";

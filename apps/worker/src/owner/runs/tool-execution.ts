@@ -20,6 +20,7 @@ import { evaluateApprovedComposioToolAction, evaluateComposioToolAction } from "
 import { and, count, eq, gt } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
+import { recordExecutionEvent } from "../../observability/execution.js";
 import {
   agents,
   auditEvents,
@@ -145,6 +146,12 @@ export class ToolExecutions {
     }
 
     if (decision.decision === "requires_approval") {
+      recordExecutionEvent({
+        outcome: "approval_required",
+        phase: "tool.reservation",
+        runId: request.data.runId,
+        toolCallId: request.data.action.toolCallId,
+      });
       return reserveToolExecutionResultSchema.parse({
         actionDigest: decision.actionDigest,
         effect: decision.effect,
@@ -244,6 +251,15 @@ export class ToolExecutions {
       });
     });
 
+    if (result.ok && result.state === "allowed") {
+      recordExecutionEvent({
+        outcome: "allowed",
+        phase: "tool.reservation",
+        runId: request.data.runId,
+        toolCallId: request.data.action.toolCallId,
+      });
+    }
+
     return result;
   }
 
@@ -261,7 +277,8 @@ export class ToolExecutions {
     );
     const currentTime = Date.now();
 
-    return this.#database.transaction((transaction) => {
+    let completedStatus: "completed" | "failed" | "unknown" | undefined;
+    const result = this.#database.transaction((transaction) => {
       const row = transaction
         .select()
         .from(toolExecutions)
@@ -293,6 +310,7 @@ export class ToolExecutions {
         request.data.outcome.outputBytes > request.data.permit.constraints.maxOutputBytes
           ? "unknown"
           : request.data.outcome.status;
+      completedStatus = status;
 
       transaction
         .update(toolExecutions)
@@ -333,6 +351,21 @@ export class ToolExecutions {
         ok: true,
       });
     });
+
+    if (result.ok && result.completed && completedStatus !== undefined) {
+      recordExecutionEvent({
+        outcome: completedStatus,
+        outputBytes: Math.min(
+          request.data.outcome.outputBytes,
+          request.data.permit.constraints.maxOutputBytes,
+        ),
+        phase: "tool.completion",
+        runId: request.data.permit.action.runId,
+        toolCallId: request.data.permit.action.toolCallId,
+      });
+    }
+
+    return result;
   }
 
   async resolveConnection(input: unknown): Promise<ResolveToolExecutionConnectionResult> {
@@ -349,7 +382,7 @@ export class ToolExecutions {
     const reservedPermitDigest = await digestToolExecutionPermit(permit.data, "reserved");
     const dispatchedPermitDigest = await digestToolExecutionPermit(permit.data, "dispatched");
 
-    return this.#database.transaction((transaction) => {
+    const result = this.#database.transaction((transaction) => {
       const row = transaction
         .select({
           actionDigest: toolExecutions.actionDigest,
@@ -411,6 +444,17 @@ export class ToolExecutions {
         providerConnectionId: row.providerConnectionId,
       });
     });
+
+    if (result.ok) {
+      recordExecutionEvent({
+        outcome: "claimed",
+        phase: "tool.dispatch",
+        runId: permit.data.action.runId,
+        toolCallId: permit.data.action.toolCallId,
+      });
+    }
+
+    return result;
   }
 
   #gateInput(database: ToolExecutionDatabase, request: ToolExecutionRequest, evaluatedAt: number) {
