@@ -5,6 +5,7 @@ import {
   CONNECTIONS_WRITE_SCOPE,
   MAXIMUM_AGENTS_PER_OWNER,
   MAXIMUM_OWNER_RUN_MODEL_CALLS_PER_WINDOW,
+  MAXIMUM_OWNER_RUN_OUTPUT_TOKENS_PER_WINDOW,
   MAXIMUM_REVISIONS_PER_AGENT,
   MAXIMUM_RUN_ADMISSIONS_PER_OWNER,
   MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
@@ -18,6 +19,7 @@ import {
   listConnectionsResultSchema,
   ownerAuthoritySchema,
   recordConnectionAuthorizationReturnResultSchema,
+  runBudgetReservationSchema,
   type CreateAgentInput,
   type CreateConnectionLinkInput,
   type OwnerAuthority,
@@ -37,6 +39,8 @@ import {
 import { controlPlaneSchema } from "../src/control-plane-schema.js";
 import { deriveOwnerKey } from "../src/owner-identity.js";
 import { digestRunPrompt } from "../src/run-admission.js";
+import migration1 from "../control-plane-migrations/0001_windy_bushwacker.sql";
+import migration2 from "../control-plane-migrations/0002_cool_rictor.sql";
 
 async function authorityFor(
   subject: string,
@@ -196,7 +200,7 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toEqual({
       ok: true,
       status: {
-        schemaVersion: 2,
+        schemaVersion: 3,
         status: "ready",
       },
     });
@@ -218,6 +222,11 @@ describe("OwnerControlPlane", () => {
           checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
           name: "0001_windy_bushwacker",
           version: 2,
+        },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0002_cool_rictor",
+          version: 3,
         },
       ],
       owner: { owner_key: authority.ownerKey },
@@ -269,12 +278,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 2, status: "ready" },
+      status: { schemaVersion: 3, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 2, status: "ready" },
+      status: { schemaVersion: 3, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -334,6 +343,190 @@ describe("OwnerControlPlane", () => {
     });
   });
 
+  it("recovers a populated v2 control plane through the tool-execution migration", async () => {
+    const authority = await authorityFor("90135", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("migration-v2-agent"));
+
+    if (!created.ok) {
+      throw new Error("Expected migration recovery Agent fixture.");
+    }
+
+    const issuedPrompt = "Preserve this issued legacy run.";
+    const redeemedPrompt = "Preserve this consumed legacy run.";
+    const issued = await stub.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "migration-v2-issued",
+      promptCharacters: issuedPrompt.length,
+      promptDigest: await digestRunPrompt(issuedPrompt),
+    });
+    const redeemed = await stub.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "migration-v2-redeemed",
+      promptCharacters: redeemedPrompt.length,
+      promptDigest: await digestRunPrompt(redeemedPrompt),
+    });
+
+    if (!issued.ok || issued.state !== "issued" || !redeemed.ok || redeemed.state !== "issued") {
+      throw new Error("Expected populated legacy run fixtures.");
+    }
+
+    await expect(stub.confirmRunAdmission(redeemed.permit)).resolves.toMatchObject({
+      confirmed: true,
+      ok: true,
+    });
+    await expect(
+      stub.verifyActiveRunAdmission({
+        agentId: redeemed.permit.agentId,
+        agentRevision: redeemed.permit.agentRevision,
+        budgetReservation: redeemed.permit.budgetReservation,
+        clientId: redeemed.permit.clientId,
+        idempotencyKey: redeemed.permit.idempotencyKey,
+        ownerKey: redeemed.permit.ownerKey,
+        promptDigest: redeemed.permit.promptDigest,
+        runId: redeemed.permit.runId,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec("PRAGMA foreign_keys=OFF");
+      state.storage.sql.exec("DROP TABLE tool_executions");
+      state.storage.sql.exec("DROP TABLE tool_approvals");
+      state.storage.sql.exec("DROP TABLE capability_grants");
+      state.storage.sql.exec(
+        `CREATE TABLE migration_v2_run_rows AS
+         SELECT
+           client_id,
+           idempotency_key,
+           request_digest,
+           run_id,
+           agent_id,
+           agent_revision,
+           prompt_digest,
+           json_remove(budget_reservation, '$.toolGrants') AS budget_reservation,
+           nonce_digest,
+           status,
+           expires_at,
+           cleanup_at,
+           created_at,
+           redeemed_at,
+           model_call_consumed_at
+         FROM run_admissions`,
+      );
+      state.storage.sql.exec("DROP TABLE run_admissions");
+      applyControlPlaneMigrationSql(state.storage, migration1);
+      state.storage.sql.exec(
+        `INSERT INTO run_admissions (
+           client_id,
+           idempotency_key,
+           request_digest,
+           run_id,
+           agent_id,
+           agent_revision,
+           prompt_digest,
+           budget_reservation,
+           nonce_digest,
+           status,
+           expires_at,
+           cleanup_at,
+           created_at,
+           redeemed_at,
+           model_call_consumed_at
+         )
+         SELECT
+           client_id,
+           idempotency_key,
+           request_digest,
+           run_id,
+           agent_id,
+           agent_revision,
+           prompt_digest,
+           budget_reservation,
+           nonce_digest,
+           status,
+           expires_at,
+           cleanup_at,
+           created_at,
+           redeemed_at,
+           model_call_consumed_at
+         FROM migration_v2_run_rows`,
+      );
+      state.storage.sql.exec("DROP TABLE migration_v2_run_rows");
+      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version = 3");
+      state.storage.sql.exec("PRAGMA foreign_keys=ON");
+
+      await expect(
+        runControlPlaneMigrationTransaction(state.storage, [migration2], () => {
+          applyControlPlaneMigrationSql(state.storage, migration2);
+          throw new Error("Injected migration interruption.");
+        }),
+      ).rejects.toThrow("Injected migration interruption.");
+
+      expect(
+        [
+          ...state.storage.sql.exec<{ name: string }>(
+            "SELECT name FROM pragma_table_info('run_admissions') ORDER BY cid",
+          ),
+        ].map((column) => column.name),
+      ).not.toContain("model_calls_consumed");
+      expect([
+        ...state.storage.sql.exec(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tool_executions'",
+        ),
+      ]).toEqual([]);
+      expect([...state.storage.sql.exec("PRAGMA foreign_key_check")]).toEqual([]);
+    });
+
+    await evictDurableObject(stub);
+    await expect(stub.status(authority)).resolves.toMatchObject({
+      ok: true,
+      status: { schemaVersion: 3, status: "ready" },
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      const rows = [
+        ...state.storage.sql.exec<{
+          budget_reservation: string;
+          model_calls_consumed: number;
+          run_id: string;
+        }>(
+          `SELECT run_id, budget_reservation, model_calls_consumed
+           FROM run_admissions
+           WHERE run_id IN (?, ?)
+           ORDER BY run_id`,
+          issued.permit.runId,
+          redeemed.permit.runId,
+        ),
+      ];
+
+      expect(rows).toHaveLength(2);
+      expect(
+        rows.map((row) => ({
+          modelCallsConsumed: row.model_calls_consumed,
+          runId: row.run_id,
+          toolGrants: runBudgetReservationSchema.parse(JSON.parse(row.budget_reservation))
+            .toolGrants,
+        })),
+      ).toEqual(
+        [
+          { modelCallsConsumed: 0, runId: issued.permit.runId, toolGrants: [] },
+          { modelCallsConsumed: 1, runId: redeemed.permit.runId, toolGrants: [] },
+        ].toSorted((left, right) => left.runId.localeCompare(right.runId)),
+      );
+      expect([...state.storage.sql.exec("PRAGMA foreign_key_check")]).toEqual([]);
+      expect([
+        ...state.storage.sql.exec<{ version: number }>(
+          "SELECT version FROM control_plane_migrations ORDER BY version",
+        ),
+      ]).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
+    });
+  });
+
   it("rolls back migration DDL when its journal write fails", async () => {
     const authority = await authorityFor("90134", [OWNER_READ_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
@@ -384,7 +577,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec(
         `INSERT INTO control_plane_migrations (version, name, checksum, applied_at)
          VALUES (?, ?, ?, ?)`,
-        3,
+        5,
         "future_migration",
         "f".repeat(64),
         Date.now(),
@@ -2580,7 +2773,8 @@ describe("OwnerControlPlane", () => {
            cleanup_at,
            created_at,
            redeemed_at,
-           model_call_consumed_at
+           model_call_consumed_at,
+           model_calls_consumed
          )
          SELECT
            'fixture-client',
@@ -2596,6 +2790,7 @@ describe("OwnerControlPlane", () => {
            1,
            ?,
            ?,
+           1,
            1,
            1
          FROM sequence`,
@@ -2623,6 +2818,90 @@ describe("OwnerControlPlane", () => {
         agentId: created.agent.id,
         expectedRevision: created.agent.revision,
         idempotencyKey: "over-run-budget-234",
+        promptCharacters: prompt.length,
+        promptDigest: await digestRunPrompt(prompt),
+      }),
+    ).resolves.toEqual(fixedRunAdmissionFailure("budget_exhausted"));
+  });
+
+  it("reserves the aggregate output allowance for every admitted model step", async () => {
+    const authority = await authorityFor("235", [OWNER_WRITE_SCOPE, AGENTS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const input = agentInput("create-run-agent-235");
+    const created = await stub.createAgent(authority, {
+      ...input,
+      executionLimits: {
+        ...input.executionLimits,
+        maxModelTokens: MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
+        maxTurns: 100,
+      },
+    });
+
+    if (!created.ok) {
+      throw new Error("Expected aggregate output-budget fixture Agent.");
+    }
+
+    const reservedModelCalls = Math.floor(
+      MAXIMUM_OWNER_RUN_OUTPUT_TOKENS_PER_WINDOW / MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
+    );
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO run_admissions (
+           client_id,
+           idempotency_key,
+           request_digest,
+           run_id,
+           agent_id,
+           agent_revision,
+           prompt_digest,
+           budget_reservation,
+           nonce_digest,
+           status,
+           expires_at,
+           cleanup_at,
+           created_at,
+           redeemed_at
+         ) VALUES (
+           'fixture-client',
+           'aggregate-output-budget',
+           'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+           'run_aggregate_output_budget',
+           ?,
+           1,
+           'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+           ?,
+           'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+           'redeemed',
+           1,
+           ?,
+           ?,
+           1
+         )`,
+        created.agent.id,
+        JSON.stringify({
+          maxDurationSeconds: created.agent.executionLimits.maxDurationSeconds,
+          maxInputCharacters: created.agent.instructions.length + 1,
+          maxModelCalls: reservedModelCalls,
+          model: created.agent.model,
+          maxOutputTokens: MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
+          maxToolCalls: 0,
+          maxTurns: reservedModelCalls,
+          reservationId: "budget_23522222-2222-4222-8222-222222222222",
+          toolGrants: [],
+        }),
+        Date.now() + 24 * 60 * 60 * 1_000,
+        Date.now(),
+      );
+    });
+
+    const prompt = "This additional step exceeds the aggregate owner output budget.";
+
+    await expect(
+      stub.createRunAdmission(authority, {
+        agentId: created.agent.id,
+        expectedRevision: created.agent.revision,
+        idempotencyKey: "over-output-budget-235",
         promptCharacters: prompt.length,
         promptDigest: await digestRunPrompt(prompt),
       }),

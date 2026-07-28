@@ -14,6 +14,16 @@ import {
   runBudgetReservationSchema,
   resumeRunAdmissionInputSchema,
   runIdSchema,
+  completeToolExecutionResultSchema,
+  evaluateToolExecutionResultSchema,
+  reserveToolExecutionResultSchema,
+  classifiedComposioToolActionSchema,
+  decideAdmittedRunToolApprovalInputSchema,
+  decideAdmittedRunToolApprovalResultSchema,
+  listAdmittedRunToolApprovalsInputSchema,
+  listAdmittedRunToolApprovalsResultSchema,
+  pendingToolApprovalSchema,
+  TOOL_APPROVAL_LIFETIME_MS,
   verifyActiveRunAdmissionResultSchema,
   verifyRunAdmissionResultSchema,
   type AcceptRunAdmissionResult,
@@ -23,11 +33,19 @@ import {
   type RunAdmissionPermit,
   type RunBudgetReservation,
   type RunReceiverCapability,
+  type ClassifiedComposioToolAction,
+  type ComposioToolCapabilityGrant,
+  type ToolExecutionPermit,
+  type PendingToolApproval,
 } from "@crewhelm/contracts";
 import {
   Think,
   Session,
+  action as defineAction,
+  type Action,
+  type ActionAuthorizationContext,
   type ActionAuthorizationDecision,
+  type ActionContext,
   type AddMessagesOptions,
   type ChatOptions,
   type DeleteSubmissionsOptions,
@@ -38,6 +56,8 @@ import {
   type RunTurnWait,
   type SaveMessagesOptions,
   type SaveMessagesResult,
+  type PrepareStepContext,
+  type StepConfig,
   type StreamCallback,
   type SubmitMessagesOptions,
   type SubmitMessagesResult,
@@ -46,8 +66,10 @@ import {
   type TurnConfig,
   type TurnContext,
   type TurnResult,
+  type ToolCallContext,
+  type ToolCallDecision,
 } from "@cloudflare/think";
-import type { UIMessage } from "ai";
+import type { ToolSet, UIMessage } from "ai";
 import type { RetryOptions, Schedule } from "agents";
 import * as z from "zod";
 
@@ -55,6 +77,7 @@ import { digestRunPrompt } from "./run-admission.js";
 
 const RUNTIME_ADMISSION_UNAVAILABLE = "CrewAgent runtime admission is not available.";
 const RUN_RECORD_PREFIX = "crewhelm:run:";
+const TOOL_APPROVAL_PREFIX = "crewhelm:tool-approval:";
 const MAXIMUM_RUN_OUTPUT_PARTS = 256;
 const INVALID_RUN_ADMISSION = {
   error: {
@@ -137,17 +160,69 @@ const scheduledRunInputSchema = z.strictObject({
 });
 
 type AdmittedRunRecord = z.infer<typeof admittedRunRecordSchema>;
+type AdmittedTurnMetadata = z.infer<typeof admittedTurnMetadataSchema>["crewhelmRun"];
+const pendingToolApprovalRecordSchema = pendingToolApprovalSchema
+  .omit({ executionId: true })
+  .extend({ runId: runIdSchema });
+
+export interface CrewAgentToolAdapter {
+  readonly description: string;
+  readonly grant: ComposioToolCapabilityGrant;
+  readonly inputSchema: z.ZodType<Record<string, unknown>>;
+  readonly name: string;
+  classify(
+    input: Record<string, unknown>,
+    context: { runId: string; toolCallId: string },
+  ): Promise<ClassifiedComposioToolAction> | ClassifiedComposioToolAction;
+  execute(
+    input: Record<string, unknown>,
+    context: { permit: ToolExecutionPermit; signal: AbortSignal },
+  ): Promise<unknown>;
+}
 
 function runtimeAdmissionError(): Error {
   return new Error(RUNTIME_ADMISSION_UNAVAILABLE);
+}
+
+export function isToolExecutionPermitFresh(
+  permit: { constraints: { decisionExpiresAt: string } },
+  currentTime = Date.now(),
+): boolean {
+  const expiresAt = Date.parse(permit.constraints.decisionExpiresAt);
+
+  return Number.isFinite(expiresAt) && currentTime < expiresAt;
 }
 
 function runRecordKey(runId: string): string {
   return `${RUN_RECORD_PREFIX}${runId}`;
 }
 
+function toolApprovalPrefix(runId: string): string {
+  return `${TOOL_APPROVAL_PREFIX}${runId}:`;
+}
+
+function toolApprovalKey(runId: string, toolCallId: string): string {
+  return `${toolApprovalPrefix(runId)}${toolCallId}`;
+}
+
 function runUserMessageId(runId: string): string {
   return `crewhelm:${runId}:user`;
+}
+
+async function canonicalToolCallId(runId: string, toolCallId: string): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(JSON.stringify({ runId, toolCallId })),
+    ),
+  );
+  digest[6] = ((digest[6] ?? 0) & 0x0f) | 0x40;
+  digest[8] = ((digest[8] ?? 0) & 0x3f) | 0x80;
+  const hex = Array.from(digest.slice(0, 16), (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
+
+  return `tool_call_${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function isoTimestamp(timestamp: number | undefined): string | undefined {
@@ -173,6 +248,8 @@ function publicRunStatus(status: ThinkSubmissionInspection["status"]): Run["stat
 }
 
 export class CrewAgent extends Think {
+  #approvalTurnMetadata: AdmittedTurnMetadata | undefined;
+  #permittedApprovalContinuationRunId: string | undefined;
   #permittedAbortRequestId: string | undefined;
   override chatRecovery = false;
   override fetchTools: false = false;
@@ -973,6 +1050,111 @@ export class CrewAgent extends Think {
     });
   }
 
+  async listAdmittedRunToolApprovals(input: unknown) {
+    const request = listAdmittedRunToolApprovalsInputSchema.safeParse(input);
+
+    if (!request.success || !(await this.#redeemReceiverCapability(request.data.capability))) {
+      return INVALID_RUN_ADMISSION;
+    }
+
+    const pending = await super.pendingApprovals();
+    const approvals: PendingToolApproval[] = [];
+
+    for (const approval of pending) {
+      if (approval.source !== "action") {
+        continue;
+      }
+
+      const toolCallId = await canonicalToolCallId(
+        request.data.capability.runId,
+        approval.descriptor.toolCallId,
+      );
+      const stored = pendingToolApprovalRecordSchema.safeParse(
+        await this.ctx.storage.get(toolApprovalKey(request.data.capability.runId, toolCallId)),
+      );
+
+      if (!stored.success || Date.parse(stored.data.expiresAt) <= Date.now()) {
+        continue;
+      }
+
+      const { runId: storedRunId, ...publicApproval } = stored.data;
+
+      if (storedRunId !== request.data.capability.runId) {
+        continue;
+      }
+
+      approvals.push(
+        pendingToolApprovalSchema.parse({
+          ...publicApproval,
+          executionId: approval.executionId,
+        }),
+      );
+    }
+
+    return listAdmittedRunToolApprovalsResultSchema.parse({ approvals, ok: true });
+  }
+
+  async decideAdmittedRunToolApproval(input: unknown) {
+    const request = decideAdmittedRunToolApprovalInputSchema.safeParse(input);
+
+    if (!request.success || !(await this.#redeemReceiverCapability(request.data.capability))) {
+      return INVALID_RUN_ADMISSION;
+    }
+
+    const capability = request.data.capability;
+    const pending = await super.pendingApprovals(capability.executionId);
+    const approval = pending.find(
+      (candidate) =>
+        candidate.source === "action" && candidate.executionId === capability.executionId,
+    );
+
+    if (approval === undefined) {
+      return decideAdmittedRunToolApprovalResultSchema.parse({
+        decided: false,
+        ok: true,
+      });
+    }
+
+    const toolCallId = await canonicalToolCallId(capability.runId, approval.descriptor.toolCallId);
+    const record = await this.#readRunRecord(capability.runId);
+
+    if (record === undefined || Date.now() >= record.deadlineAt) {
+      return INVALID_RUN_ADMISSION;
+    }
+
+    this.#approvalTurnMetadata = {
+      budgetReservation: record.budgetReservation,
+      configuration: record.configuration,
+      promptCharacters: record.promptCharacters,
+      promptDigest: record.promptDigest,
+      runId: capability.runId,
+    };
+    this.#permittedApprovalContinuationRunId = capability.runId;
+    let decided = false;
+
+    try {
+      if (capability.action === "approve_tool") {
+        await super.approveExecution(capability.executionId);
+      } else {
+        await super.rejectExecution(capability.executionId, "Rejected by the Crewhelm owner.");
+      }
+      decided = true;
+    } finally {
+      this.#approvalTurnMetadata = undefined;
+
+      if (!decided) {
+        this.#permittedApprovalContinuationRunId = undefined;
+      }
+    }
+
+    await this.ctx.storage.delete(toolApprovalKey(capability.runId, toolCallId));
+
+    return decideAdmittedRunToolApprovalResultSchema.parse({
+      decided: true,
+      ok: true,
+    });
+  }
+
   async expireAdmittedRun(input: unknown): Promise<void> {
     const request = scheduledRunInputSchema.safeParse(input);
 
@@ -1031,6 +1213,10 @@ export class CrewAgent extends Think {
       await super.deleteSubmission(request.data.runId);
     }
 
+    const approvalRecords = await this.ctx.storage.list({
+      prefix: toolApprovalPrefix(request.data.runId),
+    });
+    await Promise.all([...approvalRecords.keys()].map((key) => this.ctx.storage.delete(key)));
     await this.ctx.storage.delete(runRecordKey(request.data.runId));
   }
 
@@ -1068,52 +1254,90 @@ export class CrewAgent extends Think {
     return this.#activeRuntimeConfig().instructions;
   }
 
+  override getTools(): ToolSet {
+    return {};
+  }
+
+  override getActions(): Record<string, Action> {
+    const adapters = this.#activeToolAdapters();
+
+    return Object.fromEntries(
+      adapters.map((adapter) => [
+        adapter.name,
+        defineAction({
+          approval: adapter.grant.effect !== "read",
+          approvalRisk: adapter.grant.effect === "destructive" ? "high" : "medium",
+          approvalSummary: adapter.description,
+          description: adapter.description,
+          execute: (input, context) => this.#executeTool(adapter, input, context),
+          inputSchema: adapter.inputSchema,
+          kind: adapter.grant.effect === "read" ? "server" : "durable-pause",
+          name: adapter.name,
+          permissions: [adapter.grant.grantId],
+          timeoutMs: adapter.grant.limits.maxDurationMs,
+        }),
+      ]),
+    );
+  }
+
   override beforeTurn(context?: TurnContext): TurnConfig {
     const configuration = this.#activeRuntimeConfig();
     const metadata = this.#activeTurnMetadata();
     const promptMessage = context?.messages.at(-1);
+    const approvalContinuation =
+      context?.continuation === true && this.#permittedApprovalContinuationRunId === metadata.runId;
 
-    if (context === undefined || context.continuation || promptMessage?.role !== "user") {
+    if (
+      context === undefined ||
+      (!approvalContinuation && (context.continuation || promptMessage?.role !== "user"))
+    ) {
       throw new Error("CrewAgent admitted model input is missing or invalid.");
     }
 
+    const messages = approvalContinuation
+      ? context.messages.filter((message) => message.role !== "system")
+      : promptMessage === undefined
+        ? []
+        : [promptMessage];
+
+    if (approvalContinuation) {
+      this.#permittedApprovalContinuationRunId = undefined;
+    }
+
     return {
-      activeTools: [],
+      activeTools: approvalContinuation
+        ? []
+        : this.#activeToolAdapters().map((adapter) => adapter.name),
       instructions: configuration.instructions,
       maxOutputTokens: metadata.budgetReservation.maxOutputTokens,
       maxRetries: 0,
-      maxSteps: metadata.budgetReservation.maxTurns,
-      messages: [promptMessage],
+      maxSteps: approvalContinuation ? 1 : metadata.budgetReservation.maxTurns,
+      messages,
       sendReasoning: false,
     };
   }
 
   override async authorizeTurn(_context?: TurnContext): Promise<ActionAuthorizationDecision> {
-    const metadata = admittedTurnMetadataSchema.safeParse(this.activeTurnMetadata);
-
-    if (!metadata.success) {
-      throw new Error("CrewAgent active run admission is missing or invalid.");
-    }
-
-    let record: AdmittedRunRecord | undefined;
-
     try {
-      record = await this.#readRunRecord(metadata.data.crewhelmRun.runId);
+      const reference = await this.#activeRunReference();
+
+      if (reference !== undefined) {
+        return {
+          allowed: true,
+          grantedPermissions: reference.budgetReservation.toolGrants.map((grant) => grant.grantId),
+        };
+      }
     } catch {
-      throw new Error("CrewAgent active run admission is missing or invalid.");
+      // Return the same generic boundary error for missing, malformed, or unavailable run state.
     }
 
-    if (
-      record === undefined ||
-      Date.now() >= record.deadlineAt ||
-      record.promptCharacters !== metadata.data.crewhelmRun.promptCharacters ||
-      record.promptDigest !== metadata.data.crewhelmRun.promptDigest ||
-      JSON.stringify(record.budgetReservation) !==
-        JSON.stringify(metadata.data.crewhelmRun.budgetReservation) ||
-      JSON.stringify(record.configuration) !==
-        JSON.stringify(metadata.data.crewhelmRun.configuration) ||
-      !this.#objectMatches(record.configuration.ownerKey, record.configuration.agentId)
-    ) {
+    throw new Error("CrewAgent active run admission is missing or invalid.");
+  }
+
+  override async beforeStep(_context: PrepareStepContext): Promise<StepConfig | void> {
+    const reference = await this.#activeRunReference();
+
+    if (reference === undefined) {
       throw new Error("CrewAgent active run admission is no longer valid.");
     }
 
@@ -1121,16 +1345,9 @@ export class CrewAgent extends Think {
 
     try {
       verification = await this.env.OWNER_CONTROL_PLANE.getByName(
-        record.configuration.ownerKey,
+        reference.ownerKey,
       ).verifyActiveRunAdmission({
-        agentId: record.configuration.agentId,
-        agentRevision: record.configuration.revision,
-        budgetReservation: record.budgetReservation,
-        clientId: record.clientId,
-        idempotencyKey: record.idempotencyKey,
-        ownerKey: record.configuration.ownerKey,
-        promptDigest: record.promptDigest,
-        runId: metadata.data.crewhelmRun.runId,
+        ...reference,
       });
     } catch {
       throw new Error("CrewAgent active run admission could not be verified.");
@@ -1138,19 +1355,138 @@ export class CrewAgent extends Think {
 
     const verified = verifyActiveRunAdmissionResultSchema.safeParse(verification);
 
-    if (
-      !verified.success ||
-      !verified.data.ok ||
-      verified.data.runId !== metadata.data.crewhelmRun.runId
-    ) {
+    if (!verified.success || !verified.data.ok || verified.data.runId !== reference.runId) {
       throw new Error("CrewAgent active run admission is no longer valid.");
     }
-
-    return { allowed: true, grantedPermissions: [] };
   }
 
-  override authorizeAction(): ActionAuthorizationDecision {
-    return false;
+  override authorizeAction(
+    context?: ActionAuthorizationContext,
+  ): ActionAuthorizationDecision | Promise<ActionAuthorizationDecision> {
+    if (context === undefined) {
+      return false;
+    }
+
+    return this.#authorizeToolAction(context);
+  }
+
+  async #authorizeToolAction(
+    context: ActionAuthorizationContext,
+  ): Promise<ActionAuthorizationDecision> {
+    const adapter = this.#activeToolAdapters().find(
+      (candidate) => candidate.name === context.action,
+    );
+
+    if (
+      adapter === undefined ||
+      context.requiredPermissions.length !== 1 ||
+      context.requiredPermissions[0] !== adapter.grant.grantId
+    ) {
+      return false;
+    }
+
+    if (adapter.grant.effect === "read") {
+      return true;
+    }
+
+    const action = await this.#classifyTool(adapter, context.toolCallId, context.input);
+    const reference = await this.#activeRunReference();
+
+    if (action === undefined || reference === undefined) {
+      return false;
+    }
+
+    let result: unknown;
+
+    try {
+      result = await this.env.OWNER_CONTROL_PLANE.getByName(
+        reference.ownerKey,
+      ).evaluateToolExecution({ ...reference, action });
+    } catch {
+      return false;
+    }
+
+    const evaluation = evaluateToolExecutionResultSchema.safeParse(result);
+
+    if (
+      !evaluation.success ||
+      !evaluation.data.ok ||
+      evaluation.data.decision.decision === "deny"
+    ) {
+      return false;
+    }
+
+    if (evaluation.data.decision.decision === "requires_approval") {
+      const requestedAt = Date.now();
+      const approvalKey = toolApprovalKey(reference.runId, action.toolCallId);
+      const existing = pendingToolApprovalRecordSchema.safeParse(
+        await this.ctx.storage.get(approvalKey),
+      );
+
+      if (
+        existing.success &&
+        existing.data.runId === reference.runId &&
+        existing.data.actionDigest === evaluation.data.decision.actionDigest &&
+        Date.parse(existing.data.expiresAt) > requestedAt
+      ) {
+        return false;
+      }
+
+      await this.ctx.storage.put(
+        approvalKey,
+        pendingToolApprovalRecordSchema.parse({
+          action: context.action,
+          actionDigest: evaluation.data.decision.actionDigest,
+          effect: evaluation.data.decision.effect,
+          expiresAt: new Date(requestedAt + TOOL_APPROVAL_LIFETIME_MS).toISOString(),
+          requestedAt: new Date(requestedAt).toISOString(),
+          risk: evaluation.data.decision.effect === "destructive" ? "high" : "medium",
+          runId: reference.runId,
+          summary: adapter.description,
+          toolCallId: action.toolCallId,
+        }),
+      );
+    }
+
+    return true;
+  }
+
+  override async beforeToolCall(context: ToolCallContext): Promise<ToolCallDecision> {
+    const adapter = this.#activeToolAdapters().find(
+      (candidate) => candidate.name === context.toolName,
+    );
+    const action =
+      adapter === undefined
+        ? undefined
+        : await this.#classifyTool(adapter, context.toolCallId, context.input);
+    const reference = await this.#activeRunReference();
+
+    if (adapter === undefined || action === undefined || reference === undefined) {
+      return { action: "block", reason: "Tool execution denied." };
+    }
+
+    let evaluationResult: unknown;
+
+    try {
+      evaluationResult = await this.env.OWNER_CONTROL_PLANE.getByName(
+        reference.ownerKey,
+      ).evaluateToolExecution({ ...reference, action });
+    } catch {
+      return { action: "block", reason: "Tool execution denied." };
+    }
+
+    const evaluation = evaluateToolExecutionResultSchema.safeParse(evaluationResult);
+    const expectedDecision = adapter.grant.effect === "read" ? "allow" : "requires_approval";
+
+    if (
+      !evaluation.success ||
+      !evaluation.data.ok ||
+      evaluation.data.decision.decision !== expectedDecision
+    ) {
+      return { action: "block", reason: "Tool execution denied." };
+    }
+
+    return { action: "allow" };
   }
 
   async #submitAdmittedRun(
@@ -1202,6 +1538,207 @@ export class CrewAgent extends Think {
     });
   }
 
+  protected createToolAdapter(
+    _grant: ComposioToolCapabilityGrant,
+  ): CrewAgentToolAdapter | undefined {
+    return undefined;
+  }
+
+  #activeToolAdapters(): CrewAgentToolAdapter[] {
+    const metadata = this.#activeTurnMetadata();
+    const available: CrewAgentToolAdapter[] = [];
+
+    for (const grant of metadata.budgetReservation.toolGrants) {
+      const adapter = this.createToolAdapter(grant);
+
+      if (adapter === undefined) {
+        throw new Error("CrewAgent admitted tool capability is unavailable.");
+      }
+
+      available.push(adapter);
+    }
+
+    const names = new Set<string>();
+
+    for (const [index, adapter] of available.entries()) {
+      const grant = metadata.budgetReservation.toolGrants[index];
+
+      if (
+        grant === undefined ||
+        adapter.grant.grantId !== grant.grantId ||
+        JSON.stringify(adapter.grant) !== JSON.stringify(grant) ||
+        !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(adapter.name) ||
+        names.has(adapter.name)
+      ) {
+        throw new Error("CrewAgent admitted tool registry is invalid.");
+      }
+
+      names.add(adapter.name);
+    }
+
+    return available;
+  }
+
+  async #classifyTool(
+    adapter: CrewAgentToolAdapter,
+    frameworkToolCallId: string,
+    input: unknown,
+  ): Promise<ClassifiedComposioToolAction | undefined> {
+    const validatedInput = adapter.inputSchema.safeParse(input);
+
+    if (!validatedInput.success) {
+      return undefined;
+    }
+
+    const metadata = this.#activeTurnMetadata();
+    const parsed = classifiedComposioToolActionSchema.safeParse(
+      await adapter.classify(validatedInput.data, {
+        runId: metadata.runId,
+        toolCallId: await canonicalToolCallId(metadata.runId, frameworkToolCallId),
+      }),
+    );
+
+    if (
+      !parsed.success ||
+      parsed.data.ownerKey !== metadata.configuration.ownerKey ||
+      parsed.data.agentId !== metadata.configuration.agentId ||
+      parsed.data.agentRevision !== metadata.configuration.revision ||
+      parsed.data.runId !== metadata.runId ||
+      parsed.data.grantId !== adapter.grant.grantId ||
+      parsed.data.capabilityId !== adapter.grant.capabilityId ||
+      parsed.data.connectionId !== adapter.grant.connectionId ||
+      parsed.data.effect !== adapter.grant.effect ||
+      parsed.data.integrationSlug !== adapter.grant.integrationSlug ||
+      parsed.data.toolSlug !== adapter.grant.toolSlug ||
+      parsed.data.toolkitVersion !== adapter.grant.toolkitVersion
+    ) {
+      return undefined;
+    }
+
+    return parsed.data;
+  }
+
+  async #executeTool(
+    adapter: CrewAgentToolAdapter,
+    input: Record<string, unknown>,
+    context: ActionContext,
+  ): Promise<unknown> {
+    const action = await this.#classifyTool(adapter, context.toolCallId, input);
+
+    if (action === undefined) {
+      throw new Error("Tool execution denied.");
+    }
+
+    const reference = await this.#activeRunReference();
+
+    if (reference === undefined) {
+      throw new Error("Tool execution denied.");
+    }
+
+    let result: unknown;
+
+    try {
+      result = await this.env.OWNER_CONTROL_PLANE.getByName(
+        reference.ownerKey,
+      ).reserveToolExecution({ ...reference, action });
+    } catch {
+      throw new Error("Tool execution denied.");
+    }
+
+    const reservation = reserveToolExecutionResultSchema.safeParse(result);
+
+    if (!reservation.success || !reservation.data.ok || reservation.data.state !== "allowed") {
+      throw new Error("Tool execution denied.");
+    }
+
+    const permit = reservation.data.permit;
+
+    if (
+      permit.action.grantId !== adapter.grant.grantId ||
+      JSON.stringify(permit.action) !== JSON.stringify(action) ||
+      !isToolExecutionPermitFresh(permit)
+    ) {
+      throw new Error("Tool execution denied.");
+    }
+
+    let output: unknown;
+    let outputBytes = 0;
+    let status: "completed" | "failed" | "unknown" = "failed";
+
+    try {
+      output = await adapter.execute(input, { permit, signal: context.signal });
+      const serialized = JSON.stringify(output);
+
+      if (serialized === undefined) {
+        throw new Error("Tool result is not serializable.");
+      }
+
+      outputBytes = new TextEncoder().encode(serialized).byteLength;
+
+      if (outputBytes > permit.constraints.maxOutputBytes) {
+        status = "unknown";
+        throw new Error("Tool result exceeded its output limit.");
+      }
+
+      status = "completed";
+    } catch {
+      output = undefined;
+    }
+
+    let completion: unknown;
+
+    try {
+      completion = await this.env.OWNER_CONTROL_PLANE.getByName(
+        permit.action.ownerKey,
+      ).completeToolExecution({
+        outcome: { outputBytes, status },
+        permit,
+      });
+    } catch {
+      throw new Error("Tool execution outcome could not be recorded.");
+    }
+
+    const completed = completeToolExecutionResultSchema.safeParse(completion);
+
+    if (!completed.success || !completed.data.ok || !completed.data.completed) {
+      throw new Error("Tool execution outcome could not be recorded.");
+    }
+
+    if (status !== "completed") {
+      throw new Error("Tool execution failed.");
+    }
+
+    return output;
+  }
+
+  async #activeRunReference() {
+    const metadata = this.#activeTurnMetadata();
+    const record = await this.#readRunRecord(metadata.runId);
+
+    if (
+      record === undefined ||
+      Date.now() >= record.deadlineAt ||
+      record.promptCharacters !== metadata.promptCharacters ||
+      record.promptDigest !== metadata.promptDigest ||
+      JSON.stringify(record.budgetReservation) !== JSON.stringify(metadata.budgetReservation) ||
+      JSON.stringify(record.configuration) !== JSON.stringify(metadata.configuration) ||
+      !this.#objectMatches(record.configuration.ownerKey, record.configuration.agentId)
+    ) {
+      return undefined;
+    }
+
+    return {
+      agentId: record.configuration.agentId,
+      agentRevision: record.configuration.revision,
+      budgetReservation: record.budgetReservation,
+      clientId: record.clientId,
+      idempotencyKey: record.idempotencyKey,
+      ownerKey: record.configuration.ownerKey,
+      promptDigest: record.promptDigest,
+      runId: metadata.runId,
+    };
+  }
+
   async #readRunRecord(runId: string): Promise<AdmittedRunRecord | undefined> {
     const stored = await this.ctx.storage.get(runRecordKey(runId));
 
@@ -1210,6 +1747,38 @@ export class CrewAgent extends Think {
     }
 
     return admittedRunRecordSchema.parse(stored);
+  }
+
+  async #redeemReceiverCapability(capability: RunReceiverCapability): Promise<boolean> {
+    let record: AdmittedRunRecord | undefined;
+
+    try {
+      record = await this.#readRunRecord(capability.runId);
+    } catch {
+      return false;
+    }
+
+    if (
+      record === undefined ||
+      Date.parse(capability.expiresAt) <= Date.now() ||
+      !this.#objectMatches(record.configuration.ownerKey, record.configuration.agentId) ||
+      !this.#recordMatchesCapability(record, capability, record.promptCharacters)
+    ) {
+      return false;
+    }
+
+    let verification: unknown;
+
+    try {
+      verification = await this.env.OWNER_CONTROL_PLANE.getByName(
+        record.configuration.ownerKey,
+      ).redeemRunReceiverCapability(capability);
+    } catch {
+      return false;
+    }
+
+    const verified = redeemRunReceiverCapabilityResultSchema.safeParse(verification);
+    return verified.success && verified.data.ok && verified.data.runId === capability.runId;
   }
 
   async #scheduleRunLifecycle(runId: string, record: AdmittedRunRecord): Promise<void> {
@@ -1238,12 +1807,23 @@ export class CrewAgent extends Think {
 
     for (let offset = 0; offset < MAXIMUM_RUN_OUTPUT_PARTS; offset += 1) {
       const row = super.sql<{ originalCharacters: number; text: string }>`
+        WITH RECURSIVE run_messages(id) AS (
+          SELECT id
+          FROM assistant_messages
+          WHERE session_id = ''
+            AND id = ${runUserMessageId(runId)}
+          UNION ALL
+          SELECT child.id
+          FROM assistant_messages AS child
+          INNER JOIN run_messages AS parent ON child.parent_id = parent.id
+          WHERE child.session_id = ''
+        )
         SELECT
           length(json_extract(part.value, '$.text')) AS originalCharacters,
           substr(json_extract(part.value, '$.text'), 1, ${remaining + 1}) AS text
         FROM assistant_messages AS message, json_each(message.content, '$.parts') AS part
         WHERE message.session_id = ''
-          AND message.parent_id = ${runUserMessageId(runId)}
+          AND message.id IN (SELECT id FROM run_messages)
           AND message.role = 'assistant'
           AND json_extract(part.value, '$.type') = 'text'
           AND typeof(json_extract(part.value, '$.text')) = 'text'
@@ -1281,10 +1861,21 @@ export class CrewAgent extends Think {
     }
 
     const additionalPart = super.sql<{ present: number }>`
+      WITH RECURSIVE run_messages(id) AS (
+        SELECT id
+        FROM assistant_messages
+        WHERE session_id = ''
+          AND id = ${runUserMessageId(runId)}
+        UNION ALL
+        SELECT child.id
+        FROM assistant_messages AS child
+        INNER JOIN run_messages AS parent ON child.parent_id = parent.id
+        WHERE child.session_id = ''
+      )
       SELECT 1 AS present
       FROM assistant_messages AS message, json_each(message.content, '$.parts') AS part
       WHERE message.session_id = ''
-        AND message.parent_id = ${runUserMessageId(runId)}
+        AND message.id IN (SELECT id FROM run_messages)
         AND message.role = 'assistant'
         AND json_extract(part.value, '$.type') = 'text'
         AND typeof(json_extract(part.value, '$.text')) = 'text'
@@ -1309,7 +1900,11 @@ export class CrewAgent extends Think {
     return configuration;
   }
 
-  #activeTurnMetadata(): z.infer<typeof admittedTurnMetadataSchema>["crewhelmRun"] {
+  #activeTurnMetadata(): AdmittedTurnMetadata {
+    if (this.#approvalTurnMetadata !== undefined) {
+      return this.#approvalTurnMetadata;
+    }
+
     const metadata = admittedTurnMetadataSchema.safeParse(this.activeTurnMetadata);
 
     if (!metadata.success) {

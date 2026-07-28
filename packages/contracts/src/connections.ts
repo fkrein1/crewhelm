@@ -61,7 +61,7 @@ export const connectionAuthorizationOutcomeSchema = z.enum([
   "expired",
   "untracked",
 ]);
-export const connectionStatusSchema = z.enum(["initiated"]);
+export const connectionStatusSchema = z.enum(["initiated", "active", "revoked", "unavailable"]);
 export const connectionSummarySchema = z.strictObject({
   authorizationOutcome: connectionAuthorizationOutcomeSchema,
   authConfigId: connectionAuthConfigIdSchema,

@@ -4,6 +4,7 @@ import {
   MAXIMUM_OWNER_RUN_MODEL_CALLS_PER_WINDOW,
   MAXIMUM_OWNER_RUN_OUTPUT_TOKENS_PER_WINDOW,
   MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
+  composioToolCapabilityGrantSchema,
   RUN_ADMISSION_LIFETIME_MS,
   RUN_ADMISSION_RETENTION_MS,
   RUN_BUDGET_WINDOW_MS,
@@ -27,17 +28,22 @@ import {
   type RunAdmissionPermit,
   type RedeemRunReceiverCapabilityResult,
   type RunBudgetReservation,
+  type ComposioToolCapabilityGrant,
   type VerifyActiveRunAdmissionResult,
   type VerifyRunAdmissionResult,
 } from "@crewhelm/contracts";
-import { and, count, eq, gt, isNull, lte, min } from "drizzle-orm";
+import { and, count, eq, gt, inArray, lte, min } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import {
   agentRevisions,
   agents,
   auditEvents,
+  capabilityGrants as storedCapabilityGrants,
+  connections,
   runAdmissions,
+  toolApprovals,
+  toolExecutions,
   type ControlPlaneDatabaseSchema,
 } from "./control-plane-schema.js";
 
@@ -91,19 +97,29 @@ function createBudgetReservation(input: {
   instructions: string;
   model: string;
   promptCharacters: number;
+  toolGrants: ComposioToolCapabilityGrant[];
 }): RunBudgetReservation {
+  const grantedToolCalls = input.toolGrants.reduce(
+    (total, grant) => total + grant.limits.maxCallsPerRun,
+    0,
+  );
+  const maxToolCalls = Math.min(input.executionLimits.maxToolCalls, grantedToolCalls);
+  const maxTurns = Math.min(input.executionLimits.maxTurns, maxToolCalls + 1);
+  const maxModelCalls = Math.min(input.executionLimits.maxTurns, maxTurns + maxToolCalls);
+
   return runBudgetReservationSchema.parse({
     maxDurationSeconds: input.executionLimits.maxDurationSeconds,
     maxInputCharacters: input.instructions.length + input.promptCharacters,
-    maxModelCalls: 1,
+    maxModelCalls,
     model: input.model,
     maxOutputTokens: Math.min(
       input.executionLimits.maxModelTokens,
       MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
     ),
-    maxToolCalls: 0,
-    maxTurns: 1,
+    maxToolCalls,
+    maxTurns,
     reservationId: `budget_${crypto.randomUUID()}`,
+    toolGrants: input.toolGrants,
   });
 }
 
@@ -217,6 +233,7 @@ export class RunAdmissions {
 
       const agent = transaction
         .select({
+          capabilityGrants: agentRevisions.capabilityGrants,
           currentRevision: agents.currentRevision,
           executionLimits: agentRevisions.executionLimits,
           instructions: agentRevisions.instructions,
@@ -245,6 +262,18 @@ export class RunAdmissions {
         return this.#deniedRequest("model_unavailable");
       }
 
+      const toolGrants = this.#toolGrants(
+        transaction,
+        authority.ownerKey,
+        request.data.agentId,
+        agent.currentRevision,
+        agent.capabilityGrants,
+      );
+
+      if (toolGrants === undefined) {
+        return this.#deniedRequest("capability_unavailable");
+      }
+
       const admissionCount =
         transaction.select({ value: count() }).from(runAdmissions).get()?.value ?? 0;
 
@@ -257,6 +286,7 @@ export class RunAdmissions {
         instructions: agent.instructions,
         model: agent.model,
         promptCharacters: request.data.promptCharacters,
+        toolGrants,
       });
       const activeReservations = transaction
         .select({ budgetReservation: runAdmissions.budgetReservation })
@@ -267,7 +297,9 @@ export class RunAdmissions {
         (total, row) => ({
           inputCharacters: total.inputCharacters + row.budgetReservation.maxInputCharacters,
           modelCalls: total.modelCalls + row.budgetReservation.maxModelCalls,
-          outputTokens: total.outputTokens + row.budgetReservation.maxOutputTokens,
+          outputTokens:
+            total.outputTokens +
+            row.budgetReservation.maxOutputTokens * row.budgetReservation.maxModelCalls,
         }),
         { inputCharacters: 0, modelCalls: 0, outputTokens: 0 },
       );
@@ -277,7 +309,8 @@ export class RunAdmissions {
           MAXIMUM_OWNER_RUN_INPUT_CHARACTERS_PER_WINDOW ||
         reserved.modelCalls + budgetReservation.maxModelCalls >
           MAXIMUM_OWNER_RUN_MODEL_CALLS_PER_WINDOW ||
-        reserved.outputTokens + budgetReservation.maxOutputTokens >
+        reserved.outputTokens +
+          budgetReservation.maxOutputTokens * budgetReservation.maxModelCalls >
           MAXIMUM_OWNER_RUN_OUTPUT_TOKENS_PER_WINDOW
       ) {
         return this.#deniedRequest("budget_exhausted");
@@ -472,7 +505,7 @@ export class RunAdmissions {
         row === undefined ||
         row.status !== "redeemed" ||
         row.cleanupAt <= currentTime ||
-        row.modelCallConsumedAt !== null ||
+        row.modelCallsConsumed >= row.budgetReservation.maxModelCalls ||
         row.agentId !== request.data.agentId ||
         row.agentRevision !== request.data.agentRevision ||
         row.clientId !== request.data.clientId ||
@@ -486,12 +519,15 @@ export class RunAdmissions {
 
       const claimedRuns = transaction
         .update(runAdmissions)
-        .set({ modelCallConsumedAt: currentTime })
+        .set({
+          modelCallConsumedAt: currentTime,
+          modelCallsConsumed: row.modelCallsConsumed + 1,
+        })
         .where(
           and(
             eq(runAdmissions.runId, request.data.runId),
             eq(runAdmissions.status, "redeemed"),
-            isNull(runAdmissions.modelCallConsumedAt),
+            eq(runAdmissions.modelCallsConsumed, row.modelCallsConsumed),
           ),
         )
         .returning({
@@ -532,7 +568,10 @@ export class RunAdmissions {
       JSON.stringify(row.budgetReservation) !== JSON.stringify(capability.data.budgetReservation) ||
       (capability.data.action === "resume" &&
         (row.clientId !== capability.data.clientId ||
-          this.#runtimeConfiguration(this.#database, row.agentId, row.agentRevision) === undefined))
+          this.#runtimeConfiguration(this.#database, row.agentId, row.agentRevision) ===
+            undefined)) ||
+      (["approve_tool", "reject_tool"].includes(capability.data.action) &&
+        this.#runtimeConfiguration(this.#database, row.agentId, row.agentRevision) === undefined)
     ) {
       return RUN_ADMISSION_ERROR;
     }
@@ -583,6 +622,19 @@ export class RunAdmissions {
       .set({ status: "expired" })
       .where(and(eq(runAdmissions.status, "issued"), lte(runAdmissions.expiresAt, currentTime)))
       .run();
+    const expiredRunIds = database
+      .select({ runId: runAdmissions.runId })
+      .from(runAdmissions)
+      .where(lte(runAdmissions.cleanupAt, currentTime))
+      .all()
+      .map((row) => row.runId);
+
+    if (expiredRunIds.length === 0) {
+      return;
+    }
+
+    database.delete(toolApprovals).where(inArray(toolApprovals.runId, expiredRunIds)).run();
+    database.delete(toolExecutions).where(inArray(toolExecutions.runId, expiredRunIds)).run();
     database.delete(runAdmissions).where(lte(runAdmissions.cleanupAt, currentTime)).run();
   }
 
@@ -620,6 +672,59 @@ export class RunAdmissions {
       ownerKey: this.#objectName,
       revision,
     });
+  }
+
+  #toolGrants(
+    database: RunAdmissionDatabase,
+    ownerKey: string,
+    agentId: string,
+    agentRevision: number,
+    grantIds: readonly string[],
+  ): ComposioToolCapabilityGrant[] | undefined {
+    if (grantIds.length === 0) {
+      return [];
+    }
+
+    const rows = database
+      .select({
+        agentId: storedCapabilityGrants.agentId,
+        agentRevision: storedCapabilityGrants.agentRevision,
+        connectionId: storedCapabilityGrants.connectionId,
+        connectionStatus: connections.status,
+        grant: storedCapabilityGrants.grant,
+        grantId: storedCapabilityGrants.grantId,
+        grantStatus: storedCapabilityGrants.status,
+      })
+      .from(storedCapabilityGrants)
+      .innerJoin(connections, eq(connections.connectionId, storedCapabilityGrants.connectionId))
+      .where(inArray(storedCapabilityGrants.grantId, [...grantIds]))
+      .all();
+    const byGrantId = new Map(rows.map((row) => [row.grantId, row]));
+    const grants: ComposioToolCapabilityGrant[] = [];
+
+    for (const grantId of grantIds) {
+      const row = byGrantId.get(grantId);
+      const parsed = composioToolCapabilityGrantSchema.safeParse(row?.grant);
+
+      if (
+        !parsed.success ||
+        row?.grantStatus !== "active" ||
+        row.connectionStatus !== "active" ||
+        row.agentId !== agentId ||
+        row.agentRevision !== agentRevision ||
+        row.connectionId !== parsed.data.connectionId ||
+        parsed.data.ownerKey !== ownerKey ||
+        parsed.data.agentId !== agentId ||
+        parsed.data.agentRevision !== agentRevision ||
+        parsed.data.grantId !== grantId
+      ) {
+        return undefined;
+      }
+
+      grants.push(parsed.data);
+    }
+
+    return grants;
   }
 
   #matchesPermit(row: StoredRunAdmission, permit: RunAdmissionPermit): boolean {
@@ -673,6 +778,10 @@ export class RunAdmissions {
       reservation.model === configuration.model &&
       reservation.maxOutputTokens <= configuration.executionLimits.maxModelTokens &&
       reservation.maxToolCalls <= configuration.executionLimits.maxToolCalls &&
+      reservation.toolGrants.length === configuration.capabilityGrants.length &&
+      reservation.toolGrants.every(
+        (grant, index) => grant.grantId === configuration.capabilityGrants[index],
+      ) &&
       reservation.maxTurns <= configuration.executionLimits.maxTurns
     );
   }

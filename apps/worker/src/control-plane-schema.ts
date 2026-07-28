@@ -1,6 +1,7 @@
 import type {
   Agent,
   AgentExecutionLimits,
+  ComposioToolCapabilityGrant,
   ConnectionAuthorizationOutcome,
   RunBudgetReservation,
 } from "@crewhelm/contracts";
@@ -61,8 +62,69 @@ export const agentRevisions = sqliteTable(
       foreignColumns: [agents.agentId],
     }).onDelete("restrict"),
     check("agent_revisions_revision_positive", sql`${table.revision} > 0`),
-    check("agent_revisions_capability_grants_empty", sql`${table.capabilityGrants} = '[]'`),
+    check("agent_revisions_capability_grants_json", sql`json_valid(${table.capabilityGrants})`),
     check("agent_revisions_created_at_positive", sql`${table.createdAt} > 0`),
+  ],
+);
+
+export const connections = sqliteTable(
+  "connections",
+  {
+    connectionId: text("connection_id").primaryKey(),
+    provider: text("provider", { enum: ["composio"] }).notNull(),
+    providerConnectionId: text("provider_connection_id").notNull().unique(),
+    authConfigId: text("auth_config_id").notNull(),
+    status: text("status", {
+      enum: ["initiated", "active", "revoked", "unavailable"],
+    }).notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    check("connections_provider_composio", sql`${table.provider} = 'composio'`),
+    check(
+      "connections_status",
+      sql`${table.status} IN ('initiated', 'active', 'revoked', 'unavailable')`,
+    ),
+    check("connections_created_at_positive", sql`${table.createdAt} > 0`),
+  ],
+);
+
+export const capabilityGrants = sqliteTable(
+  "capability_grants",
+  {
+    grantId: text("grant_id").primaryKey(),
+    agentId: text("agent_id").notNull(),
+    agentRevision: integer("agent_revision").notNull(),
+    connectionId: text("connection_id").notNull(),
+    grant: text("grant", { mode: "json" }).$type<ComposioToolCapabilityGrant>().notNull(),
+    status: text("status", { enum: ["active", "revoked"] }).notNull(),
+    createdAt: integer("created_at").notNull(),
+    revokedAt: integer("revoked_at"),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.agentId, table.agentRevision],
+      foreignColumns: [agentRevisions.agentId, agentRevisions.revision],
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.connectionId],
+      foreignColumns: [connections.connectionId],
+    }).onDelete("restrict"),
+    index("capability_grants_agent_revision").on(table.agentId, table.agentRevision),
+    index("capability_grants_connection").on(table.connectionId),
+    check("capability_grants_agent_revision_positive", sql`${table.agentRevision} > 0`),
+    check("capability_grants_grant_json", sql`json_valid(${table.grant})`),
+    check("capability_grants_status", sql`${table.status} IN ('active', 'revoked')`),
+    check("capability_grants_created_at_positive", sql`${table.createdAt} > 0`),
+    check(
+      "capability_grants_state",
+      sql`(
+        (${table.status} = 'active' AND ${table.revokedAt} IS NULL)
+        OR (${table.status} = 'revoked'
+          AND ${table.revokedAt} IS NOT NULL
+          AND ${table.revokedAt} >= ${table.createdAt})
+      )`,
+    ),
   ],
 );
 
@@ -128,6 +190,8 @@ export const runAdmissions = sqliteTable(
     createdAt: integer("created_at").notNull(),
     redeemedAt: integer("redeemed_at"),
     modelCallConsumedAt: integer("model_call_consumed_at"),
+    modelCallsConsumed: integer("model_calls_consumed").notNull().default(0),
+    toolCallsConsumed: integer("tool_calls_consumed").notNull().default(0),
   },
   (table) => [
     primaryKey({ columns: [table.clientId, table.idempotencyKey] }),
@@ -152,19 +216,111 @@ export const runAdmissions = sqliteTable(
       "run_admissions_model_call_consumed_at_positive",
       sql`${table.modelCallConsumedAt} IS NULL OR ${table.modelCallConsumedAt} > 0`,
     ),
+    check("run_admissions_model_calls_consumed", sql`${table.modelCallsConsumed} >= 0`),
+    check("run_admissions_tool_calls_consumed", sql`${table.toolCallsConsumed} >= 0`),
     check(
       "run_admissions_state",
       sql`(
         (${table.status} = 'issued'
           AND ${table.redeemedAt} IS NULL
-          AND ${table.modelCallConsumedAt} IS NULL)
+          AND ${table.modelCallConsumedAt} IS NULL
+          AND ${table.modelCallsConsumed} = 0)
         OR (${table.status} = 'redeemed'
           AND ${table.redeemedAt} IS NOT NULL
-          AND (${table.modelCallConsumedAt} IS NULL
-            OR ${table.modelCallConsumedAt} >= ${table.redeemedAt}))
+          AND ${table.modelCallsConsumed} <= json_extract(
+            ${table.budgetReservation},
+            '$.maxModelCalls'
+          )
+          AND ((${table.modelCallsConsumed} = 0 AND ${table.modelCallConsumedAt} IS NULL)
+            OR (${table.modelCallsConsumed} > 0
+              AND ${table.modelCallConsumedAt} >= ${table.redeemedAt})))
         OR (${table.status} = 'expired'
           AND ${table.redeemedAt} IS NULL
-          AND ${table.modelCallConsumedAt} IS NULL)
+          AND ${table.modelCallConsumedAt} IS NULL
+          AND ${table.modelCallsConsumed} = 0)
+      )`,
+    ),
+  ],
+);
+
+export const toolApprovals = sqliteTable(
+  "tool_approvals",
+  {
+    executionId: text("execution_id").primaryKey(),
+    runId: text("run_id").notNull(),
+    toolCallId: text("tool_call_id").notNull().unique(),
+    actionDigest: text("action_digest").notNull(),
+    clientId: text("client_id").notNull(),
+    decision: text("decision", { enum: ["approved", "rejected"] }).notNull(),
+    expiresAt: integer("expires_at").notNull(),
+    requestedAt: integer("requested_at").notNull(),
+    decidedAt: integer("decided_at").notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.runId],
+      foreignColumns: [runAdmissions.runId],
+    }).onDelete("restrict"),
+    index("tool_approvals_run").on(table.runId, table.requestedAt),
+    check("tool_approvals_action_digest_length", sql`length(${table.actionDigest}) = 64`),
+    check("tool_approvals_decision", sql`${table.decision} IN ('approved', 'rejected')`),
+    check("tool_approvals_requested_at_positive", sql`${table.requestedAt} > 0`),
+    check("tool_approvals_decided_after_request", sql`${table.decidedAt} >= ${table.requestedAt}`),
+    check("tool_approvals_expiry_after_decision", sql`${table.expiresAt} > ${table.decidedAt}`),
+  ],
+);
+
+export const toolExecutions = sqliteTable(
+  "tool_executions",
+  {
+    toolCallId: text("tool_call_id").primaryKey(),
+    runId: text("run_id").notNull(),
+    grantId: text("grant_id").notNull(),
+    actionDigest: text("action_digest").notNull(),
+    nonceDigest: text("nonce_digest").notNull(),
+    status: text("status", {
+      enum: ["reserved", "completed", "failed", "unknown"],
+    }).notNull(),
+    costMicrousd: integer("cost_microusd").notNull(),
+    outputBytes: integer("output_bytes"),
+    expiresAt: integer("expires_at").notNull(),
+    startedAt: integer("started_at").notNull(),
+    completedAt: integer("completed_at"),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.runId],
+      foreignColumns: [runAdmissions.runId],
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.grantId],
+      foreignColumns: [capabilityGrants.grantId],
+    }).onDelete("restrict"),
+    index("tool_executions_run").on(table.runId, table.startedAt),
+    index("tool_executions_grant_status").on(table.grantId, table.status),
+    check("tool_executions_action_digest_length", sql`length(${table.actionDigest}) = 64`),
+    check("tool_executions_nonce_digest_length", sql`length(${table.nonceDigest}) = 43`),
+    check(
+      "tool_executions_status",
+      sql`${table.status} IN ('reserved', 'completed', 'failed', 'unknown')`,
+    ),
+    check("tool_executions_cost_nonnegative", sql`${table.costMicrousd} >= 0`),
+    check(
+      "tool_executions_output_nonnegative",
+      sql`${table.outputBytes} IS NULL OR ${table.outputBytes} >= 0`,
+    ),
+    check("tool_executions_started_at_positive", sql`${table.startedAt} > 0`),
+    check("tool_executions_expiry_after_start", sql`${table.expiresAt} > ${table.startedAt}`),
+    check(
+      "tool_executions_state",
+      sql`(
+        (${table.status} = 'reserved'
+          AND ${table.outputBytes} IS NULL
+          AND ${table.completedAt} IS NULL)
+        OR (${table.status} IN ('completed', 'failed', 'unknown')
+          AND ${table.outputBytes} IS NOT NULL
+          AND ${table.completedAt} IS NOT NULL
+          AND ${table.completedAt} >= ${table.startedAt})
       )`,
     ),
   ],
@@ -180,23 +336,6 @@ export const auditEvents = sqliteTable(
     subjectId: text("subject_id").notNull(),
   },
   (table) => [check("audit_events_occurred_at_positive", sql`${table.occurredAt} > 0`)],
-);
-
-export const connections = sqliteTable(
-  "connections",
-  {
-    connectionId: text("connection_id").primaryKey(),
-    provider: text("provider", { enum: ["composio"] }).notNull(),
-    providerConnectionId: text("provider_connection_id").notNull().unique(),
-    authConfigId: text("auth_config_id").notNull(),
-    status: text("status", { enum: ["initiated"] }).notNull(),
-    createdAt: integer("created_at").notNull(),
-  },
-  (table) => [
-    check("connections_provider_composio", sql`${table.provider} = 'composio'`),
-    check("connections_status_initiated", sql`${table.status} = 'initiated'`),
-    check("connections_created_at_positive", sql`${table.createdAt} > 0`),
-  ],
 );
 
 export const connectionLinkRequests = sqliteTable(
@@ -329,12 +468,15 @@ export const controlPlaneSchema = {
   agentUpdates,
   agents,
   auditEvents,
+  capabilityGrants,
   connectionAuthorizationReturns,
   connectionLinkRequests,
   connections,
   controlPlane,
   controlPlaneMigrations,
   runAdmissions,
+  toolApprovals,
+  toolExecutions,
 };
 
 export type ControlPlaneDatabaseSchema = typeof controlPlaneSchema;

@@ -1,7 +1,11 @@
 import * as z from "zod";
 
 import { crewAgentRuntimeConfigSchema } from "./agent-runtime.js";
-import { runIdSchema, sha256DigestSchema } from "./capabilities.js";
+import {
+  composioToolCapabilityGrantSchema,
+  runIdSchema,
+  sha256DigestSchema,
+} from "./capabilities.js";
 import {
   agentExecutionLimitsSchema,
   agentIdSchema,
@@ -32,6 +36,11 @@ export const runAdmissionIdempotencyKeySchema = z
 export const runAdmissionNonceSchema = z
   .string()
   .regex(/^[A-Za-z0-9_-]{43}$/, "Expected an opaque run-admission nonce.");
+export const toolApprovalExecutionIdSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(/^[A-Za-z0-9._:~-]+$/, "Expected an opaque tool approval execution ID.");
 export const runBudgetReservationIdSchema = z
   .string()
   .regex(
@@ -55,12 +64,22 @@ export const createRunAdmissionInputSchema = z.strictObject({
 export const runBudgetReservationSchema = z.strictObject({
   maxDurationSeconds: agentExecutionLimitsSchema.shape.maxDurationSeconds,
   maxInputCharacters: z.number().int().min(1).max(MAXIMUM_RUN_INPUT_CHARACTERS),
-  maxModelCalls: z.literal(1),
+  maxModelCalls: z.number().int().min(1).max(100),
   model: runnableAgentModelSchema,
   maxOutputTokens: z.number().int().min(1).max(MAXIMUM_RUN_MODEL_OUTPUT_TOKENS),
-  maxToolCalls: z.literal(0),
-  maxTurns: z.literal(1),
+  maxToolCalls: agentExecutionLimitsSchema.shape.maxToolCalls,
+  maxTurns: agentExecutionLimitsSchema.shape.maxTurns,
   reservationId: runBudgetReservationIdSchema,
+  toolGrants: z
+    .array(composioToolCapabilityGrantSchema)
+    .max(100)
+    .refine(
+      (grants) =>
+        grants.every(
+          (grant, index) => index === 0 || (grants[index - 1]?.grantId ?? "") < grant.grantId,
+        ),
+      "Expected unique tool grants in canonical order.",
+    ),
 });
 
 export const runAdmissionPermitSchema = z.strictObject({
@@ -94,6 +113,7 @@ const runAdmissionRequestErrorSchema = z.strictObject({
     "agent_not_found",
     "admission_limit_exceeded",
     "budget_exhausted",
+    "capability_unavailable",
     "idempotency_conflict",
     "incompatible_schema",
     "insufficient_scope",
@@ -169,9 +189,29 @@ export const inspectRunCapabilitySchema = runReceiverCapabilityBaseSchema.extend
   capability: z.literal("run:inspect"),
 });
 
+export const listRunApprovalsCapabilitySchema = runReceiverCapabilityBaseSchema.extend({
+  action: z.literal("list_approvals"),
+  capability: z.literal("run:approvals:read"),
+});
+
+export const approveRunToolCapabilitySchema = runReceiverCapabilityBaseSchema.extend({
+  action: z.literal("approve_tool"),
+  capability: z.literal("run:approvals:approve"),
+  executionId: toolApprovalExecutionIdSchema,
+});
+
+export const rejectRunToolCapabilitySchema = runReceiverCapabilityBaseSchema.extend({
+  action: z.literal("reject_tool"),
+  capability: z.literal("run:approvals:reject"),
+  executionId: toolApprovalExecutionIdSchema,
+});
+
 export const runReceiverCapabilitySchema = z.discriminatedUnion("action", [
   resumeRunCapabilitySchema,
   inspectRunCapabilitySchema,
+  listRunApprovalsCapabilitySchema,
+  approveRunToolCapabilitySchema,
+  rejectRunToolCapabilitySchema,
 ]);
 
 export const redeemRunReceiverCapabilityResultSchema = z.discriminatedUnion("ok", [
@@ -257,6 +297,7 @@ const runRequestErrorSchema = z.strictObject({
     "agent_not_found",
     "admission_limit_exceeded",
     "budget_exhausted",
+    "capability_unavailable",
     "idempotency_conflict",
     "incompatible_schema",
     "insufficient_scope",
@@ -321,6 +362,7 @@ export type CreateRunAdmissionInput = z.infer<typeof createRunAdmissionInputSche
 export type CreateRunAdmissionResult = z.infer<typeof createRunAdmissionResultSchema>;
 export type InspectAdmittedRunResult = z.infer<typeof inspectAdmittedRunResultSchema>;
 export type InspectRunCapability = z.infer<typeof inspectRunCapabilitySchema>;
+export type ListRunApprovalsCapability = z.infer<typeof listRunApprovalsCapabilitySchema>;
 export type InspectRunResult = z.infer<typeof inspectRunResultSchema>;
 export type RedeemRunReceiverCapabilityResult = z.infer<
   typeof redeemRunReceiverCapabilityResultSchema

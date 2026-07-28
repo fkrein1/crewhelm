@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
+  evaluateApprovedComposioToolAction,
   evaluateComposioToolAction,
 } from "../packages/core/src/index.js";
 import type { ComposioToolGateInput } from "../packages/contracts/src/index.js";
@@ -318,6 +319,26 @@ describe("ToolGate Composio policy", () => {
       });
     },
   );
+
+  it("allows an exact sensitive action only with matching owner approval evidence", async () => {
+    const input = exactInput();
+    input.action.effect = "write";
+    input.grant.effect = "write";
+
+    expect(
+      await evaluateApprovedComposioToolAction(input, approvalActionDigests.write),
+    ).toMatchObject({
+      action: { effect: "write" },
+      actionDigest: approvalActionDigests.write,
+      decision: "allow",
+    });
+    expect(await evaluateApprovedComposioToolAction(input, "d".repeat(64))).toEqual({
+      actionDigest: approvalActionDigests.write,
+      decision: "requires_approval",
+      effect: "write",
+      grantId,
+    });
+  });
 
   it.each([
     null,

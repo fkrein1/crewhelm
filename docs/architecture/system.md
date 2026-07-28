@@ -59,19 +59,21 @@ with Workers AI. Each run carries a closed exact Agent-revision configuration bo
 owner-plus-Agent object name; mutable object-global configuration does not select a queued turn's
 model or instructions. `OwnerControlPlane` issues a 30-second, single-use admission permit binding
 the owner, MCP client, Agent revision, run, prompt digest, expiry, nonce, idempotency key, and an
-explicit budget reservation. The initial reservation allows exactly one model call, one turn, no
-tools, the exact instruction-plus-prompt character count, a bounded model-output token count, and a
-total wall-clock duration. The control plane admits only explicitly classified runnable models and
-reserves the envelope against finite rolling 24-hour owner limits for input characters, model
-calls, and output tokens. `CrewAgent` verifies and redeems the permit before durably submitting the
-turn, then rechecks the authoritative current Agent revision and atomically consumes the one-call
-reservation immediately before inference. A crash after that claim is treated as spent and cannot
-replay the provider call. The submission ID and idempotency key are the run ID. Resume and
-inspection use separate five-second, single-use receiver capabilities minted only inside an
-already authorized owner-object request.
+explicit budget reservation. The reservation contains the exact active tool grants and bounds
+model calls, turns, tool calls, input characters, output tokens, and total wall-clock duration.
+Grant-free reservations still allow only one model call and one turn. The control plane admits only
+explicitly classified runnable models and reserves the envelope against finite rolling 24-hour
+owner limits for input characters, model calls, and output tokens. `CrewAgent` verifies and redeems
+the permit before durably submitting the turn, then rechecks the authoritative current Agent
+revision and atomically consumes one reserved model call in Think's per-step hook immediately
+before every inference. The rolling output-token reservation charges the per-call allowance for
+every reserved model call. A crash after a claim is treated as spent and cannot replay the provider
+call. The submission ID and idempotency key are the run ID. Resume, inspection, and
+tool-approval operations use distinct five-second, single-use receiver capabilities minted only
+inside an already authorized owner-object request.
 
 MCP and HTTP callers never receive the `CrewAgent` namespace or an object stub. Only the production
-Worker and `OwnerControlPlane` hold that internal capability, and their call sites use the three
+Worker and `OwnerControlPlane` hold that internal capability, and their call sites use the closed
 Crewhelm receiver methods. Crewhelm also shadows authority-bearing inherited Think entrypoints for
 configuration, fetch, transcript, approval, cancellation, MCP, host, workflow, fiber, agent-tool,
 sub-agent routing, facet scheduling, and submission management. Framework-internal transcript and
@@ -205,7 +207,7 @@ recipe request
 ∩ connection scope
 ∩ runtime allowlist
 ∩ budget
-∩ current revocation and kill-switch state
+∩ current revocation state
 ```
 
 Every call reaches `ToolGate` immediately before execution. A connector receives only a verified
@@ -226,11 +228,22 @@ current time; future-dated or more than five-second-old snapshots fail closed, a
 is bounded from both current time and snapshot creation. It also fails closed on malformed input,
 inactive policy, cross-object mismatches, unknown cost, and exhausted budgets. Write and
 destructive effects require distinct owner approval.
+Write and destructive approval-required actions remain unavailable until the owner decision is
+stored and a fresh execution-time reservation succeeds.
 
 An in-process allow decision is deliberately not a verified execution permit, does not reserve a
 budget, and cannot authorize a connector or cross an object boundary. The execution owner must
 atomically reserve current budget, rerun policy immediately before the effect, and issue the
-short-lived verified permit described above. Until that seam exists, no decision reaches a
+short-lived verified permit described above. `OwnerControlPlane` now owns that reservation: it
+rebuilds a current snapshot from the redeemed run, exact immutable grant, current Agent revision,
+connection and grant status, and persisted execution counts; atomically charges the run and writes
+the execution record; then issues a five-second, single-use permit to the exact adapter call. A
+second reservation for the same tool-call identity is denied, including while the first outcome is
+unknown; recovery must reconcile that outcome before a new action is admitted. Unknown,
+unavailable, stale, over-budget, mismatched, or expired calls fail closed. The pure ToolGate
+contract can deny an authoritative kill-switch signal, but this slice does not yet persist or
+operate that signal. The production Composio execution adapter remains a separate integration
+slice, so an admitted grant without a trusted adapter still exposes no model tool and reaches no
 provider.
 
 ### Composio
@@ -271,12 +284,16 @@ persist their external ID and resume through a Workflow.
 
 Approval is owner-authenticated evidence from an interaction distinct from model output. It binds
 owner, client, run, revision, tool, canonical input/target/effect/cost digest, expiry, and nonce.
-The requesting model cannot approve or call the approval path. Until Crewhelm has such a channel,
-approval-required actions remain unavailable.
+The requesting model cannot approve or call the approval path. Owner-scoped MCP tools list pending
+run approvals and approve or reject one exact Think durable-pause execution. The control plane
+stores the immutable digest-bound decision and audit event before issuing a single-use decision
+capability to the Agent.
 
 The execution owner stores the wait and immutable decision evidence; the control plane owns who may
 approve. After approval, run `ToolGate` again against current grants, connection, budget,
-revocation, and kill switch immediately before the side effect.
+and revocation immediately before the side effect. The resulting permit, rather than
+the earlier approval or model output, is the only authority the trusted adapter receives. Duplicate
+model attempts for the same tool call do not create duplicate waits.
 
 Revocation or deletion first blocks new admissions and permit verification, invalidates pending
 approvals, then sends idempotent cancellation to schedules, queued turns, workflows, and connector
