@@ -1,17 +1,13 @@
 # System architecture
 
-Status: current architecture and non-negotiable boundaries
+Status: current ownership and dependency map
 
-Crewhelm is an authority layer over two infrastructure bets: Cloudflare provides authenticated
-ingress and durable execution; Composio provides app and web integrations. Firecrawl is one
-Composio toolkit, not a Crewhelm subsystem.
-
-This document answers three questions: where a request goes, who owns each fact, and which
-boundaries must not be bypassed. Detailed controls live in the
+Crewhelm is an authority layer over Cloudflare execution and Composio integrations. Firecrawl is
+one Composio toolkit, not a Crewhelm subsystem. Detailed controls live in the
 [security invariants](../security/invariants.md), [threat model](../security/threat-model.md), and
 [ADRs](../decisions/).
 
-## Runtime shape
+## Runtime
 
 ```mermaid
 flowchart LR
@@ -19,172 +15,75 @@ flowchart LR
     Worker --> Auth["Auth D1"]
     Worker --> Owner["OwnerControlPlane"]
     Owner --> Agent["CrewAgent / Think"]
-    Worker --> Catalog["Composio catalog and Connect Link adapters"]
+    Worker --> Catalog["Composio catalog and Connect Links"]
     Agent --> Gate["ToolGate and execution reservation"]
-    Gate --> Adapter["Trusted tool adapter"]
-    Adapter --> Composio["Composio"]
+    Gate --> Composio["Trusted adapter / Composio"]
 ```
 
-The Worker authenticates the request, derives owner and client authority, and creates a fresh MCP
-server, handler, and transport for that request. MCP handlers translate protocol input into
-commands; they do not read SQL, agent storage, or credentials.
+The Worker authenticates requests, derives owner and client authority, and creates a fresh MCP
+server per request. There is one SQLite-backed `OwnerControlPlane` per owner and one name-addressed
+`CrewAgent` per logical Agent.
 
-There is one SQLite-backed `OwnerControlPlane` Durable Object per owner and one name-addressed
-`CrewAgent` Durable Object per logical agent. Never route multiple owners through a global control
-plane.
+| State owner         | Authoritative facts                                                                           |
+| ------------------- | --------------------------------------------------------------------------------------------- |
+| Worker              | Authenticated request context only                                                            |
+| Auth D1             | OAuth state, signing keys, and token revocation                                               |
+| `OwnerControlPlane` | Agent revisions, connection references, admission, budgets, approvals, idempotency, and audit |
+| `CrewAgent`         | Think submissions, transcripts, output, deadlines, and approval waits                         |
+| Composio            | Connected-account credentials and refresh                                                     |
 
-## State ownership
+The control plane owns admission and administration; the Agent owns execution. Cross-object calls
+carry explicit authority because Durable Objects do not share transactions. D1 is not an
+authoritative store for control-plane or Agent domain state.
 
-| Owner               | Authoritative facts                                                                               |
-| ------------------- | ------------------------------------------------------------------------------------------------- |
-| MCP Worker          | Authenticated request context only                                                                |
-| Auth D1             | OAuth protocol state, signing keys, and token revocation                                          |
-| `OwnerControlPlane` | Agent revisions, connection references, run admission, budgets, approvals, idempotency, and audit |
-| `CrewAgent`         | Think submissions, transcript state, run output, deadlines, and tool-approval waits               |
-| Composio            | Connected-account credentials and refresh                                                         |
+## Module map
 
-The control plane owns admission and administration; the agent owns execution. Cross-object calls
-carry explicit authority and are idempotent because Durable Objects do not share transactions.
-D1 is not an authoritative store for agent or control-plane domain state.
+| Change                                | Owning path               |
+| ------------------------------------- | ------------------------- |
+| Owner authorization and wiring        | `owner/durable-object.ts` |
+| Agent definitions and revisions       | `owner/agents/`           |
+| Run admission, budgets, and execution | `owner/runs/`             |
+| Connection lifecycle                  | `owner/connections/`      |
+| Owner-to-Agent capabilities           | `owner/agent-channel/`    |
+| Admitted Think execution              | `agent/admitted-runs/`    |
+| MCP presentation                      | `mcp/*-tools.ts`          |
+| Public routing and bounded HTTP input | `http/`                   |
+| OAuth persistence and protocol        | `oauth/`                  |
 
-The Worker is organized by capability rather than technical layer:
+`index.ts`, Durable Object entrypoints, and protocol servers are composition roots. They select
+authority and connect modules; capability behavior stays in the owning folder. Tests live beside
+the behavior they cover.
 
-```text
-apps/worker/src/
-  owner/
-    durable-object.ts
-    agents/
-      module.ts
-      module.test.ts
-    runs/
-      module.ts
-      module.test.ts
-      tool-execution.ts
-      tool-execution.test.ts
-    connections/
-      module.ts
-      module.test.ts
-    agent-channel/
-      module.ts
-      protocol.ts
-  agent/
-    durable-object.ts
-    admitted-runs/
-      module.ts
-      schema.ts
-      module.test.ts
-  http/
-    server.ts
-    server.test.ts
-    connection-authorization-return.ts
-    request-body.ts
-  mcp/
-    server.ts
-    agent-tools.ts
-    run-tools.ts
-    connection-tools.ts
-    integration-tools.ts
-  oauth/
-    auth.ts
-    schema.ts
-    server.ts
-    server.test.ts
-    ui.ts
-```
+A routine change should require the owning module, its contract, its tests, and at most one
+composition root or external adapter. Split only around a coherent invariant or reason to change.
 
-`index.ts`, `owner/durable-object.ts`, `agent/durable-object.ts`, `http/server.ts`, and
-`mcp/server.ts` are composition or protocol roots. They select authority, connect modules, and
-translate external protocols; capability behavior stays inside the owning folder. `owner/agents/`
-owns immutable revisions and reads. `owner/runs/` owns admission, budget reservations, execution
-policy, and replay protection. `owner/connections/` owns connection lifecycle.
-`owner/agent-channel/` owns single-use cross-object capabilities and run coordination.
-`agent/admitted-runs/` owns Think execution and its durable lifecycle. MCP tool files own only
-protocol presentation for their matching capability. `http/` owns public routing and bounded HTTP
-input, while `oauth/` owns OAuth persistence and protocol behavior. Their tests live with those
-boundaries rather than at the source root.
+## Authority flow
 
-Keep focused tests beside these implementations. Add a module when it hides a coherent policy or
-state transition behind a small interface—not merely to shorten a file. A routine change should
-require the owning module, its boundary contract, its tests, and at most one composition root or
-external adapter.
+1. The Worker derives the owner key from verified issuer and subject claims, validates operation
+   scope, and selects the owner object. Bearer tokens stop at the Worker.
+2. `OwnerControlPlane` revalidates owner binding and scope. For execution it issues a short-lived,
+   single-use permit bound to the exact Agent revision, run, prompt, idempotency key, and budget.
+3. `CrewAgent` redeems the permit and claims reserved model work before inference. Think's
+   authority-bearing inherited entrypoints remain blocked.
+4. Tool discovery grants no execution authority. `ToolGate` evaluates the exact grant and current
+   policy immediately before a single-use execution reservation. The production tool adapter is
+   not wired yet.
+5. Connect Links create owner-facing setup flows. Browser returns record lifecycle evidence; they
+   do not activate a connection or authorize execution.
 
-## Authority boundaries
-
-### Identity and ingress
-
-Build the owner key only from verified issuer and subject claims. Do not use email, username,
-model input, or free-form claims. The Worker validates token authenticity, issuer, audience,
-subject, expiry, client, resource, and operation scope before selecting an owner object. Bearer
-tokens never cross the Worker boundary.
-
-Typed RPC is not authorization. Every owner-object entrypoint validates owner binding and scope.
-MCP and HTTP callers never receive a Durable Object namespace, object stub, or raw storage handle.
-
-### Run admission
-
-`OwnerControlPlane` issues a short-lived, single-use permit bound to the owner, client, exact Agent
-revision, run, prompt digest, idempotency key, and reserved budget. `CrewAgent` redeems that permit
-before submission, rechecks the current revision, and claims reserved model work immediately
-before inference.
-
-A claimed provider call is spent. Recovery may resume work only before provider execution starts;
-Crewhelm does not silently replay interrupted paid inference.
-
-Think remains behind Crewhelm-owned methods. Authority-bearing inherited entrypoints stay blocked,
-and the inherited surface is fingerprinted so dependency upgrades force review. Grant-free turns
-expose no actions: `workspaceBash = false`, `includeMcpTools = false`, and tool inventories default
-empty.
-
-### Tool execution
-
-Tool discovery is not authorization. Effective authority is the intersection of the exact Agent
-grant, connected account, current policy and revocation state, target/effect restrictions, and
-remaining budget.
-
-Every effect reaches `ToolGate` immediately before execution. An allow decision alone is not an
-execution permit. The execution owner must atomically reserve current budget, rerun policy, and
-issue a short-lived, single-use permit for one exact adapter call. Duplicate or unknown outcomes
-fail closed until reconciled. Write and destructive approval-required actions remain unavailable
-without separate owner evidence bound to the exact action.
-
-The production tool adapter is not wired yet. A grant with no trusted adapter exposes no model tool
-and reaches no provider.
-
-Composio discovery is open-world, but execution is exact: grants bind toolkit, tool, version,
-connected account, effect, targets, and limits. Never fall through to `latest` or automatic account
-selection. Do not expose Composio Sessions, raw proxy execution, connection-management meta-tools,
-or model-managed credentials. Provider schemas, classifications, errors, and results are untrusted
-input.
-
-Connect Links are owner-facing setup flows. A browser return records lifecycle evidence; it is not
-a signed provider assertion, does not activate a connection, and cannot create a grant or
-execution permit.
-
-## Storage and recovery
-
-The control-plane schema is declared once with Drizzle. Ordered, checksummed migrations run before
-RPC admission; unknown or changed migration state fails closed. Deployed Durable Object class
-bindings and SQLite declarations roll forward even when callers are disabled. Recovery that
-changes or deletes stored state requires explicit approval.
-
-Exact migration and Durable Object recovery requirements are recorded in
-[ADR 0002](../decisions/0002-owner-scoped-durable-object-control-plane.md). OAuth storage is
-recorded in [ADR 0004](../decisions/0004-better-auth-on-d1.md).
+Control-plane migrations are ordered and checksummed; incompatible state fails closed before RPC
+admission. Recovery rules are in
+[ADR 0002](../decisions/0002-owner-scoped-durable-object-control-plane.md), and OAuth storage is in
+[ADR 0004](../decisions/0004-better-auth-on-d1.md).
 
 ## Dependency direction
 
 ```text
-entrypoints -> application commands -> domain policy and contracts
-adapters ---------------------------> application ports and contracts
-composition roots -----------------> concrete implementations
+entrypoints -> capability modules -> domain policy and contracts
+adapters ------------------------> ports and contracts
+composition roots --------------> concrete implementations
 ```
 
-Contracts import no Cloudflare, Think, MCP, Composio, database, or environment APIs. Only
-composition roots read the full environment. Modules receive the narrow database, namespace, or
-adapter they need. Provider adapters do not decide authority, and policy modules do not perform
-provider I/O.
-
-Prefer a pass-through composition root when validation and policy already live in the called
-module. Keep orchestration in the root only when it coordinates multiple state owners or converts
-one authority into a narrower capability. See [module design](../engineering/module-design.md) for
-the boundary test.
+Contracts import no runtime, provider, database, or environment APIs. Only composition roots read
+the full environment. Provider adapters do not decide authority, and policy modules do not perform
+provider I/O. See [module design](../engineering/module-design.md) for the boundary test.
