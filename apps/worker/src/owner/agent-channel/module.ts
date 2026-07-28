@@ -34,7 +34,10 @@ import { digestRunPrompt } from "../../agent/admitted-runs/protocol.js";
 import type { CrewAgent } from "../../agent/durable-object.js";
 import { recordExecutionEvent } from "../../observability/execution.js";
 import {
+  agents,
   auditEvents,
+  capabilityGrants,
+  connections,
   toolApprovals,
   toolExecutions,
   type ControlPlaneDatabaseSchema,
@@ -63,6 +66,8 @@ const TIMELINE_EVENT_ORDER = [
   "tool.execution_completed",
   "tool.execution_failed",
   "tool.execution_unknown",
+  "tool.execution_reconciled_applied",
+  "tool.execution_reconciled_not_applied",
   "run.cancellation_requested",
   "run.cancelled",
   "run.completed",
@@ -227,6 +232,7 @@ export class AgentChannel {
             decidedAt: null,
             executionId: approval.executionId,
             expiresAt: Date.parse(approval.expiresAt),
+            grantId: approval.grantId,
             requestedAt: Date.parse(approval.requestedAt),
             runId: admission.runId,
             toolCallId: approval.toolCallId,
@@ -318,6 +324,8 @@ export class AgentChannel {
       .select({
         completedAt: toolExecutions.completedAt,
         dispatchedAt: toolExecutions.dispatchedAt,
+        reconciliation: toolExecutions.reconciliation,
+        reconciledAt: toolExecutions.reconciledAt,
         startedAt: toolExecutions.startedAt,
         status: toolExecutions.status,
         toolCallId: toolExecutions.toolCallId,
@@ -332,7 +340,18 @@ export class AgentChannel {
         add("tool.execution_dispatched", execution.dispatchedAt, execution.toolCallId);
       }
 
-      if (execution.status !== "reserved" && execution.completedAt !== null) {
+      if (
+        execution.reconciliation !== null &&
+        execution.completedAt !== null &&
+        execution.reconciledAt !== null
+      ) {
+        add("tool.execution_unknown", execution.completedAt, execution.toolCallId);
+        add(
+          `tool.execution_reconciled_${execution.reconciliation}`,
+          execution.reconciledAt,
+          execution.toolCallId,
+        );
+      } else if (execution.status !== "reserved" && execution.completedAt !== null) {
         add(`tool.execution_${execution.status}`, execution.completedAt, execution.toolCallId);
       }
     }
@@ -773,10 +792,38 @@ export class AgentChannel {
       existing !== undefined &&
       (existing.runId !== request.data.runId ||
         existing.toolCallId !== approval.toolCallId ||
+        existing.grantId !== approval.grantId ||
         existing.actionDigest !== approval.actionDigest ||
         (existing.decision !== null && existing.decision !== storedDecision))
     ) {
       return deniedDecideRunToolApproval("approval_not_found");
+    }
+
+    const grantAuthority = this.#database
+      .select({
+        agentId: capabilityGrants.agentId,
+        agentRevision: capabilityGrants.agentRevision,
+        agentStatus: agents.status,
+        connectionStatus: connections.status,
+        currentAgentRevision: agents.currentRevision,
+        grantStatus: capabilityGrants.status,
+      })
+      .from(capabilityGrants)
+      .innerJoin(connections, eq(connections.connectionId, capabilityGrants.connectionId))
+      .innerJoin(agents, eq(agents.agentId, capabilityGrants.agentId))
+      .where(eq(capabilityGrants.grantId, approval.grantId))
+      .get();
+
+    if (
+      grantAuthority === undefined ||
+      grantAuthority.agentId !== admission.agentId ||
+      grantAuthority.agentRevision !== admission.agentRevision ||
+      grantAuthority.currentAgentRevision !== admission.agentRevision ||
+      grantAuthority.agentStatus !== "active" ||
+      grantAuthority.connectionStatus !== "active" ||
+      grantAuthority.grantStatus !== "active"
+    ) {
+      return deniedDecideRunToolApproval("run_unavailable");
     }
 
     let decisionRecorded = existing?.decision === null;
@@ -791,6 +838,7 @@ export class AgentChannel {
           decision: storedDecision,
           executionId: approval.executionId,
           expiresAt: Date.parse(approval.expiresAt),
+          grantId: approval.grantId,
           requestedAt: Date.parse(approval.requestedAt),
           runId: request.data.runId,
           toolCallId: approval.toolCallId,

@@ -7,20 +7,25 @@ import {
   evaluateToolExecutionResultSchema,
   reserveToolExecutionInputSchema,
   reserveToolExecutionResultSchema,
+  reconcileToolExecutionInputSchema,
+  reconcileToolExecutionResultSchema,
   resolveToolExecutionConnectionResultSchema,
   runAdmissionNonceSchema,
   toolExecutionPermitSchema,
   type CompleteToolExecutionResult,
   type EvaluateToolExecutionResult,
   type ReserveToolExecutionResult,
+  type ReconcileToolExecutionResult,
   type ResolveToolExecutionConnectionResult,
   type ToolExecutionPermit,
+  type OwnerAuthority,
 } from "@crewhelm/contracts";
 import { evaluateApprovedComposioToolAction, evaluateComposioToolAction } from "@crewhelm/core";
-import { and, count, eq, gt, isNotNull, lte, min } from "drizzle-orm";
+import { and, count, eq, gt, isNotNull, isNull, lte, min, or } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import { recordExecutionEvent } from "../../observability/execution.js";
+import { recordRecoveryEvent } from "../../observability/recovery.js";
 import {
   agents,
   auditEvents,
@@ -44,6 +49,7 @@ type ControlPlaneDatabase = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type ControlPlaneTransaction = Parameters<Parameters<ControlPlaneDatabase["transaction"]>[0]>[0];
 type ToolExecutionDatabase = ControlPlaneDatabase | ControlPlaneTransaction;
 type ToolExecutionRequest = ReturnType<typeof evaluateToolExecutionInputSchema.parse>;
+const LEGACY_UNKNOWN_EFFECT_DIGEST = "0".repeat(64);
 
 function encodeBase64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -65,6 +71,36 @@ async function digestToolExecutionPermit(
   state: "reserved" | "dispatched",
 ): Promise<string> {
   return digestBase64Url(JSON.stringify({ permit, state }));
+}
+
+export async function digestExternalEffect(
+  action: ToolExecutionRequest["action"],
+): Promise<string> {
+  const canonicalEffect = JSON.stringify({
+    schemaVersion: 1,
+    connectionId: action.connectionId,
+    inputDigest: action.inputDigest,
+    integrationSlug: action.integrationSlug,
+    toolkitVersion: action.toolkitVersion,
+    toolSlug: action.toolSlug,
+  });
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalEffect));
+
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+type ReconciliationFailure = Extract<ReconcileToolExecutionResult, { ok: false }>;
+
+export function deniedToolExecutionReconciliation(
+  code: ReconciliationFailure["error"]["code"],
+): ReconciliationFailure {
+  return {
+    error: {
+      code,
+      message: "Tool execution reconciliation denied.",
+    },
+    ok: false,
+  };
 }
 
 function createNonce(): string {
@@ -93,6 +129,15 @@ export class ToolExecutions {
       return INVALID_TOOL_EXECUTION;
     }
 
+    const effectDigest = await digestExternalEffect(request.data.action);
+
+    if (
+      request.data.action.effect !== "read" &&
+      this.#hasUnreconciledEffect(this.#database, effectDigest)
+    ) {
+      return INVALID_TOOL_EXECUTION;
+    }
+
     const gateInput = this.#gateInput(this.#database, request.data, Date.now());
 
     if (gateInput === undefined) {
@@ -113,6 +158,7 @@ export class ToolExecutions {
     }
 
     const evaluatedAt = Date.now();
+    const effectDigest = await digestExternalEffect(request.data.action);
     const existingExecution = this.#database
       .select()
       .from(toolExecutions)
@@ -120,6 +166,13 @@ export class ToolExecutions {
       .get();
 
     if (existingExecution !== undefined) {
+      return INVALID_TOOL_EXECUTION;
+    }
+
+    if (
+      request.data.action.effect !== "read" &&
+      this.#hasUnreconciledEffect(this.#database, effectDigest)
+    ) {
       return INVALID_TOOL_EXECUTION;
     }
 
@@ -190,7 +243,9 @@ export class ToolExecutions {
 
       if (
         currentGateInput === undefined ||
-        JSON.stringify(currentGateInput) !== JSON.stringify(gateInput)
+        JSON.stringify(currentGateInput) !== JSON.stringify(gateInput) ||
+        (request.data.action.effect !== "read" &&
+          this.#hasUnreconciledEffect(transaction, effectDigest))
       ) {
         return INVALID_TOOL_EXECUTION;
       }
@@ -230,6 +285,7 @@ export class ToolExecutions {
         .values({
           actionDigest: decision.actionDigest,
           costMicrousd: request.data.action.estimatedCostMicrousd ?? 0,
+          effectDigest,
           expiresAt: executionDeadline,
           grantId: request.data.action.grantId,
           nonceDigest: permitDigest,
@@ -453,6 +509,101 @@ export class ToolExecutions {
     return result;
   }
 
+  reconcile(authority: OwnerAuthority, input: unknown): ReconcileToolExecutionResult {
+    const request = reconcileToolExecutionInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return deniedToolExecutionReconciliation("invalid_request");
+    }
+
+    const reconciledAt = Date.now();
+    const result = this.#database.transaction((transaction) => {
+      const row = transaction
+        .select({
+          reconciliation: toolExecutions.reconciliation,
+          runId: toolExecutions.runId,
+          status: toolExecutions.status,
+        })
+        .from(toolExecutions)
+        .where(eq(toolExecutions.toolCallId, request.data.toolCallId))
+        .get();
+
+      if (row === undefined) {
+        return deniedToolExecutionReconciliation("execution_not_found");
+      }
+
+      if (
+        row.reconciliation === request.data.resolution &&
+        ((row.status === "completed" && request.data.resolution === "applied") ||
+          (row.status === "failed" && request.data.resolution === "not_applied"))
+      ) {
+        return reconcileToolExecutionResultSchema.parse({
+          ok: true,
+          reconciled: false,
+          resolution: request.data.resolution,
+          runId: row.runId,
+          toolCallId: request.data.toolCallId,
+        });
+      }
+
+      if (row.status !== "unknown" || row.reconciliation !== null) {
+        return deniedToolExecutionReconciliation("execution_not_reconcilable");
+      }
+
+      const status = request.data.resolution === "applied" ? "completed" : "failed";
+      const updated = transaction
+        .update(toolExecutions)
+        .set({
+          reconciliation: request.data.resolution,
+          reconciledAt,
+          status,
+        })
+        .where(
+          and(
+            eq(toolExecutions.toolCallId, request.data.toolCallId),
+            eq(toolExecutions.status, "unknown"),
+            isNull(toolExecutions.reconciliation),
+          ),
+        )
+        .returning({ toolCallId: toolExecutions.toolCallId })
+        .all();
+
+      if (updated.length !== 1) {
+        return deniedToolExecutionReconciliation("execution_not_reconcilable");
+      }
+
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: `tool.execution_reconciled_${request.data.resolution}`,
+          clientId: authority.clientId,
+          occurredAt: reconciledAt,
+          subjectId: request.data.toolCallId,
+        })
+        .run();
+
+      return reconcileToolExecutionResultSchema.parse({
+        ok: true,
+        reconciled: true,
+        resolution: request.data.resolution,
+        runId: row.runId,
+        toolCallId: request.data.toolCallId,
+      });
+    });
+
+    if (result.ok) {
+      recordRecoveryEvent({
+        operation: "tool.reconcile",
+        outcome: result.reconciled ? "changed" : "replayed",
+        resolution: result.resolution,
+        runId: result.runId,
+        toolCallId: result.toolCallId,
+      });
+    }
+
+    return result;
+  }
+
   async resolveConnection(input: unknown): Promise<ResolveToolExecutionConnectionResult> {
     const permit = toolExecutionPermitSchema.safeParse(input);
 
@@ -472,6 +623,7 @@ export class ToolExecutions {
       const row = transaction
         .select({
           actionDigest: toolExecutions.actionDigest,
+          agentStatus: agents.status,
           cancellationRequestedAt: runAdmissions.cancellationRequestedAt,
           clientId: runAdmissions.clientId,
           connectionId: capabilityGrants.connectionId,
@@ -482,6 +634,7 @@ export class ToolExecutions {
           grantStatus: capabilityGrants.status,
           nonceDigest: toolExecutions.nonceDigest,
           providerConnectionId: connections.providerConnectionId,
+          currentAgentRevision: agents.currentRevision,
           runId: toolExecutions.runId,
           status: toolExecutions.status,
         })
@@ -489,6 +642,7 @@ export class ToolExecutions {
         .innerJoin(capabilityGrants, eq(capabilityGrants.grantId, toolExecutions.grantId))
         .innerJoin(connections, eq(connections.connectionId, capabilityGrants.connectionId))
         .innerJoin(runAdmissions, eq(runAdmissions.runId, toolExecutions.runId))
+        .innerJoin(agents, eq(agents.agentId, runAdmissions.agentId))
         .where(eq(toolExecutions.toolCallId, permit.data.action.toolCallId))
         .get();
       const grant = composioToolCapabilityGrantSchema.safeParse(row?.grant);
@@ -499,6 +653,8 @@ export class ToolExecutions {
         row.status !== "reserved" ||
         row.expiresAt <= dispatchedAt ||
         row.cancellationRequestedAt !== null ||
+        row.agentStatus !== "active" ||
+        row.currentAgentRevision !== permit.data.action.agentRevision ||
         row.connectionStatus !== "active" ||
         row.grantStatus !== "active" ||
         row.nonceDigest !== reservedPermitDigest ||
@@ -626,7 +782,7 @@ export class ToolExecutions {
     }
 
     const currentAgent = database
-      .select({ currentRevision: agents.currentRevision })
+      .select({ currentRevision: agents.currentRevision, status: agents.status })
       .from(agents)
       .where(eq(agents.agentId, request.agentId))
       .get();
@@ -662,9 +818,9 @@ export class ToolExecutions {
         activeGrantCalls,
         agentId: request.agentId,
         agentStatus:
-          currentAgent?.currentRevision === request.agentRevision
-            ? ("active" as const)
-            : ("revoked" as const),
+          currentAgent?.currentRevision !== request.agentRevision
+            ? ("revoked" as const)
+            : currentAgent.status,
         capabilityId: request.action.capabilityId,
         connectionId: request.action.connectionId,
         connectionStatus:
@@ -690,5 +846,23 @@ export class ToolExecutions {
         runId: request.runId,
       },
     };
+  }
+
+  #hasUnreconciledEffect(database: ToolExecutionDatabase, effectDigest: string): boolean {
+    return (
+      database
+        .select({ toolCallId: toolExecutions.toolCallId })
+        .from(toolExecutions)
+        .where(
+          and(
+            eq(toolExecutions.status, "unknown"),
+            or(
+              eq(toolExecutions.effectDigest, effectDigest),
+              eq(toolExecutions.effectDigest, LEGACY_UNKNOWN_EFFECT_DIGEST),
+            ),
+          ),
+        )
+        .get() !== undefined
+    );
   }
 }

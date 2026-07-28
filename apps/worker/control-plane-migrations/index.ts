@@ -4,6 +4,7 @@ import migration2 from "./0002_cool_rictor.sql";
 import migration3 from "./0003_windy_stepford_cuckoos.sql";
 import migration4 from "./0004_eminent_mongoose.sql";
 import migration5 from "./0005_young_norman_osborn.sql";
+import migration6 from "./0006_concerned_mesmero.sql";
 
 export const controlPlaneMigrations = [
   {
@@ -35,6 +36,11 @@ export const controlPlaneMigrations = [
     name: "0005_young_norman_osborn",
     sql: migration5,
     version: 6,
+  },
+  {
+    name: "0006_concerned_mesmero",
+    sql: migration6,
+    version: 7,
   },
 ] as const;
 

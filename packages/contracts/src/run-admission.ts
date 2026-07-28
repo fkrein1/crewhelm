@@ -123,6 +123,7 @@ export const runAdmissionSummarySchema = runAdmissionPermitSchema
 const runAdmissionRequestErrorSchema = z.strictObject({
   code: z.enum([
     "agent_not_found",
+    "agent_unavailable",
     "admission_limit_exceeded",
     "budget_exhausted",
     "capability_unavailable",
@@ -328,6 +329,8 @@ export const runTimelineEventSchema = z.strictObject({
     "tool.execution_completed",
     "tool.execution_failed",
     "tool.execution_unknown",
+    "tool.execution_reconciled_applied",
+    "tool.execution_reconciled_not_applied",
     "run.cancellation_requested",
     "run.cancelled",
     "run.completed",
@@ -340,6 +343,7 @@ export const runTimelineEventSchema = z.strictObject({
 const runRequestErrorSchema = z.strictObject({
   code: z.enum([
     "agent_not_found",
+    "agent_unavailable",
     "admission_limit_exceeded",
     "budget_exhausted",
     "capability_unavailable",

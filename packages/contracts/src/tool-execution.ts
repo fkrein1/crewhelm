@@ -98,6 +98,7 @@ export const pendingToolApprovalSchema = z.strictObject({
   effect: z.enum(["write", "destructive"]),
   executionId: toolApprovalExecutionIdSchema,
   expiresAt: z.iso.datetime(),
+  grantId: classifiedComposioToolActionSchema.shape.grantId,
   requestedAt: z.iso.datetime(),
   risk: z.enum(["medium", "high"]),
   summary: z.string().min(1).max(240),

@@ -69,6 +69,7 @@ type StoredAgentRow = {
   instructions: string;
   model: string;
   name: string;
+  status: Agent["status"];
 };
 type StoredAgentRevisionRow = StoredAgentRow & { revisedAt: number };
 type ControlPlaneDatabase = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
@@ -236,6 +237,7 @@ export class AgentRegistry {
         model: agentRevisions.model,
         name: agentRevisions.name,
         requestDigest: agentUpdates.requestDigest,
+        status: agents.status,
       })
       .from(agentUpdates)
       .innerJoin(agents, eq(agents.agentId, agentUpdates.agentId))
@@ -311,6 +313,7 @@ export class AgentRegistry {
           model: agentRevisions.model,
           name: agentRevisions.name,
           requestDigest: agentUpdates.requestDigest,
+          status: agents.status,
         })
         .from(agentUpdates)
         .innerJoin(agents, eq(agents.agentId, agentUpdates.agentId))
@@ -351,6 +354,7 @@ export class AgentRegistry {
           instructions: agentRevisions.instructions,
           model: agentRevisions.model,
           name: agentRevisions.name,
+          status: agents.status,
         })
         .from(agents)
         .innerJoin(
@@ -547,6 +551,7 @@ export class AgentRegistry {
           model: currentRow.model,
           name: currentRow.name,
           revision,
+          status: currentRow.status,
         },
         configured: true,
         ok: true,
@@ -575,6 +580,7 @@ export class AgentRegistry {
           model: agentRevisions.model,
           name: agentRevisions.name,
           requestDigest: agentCreations.requestDigest,
+          status: agents.status,
         })
         .from(agentCreations)
         .innerJoin(agents, eq(agents.agentId, agentCreations.agentId))
@@ -657,6 +663,7 @@ export class AgentRegistry {
         model: request.data.model,
         name: request.data.name,
         revision: 1,
+        status: "active",
       });
 
       return createAgentResultSchema.parse({ agent, created: true, ok: true });
@@ -719,6 +726,7 @@ export class AgentRegistry {
         model: agentRevisions.model,
         name: agentRevisions.name,
         revisedAt: agentRevisions.createdAt,
+        status: agents.status,
       })
       .from(agents)
       .innerJoin(agentRevisions, eq(agentRevisions.agentId, agents.agentId))
@@ -768,6 +776,7 @@ export class AgentRegistry {
           model: agentRevisions.model,
           name: agentRevisions.name,
           requestDigest: agentUpdates.requestDigest,
+          status: agents.status,
         })
         .from(agentUpdates)
         .innerJoin(agents, eq(agents.agentId, agentUpdates.agentId))
@@ -808,6 +817,7 @@ export class AgentRegistry {
           instructions: agentRevisions.instructions,
           model: agentRevisions.model,
           name: agentRevisions.name,
+          status: agents.status,
         })
         .from(agents)
         .innerJoin(
@@ -931,6 +941,7 @@ export class AgentRegistry {
           model: request.data.model,
           name: request.data.name,
           revision,
+          status: currentAgent.status,
         },
         ok: true,
         updated: true,
@@ -955,6 +966,7 @@ export class AgentRegistry {
         instructions: agentRevisions.instructions,
         model: agentRevisions.model,
         name: agentRevisions.name,
+        status: agents.status,
       })
       .from(agents)
       .innerJoin(
@@ -989,6 +1001,7 @@ export class AgentRegistry {
       model: row.model,
       name: row.name,
       revision: row.currentRevision,
+      status: row.status,
     });
   }
 
@@ -1011,6 +1024,7 @@ export class AgentRegistry {
         model: agentRevisions.model,
         name: agentRevisions.name,
         revisedAt: agentRevisions.createdAt,
+        status: agents.status,
       })
       .from(agents)
       .innerJoin(agentRevisions, eq(agentRevisions.agentId, agents.agentId))
@@ -1039,6 +1053,7 @@ export class AgentRegistry {
         instructions: agentRevisions.instructions,
         model: agentRevisions.model,
         name: agentRevisions.name,
+        status: agents.status,
       })
       .from(agents)
       .innerJoin(
@@ -1063,6 +1078,7 @@ export class AgentRegistry {
       model: agent.model,
       name: agent.name,
       revision: agent.revision,
+      status: agent.status,
     });
   }
 
@@ -1076,6 +1092,7 @@ export class AgentRegistry {
       name: row.name,
       revisedAt: new Date(row.revisedAt).toISOString(),
       revision: row.currentRevision,
+      status: row.status,
     });
   }
 }

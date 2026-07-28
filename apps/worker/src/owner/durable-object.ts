@@ -4,6 +4,7 @@ import {
   CONNECTION_CONFIGS_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
+  changeAuthorityInputSchema,
   controlPlaneStatusResultSchema,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
@@ -40,6 +41,8 @@ import {
   type ResolvedConnectionForAttachment,
   type ReserveToolExecutionResult,
   type ResolveToolExecutionConnectionResult,
+  type ChangeAuthorityResult,
+  type ReconcileToolExecutionResult,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
@@ -65,7 +68,8 @@ import { CONTROL_PLANE_SCHEMA_VERSION, migrateControlPlane } from "./migrations.
 import { controlPlane, controlPlaneSchema, type ControlPlaneDatabaseSchema } from "./schema.js";
 
 import { RunAdmissions } from "./runs/module.js";
-import { ToolExecutions } from "./runs/tool-execution.js";
+import { ToolExecutions, deniedToolExecutionReconciliation } from "./runs/tool-execution.js";
+import { AuthorityControls, deniedAuthorityControl } from "./recovery/module.js";
 
 const INVALID_RUN_ADMISSION = {
   error: {
@@ -93,6 +97,7 @@ export class OwnerControlPlane extends DurableObject {
   readonly #agents: AgentRegistry;
   readonly #connections: Connections;
   readonly #agentChannel: AgentChannel;
+  readonly #authorityControls: AuthorityControls;
 
   constructor(state: DurableObjectState, environment: Cloudflare.Env) {
     super(state, environment);
@@ -106,6 +111,7 @@ export class OwnerControlPlane extends DurableObject {
     this.#toolExecutions = new ToolExecutions(this.#objectName, this.#database, this.#storage);
     this.#agents = new AgentRegistry(this.#database);
     this.#connections = new Connections(this.#database, this.#storage);
+    this.#authorityControls = new AuthorityControls(this.#database);
     this.#agentChannel = new AgentChannel(
       this.#objectName,
       this.#database,
@@ -224,6 +230,30 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     return this.#toolExecutions.resolveConnection(input);
+  }
+
+  changeAuthority(authorityInput: unknown, input: unknown): ChangeAuthorityResult {
+    const request = changeAuthorityInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return deniedAuthorityControl("invalid_request");
+    }
+
+    const requiredScope =
+      request.data.target === "connection" ? CONNECTIONS_WRITE_SCOPE : AGENTS_WRITE_SCOPE;
+    const authorization = this.#authorize(authorityInput, requiredScope);
+
+    return authorization.ok
+      ? this.#authorityControls.change(authorization.authority, request.data)
+      : deniedAuthorityControl(authorization.code);
+  }
+
+  reconcileToolExecution(authorityInput: unknown, input: unknown): ReconcileToolExecutionResult {
+    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#toolExecutions.reconcile(authorization.authority, input)
+      : deniedToolExecutionReconciliation(authorization.code);
   }
 
   redeemRunReceiverCapability(input: unknown): RedeemRunReceiverCapabilityResult {

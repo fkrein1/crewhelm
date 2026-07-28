@@ -224,6 +224,7 @@ describe("ToolGate Composio policy", () => {
 
   it.each([
     ["kill switch", { killSwitchActive: true }, "policy_inactive"],
+    ["disabled agent", { agentStatus: "disabled" }, "policy_inactive"],
     ["revoked agent", { agentStatus: "revoked" }, "policy_inactive"],
     ["revoked grant", { grantStatus: "revoked" }, "policy_inactive"],
     ["revoked connection", { connectionStatus: "revoked" }, "policy_inactive"],

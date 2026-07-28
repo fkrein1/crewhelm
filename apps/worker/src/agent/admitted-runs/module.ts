@@ -77,7 +77,7 @@ import {
   recordExecutionEvent,
   recordExecutionProviderResponse,
 } from "../../observability/execution.js";
-import { digestRunPrompt } from "./protocol.js";
+import { digestRunPrompt, digestToolInput } from "./protocol.js";
 import {
   admittedRunRecordSchema,
   admittedTurnMetadataSchema,
@@ -1461,6 +1461,7 @@ export class CrewAgent extends Think {
           actionDigest: evaluation.data.decision.actionDigest,
           effect: evaluation.data.decision.effect,
           expiresAt: new Date(requestedAt + TOOL_APPROVAL_LIFETIME_MS).toISOString(),
+          grantId: adapter.grant.grantId,
           requestedAt: new Date(requestedAt).toISOString(),
           risk: evaluation.data.decision.effect === "destructive" ? "high" : "medium",
           runId: reference.runId,
@@ -1601,14 +1602,6 @@ export class CrewAgent extends Think {
       inputSchema,
       name,
       classify: async (input, context) => {
-        const digest = await crypto.subtle.digest(
-          "SHA-256",
-          new TextEncoder().encode(JSON.stringify(input)),
-        );
-        const inputDigest = Array.from(new Uint8Array(digest), (byte) =>
-          byte.toString(16).padStart(2, "0"),
-        ).join("");
-
         return {
           agentId: grant.agentId,
           agentRevision: grant.agentRevision,
@@ -1617,7 +1610,7 @@ export class CrewAgent extends Think {
           effect: grant.effect,
           estimatedCostMicrousd: grant.limits.maxCostMicrousdPerCall,
           grantId: grant.grantId,
-          inputDigest,
+          inputDigest: await digestToolInput(input),
           integrationSlug: grant.integrationSlug,
           ownerKey: grant.ownerKey,
           runId: context.runId,

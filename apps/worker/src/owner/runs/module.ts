@@ -195,6 +195,11 @@ export class RunAdmissions {
           });
         }
 
+        if (!this.#admissionConfigurationIsActive(transaction, existing)) {
+          this.#expire(transaction, existing.runId);
+          return this.#deniedRequest("agent_unavailable");
+        }
+
         transaction
           .update(runAdmissions)
           .set({ nonceDigest })
@@ -233,6 +238,7 @@ export class RunAdmissions {
           executionLimits: agentRevisions.executionLimits,
           instructions: agentRevisions.instructions,
           model: agentRevisions.model,
+          status: agents.status,
         })
         .from(agents)
         .innerJoin(
@@ -251,6 +257,10 @@ export class RunAdmissions {
 
       if (agent.currentRevision !== request.data.expectedRevision) {
         return this.#deniedRequest("revision_conflict");
+      }
+
+      if (agent.status !== "active") {
+        return this.#deniedRequest("agent_unavailable");
       }
 
       if (!runnableAgentModelSchema.safeParse(agent.model).success) {
@@ -554,16 +564,18 @@ export class RunAdmissions {
         return RUN_ADMISSION_ERROR;
       }
 
+      if (!this.#admissionConfigurationIsActive(transaction, row)) {
+        this.#expire(transaction, permit.data.runId);
+        return RUN_ADMISSION_ERROR;
+      }
+
       const configuration = this.#runtimeConfiguration(
         transaction,
         permit.data.agentId,
         permit.data.agentRevision,
       );
 
-      if (
-        configuration === undefined ||
-        !this.#reservationMatchesConfiguration(permit.data.budgetReservation, configuration)
-      ) {
+      if (configuration === undefined) {
         this.#expire(transaction, permit.data.runId);
         return RUN_ADMISSION_ERROR;
       }
@@ -611,16 +623,7 @@ export class RunAdmissions {
         return RUN_ADMISSION_ERROR;
       }
 
-      const configuration = this.#runtimeConfiguration(
-        transaction,
-        permit.data.agentId,
-        permit.data.agentRevision,
-      );
-
-      if (
-        configuration === undefined ||
-        !this.#reservationMatchesConfiguration(permit.data.budgetReservation, configuration)
-      ) {
+      if (!this.#admissionConfigurationIsActive(transaction, row)) {
         this.#expire(transaction, permit.data.runId);
         return RUN_ADMISSION_ERROR;
       }
@@ -682,7 +685,7 @@ export class RunAdmissions {
         row.idempotencyKey !== request.data.idempotencyKey ||
         row.promptDigest !== request.data.promptDigest ||
         JSON.stringify(row.budgetReservation) !== JSON.stringify(request.data.budgetReservation) ||
-        this.#runtimeConfiguration(transaction, row.agentId, row.agentRevision) === undefined
+        !this.#admissionConfigurationIsActive(transaction, row)
       ) {
         return RUN_ADMISSION_ERROR;
       }
@@ -740,10 +743,9 @@ export class RunAdmissions {
       JSON.stringify(row.budgetReservation) !== JSON.stringify(capability.data.budgetReservation) ||
       (capability.data.action === "resume" &&
         (row.clientId !== capability.data.clientId ||
-          this.#runtimeConfiguration(this.#database, row.agentId, row.agentRevision) ===
-            undefined)) ||
+          !this.#admissionConfigurationIsActive(this.#database, row))) ||
       (["approve_tool", "reject_tool"].includes(capability.data.action) &&
-        this.#runtimeConfiguration(this.#database, row.agentId, row.agentRevision) === undefined)
+        !this.#admissionConfigurationIsActive(this.#database, row))
     ) {
       return RUN_ADMISSION_ERROR;
     }
@@ -805,9 +807,35 @@ export class RunAdmissions {
       return;
     }
 
-    database.delete(toolApprovals).where(inArray(toolApprovals.runId, expiredRunIds)).run();
-    database.delete(toolExecutions).where(inArray(toolExecutions.runId, expiredRunIds)).run();
-    database.delete(runAdmissions).where(lte(runAdmissions.cleanupAt, currentTime)).run();
+    const unresolvedRunIds = new Set(
+      database
+        .select({ runId: toolExecutions.runId })
+        .from(toolExecutions)
+        .where(
+          and(inArray(toolExecutions.runId, expiredRunIds), eq(toolExecutions.status, "unknown")),
+        )
+        .all()
+        .map((row) => row.runId),
+    );
+    const retainedRunIds = [...unresolvedRunIds];
+    const safeToDeleteRunIds = expiredRunIds.filter((runId) => !unresolvedRunIds.has(runId));
+
+    if (retainedRunIds.length > 0) {
+      database
+        .update(runAdmissions)
+        .set({ cleanupAt: currentTime + RUN_ADMISSION_RETENTION_MS })
+        .where(inArray(runAdmissions.runId, retainedRunIds))
+        .run();
+    }
+
+    if (safeToDeleteRunIds.length > 0) {
+      database.delete(toolApprovals).where(inArray(toolApprovals.runId, safeToDeleteRunIds)).run();
+      database
+        .delete(toolExecutions)
+        .where(inArray(toolExecutions.runId, safeToDeleteRunIds))
+        .run();
+      database.delete(runAdmissions).where(inArray(runAdmissions.runId, safeToDeleteRunIds)).run();
+    }
   }
 
   #runtimeConfiguration(
@@ -822,6 +850,7 @@ export class RunAdmissions {
         executionLimits: agentRevisions.executionLimits,
         instructions: agentRevisions.instructions,
         model: agentRevisions.model,
+        status: agents.status,
       })
       .from(agents)
       .innerJoin(
@@ -831,7 +860,12 @@ export class RunAdmissions {
       .where(eq(agents.agentId, agentId))
       .get();
 
-    if (row === undefined || row.currentRevision !== revision || this.#objectName === undefined) {
+    if (
+      row === undefined ||
+      row.currentRevision !== revision ||
+      row.status !== "active" ||
+      this.#objectName === undefined
+    ) {
       return undefined;
     }
 
@@ -880,8 +914,7 @@ export class RunAdmissions {
 
       if (
         !parsed.success ||
-        row?.grantStatus !== "active" ||
-        row.connectionStatus !== "active" ||
+        row === undefined ||
         row.agentId !== agentId ||
         row.agentRevision !== agentRevision ||
         row.connectionId !== parsed.data.connectionId ||
@@ -893,7 +926,9 @@ export class RunAdmissions {
         return undefined;
       }
 
-      grants.push(parsed.data);
+      if (row.grantStatus === "active" && row.connectionStatus === "active") {
+        grants.push(parsed.data);
+      }
     }
 
     return grants;
@@ -944,17 +979,52 @@ export class RunAdmissions {
   #reservationMatchesConfiguration(
     reservation: RunBudgetReservation,
     configuration: CrewAgentRuntimeConfig,
+    activeToolGrants: readonly ComposioToolCapabilityGrant[],
   ): boolean {
     return (
       reservation.maxDurationSeconds <= configuration.executionLimits.maxDurationSeconds &&
       reservation.model === configuration.model &&
       reservation.maxOutputTokens <= configuration.executionLimits.maxModelTokens &&
       reservation.maxToolCalls <= configuration.executionLimits.maxToolCalls &&
-      reservation.toolGrants.length === configuration.capabilityGrants.length &&
+      reservation.toolGrants.length === activeToolGrants.length &&
       reservation.toolGrants.every(
-        (grant, index) => grant.grantId === configuration.capabilityGrants[index],
+        (grant, index) =>
+          JSON.stringify(grant) === JSON.stringify(activeToolGrants[index]) &&
+          configuration.capabilityGrants.includes(grant.grantId),
       ) &&
       reservation.maxTurns <= configuration.executionLimits.maxTurns
+    );
+  }
+
+  #admissionConfigurationIsActive(
+    database: RunAdmissionDatabase,
+    admission: StoredRunAdmission,
+  ): boolean {
+    const configuration = this.#runtimeConfiguration(
+      database,
+      admission.agentId,
+      admission.agentRevision,
+    );
+
+    if (configuration === undefined || this.#objectName === undefined) {
+      return false;
+    }
+
+    const activeToolGrants = this.#toolGrants(
+      database,
+      this.#objectName,
+      admission.agentId,
+      admission.agentRevision,
+      configuration.capabilityGrants,
+    );
+
+    return (
+      activeToolGrants !== undefined &&
+      this.#reservationMatchesConfiguration(
+        admission.budgetReservation,
+        configuration,
+        activeToolGrants,
+      )
     );
   }
 
