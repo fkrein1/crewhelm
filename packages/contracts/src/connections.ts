@@ -1,6 +1,7 @@
 import * as z from "zod";
 
-export const MAXIMUM_CONNECTIONS_PER_OWNER = 1_000;
+import { MAXIMUM_FLEET_LIST_ITEMS } from "./fleet-capacity.js";
+
 export const MAXIMUM_CONNECTION_LINK_REQUESTS_PER_OWNER = 5_000;
 export const CONNECTION_LINK_UNKNOWN_RECOVERY_MS = 30 * 60 * 1_000;
 
@@ -70,8 +71,17 @@ export const connectionSummarySchema = z.strictObject({
   status: connectionStatusSchema,
 });
 export const listConnectionsInputSchema = z.strictObject({
+  authorizationOutcome: connectionAuthorizationOutcomeSchema
+    .optional()
+    .describe("Return connections with this latest owner-local authorization outcome."),
   cursor: connectionIdSchema.optional(),
-  limit: z.number().int().min(1).max(50).default(25),
+  integration: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9_-]{0,127}$/, "Expected a Composio integration slug.")
+    .optional()
+    .describe("Return connections created for this enabled integration."),
+  limit: z.number().int().min(1).max(MAXIMUM_FLEET_LIST_ITEMS).default(25),
+  status: connectionStatusSchema.optional().describe("Return connections in this lifecycle state."),
 });
 
 const connectionLinkRequestErrorSchema = z.strictObject({
@@ -162,7 +172,7 @@ export const recordConnectionAuthorizationReturnResultSchema = z.discriminatedUn
 ]);
 export const listConnectionsResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
-    connections: z.array(connectionSummarySchema).max(50),
+    connections: z.array(connectionSummarySchema).max(MAXIMUM_FLEET_LIST_ITEMS),
     nextCursor: connectionIdSchema.nullable(),
     ok: z.literal(true),
   }),

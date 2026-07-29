@@ -1,4 +1,5 @@
 import {
+  AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
   AUTONOMY_WRITE_SCOPE,
   MAXIMUM_RUN_ADMISSIONS_PER_OWNER,
@@ -7,6 +8,7 @@ import {
   OWNER_WRITE_SCOPE,
   RUN_ADMISSION_LIFETIME_MS,
   RUNS_WRITE_SCOPE,
+  DEFAULT_FLEET_RUN_RETENTION_SECONDS,
 } from "@crewhelm/contracts";
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -16,6 +18,158 @@ import { digestRunPrompt } from "../../agent/admitted-runs/index.js";
 import { agentInput, agentUpdate, authorityFor, fixedRunAdmissionFailure } from "../testkit.js";
 
 describe("OwnerControlPlane runs", () => {
+  it("enforces revisioned concurrent-run capacity and snapshots configured retention", async () => {
+    const authority = await authorityFor("run-configured-capacity", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const current = await stub.getFleetConfiguration(authority, { target: { kind: "fleet" } });
+
+    if (!current.ok) {
+      throw new Error("Expected fleet configuration.");
+    }
+
+    const runRetentionSeconds = DEFAULT_FLEET_RUN_RETENTION_SECONDS + 60 * 60;
+
+    await expect(
+      stub.configureFleetConfiguration(authority, {
+        expectedRevision: current.configuration.revision,
+        idempotencyKey: "run-configured-capacity-limit",
+        mode: "apply",
+        patch: {
+          capacity: { maxConcurrentRuns: 1 },
+          retention: { runSeconds: runRetentionSeconds },
+        },
+        target: { kind: "fleet" },
+      }),
+    ).resolves.toMatchObject({ applied: true, ok: true });
+    const created = await stub.createAgent(authority, agentInput("run-configured-capacity-agent"));
+
+    if (!created.ok) {
+      throw new Error("Expected configured-capacity Agent.");
+    }
+
+    const firstPrompt = "Occupy the configured concurrent run slot.";
+    const first = await stub.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "run-configured-capacity-first",
+      promptCharacters: firstPrompt.length,
+      promptDigest: await digestRunPrompt(firstPrompt),
+    });
+
+    expect(first).toMatchObject({
+      ok: true,
+      permit: {
+        budgetReservation: { retentionSeconds: runRetentionSeconds },
+      },
+      state: "issued",
+    });
+    const secondPrompt = "Exceed the configured concurrent run slot.";
+    await expect(
+      stub.createRunAdmission(authority, {
+        agentId: created.agent.id,
+        expectedRevision: created.agent.revision,
+        idempotencyKey: "run-configured-capacity-second",
+        promptCharacters: secondPrompt.length,
+        promptDigest: await digestRunPrompt(secondPrompt),
+      }),
+    ).resolves.toEqual(fixedRunAdmissionFailure("admission_limit_exceeded"));
+  });
+
+  it("filters fleet-wide run summaries by Agent, status, trigger, and creation time", async () => {
+    const authority = await authorityFor("run-list-filters", [
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("run-list-filters-agent"));
+
+    if (!created.ok) {
+      throw new Error("Expected run-list filter Agent.");
+    }
+
+    const createdAfter = new Date(Date.now() - 1_000).toISOString();
+    const admissions = await Promise.all(
+      (["manual", "schedule"] as const).map(async (trigger) => {
+        const prompt = `Create the ${trigger} list fixture.`;
+
+        return stub.createRunAdmission(authority, {
+          agentId: created.agent.id,
+          expectedRevision: created.agent.revision,
+          idempotencyKey: `run-list-filter-${trigger}`,
+          promptCharacters: prompt.length,
+          promptDigest: await digestRunPrompt(prompt),
+          trigger,
+        });
+      }),
+    );
+    const createdBefore = new Date(Date.now() + 1_000).toISOString();
+
+    expect(admissions.every((admission) => admission.ok)).toBe(true);
+    await expect(
+      stub.listAgentRuns(authority, {
+        createdAfter,
+        createdBefore,
+        status: "queued",
+        trigger: "schedule",
+      }),
+    ).resolves.toMatchObject({
+      nextCursor: null,
+      ok: true,
+      runs: [
+        {
+          agentId: created.agent.id,
+          status: "queued",
+          trigger: "schedule",
+        },
+      ],
+    });
+    const firstPage = await stub.listAgentRuns(authority, { limit: 1 });
+
+    if (!firstPage.ok || firstPage.nextCursor === null) {
+      throw new Error("Expected a second fleet-wide run page.");
+    }
+
+    const cursorTrigger = firstPage.runs[0]?.trigger;
+
+    if (cursorTrigger === undefined) {
+      throw new Error("Expected a cursor run.");
+    }
+
+    await expect(
+      stub.listAgentRuns(authority, {
+        cursor: firstPage.nextCursor,
+        trigger: cursorTrigger === "manual" ? "schedule" : "manual",
+      }),
+    ).resolves.toEqual({
+      error: { code: "invalid_request", message: "Run request denied." },
+      ok: false,
+    });
+    await expect(
+      stub.listAgentRuns(authority, {
+        agentId: created.agent.id,
+        cursor: firstPage.nextCursor,
+        limit: 1,
+      }),
+    ).resolves.toMatchObject({ nextCursor: null, ok: true, runs: [{}] });
+    await expect(
+      stub.listAgentRuns(authority, {
+        createdAfter: createdBefore,
+        createdBefore: createdAfter,
+      }),
+    ).resolves.toEqual({
+      error: { code: "invalid_request", message: "Run request denied." },
+      ok: false,
+    });
+  });
+
   it("issues, rotates, verifies, redeems, and audits an opaque run admission durably", async () => {
     const authority = await authorityFor("230", [
       OWNER_WRITE_SCOPE,

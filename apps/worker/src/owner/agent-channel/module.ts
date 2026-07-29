@@ -22,6 +22,7 @@ import {
   type AgentInboxDeferredReason,
   type AgentInboxResult,
   type DecideRunToolApprovalResult,
+  type FleetConfigurationData,
   type InspectRunResult,
   type ListAgentRunsResult,
   type ListRunToolApprovalsResult,
@@ -160,17 +161,28 @@ export class AgentChannel {
     crewAgents: DurableObjectNamespace<CrewAgent>,
     admissions: RunAdmissions,
     executionStore: ToolExecutions,
+    currentFleetConfiguration: () => FleetConfigurationData,
   ) {
     this.#admissions = admissions;
     this.#capabilities = new RunReceiverCapabilities(objectName, admissions);
     this.#crewAgents = crewAgents;
     this.#database = database;
-    this.#inbox = new AgentInbox(objectName, database);
+    this.#inbox = new AgentInbox(objectName, database, currentFleetConfiguration);
     this.#toolExecutions = executionStore;
   }
 
   inbox(authority: OwnerAuthority, input: unknown): AgentInboxResult {
     return this.#inbox.handle(authority, input);
+  }
+
+  usage(): {
+    inbox: ReturnType<AgentInbox["usage"]>;
+    runs: { active: number };
+  } {
+    return {
+      inbox: this.#inbox.usage(),
+      runs: { active: this.#admissions.activeCount() },
+    };
   }
 
   recordInboxRun(input: unknown): Promise<RecordAgentInboxRunResult> {
@@ -663,71 +675,34 @@ export class AgentChannel {
     });
   }
 
-  async listRuns(authority: OwnerAuthority, input: unknown): Promise<ListAgentRunsResult> {
+  async listRuns(_authority: OwnerAuthority, input: unknown): Promise<ListAgentRunsResult> {
     const request = listAgentRunsInputSchema.safeParse(input);
 
     if (!request.success) {
       return deniedListAgentRuns("invalid_request");
     }
 
-    const agentExists =
+    if (
+      request.data.agentId !== undefined &&
       this.#database
         .select({ agentId: agents.agentId })
         .from(agents)
         .where(eq(agents.agentId, request.data.agentId))
-        .get() !== undefined;
-
-    if (!agentExists) {
+        .get() === undefined
+    ) {
       return deniedListAgentRuns("run_not_found");
     }
 
-    const page = this.#admissions.listForAgent(
-      request.data.agentId,
-      request.data.cursor,
-      request.data.limit,
-    );
+    const page = this.#admissions.list(request.data);
 
     if (page === undefined) {
       return deniedListAgentRuns("invalid_request");
     }
 
-    const runs = await Promise.all(
-      page.rows.map(async (admission) => {
-        const inspected = await this.inspect(authority, { runId: admission.runId });
-
-        if (inspected.ok) {
-          return inspected.run;
-        }
-
-        const cancelled = admission.cancelledAt !== null;
-        const status: Run["status"] = cancelled
-          ? "cancelled"
-          : admission.cancellationRequestedAt !== null
-            ? "cancelling"
-            : admission.status === "issued"
-              ? "queued"
-              : admission.status === "expired"
-                ? "failed"
-                : "running";
-
-        return {
-          agentId: admission.agentId,
-          agentRevision: admission.agentRevision,
-          ...(cancelled
-            ? { completedAt: new Date(admission.cancelledAt ?? admission.createdAt).toISOString() }
-            : {}),
-          createdAt: new Date(admission.createdAt).toISOString(),
-          runId: admission.runId,
-          status,
-          trigger: admission.trigger,
-        };
-      }),
-    );
-
     return listAgentRunsResultSchema.parse({
       nextCursor: page.nextCursor,
       ok: true,
-      runs,
+      runs: page.runs,
     });
   }
 

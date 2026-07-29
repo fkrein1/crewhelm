@@ -3,7 +3,9 @@ import {
   AGENTS_WRITE_SCOPE,
   AUTONOMY_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
-  MAXIMUM_AGENTS_PER_OWNER,
+  DEFAULT_FLEET_MAX_AGENTS,
+  MAXIMUM_FLEET_AGENTS,
+  MAXIMUM_FLEET_LIST_RESPONSE_BYTES,
   MAXIMUM_REVISIONS_PER_AGENT,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
@@ -76,9 +78,7 @@ describe("OwnerControlPlane agents", () => {
     await expect(stub.listAgents(authority, {})).resolves.toEqual({
       agents: [
         {
-          capabilityGrants: [],
           createdAt: created.agent.createdAt,
-          executionLimits: input.executionLimits,
           id: created.agent.id,
           model: input.model,
           name: input.name,
@@ -542,15 +542,11 @@ describe("OwnerControlPlane agents", () => {
       ok: true,
       revisions: [
         {
-          capabilityGrants: [],
-          createdAt: created.agent.createdAt,
-          executionLimits: created.agent.executionLimits,
           id: created.agent.id,
           model: created.agent.model,
           name: created.agent.name,
           revisedAt: created.agent.createdAt,
           revision: 1,
-          status: "active",
         },
       ],
     });
@@ -941,7 +937,7 @@ describe("OwnerControlPlane agents", () => {
   it("bounds persistent Agent state and serializes concurrent creation at the ceiling", async () => {
     const authority = await authorityFor("209", [OWNER_READ_SCOPE, OWNER_WRITE_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
-    const inputs = Array.from({ length: MAXIMUM_AGENTS_PER_OWNER - 1 }, (_, index) =>
+    const inputs = Array.from({ length: DEFAULT_FLEET_MAX_AGENTS - 1 }, (_, index) =>
       agentInput(`limit-${index}`, `Limit Agent ${index}`),
     );
     const initial = await Promise.all(inputs.map((input) => stub.createAgent(authority, input)));
@@ -981,11 +977,41 @@ describe("OwnerControlPlane agents", () => {
           .one(),
       ),
     ).resolves.toEqual({
-      agents: MAXIMUM_AGENTS_PER_OWNER,
-      audit_events: MAXIMUM_AGENTS_PER_OWNER,
-      creations: MAXIMUM_AGENTS_PER_OWNER,
-      revisions: MAXIMUM_AGENTS_PER_OWNER,
+      agents: DEFAULT_FLEET_MAX_AGENTS,
+      audit_events: DEFAULT_FLEET_MAX_AGENTS,
+      creations: DEFAULT_FLEET_MAX_AGENTS,
+      revisions: DEFAULT_FLEET_MAX_AGENTS,
     });
+  });
+
+  it("enforces the current revisioned Agent capacity", async () => {
+    const authority = await authorityFor("agent-configured-capacity", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const current = await stub.getFleetConfiguration(authority, { target: { kind: "fleet" } });
+
+    if (!current.ok) {
+      throw new Error("Expected fleet configuration.");
+    }
+
+    await expect(
+      stub.configureFleetConfiguration(authority, {
+        expectedRevision: current.configuration.revision,
+        idempotencyKey: "agent-configured-capacity-limit",
+        mode: "apply",
+        patch: { capacity: { maxAgents: 1 } },
+        target: { kind: "fleet" },
+      }),
+    ).resolves.toMatchObject({ applied: true, ok: true });
+    await expect(
+      stub.createAgent(authority, agentInput("agent-configured-capacity-first")),
+    ).resolves.toMatchObject({ created: true, ok: true });
+    await expect(
+      stub.createAgent(authority, agentInput("agent-configured-capacity-second")),
+    ).resolves.toEqual(fixedAgentFailure("agent_limit_exceeded"));
   });
 
   it("enforces read and write scopes at the Durable Object boundary", async () => {
@@ -1090,5 +1116,110 @@ describe("OwnerControlPlane agents", () => {
     }
     const ids = [...firstPage.agents, ...secondPage.agents].map((agent) => agent.id);
     expect(new Set(ids).size).toBe(3);
+  });
+
+  it("filters and deterministically paginates a 1,000-Agent fleet within the response budget", async () => {
+    const authority = await authorityFor("fleet-scale-1000", [
+      OWNER_READ_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const current = await stub.getFleetConfiguration(authority, { target: { kind: "fleet" } });
+
+    if (!current.ok) {
+      throw new Error("Expected fleet configuration.");
+    }
+
+    await expect(
+      stub.configureFleetConfiguration(authority, {
+        expectedRevision: current.configuration.revision,
+        idempotencyKey: "fleet-scale-capacity",
+        mode: "apply",
+        patch: { capacity: { maxAgents: MAXIMUM_FLEET_AGENTS } },
+        target: { kind: "fleet" },
+      }),
+    ).resolves.toMatchObject({ applied: true, ok: true });
+
+    const firstModel = "@cf/meta/llama-4-scout-17b-16e-instruct";
+    const secondModel = "@cf/zai-org/glm-4.7-flash";
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.transactionSync(() => {
+        for (let index = 0; index < MAXIMUM_FLEET_AGENTS; index += 1) {
+          const suffix = index.toString(16).padStart(12, "0");
+          const agentId = `agent_00000000-0000-4000-8000-${suffix}`;
+          const status = index % 2 === 0 ? "active" : "disabled";
+          const createdAt = index + 1;
+
+          state.storage.sql.exec(
+            `INSERT INTO agents
+               (agent_id, current_revision, status, created_at, disabled_at)
+             VALUES (?, 1, ?, ?, ?)`,
+            agentId,
+            status,
+            createdAt,
+            status === "disabled" ? createdAt : null,
+          );
+          state.storage.sql.exec(
+            `INSERT INTO agent_revisions
+               (agent_id, revision, name, model, instructions, capability_grants,
+                execution_limits, created_at)
+             VALUES (?, 1, ?, ?, 'Fleet fixture', '[]', ?, ?)`,
+            agentId,
+            `${String(index).padStart(4, "0")}-${"N".repeat(75)}`,
+            index % 2 === 0 ? firstModel : secondModel,
+            JSON.stringify({
+              maxDurationSeconds: 300,
+              maxModelTokens: 20_000,
+              maxToolCalls: 0,
+              maxTurns: 4,
+            }),
+            createdAt,
+          );
+        }
+      });
+    });
+
+    const ids: string[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const page = await stub.listAgents(authority, { cursor, limit: 25 });
+
+      if (!page.ok) {
+        throw new Error("Expected fleet page.");
+      }
+
+      expect(new TextEncoder().encode(JSON.stringify(page)).byteLength).toBeLessThanOrEqual(
+        MAXIMUM_FLEET_LIST_RESPONSE_BYTES,
+      );
+      ids.push(...page.agents.map((agent) => agent.id));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+
+    expect(ids).toHaveLength(MAXIMUM_FLEET_AGENTS);
+    expect(new Set(ids).size).toBe(MAXIMUM_FLEET_AGENTS);
+    expect(ids).toEqual(ids.toSorted());
+    await expect(stub.listAgents(authority, { status: "active" })).resolves.toMatchObject({
+      agents: expect.arrayContaining([expect.objectContaining({ status: "active" })]),
+      ok: true,
+    });
+    await expect(stub.listAgents(authority, { model: secondModel })).resolves.toMatchObject({
+      agents: expect.arrayContaining([expect.objectContaining({ model: secondModel })]),
+      ok: true,
+    });
+    await expect(stub.listAgents(authority, { name: "nnnn" })).resolves.toMatchObject({
+      agents: expect.arrayContaining([
+        expect.objectContaining({ name: expect.stringContaining("N") }),
+      ]),
+      ok: true,
+    });
+    await expect(stub.status(authority)).resolves.toMatchObject({
+      ok: true,
+      status: {
+        capacity: { maxAgents: MAXIMUM_FLEET_AGENTS },
+        usage: { agents: { active: 500, total: MAXIMUM_FLEET_AGENTS } },
+      },
+    });
   });
 });

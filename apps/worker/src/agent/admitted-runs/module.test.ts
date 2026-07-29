@@ -605,6 +605,68 @@ describe("CrewAgent admitted execution", () => {
     );
   });
 
+  it("lists compact owner-local run summaries without inspecting the Agent Durable Object", async () => {
+    const authority = await authorityFor("crew-agent-owner-local-list");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("crew-agent-owner-local-list-create"),
+    );
+
+    if (!created.ok) {
+      throw new Error("Expected owner-local list fixture Agent.");
+    }
+
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-owner-local-list-run",
+      prompt: "Complete this run before its owner-local summary is listed.",
+    });
+
+    if (!started.ok) {
+      throw new Error("Expected owner-local list fixture run.");
+    }
+
+    await completedRun(controlPlane, authority, started.run.runId);
+    const agent = crewAgentNamespace().getByName(
+      crewAgentObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+      }),
+    );
+    const before = await runInDurableObject(agent, (instance) =>
+      asTestCrewAgent(instance).inspectionCountForTest(),
+    );
+    const listed = await controlPlane.listAgentRuns(authority, {
+      agentId: created.agent.id,
+      status: "completed",
+    });
+    const afterList = await runInDurableObject(agent, (instance) =>
+      asTestCrewAgent(instance).inspectionCountForTest(),
+    );
+
+    expect(listed).toMatchObject({
+      ok: true,
+      runs: [
+        {
+          agentId: created.agent.id,
+          runId: started.run.runId,
+          status: "completed",
+        },
+      ],
+    });
+    expect(JSON.stringify(listed)).not.toContain("output");
+    expect(afterList).toBe(before);
+
+    await expect(
+      controlPlane.inspectRun(authority, { runId: started.run.runId }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      runInDurableObject(agent, (instance) => asTestCrewAgent(instance).inspectionCountForTest()),
+    ).resolves.toBe(before + 1);
+  });
+
   it("routes an exact admitted read tool through ToolGate and records its permit", async () => {
     const authority = await authorityFor("crew-agent-611");
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);

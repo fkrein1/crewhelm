@@ -156,6 +156,28 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
     "patch": {
       "type": "object",
       "properties": {
+        "capacity": {
+          "type": "object",
+          "properties": {
+            "maxAgents": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "maxConcurrentRuns": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "maxConnections": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          },
+          "additionalProperties": false,
+          "description": "Fleet resource capacity within Crewhelm's internal safety ceilings."
+        },
         "execution": {
           "type": "object",
           "properties": {
@@ -257,6 +279,23 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
           },
           "additionalProperties": false,
           "description": "Fleet model selection defaults and allowlist."
+        },
+        "retention": {
+          "type": "object",
+          "properties": {
+            "inboxSeconds": {
+              "type": "integer",
+              "minimum": 3600,
+              "maximum": 31536000
+            },
+            "runSeconds": {
+              "type": "integer",
+              "minimum": 3600,
+              "maximum": 31536000
+            }
+          },
+          "additionalProperties": false,
+          "description": "Run-detail and operational-inbox retention in seconds."
         },
         "schedules": {
           "type": "object",
@@ -949,7 +988,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
       "default": 25,
       "type": "integer",
       "minimum": 1,
-      "maximum": 50
+      "maximum": 25
     }
   },
   "required": [
@@ -965,7 +1004,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 **List Crewhelm Agent runs**
 
-List recent manual and scheduled runs for one authenticated-owner Crewhelm Agent.
+List compact owner-local run summaries across the fleet or for one Agent, with status, trigger, and creation-time filters.
 
 Attributes: read-only, non-destructive, idempotent, closed-world.
 
@@ -978,8 +1017,21 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
   "type": "object",
   "properties": {
     "agentId": {
+      "description": "Return runs for one exact Agent.",
       "type": "string",
       "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "createdAfter": {
+      "description": "Return runs created at or after this time.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+    },
+    "createdBefore": {
+      "description": "Return runs created at or before this time.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
     },
     "cursor": {
       "type": "string",
@@ -990,11 +1042,28 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
       "type": "integer",
       "minimum": 1,
       "maximum": 25
+    },
+    "status": {
+      "description": "Return runs in this owner-local projected state.",
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "cancelling",
+        "completed",
+        "cancelled",
+        "failed"
+      ]
+    },
+    "trigger": {
+      "description": "Return manual or scheduled runs.",
+      "type": "string",
+      "enum": [
+        "manual",
+        "schedule"
+      ]
     }
   },
-  "required": [
-    "agentId"
-  ],
   "additionalProperties": false
 }
 ```
@@ -1025,7 +1094,28 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
       "default": 25,
       "type": "integer",
       "minimum": 1,
-      "maximum": 50
+      "maximum": 25
+    },
+    "model": {
+      "description": "Return Agents using this exact model.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^(?:@cf\\/)?[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "name": {
+      "description": "Return Agents whose names contain this value, case-insensitively for ASCII characters.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "status": {
+      "description": "Return Agents in this lifecycle state.",
+      "type": "string",
+      "enum": [
+        "active",
+        "disabled"
+      ]
     }
   },
   "additionalProperties": false
@@ -1050,15 +1140,41 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
+    "authorizationOutcome": {
+      "description": "Return connections with this latest owner-local authorization outcome.",
+      "type": "string",
+      "enum": [
+        "pending",
+        "returned",
+        "failed",
+        "expired",
+        "untracked"
+      ]
+    },
     "cursor": {
       "type": "string",
       "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "integration": {
+      "description": "Return connections created for this enabled integration.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$"
     },
     "limit": {
       "default": 25,
       "type": "integer",
       "minimum": 1,
-      "maximum": 50
+      "maximum": 25
+    },
+    "status": {
+      "description": "Return connections in this lifecycle state.",
+      "type": "string",
+      "enum": [
+        "initiated",
+        "active",
+        "revoked",
+        "unavailable"
+      ]
     }
   },
   "additionalProperties": false
@@ -1360,7 +1476,7 @@ Attributes: write, non-destructive, idempotent, closed-world.
 
 **Crewhelm status**
 
-Return the authenticated owner's Crewhelm control-plane status.
+Return a cheap owner-local fleet dashboard with active usage, inbox counts, and configured capacity.
 
 Attributes: read-only, non-destructive, idempotent, closed-world.
 

@@ -71,6 +71,8 @@ export {
 } from "./recovery-tools.js";
 
 const MAX_MCP_BODY_BYTES = 64 * 1024;
+export const MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES = 64 * 1_024;
+export const MCP_TOOL_COUNT_BUDGET = 30;
 const MCP_SERVER_INFO = {
   name: "crewhelm",
   version: "0.1.0",
@@ -197,7 +199,8 @@ function createMcpServer(
         openWorldHint: false,
         readOnlyHint: true,
       },
-      description: "Return the authenticated owner's Crewhelm control-plane status.",
+      description:
+        "Return a cheap owner-local fleet dashboard with active usage, inbox counts, and configured capacity.",
       inputSchema: z.strictObject({}),
       title: "Crewhelm status",
     },

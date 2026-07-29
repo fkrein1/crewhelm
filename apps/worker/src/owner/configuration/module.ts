@@ -10,7 +10,9 @@ import {
   RUNNABLE_AGENT_MODELS,
   configureFleetConfigurationInputSchema,
   configureFleetConfigurationResultSchema,
+  defaultFleetCapacity,
   defaultFleetExecutionLimits,
+  defaultFleetRetention,
   fleetConfigurationDataSchema,
   fleetConfigurationSchema,
   getFleetConfigurationInputSchema,
@@ -69,9 +71,11 @@ function mergeConfiguration(
   patch: FleetConfigurationPatch,
 ): FleetConfigurationData | null {
   const candidate = fleetConfigurationDataSchema.safeParse({
+    capacity: { ...current.capacity, ...patch.capacity },
     execution: { ...current.execution, ...patch.execution },
     integrations: { ...current.integrations, ...patch.integrations },
     models: { ...current.models, ...patch.models },
+    retention: { ...current.retention, ...patch.retention },
     schedules: { ...current.schedules, ...patch.schedules },
   });
 
@@ -296,6 +300,7 @@ export class FleetConfigurations {
 
   #defaultData(): FleetConfigurationData {
     return fleetConfigurationDataSchema.parse({
+      capacity: defaultFleetCapacity,
       execution: defaultFleetExecutionLimits,
       integrations: {
         callsPerDay: DEFAULT_FLEET_INTEGRATION_CALLS_PER_DAY,
@@ -309,6 +314,7 @@ export class FleetConfigurations {
         allowed: [...RUNNABLE_AGENT_MODELS].toSorted(),
         default: RUNNABLE_AGENT_MODELS[0],
       },
+      retention: defaultFleetRetention,
       schedules: {
         minimumIntervalSeconds: DEFAULT_FLEET_MINIMUM_SCHEDULE_INTERVAL_SECONDS,
       },
