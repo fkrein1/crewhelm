@@ -601,7 +601,10 @@ describe("public OAuth to MCP integration", () => {
     expect(actionsScript).toContain('submittingButton.setAttribute("aria-busy", "true")');
     expect(actionsScript).not.toContain("event.submitter");
     expect(actionsScript).toContain("navigationLink.href = result.redirectUrl");
-    expect(actionsScript).not.toContain("window.location.assign(result.redirectUrl)");
+    expect(actionsScript).toContain("window.location.assign(result.redirectUrl)");
+    expect(actionsScript.indexOf("navigationLink.hidden = false")).toBeLessThan(
+      actionsScript.indexOf("window.location.assign(result.redirectUrl)"),
+    );
     const speculativeGetResponse = await request(workerEnv, "/oauth/consent/decision");
     const unauthenticatedApproveResponse = await request(workerEnv, "/oauth/consent", {
       body: new URLSearchParams({ decision: "approve", oauth_query: consentQuery }),

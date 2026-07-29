@@ -256,6 +256,11 @@ consentForms.forEach((consentForm) => {
         form.hidden = true;
       });
       navigationLink.focus();
+      try {
+        window.location.assign(result.redirectUrl);
+      } catch {
+        navigationLink.focus();
+      }
     } catch {
       window.location.assign("/oauth/error");
     }
