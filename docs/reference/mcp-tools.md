@@ -97,6 +97,56 @@ Attributes: write, non-destructive, idempotent, closed-world.
 
 </details>
 
+## `crewhelm_batch_disable_agents`
+
+**Disable a bounded Crewhelm Agent batch**
+
+Disable up to 25 exact authenticated-owner Crewhelm Agent revisions and return one ordered compact receipt per Agent.
+
+Attributes: write, destructive, idempotent, closed-world.
+
+<details>
+<summary>Input schema</summary>
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "agents": {
+      "minItems": 1,
+      "maxItems": 25,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string",
+            "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "agentId",
+          "expectedRevision"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "agents"
+  ],
+  "additionalProperties": false
+}
+```
+
+</details>
+
 ## `crewhelm_cancel_run`
 
 **Cancel Crewhelm run**

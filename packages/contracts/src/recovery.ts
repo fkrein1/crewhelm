@@ -1,8 +1,15 @@
 import * as z from "zod";
 
-import { capabilityGrantIdSchema, agentIdSchema } from "./control-plane.js";
+import {
+  agentIdSchema,
+  agentRevisionNumberSchema,
+  capabilityGrantIdSchema,
+} from "./control-plane.js";
 import { connectionIdSchema } from "./connections.js";
 import { runIdSchema, toolCallIdSchema } from "./capabilities.js";
+
+export const MAXIMUM_BATCH_AGENT_DISABLE_ITEMS = 25;
+export const MAXIMUM_BATCH_AGENT_DISABLE_RESPONSE_BYTES = 8 * 1_024;
 
 export const changeAuthorityInputSchema = z.discriminatedUnion("target", [
   z.strictObject({
@@ -16,6 +23,50 @@ export const changeAuthorityInputSchema = z.discriminatedUnion("target", [
   z.strictObject({
     grantId: capabilityGrantIdSchema,
     target: z.literal("capability"),
+  }),
+]);
+
+export const batchDisableAgentsInputSchema = z.strictObject({
+  agents: z
+    .array(
+      z.strictObject({
+        agentId: agentIdSchema,
+        expectedRevision: agentRevisionNumberSchema,
+      }),
+    )
+    .min(1)
+    .max(MAXIMUM_BATCH_AGENT_DISABLE_ITEMS)
+    .refine(
+      (agents) => new Set(agents.map((agent) => agent.agentId)).size === agents.length,
+      "Expected unique Agent IDs.",
+    ),
+});
+
+export const batchDisableAgentReceiptSchema = z.strictObject({
+  agentId: agentIdSchema,
+  expectedRevision: agentRevisionNumberSchema,
+  outcome: z.enum(["disabled", "already_disabled", "agent_not_found", "revision_conflict"]),
+});
+
+const batchDisableAgentsErrorSchema = z.strictObject({
+  code: z.enum([
+    "incompatible_schema",
+    "insufficient_scope",
+    "invalid_authority",
+    "invalid_request",
+    "owner_mismatch",
+  ]),
+  message: z.literal("Batch Agent disable request denied."),
+});
+
+export const batchDisableAgentsResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    ok: z.literal(true),
+    receipts: z.array(batchDisableAgentReceiptSchema).max(MAXIMUM_BATCH_AGENT_DISABLE_ITEMS),
+  }),
+  z.strictObject({
+    error: batchDisableAgentsErrorSchema,
+    ok: z.literal(false),
   }),
 ]);
 
@@ -91,6 +142,9 @@ export const reconcileToolExecutionResultSchema = z.discriminatedUnion("ok", [
   }),
 ]);
 
+export type BatchDisableAgentReceipt = z.infer<typeof batchDisableAgentReceiptSchema>;
+export type BatchDisableAgentsInput = z.infer<typeof batchDisableAgentsInputSchema>;
+export type BatchDisableAgentsResult = z.infer<typeof batchDisableAgentsResultSchema>;
 export type ChangeAuthorityInput = z.infer<typeof changeAuthorityInputSchema>;
 export type ChangeAuthorityResult = z.infer<typeof changeAuthorityResultSchema>;
 export type ReconcileToolExecutionResult = z.infer<typeof reconcileToolExecutionResultSchema>;

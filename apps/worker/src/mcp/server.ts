@@ -66,6 +66,7 @@ export {
   MCP_GET_AGENT_SCHEDULE_TOOL_NAME,
 } from "./schedule-tools.js";
 export {
+  MCP_BATCH_DISABLE_AGENTS_TOOL_NAME,
   MCP_RECONCILE_TOOL_EXECUTION_TOOL_NAME,
   MCP_REVOKE_AUTHORITY_TOOL_NAME,
 } from "./recovery-tools.js";

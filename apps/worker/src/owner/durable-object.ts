@@ -3,6 +3,7 @@ import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
   AUTONOMY_WRITE_SCOPE,
+  batchDisableAgentsInputSchema,
   CONNECTION_CONFIGS_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
@@ -18,6 +19,7 @@ import {
   type AgentInboxDeferredReason,
   type AgentInboxResult,
   type CancelRunResult,
+  type BatchDisableAgentsResult,
   type CreateAgentResult,
   type CreateConnectionLinkResult,
   type EnableIntegrationResult,
@@ -83,7 +85,11 @@ import { FleetConfigurations, deniedFleetConfiguration } from "./configuration/i
 import { CONTROL_PLANE_SCHEMA_VERSION, migrateControlPlane } from "./migrations.js";
 import { controlPlane, controlPlaneSchema, type ControlPlaneDatabaseSchema } from "./schema.js";
 
-import { AuthorityControls, deniedAuthorityControl } from "./recovery/index.js";
+import {
+  AuthorityControls,
+  deniedAuthorityControl,
+  deniedBatchAgentDisable,
+} from "./recovery/index.js";
 import {
   RunAdmissions,
   ToolExecutions,
@@ -350,6 +356,20 @@ export class OwnerControlPlane extends DurableObject {
     return authorization.ok
       ? this.#authorityControls.change(authorization.authority, request.data)
       : deniedAuthorityControl(authorization.code);
+  }
+
+  batchDisableAgents(authorityInput: unknown, input: unknown): BatchDisableAgentsResult {
+    const request = batchDisableAgentsInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return deniedBatchAgentDisable("invalid_request");
+    }
+
+    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#authorityControls.disableAgents(authorization.authority, request.data)
+      : deniedBatchAgentDisable(authorization.code);
   }
 
   reconcileToolExecution(authorityInput: unknown, input: unknown): ReconcileToolExecutionResult {
