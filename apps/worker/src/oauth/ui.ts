@@ -196,7 +196,6 @@ button:disabled,
 `.trim();
 const OAUTH_ACTIONS_SCRIPT = `
 const consentForms = document.querySelectorAll("[data-consent-form]");
-const navigationLink = document.querySelector("[data-navigation-link]");
 const navigationStarts = document.querySelectorAll("[data-navigation-start]");
 
 navigationStarts.forEach((link) => {
@@ -216,9 +215,7 @@ navigationStarts.forEach((link) => {
 });
 
 consentForms.forEach((consentForm) => {
-  consentForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-
+  consentForm.addEventListener("submit", () => {
     const submittingButton = consentForm.querySelector("button[type=submit]");
     const buttons = document.querySelectorAll("[data-consent-form] button");
     buttons.forEach((button) => {
@@ -230,39 +227,6 @@ consentForms.forEach((consentForm) => {
       if (pendingLabel) {
         submittingButton.textContent = pendingLabel;
       }
-    }
-
-    try {
-      const response = await fetch(consentForm.action, {
-        body: new URLSearchParams(new FormData(consentForm)),
-        headers: { accept: "application/json" },
-        method: "POST",
-      });
-      const result = await response.json();
-
-      if (
-        !response.ok ||
-        typeof result !== "object" ||
-        result === null ||
-        typeof result.redirectUrl !== "string" ||
-        navigationLink?.tagName !== "A"
-      ) {
-        throw new Error("Authorization failed.");
-      }
-
-      navigationLink.href = result.redirectUrl;
-      navigationLink.hidden = false;
-      consentForms.forEach((form) => {
-        form.hidden = true;
-      });
-      navigationLink.focus();
-      try {
-        window.location.assign(result.redirectUrl);
-      } catch {
-        navigationLink.focus();
-      }
-    } catch {
-      window.location.assign("/oauth/error");
     }
   });
 });
@@ -281,12 +245,13 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
-function htmlResponse(body: string): Response {
+function htmlResponse(body: string, formActionOrigin?: string): Response {
+  const formAction = formActionOrigin === undefined ? "'self'" : `'self' ${formActionOrigin}`;
+
   return new Response(body, {
     headers: {
       "cache-control": "no-store",
-      "content-security-policy":
-        "default-src 'none'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; script-src 'self'; style-src 'self'",
+      "content-security-policy": `default-src 'none'; base-uri 'none'; connect-src 'self'; form-action ${formAction}; frame-ancestors 'none'; script-src 'self'; style-src 'self'`,
       "content-type": "text/html; charset=utf-8",
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
@@ -556,7 +521,6 @@ function consentPage(
           <input type="hidden" name="decision" value="deny">
           <button class="secondary" type="submit" data-pending-label="Denying…">Deny</button>
         </form>
-        <a class="button primary" data-navigation-link hidden>Continue to client</a>
       </div>
     </main>
   </body>
@@ -649,6 +613,8 @@ async function showConsent(context: WorkerContext, createAuth: AuthFactory): Pro
       return authorizationDenied();
     }
 
+    const redirectOrigin = new URL(parsedQuery.data.redirect_uri).origin;
+
     return htmlResponse(
       consentPage(
         query,
@@ -656,9 +622,10 @@ async function showConsent(context: WorkerContext, createAuth: AuthFactory): Pro
           id: client.data.client_id,
           name: client.data.client_name ?? "An MCP client",
         },
-        new URL(parsedQuery.data.redirect_uri).origin,
+        redirectOrigin,
         parsedQuery.data.scope,
       ),
+      redirectOrigin,
     );
   } catch {
     return authorizationUnavailable("consent");

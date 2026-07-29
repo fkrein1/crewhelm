@@ -568,6 +568,12 @@ describe("public OAuth to MCP integration", () => {
     const consentQuery = htmlAttribute(consentPage, "oauth_query");
 
     expect(consentPageResponse.status).toBe(200);
+    expect(consentPageResponse.headers.get("content-security-policy")).toContain(
+      "form-action 'self' https://client.example",
+    );
+    expect(consentPageResponse.headers.get("content-security-policy")).not.toContain(
+      "attacker.example",
+    );
     expect(consentPage).toContain('<script src="/oauth/actions.js" defer></script>');
     expect(consentPage.match(/data-consent-form/g)).toHaveLength(2);
     expect(consentPage).toContain('<input type="hidden" name="decision" value="approve">');
@@ -578,9 +584,8 @@ describe("public OAuth to MCP integration", () => {
     expect(consentPage).toContain(
       '<button class="secondary" type="submit" data-pending-label="Denying…">Deny</button>',
     );
-    expect(consentPage).toContain(
-      '<a class="button primary" data-navigation-link hidden>Continue to client</a>',
-    );
+    expect(consentPage).not.toContain("Continue to client");
+    expect(consentPage).not.toContain("data-navigation-link");
     expect(consentPage).toContain("&lt;script&gt;Integration MCP client&lt;/script&gt;");
     expect(consentPage).not.toContain("<script>Integration MCP client</script>");
     expect(consentPage).toContain("<strong>Full control:</strong>");
@@ -595,16 +600,13 @@ describe("public OAuth to MCP integration", () => {
     );
     const actionsScript = await actionsScriptResponse.text();
 
-    expect(actionsScript).toContain('method: "POST"');
-    expect(actionsScript).toContain("new FormData(consentForm)");
+    expect(actionsScript).toContain('consentForm.addEventListener("submit", () => {');
     expect(actionsScript).toContain('link.setAttribute("aria-disabled", "true")');
     expect(actionsScript).toContain('submittingButton.setAttribute("aria-busy", "true")');
     expect(actionsScript).not.toContain("event.submitter");
-    expect(actionsScript).toContain("navigationLink.href = result.redirectUrl");
-    expect(actionsScript).toContain("window.location.assign(result.redirectUrl)");
-    expect(actionsScript.indexOf("navigationLink.hidden = false")).toBeLessThan(
-      actionsScript.indexOf("window.location.assign(result.redirectUrl)"),
-    );
+    expect(actionsScript).not.toContain("fetch(consentForm.action");
+    expect(actionsScript).not.toContain("new FormData(consentForm)");
+    expect(actionsScript).not.toContain("window.location.assign(result.redirectUrl)");
     const speculativeGetResponse = await request(workerEnv, "/oauth/consent/decision");
     const unauthenticatedApproveResponse = await request(workerEnv, "/oauth/consent", {
       body: new URLSearchParams({ decision: "approve", oauth_query: consentQuery }),
