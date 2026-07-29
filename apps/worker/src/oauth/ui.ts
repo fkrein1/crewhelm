@@ -315,13 +315,14 @@ function signedQuery(request: Request): string | null {
 function isTrustedFormNavigation(request: Request): boolean {
   const origin = request.headers.get("origin");
 
-  if (origin !== null) {
+  if (origin !== null && origin !== "null") {
     return origin === new URL(request.url).origin;
   }
 
   return (
     request.headers.get("sec-fetch-site") === "same-origin" &&
-    request.headers.get("sec-fetch-mode") === "navigate"
+    request.headers.get("sec-fetch-mode") === "navigate" &&
+    request.headers.get("sec-fetch-dest") === "document"
   );
 }
 
