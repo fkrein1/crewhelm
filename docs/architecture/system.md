@@ -2,9 +2,9 @@
 
 Status: current ownership and dependency map
 
-Crewhelm is an authority layer over Cloudflare execution and Composio integrations. Firecrawl is
-one Composio toolkit, not a Crewhelm subsystem. Detailed controls live in the
-[security invariants](../security/invariants.md) and [threat model](../security/threat-model.md).
+Crewhelm is an authority layer over Cloudflare execution and Composio integrations. Detailed
+controls live in the [security invariants](../security/invariants.md) and
+[threat model](../security/threat-model.md).
 
 ## Runtime
 
