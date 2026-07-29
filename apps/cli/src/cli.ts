@@ -28,6 +28,11 @@ import {
   type Installation,
 } from "./installation.js";
 import { createCliPresentation, type CliPresentation } from "./presentation.js";
+import {
+  runStandingIntegrationSmoke,
+  standingIntegrationSmokeReportSchema,
+  type StandingIntegrationSmokeReport,
+} from "./standing-integration-smoke.js";
 
 export { CLI_HELP, parseCli } from "./command.js";
 
@@ -80,6 +85,32 @@ function formatAgentSmokeReport(report: AgentSmokeReport, presentation: CliPrese
       : "";
 
   return `${formatDoctorReport(report.public, presentation)}${smokeChecks}${fixture}${capacity}`;
+}
+
+function formatStandingIntegrationSmokeReport(
+  report: StandingIntegrationSmokeReport,
+  presentation: CliPresentation,
+): string {
+  const smokeChecks = report.checks
+    .map((check) => {
+      const prefix = presentation.status(check.status);
+      return `${prefix} ${check.name} ${presentation.muted(check.endpoint)}\n${check.message}\n`;
+    })
+    .join("");
+  const fixture =
+    report.agentId && report.runId
+      ? `Agent ${report.agentId}; run ${report.runId}; terminal status ${report.runStatus ?? "unknown"}.\n`
+      : "";
+  const draft =
+    report.retainedDraft && report.fixtureSubject
+      ? `Retained non-deliverable Gmail draft: ${report.fixtureSubject}\n`
+      : "";
+  const cleanup =
+    report.activeAgentsBefore !== undefined && report.activeAgentsAfter !== undefined
+      ? `Active Agents ${report.activeAgentsBefore} -> ${report.activeAgentsAfter} after cleanup.\n`
+      : "";
+
+  return `${formatDoctorReport(report.public, presentation)}${smokeChecks}${fixture}${draft}${cleanup}`;
 }
 
 function formatBootstrapReport(report: BootstrapReport, presentation: CliPresentation): string {
@@ -340,6 +371,25 @@ export async function runCli(
     );
     dependencies.writeOutput(
       command.json ? `${JSON.stringify(report)}\n` : formatAgentSmokeReport(report, presentation),
+    );
+    return report.ok ? 0 : 1;
+  }
+
+  if (command.kind === "standing-integration-smoke") {
+    const report = standingIntegrationSmokeReportSchema.parse(
+      await runStandingIntegrationSmoke(command, {
+        fetch: dependencies.fetch,
+        openUrl:
+          dependencies.openUrl ??
+          (async () => {
+            throw new Error("Browser unavailable.");
+          }),
+      }),
+    );
+    dependencies.writeOutput(
+      command.json
+        ? `${JSON.stringify(report)}\n`
+        : formatStandingIntegrationSmokeReport(report, presentation),
     );
     return report.ok ? 0 : 1;
   }

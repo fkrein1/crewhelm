@@ -10,6 +10,7 @@ import { CLI_HELP, parseCli, runCli, type CliDependencies } from "../src/cli.js"
 import { doctorReportSchema } from "../src/doctor.js";
 import { readInstallation } from "../src/installation.js";
 import { CLI_BANNER } from "../src/presentation.js";
+import { standingIntegrationSmokeReportSchema } from "../src/standing-integration-smoke.js";
 
 const DATABASE_ID = "c58217fd-fe09-447b-b79c-5d63ed1cedc0";
 const DEPLOYMENT_VERSION_ID = "37bcd44d-e373-41a2-8a47-eb03cce01d32";
@@ -418,6 +419,79 @@ describe("Crewhelm CLI", () => {
 
     const report = agentSmokeReportSchema.parse(JSON.parse(harness.output.join("")));
     expect(report.public.ok).toBe(false);
+    expect(report.checks.every((check) => check.status === "skip")).toBe(true);
+    expect(openUrl).not.toHaveBeenCalled();
+    expect(harness.errors).toEqual([]);
+  });
+
+  it("requires an exact connection and explicit confirmation for the integration smoke", async () => {
+    const connectionId = "connection_33333333-3333-4333-8333-333333333333";
+
+    expect(() =>
+      parseCli([
+        "smoke",
+        "integration",
+        "--endpoint",
+        "https://crewhelm.example",
+        "--connection-id",
+        connectionId,
+      ]),
+    ).toThrow("smoke integration requires --confirm-production.");
+    expect(() =>
+      parseCli([
+        "smoke",
+        "integration",
+        "--endpoint",
+        "https://crewhelm.example",
+        "--connection-id",
+        "not-a-connection",
+        "--confirm-production",
+      ]),
+    ).toThrow("One or more command values were invalid or outside their bounds.");
+    expect(
+      parseCli([
+        "smoke",
+        "integration",
+        "--endpoint",
+        "https://crewhelm.example",
+        "--connection-id",
+        connectionId,
+        "--confirm-production",
+        "--run-timeout-ms",
+        "45000",
+      ]),
+    ).toMatchObject({
+      confirmProduction: true,
+      connectionId,
+      kind: "standing-integration-smoke",
+      runTimeoutMs: 45_000,
+    });
+
+    const openUrl = vi.fn<(url: URL) => Promise<void>>();
+    const harness = createHarness(
+      vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(null, { status: 503 })),
+      { openUrl },
+    );
+
+    await expect(
+      runCli(
+        [
+          "smoke",
+          "integration",
+          "--endpoint",
+          "https://crewhelm.example",
+          "--connection-id",
+          connectionId,
+          "--confirm-production",
+          "--json",
+        ],
+        harness.dependencies,
+      ),
+    ).resolves.toBe(1);
+
+    const report = standingIntegrationSmokeReportSchema.parse(JSON.parse(harness.output.join("")));
+    expect(report.public.ok).toBe(false);
+    expect(report.connectionId).toBe(connectionId);
     expect(report.checks.every((check) => check.status === "skip")).toBe(true);
     expect(openUrl).not.toHaveBeenCalled();
     expect(harness.errors).toEqual([]);
