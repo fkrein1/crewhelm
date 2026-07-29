@@ -148,6 +148,42 @@ async function unavailableControlPlane(): Promise<never> {
 }
 
 describe("authenticated MCP handler", () => {
+  it("accepts the stateless initialize request used by installation diagnosis", async () => {
+    const authority = await ownerAuthority();
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 1,
+          jsonrpc: "2.0",
+          method: "initialize",
+          params: {
+            capabilities: {},
+            clientInfo: {
+              name: "crewhelm-cli",
+              version: "0.0.0",
+            },
+            protocolVersion: "2025-11-25",
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: 1,
+      jsonrpc: "2.0",
+      result: {
+        protocolVersion: "2025-11-25",
+        serverInfo: {
+          name: "crewhelm",
+          version: "0.1.0",
+        },
+      },
+    });
+  });
+
   it("keeps the advertised MCP surface within explicit tool-count and schema budgets", async () => {
     const authority = await ownerAuthority();
     const response = await handleAuthenticatedMcpRequest(
