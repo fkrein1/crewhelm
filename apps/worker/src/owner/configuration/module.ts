@@ -6,6 +6,7 @@ import {
   DEFAULT_FLEET_MAXIMUM_TOOL_CALLS_PER_TOOL_PER_RUN,
   DEFAULT_FLEET_MAXIMUM_TOOL_CONCURRENCY_PER_GRANT,
   DEFAULT_FLEET_MINIMUM_SCHEDULE_INTERVAL_SECONDS,
+  DEFAULT_RUNNABLE_AGENT_MODEL,
   MAXIMUM_FLEET_CONFIGURATION_REVISIONS,
   RUNNABLE_AGENT_MODELS,
   configureFleetConfigurationInputSchema,
@@ -312,7 +313,7 @@ export class FleetConfigurations {
       },
       models: {
         allowed: [...RUNNABLE_AGENT_MODELS].toSorted(),
-        default: RUNNABLE_AGENT_MODELS[0],
+        default: DEFAULT_RUNNABLE_AGENT_MODEL,
       },
       retention: defaultFleetRetention,
       schedules: {
