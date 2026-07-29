@@ -34,14 +34,9 @@ generated SQL, snapshot, journal, and manifest together. Never edit generated mi
 previously committed migration; fix the schema or add a new migration instead.
 
 Use semantic commit and pull-request titles such as `feat: add connection validation` or
-`fix: reject expired approvals`. Keep commits green and independently reviewable. Sign off every
-commit; the pull request's `DCO` check enforces this.
+`fix: reject expired approvals`. Keep commits green and independently reviewable.
 
 Merge only after GitHub's required checks pass and blocking conversations are resolved.
 
 Sensitive changes should include relevant negative tests and update the threat model when they
 alter a trust boundary. Report vulnerabilities according to [SECURITY.md](SECURITY.md).
-
-By contributing, you certify the
-[Developer Certificate of Origin 1.1](https://developercertificate.org/) for your contribution
-using a signed-off commit (`git commit -s`).
