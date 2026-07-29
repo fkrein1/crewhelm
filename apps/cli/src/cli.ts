@@ -13,6 +13,7 @@ import {
   type BootstrapFailure,
   type BootstrapOptions,
   type BootstrapReport,
+  type ExistingInstallationCoordinates,
 } from "./bootstrap.js";
 import {
   diagnoseDeployment,
@@ -37,6 +38,8 @@ Usage:
 The up command creates or safely upgrades one Crewhelm installation, preserving deployed secrets
 and an existing AI Gateway route unless you explicitly change its budget. It saves non-secret
 installation metadata locally so later upgrades need no repeated flags.
+If metadata is missing for an existing Worker, up verifies and recovers its exact non-secret
+coordinates before applying migrations or deploying.
 Fresh installations create a private, zero-repository-permission GitHub App in your browser and
 prompt for the Composio project key without echoing it. Interactive setup also recommends an
 optional Cloudflare AI Gateway hard spend limit; you choose the daily USD amount or skip it.
@@ -306,7 +309,7 @@ function formatBootstrapFailure(failure: BootstrapFailure): string {
 async function resolveUpOptions(
   command: Extract<CliCommand, { kind: "up" }>,
   dependencies: CliDependencies,
-): Promise<BootstrapOptions> {
+): Promise<{ options: BootstrapOptions; recoverExisting: boolean }> {
   let previous: Installation | undefined;
 
   try {
@@ -393,23 +396,32 @@ async function resolveUpOptions(
     );
   }
 
-  return resolved.data;
+  return { options: resolved.data, recoverExisting: previous === undefined };
 }
 
-async function saveInstallation(path: string, report: BootstrapReport): Promise<void> {
+async function saveInstallationCoordinates(
+  path: string,
+  installation: ExistingInstallationCoordinates,
+): Promise<void> {
   await writeInstallation(
     path,
     installationSchema.parse({
       schemaVersion: 1,
-      accountId: report.account.id,
-      ...(report.aiGateway.enabled ? { aiGatewayId: report.aiGateway.id } : {}),
-      databaseId: report.database.id,
-      databaseName: report.database.name,
-      origin: report.deployment.origin,
+      ...installation,
       updatedAt: new Date().toISOString(),
-      workerName: report.deployment.workerName,
     }),
   );
+}
+
+async function saveInstallation(path: string, report: BootstrapReport): Promise<void> {
+  await saveInstallationCoordinates(path, {
+    accountId: report.account.id,
+    ...(report.aiGateway.enabled ? { aiGatewayId: report.aiGateway.id } : {}),
+    databaseId: report.database.id,
+    databaseName: report.database.name,
+    origin: report.deployment.origin,
+    workerName: report.deployment.workerName,
+  });
 }
 
 export async function runCli(
@@ -436,8 +448,23 @@ export async function runCli(
 
   if (command.kind === "up") {
     try {
-      const options = await resolveUpOptions(command, dependencies);
-      const report = await bootstrapDeployment(options, dependencies);
+      const { options, recoverExisting } = await resolveUpOptions(command, dependencies);
+      const bootstrapDependencies: BootstrapDependencies = recoverExisting
+        ? {
+            ...dependencies,
+            recoverExistingInstallation: {
+              ...(command.databaseId === undefined
+                ? {}
+                : { expectedDatabaseId: command.databaseId }),
+              ...(command.databaseName === undefined
+                ? {}
+                : { expectedDatabaseName: command.databaseName }),
+              persist: (installation) =>
+                saveInstallationCoordinates(command.installationPath, installation),
+            },
+          }
+        : dependencies;
+      const report = await bootstrapDeployment(options, bootstrapDependencies);
 
       if (report.ok) {
         try {

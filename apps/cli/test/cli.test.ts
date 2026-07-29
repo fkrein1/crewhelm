@@ -7,6 +7,43 @@ import { describe, expect, it, vi } from "vitest";
 import { authenticatedDoctorReportSchema } from "../src/authenticated-doctor.js";
 import { CLI_HELP, parseCli, runCli, type CliDependencies } from "../src/cli.js";
 import { doctorReportSchema } from "../src/doctor.js";
+import { readInstallation } from "../src/installation.js";
+
+const DATABASE_ID = "c58217fd-fe09-447b-b79c-5d63ed1cedc0";
+const DEPLOYMENT_VERSION_ID = "37bcd44d-e373-41a2-8a47-eb03cce01d32";
+const EXPECTED_MIGRATIONS = [
+  "0001_better_auth.sql",
+  "0002_control_write_scope.sql",
+  "0003_integration_catalog_scope.sql",
+  "0004_agent_definition_read_scope.sql",
+  "0005_agent_update_scope.sql",
+  "0006_connection_write_scope.sql",
+  "0007_connection_read_scope.sql",
+  "0008_connection_config_read_scope.sql",
+  "0009_connection_config_write_scope.sql",
+  "0010_oauth_offline_access.sql",
+  "0011_autonomy_write_scope.sql",
+  "0012_access_levels.sql",
+] as const;
+const AUTH_TABLES = [
+  "_cf_KV",
+  "account",
+  "d1_migrations",
+  "jwks",
+  "mcpClientRegistration",
+  "mcpTokenRevocation",
+  "oauthAccessToken",
+  "oauthClient",
+  "oauthClientAssertion",
+  "oauthClientResource",
+  "oauthConsent",
+  "oauthRefreshToken",
+  "oauthResource",
+  "session",
+  "sqlite_sequence",
+  "user",
+  "verification",
+] as const;
 
 function requestPath(input: RequestInfo | URL): string {
   if (input instanceof URL) {
@@ -51,6 +88,15 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
   });
 }
 
+function completedWrangler(stdout = "") {
+  return {
+    exitCode: 0,
+    outcome: "completed" as const,
+    stderr: "",
+    stdout,
+  };
+}
+
 function createHarness(
   fetch: typeof globalThis.fetch = vi
     .fn<typeof globalThis.fetch>()
@@ -70,6 +116,70 @@ function createHarness(
   };
 
   return { dependencies, errors, output };
+}
+
+async function createDeploymentAssetsDirectory(): Promise<string> {
+  const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-cli-test-"));
+  await mkdir(resolve(directory, "migrations"));
+  await writeFile(resolve(directory, "index.js"), "export default {};\n");
+  await writeFile(resolve(directory, "index.js.map"), "{}\n");
+
+  for (const migration of EXPECTED_MIGRATIONS) {
+    await writeFile(resolve(directory, "migrations", migration), "SELECT 1;\n");
+  }
+
+  await writeFile(
+    resolve(directory, "wrangler-template.json"),
+    JSON.stringify({
+      ai: { binding: "AI" },
+      compatibility_date: "2026-07-22",
+      compatibility_flags: ["nodejs_compat"],
+      d1_databases: [
+        {
+          binding: "AUTH_DB",
+          database_id: DATABASE_ID,
+          database_name: "crewhelm-auth",
+          migrations_dir: "./migrations",
+        },
+      ],
+      durable_objects: {
+        bindings: [
+          { class_name: "OwnerControlPlane", name: "OWNER_CONTROL_PLANE" },
+          { class_name: "CrewAgent", name: "CREW_AGENT" },
+        ],
+      },
+      exports: {
+        CrewAgent: { storage: "sqlite", type: "durable-object" },
+        OwnerControlPlane: { storage: "sqlite", type: "durable-object" },
+      },
+      main: "./index.js",
+      name: "crewhelm",
+      observability: {
+        enabled: true,
+        logs: { enabled: true, head_sampling_rate: 1, invocation_logs: false },
+        traces: { enabled: false },
+      },
+      ratelimits: [
+        {
+          name: "AUTH_RATE_LIMIT",
+          namespace_id: "10001",
+          simple: { limit: 10, period: 60 },
+        },
+        {
+          name: "MCP_RATE_LIMIT",
+          namespace_id: "10002",
+          simple: { limit: 60, period: 60 },
+        },
+      ],
+      rules: [{ fallthrough: true, globs: ["**/*.sql"], type: "Text" }],
+      triggers: { crons: ["17 * * * *"] },
+      vars: {
+        PUBLIC_ORIGIN: "https://crewhelm.example",
+      },
+    }),
+  );
+
+  return directory;
 }
 
 describe("Crewhelm CLI", () => {
@@ -208,100 +318,136 @@ describe("Crewhelm CLI", () => {
     expect(harness.dependencies.fetch).not.toHaveBeenCalled();
   });
 
-  it("emits a stable up failure without reflecting Wrangler output", async () => {
-    const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-cli-test-"));
-    await mkdir(resolve(directory, "migrations"));
-    await writeFile(resolve(directory, "index.js"), "export default {};\n");
-    await writeFile(resolve(directory, "index.js.map"), "{}\n");
-    await writeFile(resolve(directory, "migrations", "0001_better_auth.sql"), "SELECT 1;\n");
-    await writeFile(
-      resolve(directory, "migrations", "0002_control_write_scope.sql"),
-      "SELECT 1;\n",
-    );
-    await writeFile(
-      resolve(directory, "migrations", "0003_integration_catalog_scope.sql"),
-      "SELECT 1;\n",
-    );
-    await writeFile(
-      resolve(directory, "migrations", "0004_agent_definition_read_scope.sql"),
-      "SELECT 1;\n",
-    );
-    await writeFile(resolve(directory, "migrations", "0005_agent_update_scope.sql"), "SELECT 1;\n");
-    await writeFile(
-      resolve(directory, "migrations", "0006_connection_write_scope.sql"),
-      "SELECT 1;\n",
-    );
-    await writeFile(
-      resolve(directory, "migrations", "0007_connection_read_scope.sql"),
-      "SELECT 1;\n",
-    );
-    await writeFile(
-      resolve(directory, "migrations", "0008_connection_config_read_scope.sql"),
-      "SELECT 1;\n",
-    );
-    await writeFile(
-      resolve(directory, "migrations", "0009_connection_config_write_scope.sql"),
-      "SELECT 1;\n",
-    );
-    await writeFile(
-      resolve(directory, "migrations", "0010_oauth_offline_access.sql"),
-      "SELECT 1;\n",
-    );
-    await writeFile(
-      resolve(directory, "migrations", "0011_autonomy_write_scope.sql"),
-      "SELECT 1;\n",
-    );
-    await writeFile(resolve(directory, "migrations", "0012_access_levels.sql"), "SELECT 1;\n");
-    await writeFile(
-      resolve(directory, "wrangler-template.json"),
-      JSON.stringify({
-        ai: { binding: "AI" },
-        compatibility_date: "2026-07-22",
-        compatibility_flags: ["nodejs_compat"],
-        d1_databases: [
-          {
-            binding: "AUTH_DB",
-            database_id: "c58217fd-fe09-447b-b79c-5d63ed1cedc0",
-            database_name: "crewhelm-auth",
-            migrations_dir: "./migrations",
-          },
-        ],
-        durable_objects: {
-          bindings: [
-            { class_name: "OwnerControlPlane", name: "OWNER_CONTROL_PLANE" },
-            { class_name: "CrewAgent", name: "CREW_AGENT" },
+  it("recreates missing installation metadata before upgrading an existing Worker", async () => {
+    const directory = await createDeploymentAssetsDirectory();
+    const installationPath = resolve(directory, "installation.json");
+    const databaseName = "crewhelm-development-auth";
+    const events: string[] = [];
+    let metadataAtMutation: Awaited<ReturnType<typeof readInstallation>>;
+    const runWrangler = vi.fn<CliDependencies["runWrangler"]>(async (arguments_) => {
+      events.push(arguments_.slice(0, 2).join(":"));
+
+      if (arguments_[0] === "whoami") {
+        return completedWrangler(
+          JSON.stringify({
+            accounts: [{ id: "055dc37aa5b65190125a66e918e9b73e", name: "owner" }],
+            loggedIn: true,
+          }),
+        );
+      }
+      if (arguments_[0] === "deployments") {
+        return completedWrangler(
+          JSON.stringify([
+            {
+              id: "24f9520f-a92f-47e8-8c7d-6cbd14c89309",
+              versions: [{ percentage: 100, version_id: DEPLOYMENT_VERSION_ID }],
+            },
+          ]),
+        );
+      }
+      if (arguments_[0] === "versions") {
+        return completedWrangler(
+          JSON.stringify({
+            id: DEPLOYMENT_VERSION_ID,
+            resources: {
+              bindings: [
+                { database_id: DATABASE_ID, name: "AUTH_DB", type: "d1" },
+                { name: "AI_GATEWAY_ID", text: "crewhelm", type: "plain_text" },
+                {
+                  name: "PUBLIC_ORIGIN",
+                  text: "https://crewhelm.example",
+                  type: "plain_text",
+                },
+              ],
+              script_runtime: {
+                exports: {
+                  CrewAgent: { storage: "sqlite", type: "durable-object" },
+                  OwnerControlPlane: { storage: "sqlite", type: "durable-object" },
+                },
+              },
+            },
+          }),
+        );
+      }
+      if (arguments_[0] === "secret") {
+        return completedWrangler(
+          JSON.stringify(
+            [
+              "BETTER_AUTH_SECRET",
+              "COMPOSIO_API_KEY",
+              "GITHUB_CLIENT_ID",
+              "GITHUB_CLIENT_SECRET",
+              "OWNER_GITHUB_USER_ID",
+            ].map((name) => ({ name, type: "secret_text" })),
+          ),
+        );
+      }
+      if (arguments_[0] === "d1" && arguments_[1] === "list") {
+        return completedWrangler(JSON.stringify([{ name: databaseName, uuid: DATABASE_ID }]));
+      }
+      if (arguments_[0] === "d1" && arguments_[1] === "execute") {
+        const names = arguments_.includes("SELECT name FROM d1_migrations ORDER BY id")
+          ? EXPECTED_MIGRATIONS
+          : AUTH_TABLES;
+        return completedWrangler(
+          JSON.stringify([
+            {
+              results: names.map((name) => ({ name })),
+              success: true,
+            },
+          ]),
+        );
+      }
+      if (arguments_[0] === "d1" && arguments_[1] === "migrations") {
+        metadataAtMutation = await readInstallation(installationPath);
+      }
+
+      return completedWrangler();
+    });
+    const harness = createHarness(healthyDeploymentFetch(), {
+      deploymentAssetsDirectory: directory,
+      runWrangler,
+    });
+
+    try {
+      await expect(
+        runCli(
+          [
+            "up",
+            "--endpoint",
+            "https://crewhelm.example",
+            "--installation",
+            installationPath,
+            "--json",
           ],
-        },
-        exports: {
-          CrewAgent: { storage: "sqlite", type: "durable-object" },
-          OwnerControlPlane: { storage: "sqlite", type: "durable-object" },
-        },
-        main: "./index.js",
-        name: "crewhelm",
-        observability: {
-          enabled: true,
-          logs: { enabled: true, head_sampling_rate: 1, invocation_logs: false },
-          traces: { enabled: false },
-        },
-        ratelimits: [
-          {
-            name: "AUTH_RATE_LIMIT",
-            namespace_id: "10001",
-            simple: { limit: 10, period: 60 },
-          },
-          {
-            name: "MCP_RATE_LIMIT",
-            namespace_id: "10002",
-            simple: { limit: 60, period: 60 },
-          },
-        ],
-        rules: [{ fallthrough: true, globs: ["**/*.sql"], type: "Text" }],
-        triggers: { crons: ["17 * * * *"] },
-        vars: {
-          PUBLIC_ORIGIN: "https://crewhelm.example",
-        },
-      }),
-    );
+          harness.dependencies,
+        ),
+      ).resolves.toBe(0);
+
+      expect(metadataAtMutation).toMatchObject({
+        aiGatewayId: "crewhelm",
+        databaseId: DATABASE_ID,
+        databaseName,
+        origin: "https://crewhelm.example",
+        workerName: "crewhelm",
+      });
+      await expect(readInstallation(installationPath)).resolves.toMatchObject({
+        aiGatewayId: "crewhelm",
+        databaseId: DATABASE_ID,
+        databaseName,
+        origin: "https://crewhelm.example",
+        workerName: "crewhelm",
+      });
+      expect(events).not.toContain("d1:create");
+      expect(events.indexOf("versions:view")).toBeLessThan(events.indexOf("d1:migrations"));
+      expect(harness.errors).toEqual([]);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("emits a stable up failure without reflecting Wrangler output", async () => {
+    const directory = await createDeploymentAssetsDirectory();
     const harness = createHarness(undefined, {
       deploymentAssetsDirectory: directory,
       runWrangler: vi.fn<CliDependencies["runWrangler"]>().mockResolvedValue({

@@ -13,6 +13,7 @@ import {
 import { type RunWrangler, type WranglerResult } from "../src/wrangler.js";
 
 const DATABASE_ID = "c58217fd-fe09-447b-b79c-5d63ed1cedc0";
+const DEPLOYMENT_VERSION_ID = "37bcd44d-e373-41a2-8a47-eb03cce01d32";
 const ACCOUNT_ID = "055dc37aa5b65190125a66e918e9b73e";
 const HOSTILE_ACCOUNT_NAME = "forged\n\u001B[31mFAIL";
 const AUTH_TABLES = [
@@ -44,6 +45,20 @@ const WORKER_SECRET_NAMES = [
 const WORKER_SECRET_NAMES_WITHOUT_COMPOSIO = WORKER_SECRET_NAMES.filter(
   (name) => name !== "COMPOSIO_API_KEY",
 );
+const EXPECTED_MIGRATIONS = [
+  "0001_better_auth.sql",
+  "0002_control_write_scope.sql",
+  "0003_integration_catalog_scope.sql",
+  "0004_agent_definition_read_scope.sql",
+  "0005_agent_update_scope.sql",
+  "0006_connection_write_scope.sql",
+  "0007_connection_read_scope.sql",
+  "0008_connection_config_read_scope.sql",
+  "0009_connection_config_write_scope.sql",
+  "0010_oauth_offline_access.sql",
+  "0011_autonomy_write_scope.sql",
+  "0012_access_levels.sql",
+] as const;
 const WORKER_TEXT_MODULE = "0000000000000000000000000000000000000000-0000_test.sql";
 const OPTIONS: BootstrapOptions = {
   databaseName: "crewhelm-auth",
@@ -322,7 +337,355 @@ function successfulReuseWrangler(events: string[] = []): RunWrangler {
   };
 }
 
+function recoveryWrangler({
+  bindings = [
+    { database_id: DATABASE_ID, name: "AUTH_DB", type: "d1" },
+    { name: "AI_GATEWAY_ID", text: OPTIONS.workerName, type: "plain_text" },
+    { name: "PUBLIC_ORIGIN", text: OPTIONS.origin.origin, type: "plain_text" },
+  ],
+  databaseName = "crewhelm-development-auth",
+  events = [],
+  tables = AUTH_TABLES,
+  versions = [{ percentage: 100, version_id: DEPLOYMENT_VERSION_ID }],
+  workerExports = {
+    CrewAgent: { storage: "sqlite", type: "durable-object" },
+    OwnerControlPlane: { storage: "sqlite", type: "durable-object" },
+  },
+}: {
+  bindings?: readonly Readonly<Record<string, unknown>>[];
+  databaseName?: string;
+  events?: string[];
+  tables?: readonly string[];
+  versions?: readonly Readonly<Record<string, unknown>>[];
+  workerExports?: Readonly<Record<string, unknown>>;
+} = {}): RunWrangler {
+  return async (arguments_) => {
+    events.push(arguments_.slice(0, 2).join(":"));
+
+    if (arguments_[0] === "whoami") {
+      return whoami();
+    }
+    if (arguments_[0] === "deployments") {
+      return success(
+        JSON.stringify([
+          {
+            id: "24f9520f-a92f-47e8-8c7d-6cbd14c89309",
+            versions,
+          },
+        ]),
+      );
+    }
+    if (arguments_[0] === "versions") {
+      return success(
+        JSON.stringify({
+          id: DEPLOYMENT_VERSION_ID,
+          resources: {
+            bindings,
+            script_runtime: {
+              exports: workerExports,
+            },
+          },
+        }),
+      );
+    }
+    if (arguments_[0] === "secret") {
+      return secretList(WORKER_SECRET_NAMES);
+    }
+    if (arguments_[0] === "d1" && arguments_[1] === "list") {
+      return success(JSON.stringify([{ name: databaseName, uuid: DATABASE_ID }]));
+    }
+    if (arguments_[0] === "d1" && arguments_[1] === "execute") {
+      return arguments_.includes("SELECT name FROM d1_migrations ORDER BY id")
+        ? queryResult(EXPECTED_MIGRATIONS)
+        : queryResult(tables);
+    }
+
+    return success();
+  };
+}
+
 describe("Cloudflare bootstrap", () => {
+  it("recovers an existing installation before any deployment mutation", async () => {
+    const fixture = await createDeploymentAssets();
+    const databaseName = "crewhelm-development-auth";
+    const events: string[] = [];
+    const persist = vi.fn<(installation: unknown) => Promise<void>>(async () => {});
+    const dependencies = {
+      ...createDependencies(fixture.assets, recoveryWrangler({ databaseName, events })),
+      recoverExistingInstallation: { persist },
+    };
+
+    try {
+      const report = await bootstrapDeployment(OPTIONS, dependencies);
+
+      expect(report.database).toMatchObject({
+        action: "reused",
+        id: DATABASE_ID,
+        name: databaseName,
+      });
+      expect(report.aiGateway).toEqual({ enabled: true, id: "crewhelm" });
+      expect(persist).toHaveBeenCalledWith({
+        accountId: ACCOUNT_ID,
+        aiGatewayId: "crewhelm",
+        databaseId: DATABASE_ID,
+        databaseName,
+        origin: OPTIONS.origin.origin,
+        workerName: OPTIONS.workerName,
+      });
+      expect(events).not.toContain("d1:create");
+      expect(events.indexOf("versions:view")).toBeLessThan(events.indexOf("d1:migrations"));
+      expect(events.indexOf("d1:execute")).toBeLessThan(events.indexOf("d1:migrations"));
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("fails closed before mutation when an existing Worker has split traffic", async () => {
+    const fixture = await createDeploymentAssets();
+    const events: string[] = [];
+    const persist = vi.fn<(installation: unknown) => Promise<void>>(async () => {});
+    const dependencies = {
+      ...createDependencies(
+        fixture.assets,
+        recoveryWrangler({
+          events,
+          versions: [
+            { percentage: 50, version_id: DEPLOYMENT_VERSION_ID },
+            {
+              percentage: 50,
+              version_id: "5263bddc-9b96-45ff-8053-38bd0fdb0bf9",
+            },
+          ],
+        }),
+      ),
+      recoverExistingInstallation: { persist },
+    };
+
+    try {
+      await expect(bootstrapDeployment(OPTIONS, dependencies)).rejects.toMatchObject({
+        message: "Existing Worker has no single active version that can be adopted safely.",
+        stage: "worker",
+      });
+      expect(persist).not.toHaveBeenCalled();
+      expect(events).toEqual(["whoami:--json", "deployments:list"]);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects ambiguous Worker bindings before D1 mutation", async () => {
+    const fixture = await createDeploymentAssets();
+    const events: string[] = [];
+    const persist = vi.fn<(installation: unknown) => Promise<void>>(async () => {});
+    const dependencies = {
+      ...createDependencies(
+        fixture.assets,
+        recoveryWrangler({
+          bindings: [
+            { database_id: DATABASE_ID, name: "AUTH_DB", type: "d1" },
+            { database_id: DATABASE_ID, name: "AUTH_DB", type: "d1" },
+            { name: "PUBLIC_ORIGIN", text: OPTIONS.origin.origin, type: "plain_text" },
+          ],
+          events,
+        }),
+      ),
+      recoverExistingInstallation: { persist },
+    };
+
+    try {
+      await expect(bootstrapDeployment(OPTIONS, dependencies)).rejects.toMatchObject({
+        message: "Active Worker version contains ambiguous bindings.",
+        stage: "worker",
+      });
+      expect(persist).not.toHaveBeenCalled();
+      expect(events).toEqual(["whoami:--json", "deployments:list", "versions:view"]);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects an explicit D1 name that conflicts with the Worker binding", async () => {
+    const fixture = await createDeploymentAssets();
+    const events: string[] = [];
+    const persist = vi.fn<(installation: unknown) => Promise<void>>(async () => {});
+    const dependencies = {
+      ...createDependencies(fixture.assets, recoveryWrangler({ events })),
+      recoverExistingInstallation: {
+        expectedDatabaseName: OPTIONS.databaseName,
+        persist,
+      },
+    };
+
+    try {
+      await expect(bootstrapDeployment(OPTIONS, dependencies)).rejects.toMatchObject({
+        message: "The requested D1 database name conflicts with the existing Worker binding.",
+        stage: "configuration",
+      });
+      expect(persist).not.toHaveBeenCalled();
+      expect(events).not.toContain("d1:create");
+      expect(events).not.toContain("d1:migrations");
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("recovers an installation without inventing an AI Gateway binding", async () => {
+    const fixture = await createDeploymentAssets();
+    const persist = vi.fn<(installation: unknown) => Promise<void>>(async () => {});
+    const dependencies = {
+      ...createDependencies(
+        fixture.assets,
+        recoveryWrangler({
+          bindings: [
+            { database_id: DATABASE_ID, name: "AUTH_DB", type: "d1" },
+            { name: "PUBLIC_ORIGIN", text: OPTIONS.origin.origin, type: "plain_text" },
+          ],
+        }),
+      ),
+      recoverExistingInstallation: { persist },
+    };
+
+    try {
+      const report = await bootstrapDeployment(OPTIONS, dependencies);
+
+      expect(report.aiGateway).toEqual({ enabled: false });
+      expect(persist).toHaveBeenCalledWith(
+        expect.not.objectContaining({ aiGatewayId: expect.anything() }),
+      );
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("stops before deployment mutation when recovered metadata cannot be persisted", async () => {
+    const fixture = await createDeploymentAssets();
+    const events: string[] = [];
+    const dependencies = {
+      ...createDependencies(fixture.assets, recoveryWrangler({ events })),
+      recoverExistingInstallation: {
+        persist: vi.fn<(installation: unknown) => Promise<void>>(async () => {
+          throw new Error("private local detail");
+        }),
+      },
+    };
+
+    try {
+      await expect(bootstrapDeployment(OPTIONS, dependencies)).rejects.toMatchObject({
+        message:
+          "Existing installation was verified, but local installation metadata could not be saved.",
+        stage: "configuration",
+      });
+      expect(events).not.toContain("d1:create");
+      expect(events).not.toContain("d1:migrations");
+      expect(events).not.toContain("deploy:--config");
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("does not adopt an empty D1 database as an existing installation", async () => {
+    const fixture = await createDeploymentAssets();
+    const events: string[] = [];
+    const persist = vi.fn<(installation: unknown) => Promise<void>>(async () => {});
+    const dependencies = {
+      ...createDependencies(fixture.assets, recoveryWrangler({ events, tables: [] })),
+      recoverExistingInstallation: { persist },
+    };
+
+    try {
+      await expect(bootstrapDeployment(OPTIONS, dependencies)).rejects.toMatchObject({
+        message: "Existing Worker D1 database has no Crewhelm provenance.",
+        stage: "database",
+      });
+      expect(persist).not.toHaveBeenCalled();
+      expect(events).not.toContain("d1:migrations");
+      expect(events).not.toContain("deploy:--config");
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("does not adopt Durable Object namespaces that are mid-transfer", async () => {
+    const fixture = await createDeploymentAssets();
+    const events: string[] = [];
+    const persist = vi.fn<(installation: unknown) => Promise<void>>(async () => {});
+    const dependencies = {
+      ...createDependencies(
+        fixture.assets,
+        recoveryWrangler({
+          events,
+          workerExports: {
+            CrewAgent: {
+              state: "expecting-transfer",
+              storage: "sqlite",
+              transfer_from: "another-worker",
+              type: "durable-object",
+            },
+            OwnerControlPlane: {
+              state: "created",
+              storage: "sqlite",
+              type: "durable-object",
+            },
+          },
+        }),
+      ),
+      recoverExistingInstallation: { persist },
+    };
+
+    try {
+      await expect(bootstrapDeployment(OPTIONS, dependencies)).rejects.toMatchObject({
+        message: "Active Worker version returned an invalid response.",
+        stage: "worker",
+      });
+      expect(persist).not.toHaveBeenCalled();
+      expect(events).toEqual(["whoami:--json", "deployments:list", "versions:view"]);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("stops when the active Worker version changes during recovery", async () => {
+    const fixture = await createDeploymentAssets();
+    const events: string[] = [];
+    const persist = vi.fn<(installation: unknown) => Promise<void>>(async () => {});
+    const baseRunner = recoveryWrangler({ events });
+    let inventoryReads = 0;
+    const dependencies = {
+      ...createDependencies(fixture.assets, async (arguments_, options) => {
+        if (arguments_[0] === "deployments" && ++inventoryReads === 2) {
+          events.push("deployments:list");
+          return success(
+            JSON.stringify([
+              {
+                id: "881c0379-d3c4-4afb-b9d9-e2971cc4c0b5",
+                versions: [
+                  {
+                    percentage: 100,
+                    version_id: "5263bddc-9b96-45ff-8053-38bd0fdb0bf9",
+                  },
+                ],
+              },
+            ]),
+          );
+        }
+
+        return baseRunner(arguments_, options);
+      }),
+      recoverExistingInstallation: { persist },
+    };
+
+    try {
+      await expect(bootstrapDeployment(OPTIONS, dependencies)).rejects.toMatchObject({
+        message: "Existing Worker changed while its installation was recovered.",
+        stage: "worker",
+      });
+      expect(persist).not.toHaveBeenCalled();
+      expect(events).not.toContain("d1:migrations");
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
   it("rejects an unreferenced Worker text module", async () => {
     const fixture = await createDeploymentAssets();
     const unreferencedModule = "1111111111111111111111111111111111111111-0001_extra.sql";

@@ -147,7 +147,47 @@ const deploymentSchema = z.looseObject({
   annotations: z.record(z.string(), z.unknown()).optional(),
   id: z.uuid(),
 });
+const activeDeploymentSchema = z.looseObject({
+  id: z.uuid(),
+  versions: z
+    .array(
+      z.looseObject({
+        percentage: z.number().finite().min(0).max(100),
+        version_id: z.uuid(),
+      }),
+    )
+    .max(100),
+});
 const deploymentListSchema = z.array(deploymentSchema).max(100);
+const establishedDurableObjectExportSchema = z.looseObject({
+  renamed_to: z.never().optional(),
+  state: z.literal("created").optional(),
+  storage: z.literal("sqlite"),
+  transfer_from: z.never().optional(),
+  transferred_to: z.never().optional(),
+  type: z.literal("durable-object"),
+});
+const workerVersionSchema = z.looseObject({
+  id: z.uuid(),
+  resources: z.looseObject({
+    bindings: z
+      .array(
+        z.looseObject({
+          database_id: databaseIdSchema.optional(),
+          name: z.string().min(1).max(255),
+          text: z.string().max(2_048).optional(),
+          type: z.string().min(1).max(255),
+        }),
+      )
+      .max(1_000),
+    script_runtime: z.looseObject({
+      exports: z.looseObject({
+        CrewAgent: establishedDurableObjectExportSchema,
+        OwnerControlPlane: establishedDurableObjectExportSchema,
+      }),
+    }),
+  }),
+});
 const workerSecretListSchema = z
   .array(
     z.looseObject({
@@ -309,6 +349,14 @@ type BootstrapFailureStage = z.infer<typeof bootstrapFailureStageSchema>;
 type DeploymentTemplate = z.infer<typeof deploymentTemplateSchema>;
 type GitHubSecrets = z.infer<typeof githubSecretsSchema>;
 type CloudflareCredentials = z.infer<typeof cloudflareCredentialsSchema>;
+export interface ExistingInstallationCoordinates {
+  accountId: string;
+  aiGatewayId?: string;
+  databaseId: string;
+  databaseName: string;
+  origin: string;
+  workerName: string;
+}
 
 interface DeploymentAssets {
   digest: string;
@@ -318,6 +366,7 @@ interface DeploymentAssets {
 }
 
 interface CloudflareContext {
+  accountId: string;
   accountConfigPath: string;
   cwd: string;
   dependencies: BootstrapDependencies;
@@ -334,6 +383,11 @@ export interface BootstrapDependencies extends DoctorDependencies {
   openCloudflareApiTokens?: () => Promise<void>;
   promptSecret?: (message: string) => Promise<string>;
   readEnvironment: (name: string) => string | undefined;
+  recoverExistingInstallation?: {
+    expectedDatabaseId?: string;
+    expectedDatabaseName?: string;
+    persist: (installation: ExistingInstallationCoordinates) => Promise<void>;
+  };
   runWrangler: RunWrangler;
 }
 
@@ -1050,6 +1104,7 @@ async function validateDatabaseForReuse(
   databaseId: string,
   migrations: readonly string[],
   context: CloudflareContext,
+  policy: { allowEmpty: boolean },
 ): Promise<void> {
   const tables = await executeInventory(databaseId, TABLE_INVENTORY_SQL, context);
 
@@ -1063,6 +1118,10 @@ async function validateDatabaseForReuse(
     applicationTables.length === 0 ||
     (applicationTables.length === 1 && applicationTables[0] === "d1_migrations")
   ) {
+    if (!policy.allowEmpty) {
+      throw commandFailed("database", "Existing Worker D1 database has no Crewhelm provenance.");
+    }
+
     if (
       applicationTables[0] === "d1_migrations" &&
       (await readAppliedMigrations(databaseId, context)).length > 0
@@ -1097,6 +1156,176 @@ async function validateDatabaseForReuse(
   }
 }
 
+function readSingleActiveVersionId(inventory: WorkerInventory): string | undefined {
+  const currentDeployment = activeDeploymentSchema.safeParse(inventory.deployments.at(-1));
+
+  return currentDeployment.success &&
+    currentDeployment.data.versions.length === 1 &&
+    currentDeployment.data.versions[0]?.percentage === 100
+    ? currentDeployment.data.versions[0].version_id
+    : undefined;
+}
+
+async function recoverExistingInstallation(
+  options: BootstrapOptions,
+  inventory: WorkerInventory,
+  migrations: readonly string[],
+  context: CloudflareContext,
+): Promise<BootstrapOptions> {
+  const recovery = context.dependencies.recoverExistingInstallation;
+
+  if (!recovery || !inventory.exists) {
+    return options;
+  }
+
+  const versionId = readSingleActiveVersionId(inventory);
+
+  if (versionId === undefined) {
+    throw commandFailed(
+      "worker",
+      "Existing Worker has no single active version that can be adopted safely.",
+    );
+  }
+
+  const result = await runCloudflare(
+    context,
+    [
+      "versions",
+      "view",
+      versionId,
+      "--name",
+      options.workerName,
+      "--json",
+      "--config",
+      context.accountConfigPath,
+    ],
+    "worker",
+  );
+  requireCompleted(result, "worker", "Active Worker version outcome could not be confirmed.");
+
+  if (result.exitCode !== 0) {
+    throw commandFailed("worker", "Active Worker version could not be read.");
+  }
+
+  let version: z.infer<typeof workerVersionSchema>;
+
+  try {
+    version = workerVersionSchema.parse(JSON.parse(result.stdout));
+  } catch {
+    throw commandFailed("worker", "Active Worker version returned an invalid response.");
+  }
+
+  if (version.id !== versionId) {
+    throw commandFailed("worker", "Active Worker version did not match the requested version.");
+  }
+
+  const bindings = version.resources.bindings;
+  const bindingNames = bindings.map((binding) => binding.name);
+
+  if (new Set(bindingNames).size !== bindingNames.length) {
+    throw commandFailed("worker", "Active Worker version contains ambiguous bindings.");
+  }
+
+  const databaseBinding = bindings.find((binding) => binding.name === "AUTH_DB");
+  const originBinding = bindings.find((binding) => binding.name === "PUBLIC_ORIGIN");
+  const gatewayBinding = bindings.find((binding) => binding.name === "AI_GATEWAY_ID");
+
+  if (databaseBinding?.type !== "d1" || databaseBinding.database_id === undefined) {
+    throw commandFailed("worker", "Existing Worker has no valid Crewhelm AUTH_DB binding.");
+  }
+
+  if (
+    originBinding?.type !== "plain_text" ||
+    originBinding.text === undefined ||
+    originBinding.text !== options.origin.origin
+  ) {
+    throw commandFailed(
+      "configuration",
+      "Existing Worker PUBLIC_ORIGIN does not match the requested endpoint.",
+    );
+  }
+
+  if (
+    gatewayBinding !== undefined &&
+    (gatewayBinding.type !== "plain_text" ||
+      gatewayBinding.text === undefined ||
+      !deploymentNameSchema.safeParse(gatewayBinding.text).success)
+  ) {
+    throw commandFailed("worker", "Existing Worker has an invalid AI_GATEWAY_ID binding.");
+  }
+
+  if (
+    recovery.expectedDatabaseId !== undefined &&
+    recovery.expectedDatabaseId !== databaseBinding.database_id
+  ) {
+    throw commandFailed(
+      "configuration",
+      "The requested D1 database ID conflicts with the existing Worker binding.",
+    );
+  }
+
+  const databases = (await listDatabases(context)).filter(
+    (database) => database.uuid === databaseBinding.database_id,
+  );
+
+  if (databases.length !== 1 || !databases[0]) {
+    throw commandFailed(
+      "database",
+      "Existing Worker AUTH_DB could not be matched to exactly one D1 database.",
+    );
+  }
+
+  const database = databases[0];
+
+  if (!deploymentNameSchema.safeParse(database.name).success) {
+    throw commandFailed("database", "Existing Worker D1 database has an invalid name.");
+  }
+
+  if (
+    recovery.expectedDatabaseName !== undefined &&
+    recovery.expectedDatabaseName !== database.name
+  ) {
+    throw commandFailed(
+      "configuration",
+      "The requested D1 database name conflicts with the existing Worker binding.",
+    );
+  }
+
+  await validateDatabaseForReuse(database.uuid, migrations, context, { allowEmpty: false });
+
+  const reconciledInventory = await readWorkerInventory(options.workerName, context);
+
+  if (readSingleActiveVersionId(reconciledInventory) !== versionId) {
+    throw commandFailed("worker", "Existing Worker changed while its installation was recovered.");
+  }
+
+  const aiGatewayId = gatewayBinding?.text;
+  const coordinates: ExistingInstallationCoordinates = {
+    accountId: context.accountId,
+    ...(aiGatewayId === undefined ? {} : { aiGatewayId }),
+    databaseId: database.uuid,
+    databaseName: database.name,
+    origin: options.origin.origin,
+    workerName: options.workerName,
+  };
+
+  try {
+    await recovery.persist(coordinates);
+  } catch {
+    throw commandFailed(
+      "configuration",
+      "Existing installation was verified, but local installation metadata could not be saved.",
+    );
+  }
+
+  return bootstrapOptionsSchema.parse({
+    ...options,
+    aiGatewayId,
+    databaseId: database.uuid,
+    databaseName: database.name,
+  });
+}
+
 async function ensureDatabase(
   options: BootstrapOptions,
   migrations: readonly string[],
@@ -1125,7 +1354,7 @@ async function ensureDatabase(
       );
     }
 
-    await validateDatabaseForReuse(existing[0].uuid, migrations, context);
+    await validateDatabaseForReuse(existing[0].uuid, migrations, context, { allowEmpty: true });
     return { action: "reused" as const, database: existing[0] };
   }
 
@@ -1307,7 +1536,7 @@ export async function bootstrapDeployment(
     const neutralConfigPath = await writeAccountConfig(cwd);
     const account = await authenticate(options, cwd, neutralConfigPath, dependencies);
     const accountConfigPath = await writeAccountConfig(cwd, account.id);
-    const context = { accountConfigPath, cwd, dependencies };
+    const context = { accountId: account.id, accountConfigPath, cwd, dependencies };
     const configuredGatewayToken = dependencies.readEnvironment(CLOUDFLARE_API_TOKEN_ENVIRONMENT);
 
     if (
@@ -1322,17 +1551,23 @@ export async function bootstrapDeployment(
     }
 
     const workerInventory = await readWorkerInventory(options.workerName, context);
+    const deploymentOptions = await recoverExistingInstallation(
+      options,
+      workerInventory,
+      assets.migrations,
+      context,
+    );
     const existingSecretNames = workerInventory.exists
-      ? await readWorkerSecretNames(options.workerName, context)
+      ? await readWorkerSecretNames(deploymentOptions.workerName, context)
       : undefined;
     const suppliedGitHubSecretCount = Object.values(GITHUB_SECRET_ENVIRONMENT).filter(
       (name) => dependencies.readEnvironment(name) !== undefined,
     ).length;
     let githubSecrets =
-      (workerInventory.exists && !options.setupGitHub) ||
+      (workerInventory.exists && !deploymentOptions.setupGitHub) ||
       (!workerInventory.exists &&
         (suppliedGitHubSecretCount > 0 || dependencies.createGitHubApp === undefined))
-        ? await readGitHubSecrets(workerInventory.exists, options, dependencies)
+        ? await readGitHubSecrets(workerInventory.exists, deploymentOptions, dependencies)
         : undefined;
     let composioApiKey =
       workerInventory.exists ||
@@ -1341,18 +1576,23 @@ export async function bootstrapDeployment(
         ? await readComposioApiKey(workerInventory.exists, dependencies)
         : undefined;
 
-    if (existingSecretNames !== undefined && !options.setupGitHub) {
+    if (existingSecretNames !== undefined && !deploymentOptions.setupGitHub) {
       requireCompleteSecretSet(existingSecretNames, githubSecrets, composioApiKey);
     }
 
     let aiGatewayPlan: AiGatewayPlan | undefined;
     let gatewayCredentials: CloudflareCredentials | undefined;
 
-    if (options.aiDailySpendUsd !== undefined) {
+    if (deploymentOptions.aiDailySpendUsd !== undefined) {
       gatewayCredentials = await readCloudflareCredentials({ cwd, dependencies });
 
       try {
-        aiGatewayPlan = await planAiGateway(options, account.id, gatewayCredentials, dependencies);
+        aiGatewayPlan = await planAiGateway(
+          deploymentOptions,
+          account.id,
+          gatewayCredentials,
+          dependencies,
+        );
       } catch (error) {
         if (
           !(error instanceof BootstrapError) ||
@@ -1391,18 +1631,23 @@ export async function bootstrapDeployment(
         }
 
         gatewayCredentials = { token: parsed.data, type: "api_token" };
-        aiGatewayPlan = await planAiGateway(options, account.id, gatewayCredentials, dependencies);
+        aiGatewayPlan = await planAiGateway(
+          deploymentOptions,
+          account.id,
+          gatewayCredentials,
+          dependencies,
+        );
       }
     }
 
     const { action: databaseAction, database } = await ensureDatabase(
-      options,
+      deploymentOptions,
       assets.migrations,
       context,
     );
-    const aiGatewayId = aiGatewayPlan?.id ?? options.aiGatewayId;
+    const aiGatewayId = aiGatewayPlan?.id ?? deploymentOptions.aiGatewayId;
     const configPath = await stageDeployment(
-      options,
+      deploymentOptions,
       account.id,
       database,
       aiGatewayId === undefined ? undefined : { id: aiGatewayId },
@@ -1429,7 +1674,11 @@ export async function bootstrapDeployment(
       await applyAiGatewayPlan(aiGatewayPlan, account.id, gatewayCredentials, dependencies);
     }
 
-    githubSecrets ??= await readGitHubSecrets(workerInventory.exists, options, dependencies);
+    githubSecrets ??= await readGitHubSecrets(
+      workerInventory.exists,
+      deploymentOptions,
+      dependencies,
+    );
     composioApiKey ??= await readComposioApiKey(workerInventory.exists, dependencies);
 
     if (existingSecretNames !== undefined) {
@@ -1453,7 +1702,7 @@ export async function bootstrapDeployment(
       "--config",
       configPath,
       "--name",
-      options.workerName,
+      deploymentOptions.workerName,
       "--no-bundle",
       "--strict",
       "--upload-source-maps",
@@ -1472,7 +1721,7 @@ export async function bootstrapDeployment(
       const deployment = await runCloudflare(context, deployArguments, "deployment");
 
       if (deployment.outcome !== "completed" || deployment.exitCode !== 0) {
-        const reconciled = await readWorkerInventory(options.workerName, context);
+        const reconciled = await readWorkerInventory(deploymentOptions.workerName, context);
 
         if (!hasDeploymentMessage(reconciled, deploymentMessage)) {
           throw commandFailed(
@@ -1493,7 +1742,7 @@ export async function bootstrapDeployment(
     } else {
       const triggerReconciliation = await runCloudflare(
         context,
-        ["triggers", "deploy", "--config", configPath, "--name", options.workerName],
+        ["triggers", "deploy", "--config", configPath, "--name", deploymentOptions.workerName],
         "deployment",
       );
 
@@ -1505,7 +1754,7 @@ export async function bootstrapDeployment(
       }
     }
 
-    const doctor: DoctorReport = await diagnoseDeployment(options, dependencies);
+    const doctor: DoctorReport = await diagnoseDeployment(deploymentOptions, dependencies);
 
     return bootstrapReportSchema.parse({
       schemaVersion: 1,
@@ -1522,8 +1771,8 @@ export async function bootstrapDeployment(
       },
       deployment: {
         action: !workerInventory.exists ? "created" : deploymentUnchanged ? "unchanged" : "updated",
-        origin: options.origin.origin,
-        workerName: options.workerName,
+        origin: deploymentOptions.origin.origin,
+        workerName: deploymentOptions.workerName,
       },
       doctor,
     });
