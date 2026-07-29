@@ -634,9 +634,28 @@ async function showConsent(context: WorkerContext, createAuth: AuthFactory): Pro
 
 async function submitConsent(context: WorkerContext, createAuth: AuthFactory): Promise<Response> {
   const values = await readForm(context.req.raw, new Set(["decision", "oauth_query"]));
+
+  if (values === null) {
+    console.warn("crewhelm.authorization_denied", {
+      contentLength: context.req.raw.headers.get("content-length"),
+      contentType: context.req.raw.headers.get("content-type"),
+      hasOrigin: context.req.raw.headers.has("origin"),
+      reason: "invalid_form_request",
+      secFetchMode: context.req.raw.headers.get("sec-fetch-mode"),
+      secFetchSite: context.req.raw.headers.get("sec-fetch-site"),
+      stage: "consent",
+    });
+  }
+
   const form = consentFormSchema.safeParse(values);
 
   if (!form.success) {
+    if (values !== null) {
+      console.warn("crewhelm.authorization_denied", {
+        reason: "invalid_form_payload",
+        stage: "consent",
+      });
+    }
     return authorizationDenied();
   }
 
@@ -662,6 +681,10 @@ async function startConsent(
   );
 
   if (!requestedScope.success) {
+    console.warn("crewhelm.authorization_denied", {
+      reason: "invalid_scope",
+      stage: "consent",
+    });
     return authorizationDenied();
   }
 
