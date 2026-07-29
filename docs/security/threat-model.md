@@ -39,8 +39,9 @@ Trust changes at:
 | Supply-chain or deployment compromise                  | Pin dependencies and automation, minimize CI permissions, validate release artifacts, and require explicit deployment authority                                        |
 
 Tool discovery never grants execution authority. Model output never grants permission or approves
-an action. External writes remain approval-gated where policy classifies them as write or
-destructive.
+an action. Routine writes may run only under an exact, versioned standing-authority grant created
+through a separately owner-consented `autonomy:write` capability, with
+bounded budgets; destructive actions remain approval-gated.
 
 ## Residual risks and recovery
 
@@ -55,7 +56,7 @@ binding; the old database is quarantined and must never be rebound because doing
 reactivate clients, sessions, signing keys, or tokens.
 
 Crewhelm permits only the explicit `control:read`, `control:write`, `agents:read`, `agents:write`,
-`connections:read`, `connections:write`, `connection-configs:read`,
+`autonomy:write`, `connections:read`, `connections:write`, `connection-configs:read`,
 `connection-configs:write`, and `integrations:read` capability scopes, plus standard
 `offline_access` for refresh. Tokens and existing client registrations are never silently widened.
 GitHub login uses no upstream scope, and its transient token is not persisted.
@@ -106,9 +107,10 @@ Active account state is established separately when tools are attached and check
 execution.
 
 Provider names, descriptions, tags, schemas, and results remain untrusted. Unknown tool effects
-default to approval-gated write. Credential-shaped tools and outputs are denied. Composio remains
-the authority for provider consent, deletion, and credential refresh; Crewhelm revocation
-immediately stops local use but does not revoke provider-side credentials.
+default to approval-gated write. Standing authority is selected per exact tool and never applies to
+destructive actions. Credential-shaped tools and outputs are denied. Composio remains the authority
+for provider consent, deletion, and credential refresh; Crewhelm revocation immediately stops
+local use but does not revoke provider-side credentials.
 
 ### Observability and deployment
 

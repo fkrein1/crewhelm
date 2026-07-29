@@ -32,7 +32,20 @@ import {
   type VerifyActiveRunAdmissionResult,
   type VerifyRunAdmissionResult,
 } from "@crewhelm/contracts";
-import { and, count, eq, gt, inArray, isNotNull, isNull, lte, min } from "drizzle-orm";
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  min,
+  or,
+} from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import { recordExecutionEvent } from "../../observability/execution.js";
@@ -123,12 +136,14 @@ function canonicalRequest(input: {
   expectedRevision: number;
   promptCharacters: number;
   promptDigest: string;
+  trigger: "manual" | "schedule";
 }): string {
   return JSON.stringify({
     agentId: input.agentId,
     expectedRevision: input.expectedRevision,
     promptCharacters: input.promptCharacters,
     promptDigest: input.promptDigest,
+    trigger: input.trigger,
   });
 }
 
@@ -339,6 +354,7 @@ export class RunAdmissions {
           requestDigest,
           runId,
           status: "issued",
+          trigger: request.data.trigger,
         })
         .run();
       transaction
@@ -758,6 +774,57 @@ export class RunAdmissions {
 
   read(runId: string): StoredRunAdmission | undefined {
     return this.#database.select().from(runAdmissions).where(eq(runAdmissions.runId, runId)).get();
+  }
+
+  listForAgent(
+    agentId: string,
+    cursor: string | undefined,
+    limit: number,
+  ): { nextCursor: string | null; rows: StoredRunAdmission[] } | undefined {
+    const cursorRow =
+      cursor === undefined
+        ? undefined
+        : this.#database
+            .select({
+              agentId: runAdmissions.agentId,
+              createdAt: runAdmissions.createdAt,
+              runId: runAdmissions.runId,
+            })
+            .from(runAdmissions)
+            .where(eq(runAdmissions.runId, cursor))
+            .get();
+
+    if (cursor !== undefined && (cursorRow === undefined || cursorRow.agentId !== agentId)) {
+      return undefined;
+    }
+
+    const rows = this.#database
+      .select()
+      .from(runAdmissions)
+      .where(
+        and(
+          eq(runAdmissions.agentId, agentId),
+          cursorRow === undefined
+            ? undefined
+            : or(
+                lt(runAdmissions.createdAt, cursorRow.createdAt),
+                and(
+                  eq(runAdmissions.createdAt, cursorRow.createdAt),
+                  lt(runAdmissions.runId, cursorRow.runId),
+                ),
+              ),
+        ),
+      )
+      .orderBy(desc(runAdmissions.createdAt), desc(runAdmissions.runId))
+      .limit(limit + 1)
+      .all();
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+
+    return {
+      nextCursor: hasMore ? (page.at(-1)?.runId ?? null) : null,
+      rows: page,
+    };
   }
 
   cleanup(currentTime: number): void {

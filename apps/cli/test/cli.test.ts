@@ -32,6 +32,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "control:write",
           "agents:read",
           "agents:write",
+          "autonomy:write",
           "connections:read",
           "connections:write",
           "connection-configs:read",
@@ -56,6 +57,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "control:write",
           "agents:read",
           "agents:write",
+          "autonomy:write",
           "connections:read",
           "connections:write",
           "connection-configs:read",
@@ -187,6 +189,10 @@ describe("Crewhelm CLI", () => {
     );
     await writeFile(
       resolve(directory, "migrations", "0010_oauth_offline_access.sql"),
+      "SELECT 1;\n",
+    );
+    await writeFile(
+      resolve(directory, "migrations", "0011_autonomy_write_scope.sql"),
       "SELECT 1;\n",
     );
     await writeFile(

@@ -3,6 +3,7 @@ import * as z from "zod";
 import {
   classifiedComposioToolActionSchema,
   sha256DigestSchema,
+  toolExecutionEvaluationFailureReasonSchema,
   toolGateDecisionSchema,
 } from "./capabilities.js";
 import {
@@ -36,7 +37,11 @@ export const evaluateToolExecutionResultSchema = z.discriminatedUnion("ok", [
     decision: toolGateDecisionSchema,
     ok: z.literal(true),
   }),
-  invalidToolExecutionSchema,
+  invalidToolExecutionSchema.extend({
+    error: invalidToolExecutionSchema.shape.error.extend({
+      reason: toolExecutionEvaluationFailureReasonSchema,
+    }),
+  }),
 ]);
 
 export const toolExecutionPermitSchema = z.strictObject({

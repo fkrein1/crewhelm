@@ -44,6 +44,7 @@ function exactInput(): ComposioToolGateInput {
     grant: {
       agentId,
       agentRevision: 7,
+      authorization: "approval_required",
       capabilityId: COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
       connectionId,
       effect: "read",
@@ -326,6 +327,28 @@ describe("ToolGate Composio policy", () => {
       });
     },
   );
+
+  it("allows a routine write under exact standing authority but still escalates destruction", async () => {
+    const standingWrite = exactInput();
+    standingWrite.action.effect = "write";
+    standingWrite.grant.effect = "write";
+    standingWrite.grant.authorization = "standing";
+
+    await expect(evaluateComposioToolAction(standingWrite)).resolves.toMatchObject({
+      action: { effect: "write" },
+      decision: "allow",
+    });
+
+    const destructive = exactInput();
+    destructive.action.effect = "destructive";
+    destructive.grant.effect = "destructive";
+    destructive.grant.authorization = "standing";
+
+    await expect(evaluateComposioToolAction(destructive)).resolves.toMatchObject({
+      decision: "requires_approval",
+      effect: "destructive",
+    });
+  });
 
   it("allows an exact sensitive action only with matching owner approval evidence", async () => {
     const input = exactInput();

@@ -9,7 +9,8 @@ The implemented surface includes a deployable Worker, an authenticated MCP contr
 owner-scoped Agent registry, bounded Agent runs on Cloudflare Think, a pure ToolGate policy module,
 dynamic Composio tool definitions and execution, and local bootstrap and diagnostic commands.
 Composio remains the credential and account-authorization owner; Crewhelm attaches a connection to
-an immutable Agent revision and applies its own budgets, approvals, and execution permits.
+an immutable Agent revision and applies its own standing authority, budgets, approvals, schedules,
+and execution permits.
 
 ## Principles
 
@@ -79,11 +80,12 @@ The Worker exposes Streamable HTTP MCP at `/mcp`. OAuth clients dynamically regi
 `/api/auth/oauth2/register` and authenticate the owner through a GitHub OAuth App. Clients request
 `control:read` to inspect control-plane status and Agent summaries, `control:write` to create Agent
 definitions, `agents:read` to inspect full Agent definitions including instructions,
-`agents:write` to replace Agent configuration through immutable revisions, `connections:read` to
-list bounded connection summaries, `connections:write` to create private hosted connection links,
+`agents:write` to replace Agent configuration through immutable revisions, `autonomy:write` to
+grant standing authority and recurring schedules, `connections:read` to list bounded connection
+summaries, `connections:write` to create private hosted connection links,
 `connection-configs:read` to list project auth configurations, `connection-configs:write` to
 enable Composio-managed authentication, and `integrations:read` to search Composio's catalog and
-inspect exact tool schemas. Registrations default to all nine Crewhelm scopes plus the standard
+inspect exact tool schemas. Registrations default to all ten Crewhelm scopes plus the standard
 `offline_access` scope; every token keeps the exact approved scope set, so adding a capability
 never widens an issued token. The consent page discloses the bounded metadata sent to Composio.
 The app callback URL must be:
@@ -127,13 +129,24 @@ The MCP surface exposes:
   requires `agents:read`.
 - `crewhelm_update_agent` — replace an Agent's editable configuration as a new immutable revision;
   requires `agents:write`, the expected current revision, and an idempotency key. Each Agent retains
-  at most 1,000 revisions.
+  at most 1,000 revisions. Carrying standing grants onto the new revision also requires
+  `autonomy:write`.
 - `crewhelm_configure_agent_connection` — replace the version-pinned Composio tools exposed from
   one authorized connection on an Agent, or detach that connection by selecting no tools; requires
-  `agents:write`, `connections:read`, and `integrations:read`. The operation creates an immutable
-  Agent revision and never returns the Composio connected-account ID.
+  `agents:write`, `connections:read`, and `integrations:read`. Selecting standing authority also
+  requires the separately consented `autonomy:write` scope. The operation creates an immutable
+  Agent revision and never returns the Composio connected-account ID. Each selected tool explicitly
+  chooses approval-required or standing authority; destructive actions always require approval.
+- `crewhelm_configure_agent_schedule` — configure, replace, or pause one versioned recurring
+  schedule bound to an exact Agent revision; creating or replacing an active schedule requires
+  `agents:write` and the separately consented `autonomy:write` scope. Pausing requires only
+  `agents:write`.
+- `crewhelm_get_agent_schedule` — inspect one Agent's current schedule, next trigger, and last
+  scheduled run; requires `agents:read`.
 - `crewhelm_start_run` — admit and durably start one bounded turn against an exact immutable Agent
   revision; requires `agents:write` and an idempotency key.
+- `crewhelm_list_agent_runs` — list recent manual and scheduled runs for one Agent, including
+  status and bounded output summaries; requires `agents:read`.
 - `crewhelm_inspect_run` — inspect the status, bounded output, and chronological admission,
   approval, dispatch, cancellation, and outcome timeline of one owner-scoped run; requires
   `agents:read`.
@@ -171,6 +184,13 @@ The MCP surface exposes:
   model, bounded instructions and execution limits, and no capability grants; requires
   `control:write`. Each owner can store at most 100 Agents.
 
+`crewhelm_inspect_run` is the durable execution trace: it orders admission, authorization,
+approval, reservation, provider dispatch, completion, cancellation, and safe failure reasons.
+Workers Logs mirror that lifecycle as structured spans. Filter by `traceId`/`runId`; a
+`toolCallId` is the child `spanId`, and `phase`, `checkpoint`, `outcome`, `reason`, and `durationMs`
+show where and why execution stopped. The trace records no prompts, tool arguments, outputs,
+provider account identifiers, credentials, or response bodies.
+
 Crewhelm's scopes and capability grants control authority, not catalog reach. The MCP design
 preserves access to the underlying Agent framework rather than defining a permanently reduced
 facade, while deterministic policy decides which capabilities each Agent may use. Composio
@@ -188,6 +208,9 @@ digests instead of raw arguments or targets, and a current policy and budget sna
 decision is local policy evidence, not a cross-object execution permit and not permission to call
 Composio; runtime admission, atomic budget reservation, single-use verified permits, approval
 evidence, account revalidation, and connector execution remain separate boundaries.
+Exact tools configured with standing authority may perform routine writes without interrupting the
+owner. Destructive actions, policy changes, permission grants, and budget increases remain
+approval-gated.
 
 Changing `OWNER_GITHUB_USER_ID` blocks new authorization and refresh, but does not revoke an
 already issued 15-minute access token. Rotating only the GitHub client secret blocks new login but

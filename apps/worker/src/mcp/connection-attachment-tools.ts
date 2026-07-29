@@ -1,4 +1,5 @@
 import {
+  AUTONOMY_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
   configureAgentConnectionInputSchema,
   configureAgentConnectionResultSchema,
@@ -51,6 +52,13 @@ export function registerConnectionAttachmentTools(
           return denied("insufficient_scope");
         }
 
+        if (
+          input.tools.some(({ authorization }) => authorization === "standing") &&
+          !authority.scopes.includes(AUTONOMY_WRITE_SCOPE)
+        ) {
+          return denied("insufficient_scope");
+        }
+
         const lookup = lookupAgentConnectionConfigurationResultSchema.safeParse(
           await controlPlane.lookupAgentConnectionConfiguration(authority, input),
         );
@@ -94,24 +102,32 @@ export function registerConnectionAttachmentTools(
         }
 
         const inspected = await Promise.all(
-          input.tools.map((tool) => adapters.catalog.inspectTool(tool)),
+          input.tools.map(({ slug, version }) => adapters.catalog.inspectTool({ slug, version })),
         );
+        const configuredTools = [];
 
-        if (
-          inspected.some(
-            (result) =>
-              !result.ok ||
-              result.tool.integration.slug !== verified.toolkitSlug ||
-              isCredentialBearingComposioTool(result.tool),
-          )
-        ) {
-          return denied("invalid_request");
+        for (const [index, result] of inspected.entries()) {
+          const requested = input.tools[index];
+
+          if (
+            requested === undefined ||
+            !result.ok ||
+            result.tool.integration.slug !== verified.toolkitSlug ||
+            isCredentialBearingComposioTool(result.tool)
+          ) {
+            return denied("invalid_request");
+          }
+
+          configuredTools.push({
+            ...result.tool,
+            authorization: requested.authorization,
+          });
         }
 
         return controlPlane.configureAgentConnection(authority, {
           ...input,
           providerConnectionId: resolved.data.providerConnectionId,
-          tools: inspected.flatMap((result) => (result.ok ? [result.tool] : [])),
+          tools: configuredTools,
           verifiedToolkitSlug: verified.toolkitSlug,
         });
       }, configureAgentConnectionResultSchema),

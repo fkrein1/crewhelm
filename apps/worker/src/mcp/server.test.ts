@@ -39,12 +39,15 @@ import {
   MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
   MCP_ENABLE_INTEGRATION_TOOL_NAME,
   MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME,
+  MCP_CONFIGURE_AGENT_SCHEDULE_TOOL_NAME,
   MCP_GET_AGENT_TOOL_NAME,
   MCP_GET_AGENT_REVISION_TOOL_NAME,
+  MCP_GET_AGENT_SCHEDULE_TOOL_NAME,
   MCP_INSPECT_INTEGRATION_TOOL_NAME,
   MCP_INSPECT_RUN_TOOL_NAME,
   MCP_LIST_INTEGRATION_AUTH_CONFIGS_TOOL_NAME,
   MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
+  MCP_LIST_AGENT_RUNS_TOOL_NAME,
   MCP_LIST_AGENTS_TOOL_NAME,
   MCP_LIST_CONNECTIONS_TOOL_NAME,
   MCP_LIST_RUN_TOOL_APPROVALS_TOOL_NAME,
@@ -160,6 +163,9 @@ describe("authenticated MCP handler", () => {
       (tool) => tool.name === MCP_LIST_CONNECTIONS_TOOL_NAME,
     );
     const startRunTool = payload.result.tools.find((tool) => tool.name === MCP_START_RUN_TOOL_NAME);
+    const configureScheduleTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_CONFIGURE_AGENT_SCHEDULE_TOOL_NAME,
+    );
     const cancelRunTool = payload.result.tools.find(
       (tool) => tool.name === MCP_CANCEL_RUN_TOOL_NAME,
     );
@@ -182,6 +188,11 @@ describe("authenticated MCP handler", () => {
         tool.name === MCP_GET_AGENT_REVISION_TOOL_NAME ||
         tool.name === MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
     );
+    const scheduleReadTools = payload.result.tools.filter(
+      (tool) =>
+        tool.name === MCP_GET_AGENT_SCHEDULE_TOOL_NAME ||
+        tool.name === MCP_LIST_AGENT_RUNS_TOOL_NAME,
+    );
 
     expect(createTool?.annotations).toMatchObject({
       destructiveHint: false,
@@ -195,6 +206,14 @@ describe("authenticated MCP handler", () => {
       openWorldHint: false,
       readOnlyHint: false,
     });
+    expect(configureScheduleTool?.annotations).toMatchObject({
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+      readOnlyHint: false,
+    });
+    expect(scheduleReadTools).toHaveLength(2);
+    expect(scheduleReadTools.every((tool) => tool.annotations.readOnlyHint)).toBe(true);
     expect(connectionLinkTool?.annotations).toMatchObject({
       destructiveHint: false,
       idempotentHint: true,
@@ -292,7 +311,7 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 7,
+        schemaVersion: 9,
         status: "ready",
       },
     });
@@ -420,6 +439,9 @@ describe("authenticated MCP handler", () => {
           configureAgentConnection: async () => {
             throw new Error("do-not-reflect-this");
           },
+          configureAgentSchedule: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           createAgent: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -435,6 +457,9 @@ describe("authenticated MCP handler", () => {
           getAgentRevision: async () => {
             throw new Error("do-not-reflect-this");
           },
+          getAgentSchedule: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           inspectRun: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -442,6 +467,9 @@ describe("authenticated MCP handler", () => {
             throw new Error("do-not-reflect-this");
           },
           listAgentRevisions: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          listAgentRuns: async () => {
             throw new Error("do-not-reflect-this");
           },
           listAgents: async () => {
@@ -1540,12 +1568,15 @@ describe("authenticated MCP handler", () => {
           completeConnectionLink: unavailableControlPlane,
           completeIntegrationEnablement: unavailableControlPlane,
           configureAgentConnection: unavailableControlPlane,
+          configureAgentSchedule: unavailableControlPlane,
           createAgent: unavailableControlPlane,
           getAgent: unavailableControlPlane,
           getAgentRevision: unavailableControlPlane,
+          getAgentSchedule: unavailableControlPlane,
           inspectRun: unavailableControlPlane,
           decideRunToolApproval: unavailableControlPlane,
           listAgentRevisions: unavailableControlPlane,
+          listAgentRuns: unavailableControlPlane,
           listAgents: unavailableControlPlane,
           listConnections: unavailableControlPlane,
           listRunToolApprovals: unavailableControlPlane,
@@ -1645,12 +1676,15 @@ describe("authenticated MCP handler", () => {
             ),
           completeIntegrationEnablement: unavailableControlPlane,
           configureAgentConnection: unavailableControlPlane,
+          configureAgentSchedule: unavailableControlPlane,
           createAgent: unavailableControlPlane,
           getAgent: unavailableControlPlane,
           getAgentRevision: unavailableControlPlane,
+          getAgentSchedule: unavailableControlPlane,
           inspectRun: unavailableControlPlane,
           decideRunToolApproval: unavailableControlPlane,
           listAgentRevisions: unavailableControlPlane,
+          listAgentRuns: unavailableControlPlane,
           listAgents: unavailableControlPlane,
           listConnections: unavailableControlPlane,
           listRunToolApprovals: unavailableControlPlane,
@@ -2025,6 +2059,7 @@ describe("authenticated MCP handler", () => {
       },
       tools: [
         {
+          authorization: "approval_required",
           slug: "PROJECT_TOOLKIT_READ_ITEM",
           version: "20260727_00",
         },
@@ -2060,11 +2095,47 @@ describe("authenticated MCP handler", () => {
     expect(text).not.toContain("ca_project_919");
     expect(text).not.toContain("provider-secret");
 
+    const standingResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 21,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              ...configurationArguments,
+              expectedRevision: 2,
+              idempotencyKey: "mcp-configure-standing-without-autonomy",
+              tools: configurationArguments.tools.map((tool) => ({
+                ...tool,
+                authorization: "standing",
+              })),
+            },
+            name: MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const standingPayload: unknown = await standingResponse.json();
+    const standingResult = jsonRpcToolResultSchema.parse(standingPayload).result;
+    const standingText = standingResult.content[0]?.text;
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(standingResult.isError).toBe(true);
+    expect(
+      configureAgentConnectionResultSchema.parse(JSON.parse(standingText ?? "")),
+    ).toMatchObject({
+      error: { code: "insufficient_scope" },
+      ok: false,
+    });
+
     fetchMock.mockRejectedValue(new Error("Composio is unavailable."));
     const replayResponse = await handleAuthenticatedMcpRequest(
       toolRequest(
         JSON.stringify({
-          id: 21,
+          id: 22,
           jsonrpc: "2.0",
           method: "tools/call",
           params: {
@@ -2128,6 +2199,7 @@ describe("authenticated MCP handler", () => {
               idempotencyKey: "mcp-configure-credential-tool",
               tools: [
                 {
+                  authorization: "approval_required",
                   slug: "PROJECT_TOOLKIT_GET_SECRET",
                   version: "20260727_00",
                 },

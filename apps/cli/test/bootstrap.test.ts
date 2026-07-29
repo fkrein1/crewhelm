@@ -128,6 +128,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "control:write",
           "agents:read",
           "agents:write",
+          "autonomy:write",
           "connections:read",
           "connections:write",
           "connection-configs:read",
@@ -152,6 +153,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "control:write",
           "agents:read",
           "agents:write",
+          "autonomy:write",
           "connections:read",
           "connections:write",
           "connection-configs:read",
@@ -199,6 +201,7 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
     "SELECT 1;\n",
   );
   await writeFile(resolve(assets, "migrations", "0010_oauth_offline_access.sql"), "SELECT 1;\n");
+  await writeFile(resolve(assets, "migrations", "0011_autonomy_write_scope.sql"), "SELECT 1;\n");
   await writeFile(
     resolve(assets, "wrangler-template.json"),
     JSON.stringify({
@@ -375,6 +378,7 @@ describe("Cloudflare bootstrap", () => {
               "0008_connection_config_read_scope.sql",
               "0009_connection_config_write_scope.sql",
               "0010_oauth_offline_access.sql",
+              "0011_autonomy_write_scope.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
@@ -527,6 +531,7 @@ describe("Cloudflare bootstrap", () => {
               "0008_connection_config_read_scope.sql",
               "0009_connection_config_write_scope.sql",
               "0010_oauth_offline_access.sql",
+              "0011_autonomy_write_scope.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
@@ -869,6 +874,7 @@ describe("Cloudflare bootstrap", () => {
               "0008_connection_config_read_scope.sql",
               "0009_connection_config_write_scope.sql",
               "0010_oauth_offline_access.sql",
+              "0011_autonomy_write_scope.sql",
             ])
           : queryResult(AUTH_TABLES);
       }

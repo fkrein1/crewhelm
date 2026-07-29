@@ -2,6 +2,7 @@ import { createExecutionContext, env, runInDurableObject } from "cloudflare:test
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  AUTONOMY_WRITE_SCOPE,
   CONNECTION_CONFIGS_READ_SCOPE,
   CONNECTION_CONFIGS_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
@@ -53,7 +54,7 @@ const origin = "https://crewhelm.test";
 const redirectUri = "https://client.example/oauth/callback";
 const ownerGithubUserId = "123456";
 const githubToken = "transient-github-token-must-not-be-stored";
-const reversedOwnerScopeClaim = `${INTEGRATIONS_READ_SCOPE} ${CONNECTION_CONFIGS_WRITE_SCOPE} ${CONNECTION_CONFIGS_READ_SCOPE} ${CONNECTIONS_WRITE_SCOPE} ${CONNECTIONS_READ_SCOPE} ${AGENTS_WRITE_SCOPE} ${AGENTS_READ_SCOPE} ${OWNER_WRITE_SCOPE} ${OWNER_READ_SCOPE}`;
+const reversedOwnerScopeClaim = `${INTEGRATIONS_READ_SCOPE} ${CONNECTION_CONFIGS_WRITE_SCOPE} ${CONNECTION_CONFIGS_READ_SCOPE} ${CONNECTIONS_WRITE_SCOPE} ${CONNECTIONS_READ_SCOPE} ${AUTONOMY_WRITE_SCOPE} ${AGENTS_WRITE_SCOPE} ${AGENTS_READ_SCOPE} ${OWNER_WRITE_SCOPE} ${OWNER_READ_SCOPE}`;
 const registrationSchema = z.looseObject({
   client_id: z.string().min(1),
   token_endpoint_auth_method: z.literal("none"),
@@ -581,6 +582,9 @@ describe("public OAuth to MCP integration", () => {
       "Start runs, decide approvals, and replace Agent definitions or exposed connection tools through immutable revisions.",
     );
     expect(consentPage).toContain(
+      "Grant exact tools standing authority and create recurring Agent schedules that continue after this session.",
+    );
+    expect(consentPage).toContain(
       "Create Agent definitions with bounded configuration and no capability grants.",
     );
     expect(consentPage).toContain(
@@ -777,7 +781,7 @@ describe("public OAuth to MCP integration", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(toolResult.content[0].text))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 7,
+        schemaVersion: 9,
         status: "ready",
       },
     });

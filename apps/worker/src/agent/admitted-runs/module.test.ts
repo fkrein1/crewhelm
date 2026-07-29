@@ -122,7 +122,12 @@ async function runWithTimeline(
   );
 }
 
-async function pendingWriteRun(subject: string, idempotencyKey: string, prompt = TOOL_TEST_PROMPT) {
+async function startWriteRun(
+  subject: string,
+  idempotencyKey: string,
+  authorization: ComposioToolCapabilityGrant["authorization"],
+  prompt = TOOL_TEST_PROMPT,
+) {
   const authority = await authorityFor(subject);
   const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
   const input = agentInput(`${idempotencyKey}-agent`);
@@ -143,6 +148,7 @@ async function pendingWriteRun(subject: string, idempotencyKey: string, prompt =
   const grant: ComposioToolCapabilityGrant = {
     agentId: created.agent.id,
     agentRevision: created.agent.revision,
+    authorization,
     capabilityId: COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
     connectionId,
     effect: "write",
@@ -210,13 +216,23 @@ async function pendingWriteRun(subject: string, idempotencyKey: string, prompt =
   });
 
   if (!started.ok) {
-    throw new Error("Expected approval-bound tool run.");
+    throw new Error("Expected write tool run.");
   }
 
+  return {
+    agentId: created.agent.id,
+    authority,
+    controlPlane,
+    runId: started.run.runId,
+  };
+}
+
+async function pendingWriteRun(subject: string, idempotencyKey: string, prompt = TOOL_TEST_PROMPT) {
+  const fixture = await startWriteRun(subject, idempotencyKey, "approval_required", prompt);
   const listed = await vi.waitFor(
     async () => {
-      const result = await controlPlane.listRunToolApprovals(authority, {
-        runId: started.run.runId,
+      const result = await fixture.controlPlane.listRunToolApprovals(fixture.authority, {
+        runId: fixture.runId,
       });
 
       if (!result.ok || result.approvals[0] === undefined) {
@@ -234,11 +250,8 @@ async function pendingWriteRun(subject: string, idempotencyKey: string, prompt =
   }
 
   return {
-    agentId: created.agent.id,
+    ...fixture,
     approval,
-    authority,
-    controlPlane,
-    runId: started.run.runId,
   };
 }
 
@@ -610,6 +623,7 @@ describe("CrewAgent admitted execution", () => {
     const grant: ComposioToolCapabilityGrant = {
       agentId: created.agent.id,
       agentRevision: created.agent.revision,
+      authorization: "approval_required",
       capabilityId: COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
       connectionId,
       effect: "read",
@@ -922,6 +936,7 @@ describe("CrewAgent admitted execution", () => {
     const grant: ComposioToolCapabilityGrant = {
       agentId: created.agent.id,
       agentRevision: created.agent.revision,
+      authorization: "approval_required",
       capabilityId: COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
       connectionId,
       effect: "write",
@@ -1038,6 +1053,7 @@ describe("CrewAgent admitted execution", () => {
     const completed = await runWithTimeline(controlPlane, authority, started.run.runId, [
       "run.admitted",
       "run.started",
+      "tool.authorization_approval_required",
       "tool.approval_required",
       "tool.approval_approved",
       "tool.execution_reserved",
@@ -1082,6 +1098,35 @@ describe("CrewAgent admitted execution", () => {
     });
   });
 
+  it("executes an exact standing-authority write without owner approval", async () => {
+    const fixture = await startWriteRun(
+      "crew-agent-standing-write",
+      "crew-agent-standing-write",
+      "standing",
+    );
+    const completed = await runWithTimeline(
+      fixture.controlPlane,
+      fixture.authority,
+      fixture.runId,
+      [
+        "run.admitted",
+        "run.started",
+        "tool.authorization_allowed",
+        "tool.execution_reserved",
+        "tool.execution_dispatched",
+        "tool.execution_completed",
+        "run.completed",
+      ],
+    );
+
+    expect(completed.run.status).toBe("completed");
+    await expect(
+      fixture.controlPlane.listRunToolApprovals(fixture.authority, {
+        runId: fixture.runId,
+      }),
+    ).resolves.toEqual({ approvals: [], ok: true });
+  });
+
   it("returns the terminal tool outcome when the model emits no post-approval text", async () => {
     const fixture = await pendingWriteRun(
       "crew-agent-612-fallback",
@@ -1108,6 +1153,7 @@ describe("CrewAgent admitted execution", () => {
       [
         "run.admitted",
         "run.started",
+        "tool.authorization_approval_required",
         "tool.approval_required",
         "tool.approval_approved",
         "tool.execution_reserved",
@@ -1145,6 +1191,7 @@ describe("CrewAgent admitted execution", () => {
       [
         "run.admitted",
         "run.started",
+        "tool.authorization_approval_required",
         "tool.approval_required",
         "tool.approval_rejected",
         "run.completed",
@@ -1248,6 +1295,7 @@ describe("CrewAgent admitted execution", () => {
     expect(cancelled.ok ? cancelled.timeline.map((event) => event.event) : []).toEqual([
       "run.admitted",
       "run.started",
+      "tool.authorization_approval_required",
       "tool.approval_required",
       "run.cancellation_requested",
       "run.cancelled",

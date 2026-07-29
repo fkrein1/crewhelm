@@ -1,6 +1,7 @@
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  AUTONOMY_WRITE_SCOPE,
   CONNECTION_CONFIGS_READ_SCOPE,
   CONNECTION_CONFIGS_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
@@ -512,6 +513,9 @@ function consentPage(
       : "",
     requestedScopes.includes(AGENTS_WRITE_SCOPE)
       ? "<li>Start runs, decide approvals, and replace Agent definitions or exposed connection tools through immutable revisions.</li>"
+      : "",
+    requestedScopes.includes(AUTONOMY_WRITE_SCOPE)
+      ? "<li>Grant exact tools standing authority and create recurring Agent schedules that continue after this session.</li>"
       : "",
     requestedScopes.includes(CONNECTIONS_READ_SCOPE)
       ? "<li>View bounded Crewhelm connection summaries. Provider account identifiers and credentials are not returned.</li>"

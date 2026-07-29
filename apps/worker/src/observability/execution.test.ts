@@ -4,6 +4,9 @@ import { recordExecutionEvent, recordExecutionProviderResponse } from "./executi
 
 const runId = "run_00000000-0000-4000-8000-000000000001";
 const toolCallId = "tool_call_00000000-0000-4000-8000-000000000002";
+const agentId = "agent_00000000-0000-4000-8000-000000000003";
+const connectionId = "connection_00000000-0000-4000-8000-000000000004";
+const grantId = "grant_00000000-0000-4000-8000-000000000005";
 
 describe("execution observability", () => {
   afterEach(() => {
@@ -25,9 +28,12 @@ describe("execution observability", () => {
       event: "crewhelm.execution",
       outcome: "completed",
       outputBytes: 42,
+      parentSpanId: runId,
       phase: "tool.completion",
       runId,
+      spanId: toolCallId,
       toolCallId,
+      traceId: runId,
     });
   });
 
@@ -72,12 +78,59 @@ describe("execution observability", () => {
       durationMs: 157,
       operation: "execute",
       outcome: "provider_rejected",
+      parentSpanId: runId,
       providerErrorCode: 4001,
       providerErrorSlug: "invalid_tool_input",
       runId,
+      spanId: toolCallId,
       status: 403,
       toolCallId,
       toolSlug: "DISCORD_GET_MY_USER",
+      traceId: runId,
+    });
+  });
+
+  it("records a safe authorization root cause as a correlated tool span", () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    recordExecutionEvent({
+      agentId,
+      agentRevision: 2,
+      authorization: "standing",
+      checkpoint: "pre_execution",
+      connectionId,
+      durationMs: 12,
+      effect: "write",
+      grantId,
+      integrationSlug: "todoist",
+      outcome: "blocked",
+      phase: "tool.authorization",
+      reason: "budget_exhausted",
+      runId,
+      toolCallId,
+      toolSlug: "TODOIST_CREATE_TASK",
+    });
+
+    expect(info).toHaveBeenCalledExactlyOnceWith({
+      agentId,
+      agentRevision: 2,
+      authorization: "standing",
+      checkpoint: "pre_execution",
+      connectionId,
+      durationMs: 12,
+      effect: "write",
+      event: "crewhelm.execution",
+      grantId,
+      integrationSlug: "todoist",
+      outcome: "blocked",
+      parentSpanId: runId,
+      phase: "tool.authorization",
+      reason: "budget_exhausted",
+      runId,
+      spanId: toolCallId,
+      toolCallId,
+      toolSlug: "TODOIST_CREATE_TASK",
+      traceId: runId,
     });
   });
 });

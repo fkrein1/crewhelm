@@ -37,6 +37,7 @@ export const sha256DigestSchema = z
   .string()
   .regex(/^[0-9a-f]{64}$/, "Expected a lowercase SHA-256 digest.");
 export const capabilityEffectSchema = z.enum(["read", "write", "destructive"]);
+export const toolAuthorizationModeSchema = z.enum(["approval_required", "standing"]);
 
 const credentialMaterialNames = new Set([
   "accesskey",
@@ -207,6 +208,7 @@ export const composioToolLimitsSchema = z.strictObject({
   maxOutputBytes: z.number().int().min(1).max(MAXIMUM_TOOL_OUTPUT_BYTES),
 });
 export const composioToolCapabilityGrantSchema = composioToolBindingSchema.extend({
+  authorization: toolAuthorizationModeSchema,
   expiresAt: z.iso.datetime().nullable(),
   limits: composioToolLimitsSchema,
   tool: integrationToolRuntimeDefinitionSchema,
@@ -251,7 +253,7 @@ export const composioToolGateInputSchema = z.strictObject({
   policy: toolGatePolicySnapshotSchema,
 });
 
-const toolGateDenialReasonSchema = z.enum([
+export const toolGateDenialReasonSchema = z.enum([
   "budget_exhausted",
   "concurrency_exhausted",
   "grant_expired",
@@ -261,6 +263,16 @@ const toolGateDenialReasonSchema = z.enum([
   "policy_mismatch",
   "policy_stale",
   "unknown_cost",
+]);
+export const toolExecutionEvaluationFailureReasonSchema = z.enum([
+  "action_mismatch",
+  "admission_mismatch",
+  "admission_unavailable",
+  "grant_mismatch",
+  "grant_snapshot_mismatch",
+  "grant_unavailable",
+  "invalid_request",
+  "unreconciled_effect",
 ]);
 export const toolGateDecisionSchema = z.discriminatedUnion("decision", [
   z.strictObject({
@@ -290,5 +302,9 @@ export type CapabilityEffect = z.infer<typeof capabilityEffectSchema>;
 export type ClassifiedComposioToolAction = z.infer<typeof classifiedComposioToolActionSchema>;
 export type ComposioToolCapabilityGrant = z.infer<typeof composioToolCapabilityGrantSchema>;
 export type ComposioToolGateInput = z.infer<typeof composioToolGateInputSchema>;
+export type ToolAuthorizationMode = z.infer<typeof toolAuthorizationModeSchema>;
+export type ToolExecutionEvaluationFailureReason = z.infer<
+  typeof toolExecutionEvaluationFailureReasonSchema
+>;
 export type ToolGateDecision = z.infer<typeof toolGateDecisionSchema>;
 export type ToolGatePolicySnapshot = z.infer<typeof toolGatePolicySnapshotSchema>;

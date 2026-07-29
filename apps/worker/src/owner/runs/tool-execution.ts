@@ -13,12 +13,14 @@ import {
   runAdmissionNonceSchema,
   toolExecutionPermitSchema,
   type CompleteToolExecutionResult,
+  type ComposioToolGateInput,
   type EvaluateToolExecutionResult,
   type ReserveToolExecutionResult,
   type ReconcileToolExecutionResult,
   type ResolveToolExecutionConnectionResult,
   type ToolExecutionPermit,
   type OwnerAuthority,
+  type ToolExecutionEvaluationFailureReason,
 } from "@crewhelm/contracts";
 import { and, count, eq, gt, isNotNull, isNull, lte, min, or } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
@@ -45,11 +47,25 @@ const INVALID_TOOL_EXECUTION = {
   ok: false,
 } as const;
 
+export function deniedToolExecutionEvaluation(
+  reason: ToolExecutionEvaluationFailureReason,
+): EvaluateToolExecutionResult {
+  return evaluateToolExecutionResultSchema.parse({
+    error: {
+      ...INVALID_TOOL_EXECUTION.error,
+      reason,
+    },
+    ok: false,
+  });
+}
+
 type ControlPlaneDatabase = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type ControlPlaneTransaction = Parameters<Parameters<ControlPlaneDatabase["transaction"]>[0]>[0];
 type ToolExecutionDatabase = ControlPlaneDatabase | ControlPlaneTransaction;
 type ToolExecutionRequest = ReturnType<typeof evaluateToolExecutionInputSchema.parse>;
-const LEGACY_UNKNOWN_EFFECT_DIGEST = "0".repeat(64);
+type GateInputResult =
+  | { input: ComposioToolGateInput; ok: true }
+  | { ok: false; reason: ToolExecutionEvaluationFailureReason };
 
 function encodeBase64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -126,7 +142,7 @@ export class ToolExecutions {
     const request = evaluateToolExecutionInputSchema.safeParse(input);
 
     if (!request.success) {
-      return INVALID_TOOL_EXECUTION;
+      return deniedToolExecutionEvaluation("invalid_request");
     }
 
     const effectDigest = await digestExternalEffect(request.data.action);
@@ -135,17 +151,17 @@ export class ToolExecutions {
       request.data.action.effect !== "read" &&
       this.#hasUnreconciledEffect(this.#database, effectDigest)
     ) {
-      return INVALID_TOOL_EXECUTION;
+      return deniedToolExecutionEvaluation("unreconciled_effect");
     }
 
-    const gateInput = this.#gateInput(this.#database, request.data, Date.now());
+    const gate = this.#gateInput(this.#database, request.data, Date.now());
 
-    if (gateInput === undefined) {
-      return INVALID_TOOL_EXECUTION;
+    if (!gate.ok) {
+      return deniedToolExecutionEvaluation(gate.reason);
     }
 
     return evaluateToolExecutionResultSchema.parse({
-      decision: await evaluateComposioToolAction(gateInput),
+      decision: await evaluateComposioToolAction(gate.input),
       ok: true,
     });
   }
@@ -176,11 +192,12 @@ export class ToolExecutions {
       return INVALID_TOOL_EXECUTION;
     }
 
-    const gateInput = this.#gateInput(this.#database, request.data, evaluatedAt);
+    const gate = this.#gateInput(this.#database, request.data, evaluatedAt);
 
-    if (gateInput === undefined) {
+    if (!gate.ok) {
       return INVALID_TOOL_EXECUTION;
     }
+    const gateInput = gate.input;
 
     const approval = this.#database
       .select({
@@ -239,11 +256,11 @@ export class ToolExecutions {
     const executionDeadline =
       evaluatedAt + Math.min(decision.constraints.maxDurationMs, 5 * 60 * 1_000);
     const result = this.#database.transaction((transaction) => {
-      const currentGateInput = this.#gateInput(transaction, request.data, evaluatedAt);
+      const currentGate = this.#gateInput(transaction, request.data, evaluatedAt);
 
       if (
-        currentGateInput === undefined ||
-        JSON.stringify(currentGateInput) !== JSON.stringify(gateInput) ||
+        !currentGate.ok ||
+        JSON.stringify(currentGate.input) !== JSON.stringify(gateInput) ||
         (request.data.action.effect !== "read" &&
           this.#hasUnreconciledEffect(transaction, effectDigest))
       ) {
@@ -721,9 +738,13 @@ export class ToolExecutions {
     }
   }
 
-  #gateInput(database: ToolExecutionDatabase, request: ToolExecutionRequest, evaluatedAt: number) {
+  #gateInput(
+    database: ToolExecutionDatabase,
+    request: ToolExecutionRequest,
+    evaluatedAt: number,
+  ): GateInputResult {
     if (request.ownerKey !== this.#objectName) {
-      return undefined;
+      return { ok: false, reason: "admission_mismatch" };
     }
 
     const admission = database
@@ -736,19 +757,29 @@ export class ToolExecutions {
       admission === undefined ||
       admission.status !== "redeemed" ||
       admission.cancellationRequestedAt !== null ||
-      admission.cleanupAt <= evaluatedAt ||
+      admission.cleanupAt <= evaluatedAt
+    ) {
+      return { ok: false, reason: "admission_unavailable" };
+    }
+
+    if (
       admission.agentId !== request.agentId ||
       admission.agentRevision !== request.agentRevision ||
       admission.clientId !== request.clientId ||
       admission.idempotencyKey !== request.idempotencyKey ||
       admission.promptDigest !== request.promptDigest ||
-      JSON.stringify(admission.budgetReservation) !== JSON.stringify(request.budgetReservation) ||
+      JSON.stringify(admission.budgetReservation) !== JSON.stringify(request.budgetReservation)
+    ) {
+      return { ok: false, reason: "admission_mismatch" };
+    }
+
+    if (
       request.action.ownerKey !== request.ownerKey ||
       request.action.agentId !== request.agentId ||
       request.action.agentRevision !== request.agentRevision ||
       request.action.runId !== request.runId
     ) {
-      return undefined;
+      return { ok: false, reason: "action_mismatch" };
     }
 
     const grantRow = database
@@ -769,16 +800,24 @@ export class ToolExecutions {
       (candidate) => candidate.grantId === request.action.grantId,
     );
 
+    if (grantRow === undefined || !grant.success) {
+      return { ok: false, reason: "grant_unavailable" };
+    }
+
+    if (reservedGrant === undefined) {
+      return { ok: false, reason: "grant_snapshot_mismatch" };
+    }
+
     if (
-      grantRow === undefined ||
-      !grant.success ||
-      reservedGrant === undefined ||
       grantRow.agentId !== request.agentId ||
       grantRow.agentRevision !== request.agentRevision ||
-      grantRow.connectionId !== grant.data.connectionId ||
-      JSON.stringify(grant.data) !== JSON.stringify(reservedGrant)
+      grantRow.connectionId !== grant.data.connectionId
     ) {
-      return undefined;
+      return { ok: false, reason: "grant_mismatch" };
+    }
+
+    if (JSON.stringify(grant.data) !== JSON.stringify(reservedGrant)) {
+      return { ok: false, reason: "grant_snapshot_mismatch" };
     }
 
     const currentAgent = database
@@ -786,6 +825,10 @@ export class ToolExecutions {
       .from(agents)
       .where(eq(agents.agentId, request.agentId))
       .get();
+
+    if (currentAgent === undefined) {
+      return { ok: false, reason: "admission_unavailable" };
+    }
     const grantCallsUsed =
       database
         .select({ value: count() })
@@ -812,39 +855,42 @@ export class ToolExecutions {
     const deadlineAt = admission.createdAt + request.budgetReservation.maxDurationSeconds * 1_000;
 
     return {
-      action: request.action,
-      grant: grant.data,
-      policy: {
-        activeGrantCalls,
-        agentId: request.agentId,
-        agentStatus:
-          currentAgent?.currentRevision !== request.agentRevision
-            ? ("revoked" as const)
-            : currentAgent.status,
-        capabilityId: request.action.capabilityId,
-        connectionId: request.action.connectionId,
-        connectionStatus:
-          grantRow?.connectionStatus === "active"
-            ? ("active" as const)
-            : grantRow?.connectionStatus === "revoked"
+      input: {
+        action: request.action,
+        grant: grant.data,
+        policy: {
+          activeGrantCalls,
+          agentId: request.agentId,
+          agentStatus:
+            currentAgent.currentRevision !== request.agentRevision
               ? ("revoked" as const)
-              : ("unavailable" as const),
-        currentAgentRevision: currentAgent?.currentRevision ?? request.agentRevision,
-        evaluatedAt: new Date(evaluatedAt).toISOString(),
-        grantCallsUsed,
-        grantId: request.action.grantId,
-        grantStatus: grantRow?.grantStatus ?? "revoked",
-        killSwitchActive: false,
-        ownerKey: request.ownerKey,
-        remainingCostMicrousd: grant.data.limits.maxCostMicrousdPerCall,
-        remainingDurationMs: Math.max(0, deadlineAt - evaluatedAt),
-        remainingOutputBytes: grant.data.limits.maxOutputBytes,
-        remainingToolCalls: Math.max(
-          0,
-          request.budgetReservation.maxToolCalls - admission.toolCallsConsumed,
-        ),
-        runId: request.runId,
+              : currentAgent.status,
+          capabilityId: request.action.capabilityId,
+          connectionId: request.action.connectionId,
+          connectionStatus:
+            grantRow?.connectionStatus === "active"
+              ? ("active" as const)
+              : grantRow?.connectionStatus === "revoked"
+                ? ("revoked" as const)
+                : ("unavailable" as const),
+          currentAgentRevision: currentAgent.currentRevision,
+          evaluatedAt: new Date(evaluatedAt).toISOString(),
+          grantCallsUsed,
+          grantId: request.action.grantId,
+          grantStatus: grantRow?.grantStatus ?? "revoked",
+          killSwitchActive: false,
+          ownerKey: request.ownerKey,
+          remainingCostMicrousd: grant.data.limits.maxCostMicrousdPerCall,
+          remainingDurationMs: Math.max(0, deadlineAt - evaluatedAt),
+          remainingOutputBytes: grant.data.limits.maxOutputBytes,
+          remainingToolCalls: Math.max(
+            0,
+            request.budgetReservation.maxToolCalls - admission.toolCallsConsumed,
+          ),
+          runId: request.runId,
+        },
       },
+      ok: true,
     };
   }
 
@@ -858,7 +904,7 @@ export class ToolExecutions {
             eq(toolExecutions.status, "unknown"),
             or(
               eq(toolExecutions.effectDigest, effectDigest),
-              eq(toolExecutions.effectDigest, LEGACY_UNKNOWN_EFFECT_DIGEST),
+              eq(toolExecutions.effectDigest, "0".repeat(64)),
             ),
           ),
         )

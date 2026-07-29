@@ -10,7 +10,7 @@ import {
   type ComposioToolCapabilityGrant,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
-import { runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
@@ -30,7 +30,11 @@ async function authorityFor(subject: string): Promise<OwnerAuthority> {
   });
 }
 
-async function toolExecutionFixture(subject: string, effect: "read" | "write") {
+async function toolExecutionFixture(
+  subject: string,
+  effect: "read" | "write",
+  authorization: "approval_required" | "standing" = "approval_required",
+) {
   const authority = await authorityFor(subject);
   const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
   const created = await controlPlane.createAgent(authority, {
@@ -56,6 +60,7 @@ async function toolExecutionFixture(subject: string, effect: "read" | "write") {
   const grant: ComposioToolCapabilityGrant = {
     agentId: created.agent.id,
     agentRevision: created.agent.revision,
+    authorization,
     capabilityId: COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
     connectionId: fixtureConnectionId,
     effect,
@@ -206,6 +211,47 @@ async function approveFixtureAction(
 }
 
 describe("admitted tool execution", () => {
+  it("backfills legacy grants to approval-required before they can execute", async () => {
+    const fixture = await toolExecutionFixture("legacy-grant-authorization", "write");
+
+    await runInDurableObject(fixture.controlPlane, (_instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE capability_grants
+         SET grant = json_remove(grant, '$.authorization')
+         WHERE grant_id = ?`,
+        fixture.grantId,
+      );
+      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version = 9");
+    });
+    await evictDurableObject(fixture.controlPlane);
+
+    await expect(fixture.controlPlane.status(fixture.authority)).resolves.toMatchObject({
+      ok: true,
+      status: { schemaVersion: 9 },
+    });
+    await expect(
+      fixture.controlPlane.evaluateToolExecution({
+        ...fixture.reference,
+        action: fixture.action,
+      }),
+    ).resolves.toMatchObject({
+      decision: { decision: "requires_approval" },
+      ok: true,
+    });
+    await runInDurableObject(fixture.controlPlane, (_instance, state) => {
+      expect(
+        state.storage.sql
+          .exec<{ authorization: string }>(
+            `SELECT json_extract(grant, '$.authorization') AS authorization
+             FROM capability_grants
+             WHERE grant_id = ?`,
+            fixture.grantId,
+          )
+          .one(),
+      ).toEqual({ authorization: "approval_required" });
+    });
+  });
+
   it("identifies an external effect independently of run and grant policy", async () => {
     const fixture = await toolExecutionFixture("effect-identity", "write");
     const action = classifiedComposioToolActionSchema.parse(fixture.action);
@@ -224,6 +270,31 @@ describe("admitted tool execution", () => {
     await expect(
       digestExternalEffect({ ...action, inputDigest: "f".repeat(64) }),
     ).resolves.not.toBe(original);
+  });
+
+  it("reserves an exact routine write without owner interruption under standing authority", async () => {
+    const fixture = await toolExecutionFixture("standing-write", "write", "standing");
+    const evaluated = await fixture.controlPlane.evaluateToolExecution({
+      ...fixture.reference,
+      action: fixture.action,
+    });
+
+    expect(evaluated).toMatchObject({
+      decision: {
+        action: { effect: "write" },
+        decision: "allow",
+      },
+      ok: true,
+    });
+    await expect(
+      fixture.controlPlane.reserveToolExecution({
+        ...fixture.reference,
+        action: fixture.action,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      state: "allowed",
+    });
   });
 
   it("reserves, completes, and exhausts an exact read grant", async () => {
@@ -249,6 +320,7 @@ describe("admitted tool execution", () => {
     const grant: ComposioToolCapabilityGrant = {
       agentId: created.agent.id,
       agentRevision: created.agent.revision,
+      authorization: "approval_required",
       capabilityId: COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
       connectionId,
       effect: "read",
@@ -697,9 +769,39 @@ describe("admitted tool execution", () => {
         action: retryAction,
       }),
     ).resolves.toEqual({
-      error: { code: "invalid_execution", message: "Tool execution denied." },
+      error: {
+        code: "invalid_execution",
+        message: "Tool execution denied.",
+        reason: "unreconciled_effect",
+      },
       ok: false,
     });
+
+    await runInDurableObject(fixture.controlPlane, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE tool_executions SET effect_digest = ? WHERE tool_call_id = ?",
+        "0".repeat(64),
+        fixture.action.toolCallId,
+      );
+    });
+    await expect(
+      fixture.controlPlane.evaluateToolExecution({
+        ...fixture.reference,
+        action: {
+          ...retryAction,
+          inputDigest: "1".repeat(64),
+          toolCallId: `tool_call_${crypto.randomUUID()}`,
+        },
+      }),
+    ).resolves.toEqual({
+      error: {
+        code: "invalid_execution",
+        message: "Tool execution denied.",
+        reason: "unreconciled_effect",
+      },
+      ok: false,
+    });
+
     await expect(
       fixture.controlPlane.reserveToolExecution({
         ...fixture.reference,
