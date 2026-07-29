@@ -1,5 +1,6 @@
 import { Chalk, type ChalkInstance } from "chalk";
 import { Command, CommanderError, type OutputConfiguration } from "commander";
+import { connectionIdSchema } from "@crewhelm/contracts";
 import * as z from "zod";
 
 import { bootstrapOptionsSchema } from "./bootstrap.js";
@@ -11,6 +12,7 @@ ${style.cyan.bold("Examples:")}
   ${style.cyan("$ crewhelm up")}
   ${style.cyan("$ crewhelm doctor --endpoint https://crewhelm.example")}
   ${style.cyan("$ crewhelm smoke agent --help")}
+  ${style.cyan("$ crewhelm smoke integration --help")}
 
 ${style.dim("Run crewhelm <command> --help for command-specific options and safety notes.")}
 `;
@@ -62,6 +64,16 @@ ${style.yellow.bold("Production rehearsal:")}
 `;
 }
 
+function formatStandingIntegrationSmokeHelp(style: ChalkInstance): string {
+  return `
+${style.yellow.bold("Production rehearsal:")}
+  Creates one draft to the reserved, non-deliverable example.invalid domain.
+  Requires an exact active Gmail connection and retains the draft for verification.
+  Revokes the grant, disables the Agent, and revokes temporary Full control before exit.
+  Requires ${style.yellow("--confirm-production")} and an HTTPS endpoint.
+`;
+}
+
 const cliCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("help"),
@@ -85,6 +97,19 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
     json: z.boolean(),
     kind: z.literal("doctor"),
     origin: z.instanceof(URL),
+    timeoutMs: z.number().int().min(100).max(30_000),
+  }),
+  z.strictObject({
+    confirmProduction: z.literal(true),
+    connectionId: connectionIdSchema,
+    json: z.boolean(),
+    kind: z.literal("standing-integration-smoke"),
+    origin: z.instanceof(URL).refine((origin) => origin.protocol === "https:"),
+    runTimeoutMs: z
+      .number()
+      .int()
+      .min(1_000)
+      .max(10 * 60 * 1_000),
     timeoutMs: z.number().int().min(100).max(30_000),
   }),
   z.strictObject({
@@ -131,11 +156,18 @@ interface AgentSmokeCommandOptions {
   timeoutMs: string;
 }
 
+interface StandingIntegrationSmokeCommandOptions extends AgentSmokeCommandOptions {
+  connectionId: string;
+}
+
 export class CliUsageError extends Error {
   override readonly name = "CliUsageError";
 }
 
-function parseOrigin(endpoint: string | undefined, kind: "up" | "doctor" | "agent-smoke") {
+function parseOrigin(
+  endpoint: string | undefined,
+  kind: "up" | "doctor" | "agent-smoke" | "standing-integration-smoke",
+) {
   if (endpoint === undefined) {
     return undefined;
   }
@@ -152,9 +184,18 @@ function parseOrigin(endpoint: string | undefined, kind: "up" | "doctor" | "agen
     throw error;
   }
 
-  if ((kind === "up" || kind === "agent-smoke") && origin.protocol !== "https:") {
+  if (
+    (kind === "up" || kind === "agent-smoke" || kind === "standing-integration-smoke") &&
+    origin.protocol !== "https:"
+  ) {
     throw new CliUsageError(
-      `${kind === "agent-smoke" ? "smoke agent" : kind} requires an HTTPS endpoint.`,
+      `${
+        kind === "agent-smoke"
+          ? "smoke agent"
+          : kind === "standing-integration-smoke"
+            ? "smoke integration"
+            : kind
+      } requires an HTTPS endpoint.`,
     );
   }
 
@@ -256,10 +297,12 @@ function createCliProgram(
       );
     });
 
-  program
+  const smoke = program
     .command("smoke")
     .summary("run explicit production rehearsals")
-    .description("Run explicit, mutating production rehearsals.")
+    .description("Run explicit, mutating production rehearsals.");
+
+  smoke
     .command("agent")
     .summary("rehearse one disposable Agent lifecycle")
     .description("Create, run, disable, and verify one zero-grant disposable Agent.")
@@ -276,6 +319,33 @@ function createCliProgram(
           json: options.json === true,
           kind: "agent-smoke",
           origin: parseOrigin(options.endpoint, "agent-smoke"),
+          runTimeoutMs: Number(options.runTimeoutMs),
+          timeoutMs: Number(options.timeoutMs),
+        }),
+      );
+    });
+
+  smoke
+    .command("integration")
+    .summary("rehearse one standing Gmail draft action")
+    .description(
+      "Create one non-deliverable Gmail draft through an exact, one-call standing capability grant.",
+    )
+    .requiredOption("--endpoint <origin>", "HTTPS Crewhelm deployment origin")
+    .requiredOption("--connection-id <id>", "exact active Crewhelm Gmail connection")
+    .requiredOption("--confirm-production", "confirm the mutating production rehearsal")
+    .option("--run-timeout-ms <milliseconds>", "maximum Agent run duration", "120000")
+    .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")
+    .option("--json", "write one machine-readable JSON result")
+    .addHelpText("after", formatStandingIntegrationSmokeHelp(style))
+    .action((options: StandingIntegrationSmokeCommandOptions) => {
+      onCommand?.(
+        validatedCommand({
+          confirmProduction: options.confirmProduction,
+          connectionId: options.connectionId,
+          json: options.json === true,
+          kind: "standing-integration-smoke",
+          origin: parseOrigin(options.endpoint, "standing-integration-smoke"),
           runTimeoutMs: Number(options.runTimeoutMs),
           timeoutMs: Number(options.timeoutMs),
         }),
@@ -343,17 +413,28 @@ export function parseCli(
 
   const helpRequested = hasFlag(arguments_, "--help") || arguments_.includes("-h");
   const agentSmoke = arguments_[0] === "smoke" && arguments_[1] === "agent";
+  const integrationSmoke = arguments_[0] === "smoke" && arguments_[1] === "integration";
 
-  if (!helpRequested && agentSmoke && !hasFlag(arguments_, "--confirm-production")) {
-    throw new CliUsageError("smoke agent requires --confirm-production.");
+  if (
+    !helpRequested &&
+    (agentSmoke || integrationSmoke) &&
+    !hasFlag(arguments_, "--confirm-production")
+  ) {
+    throw new CliUsageError(
+      `${integrationSmoke ? "smoke integration" : "smoke agent"} requires --confirm-production.`,
+    );
   }
 
   if (
     !helpRequested &&
-    (arguments_[0] === "doctor" || agentSmoke) &&
+    (arguments_[0] === "doctor" || agentSmoke || integrationSmoke) &&
     !hasFlag(arguments_, "--endpoint")
   ) {
-    throw new CliUsageError(`${agentSmoke ? "agent-smoke" : "doctor"} requires --endpoint.`);
+    throw new CliUsageError(
+      `${
+        agentSmoke ? "agent-smoke" : integrationSmoke ? "standing-integration-smoke" : "doctor"
+      } requires --endpoint.`,
+    );
   }
 
   let command: Exclude<CliCommand, { kind: "help" }> | undefined;
