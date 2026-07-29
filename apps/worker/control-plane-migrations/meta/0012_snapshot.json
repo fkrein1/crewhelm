@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "768390e5-67b5-480c-adb3-75517183e329",
-  "prevId": "d1f930c3-4b80-4cdd-9a34-ea076227224e",
+  "id": "0a94b447-247a-4b21-8431-73531bf96334",
+  "prevId": "768390e5-67b5-480c-adb3-75517183e329",
   "tables": {
     "agent_creations": {
       "name": "agent_creations",
@@ -76,6 +76,302 @@
         "agent_creations_revision_positive": {
           "name": "agent_creations_revision_positive",
           "value": "\"agent_creations\".\"revision\" > 0"
+        }
+      }
+    },
+    "agent_inbox_acknowledgements": {
+      "name": "agent_inbox_acknowledgements",
+      "columns": {
+        "item_id": {
+          "name": "item_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "acknowledged_at": {
+          "name": "acknowledged_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cleanup_at": {
+          "name": "cleanup_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "agent_inbox_acknowledgements_cleanup": {
+          "name": "agent_inbox_acknowledgements_cleanup",
+          "columns": ["cleanup_at"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "agent_inbox_acknowledgements_item_id_version_pk": {
+          "columns": ["item_id", "version"],
+          "name": "agent_inbox_acknowledgements_item_id_version_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "agent_inbox_acknowledgements_acknowledged_at": {
+          "name": "agent_inbox_acknowledgements_acknowledged_at",
+          "value": "\"agent_inbox_acknowledgements\".\"acknowledged_at\" > 0"
+        },
+        "agent_inbox_acknowledgements_cleanup_after_acknowledgement": {
+          "name": "agent_inbox_acknowledgements_cleanup_after_acknowledgement",
+          "value": "\"agent_inbox_acknowledgements\".\"cleanup_at\" > \"agent_inbox_acknowledgements\".\"acknowledged_at\""
+        }
+      }
+    },
+    "agent_inbox_items": {
+      "name": "agent_inbox_items",
+      "columns": {
+        "item_id": {
+          "name": "item_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "agent_revision": {
+          "name": "agent_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fleet_revision": {
+          "name": "fleet_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "schedule_revision": {
+          "name": "schedule_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "trigger": {
+          "name": "trigger",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "run_status": {
+          "name": "run_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "approval_count": {
+          "name": "approval_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "request_preview": {
+          "name": "request_preview",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "result_preview": {
+          "name": "result_preview",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "scheduled_at": {
+          "name": "scheduled_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "retry_at": {
+          "name": "retry_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "occurred_at": {
+          "name": "occurred_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cleanup_at": {
+          "name": "cleanup_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "agent_inbox_items_run": {
+          "name": "agent_inbox_items_run",
+          "columns": ["run_id"],
+          "isUnique": true
+        },
+        "agent_inbox_items_schedule_occurrence": {
+          "name": "agent_inbox_items_schedule_occurrence",
+          "columns": ["agent_id", "schedule_revision", "scheduled_at"],
+          "isUnique": true
+        },
+        "agent_inbox_items_agent_occurred": {
+          "name": "agent_inbox_items_agent_occurred",
+          "columns": ["agent_id", "occurred_at"],
+          "isUnique": false
+        },
+        "agent_inbox_items_cleanup": {
+          "name": "agent_inbox_items_cleanup",
+          "columns": ["cleanup_at"],
+          "isUnique": false
+        },
+        "agent_inbox_items_kind_occurred": {
+          "name": "agent_inbox_items_kind_occurred",
+          "columns": ["kind", "occurred_at"],
+          "isUnique": false
+        },
+        "agent_inbox_items_occurred": {
+          "name": "agent_inbox_items_occurred",
+          "columns": ["occurred_at"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "agent_inbox_items_agent_id_agent_revision_agent_revisions_agent_id_revision_fk": {
+          "name": "agent_inbox_items_agent_id_agent_revision_agent_revisions_agent_id_revision_fk",
+          "tableFrom": "agent_inbox_items",
+          "tableTo": "agent_revisions",
+          "columnsFrom": ["agent_id", "agent_revision"],
+          "columnsTo": ["agent_id", "revision"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "agent_inbox_items_agent_revision": {
+          "name": "agent_inbox_items_agent_revision",
+          "value": "\"agent_inbox_items\".\"agent_revision\" > 0"
+        },
+        "agent_inbox_items_fleet_revision": {
+          "name": "agent_inbox_items_fleet_revision",
+          "value": "\"agent_inbox_items\".\"fleet_revision\" > 0"
+        },
+        "agent_inbox_items_schedule_revision": {
+          "name": "agent_inbox_items_schedule_revision",
+          "value": "\"agent_inbox_items\".\"schedule_revision\" IS NULL OR \"agent_inbox_items\".\"schedule_revision\" > 0"
+        },
+        "agent_inbox_items_kind": {
+          "name": "agent_inbox_items_kind",
+          "value": "\"agent_inbox_items\".\"kind\" IN ('action_required', 'deferred', 'exception', 'outcome')"
+        },
+        "agent_inbox_items_approval_count": {
+          "name": "agent_inbox_items_approval_count",
+          "value": "\"agent_inbox_items\".\"approval_count\" BETWEEN 0 AND 100"
+        },
+        "agent_inbox_items_request_preview": {
+          "name": "agent_inbox_items_request_preview",
+          "value": "length(\"agent_inbox_items\".\"request_preview\") BETWEEN 1 AND 240"
+        },
+        "agent_inbox_items_result_preview": {
+          "name": "agent_inbox_items_result_preview",
+          "value": "\"agent_inbox_items\".\"result_preview\" IS NULL OR length(\"agent_inbox_items\".\"result_preview\") BETWEEN 1 AND 240"
+        },
+        "agent_inbox_items_reason": {
+          "name": "agent_inbox_items_reason",
+          "value": "\"agent_inbox_items\".\"reason\" IS NULL OR \"agent_inbox_items\".\"reason\" IN (\n        'active_run',\n        'admission_limit_exceeded',\n        'agent_not_found',\n        'agent_unavailable',\n        'budget_exhausted',\n        'capability_unavailable',\n        'dispatch_exception',\n        'idempotency_conflict',\n        'model_unavailable',\n        'record_dispatch_conflict',\n        'revision_conflict',\n        'run_unavailable'\n      )"
+        },
+        "agent_inbox_items_shape": {
+          "name": "agent_inbox_items_shape",
+          "value": "(\n        (\"agent_inbox_items\".\"kind\" = 'deferred'\n          AND \"agent_inbox_items\".\"run_id\" IS NULL\n          AND \"agent_inbox_items\".\"trigger\" IS NULL\n          AND \"agent_inbox_items\".\"run_status\" IS NULL\n          AND \"agent_inbox_items\".\"schedule_revision\" IS NOT NULL\n          AND \"agent_inbox_items\".\"reason\" IS NOT NULL\n          AND \"agent_inbox_items\".\"scheduled_at\" IS NOT NULL\n          AND \"agent_inbox_items\".\"approval_count\" = 0\n          AND \"agent_inbox_items\".\"result_preview\" IS NULL)\n        OR\n        (\"agent_inbox_items\".\"kind\" <> 'deferred'\n          AND \"agent_inbox_items\".\"run_id\" IS NOT NULL\n          AND \"agent_inbox_items\".\"trigger\" IS NOT NULL\n          AND \"agent_inbox_items\".\"run_status\" IS NOT NULL\n          AND \"agent_inbox_items\".\"schedule_revision\" IS NULL\n          AND \"agent_inbox_items\".\"reason\" IS NULL\n          AND \"agent_inbox_items\".\"scheduled_at\" IS NULL\n          AND \"agent_inbox_items\".\"retry_at\" IS NULL\n          AND ((\"agent_inbox_items\".\"kind\" = 'action_required' AND \"agent_inbox_items\".\"approval_count\" > 0)\n            OR (\"agent_inbox_items\".\"kind\" <> 'action_required' AND \"agent_inbox_items\".\"approval_count\" = 0))\n          AND ((\"agent_inbox_items\".\"kind\" = 'action_required' AND \"agent_inbox_items\".\"run_status\" = 'running')\n            OR (\"agent_inbox_items\".\"kind\" = 'exception' AND \"agent_inbox_items\".\"run_status\" = 'failed')\n            OR (\"agent_inbox_items\".\"kind\" = 'outcome'\n              AND \"agent_inbox_items\".\"run_status\" IN ('cancelled', 'completed'))))\n      )"
+        },
+        "agent_inbox_items_scheduled_at": {
+          "name": "agent_inbox_items_scheduled_at",
+          "value": "\"agent_inbox_items\".\"scheduled_at\" IS NULL OR \"agent_inbox_items\".\"scheduled_at\" > 0"
+        },
+        "agent_inbox_items_retry_at": {
+          "name": "agent_inbox_items_retry_at",
+          "value": "\"agent_inbox_items\".\"retry_at\" IS NULL OR \"agent_inbox_items\".\"retry_at\" > \"agent_inbox_items\".\"scheduled_at\""
+        },
+        "agent_inbox_items_occurred_at": {
+          "name": "agent_inbox_items_occurred_at",
+          "value": "\"agent_inbox_items\".\"occurred_at\" > 0"
+        },
+        "agent_inbox_items_cleanup_after_occurrence": {
+          "name": "agent_inbox_items_cleanup_after_occurrence",
+          "value": "\"agent_inbox_items\".\"cleanup_at\" > \"agent_inbox_items\".\"occurred_at\""
         }
       }
     },
@@ -1670,6 +1966,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "prompt": {
+          "name": "prompt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "prompt_digest": {
           "name": "prompt_digest",
           "type": "text",
@@ -1816,6 +2119,10 @@
         "run_admissions_agent_revision_positive": {
           "name": "run_admissions_agent_revision_positive",
           "value": "\"run_admissions\".\"agent_revision\" > 0"
+        },
+        "run_admissions_prompt_length": {
+          "name": "run_admissions_prompt_length",
+          "value": "\"run_admissions\".\"prompt\" IS NULL OR length(\"run_admissions\".\"prompt\") BETWEEN 1 AND 16384"
         },
         "run_admissions_prompt_digest_length": {
           "name": "run_admissions_prompt_digest_length",

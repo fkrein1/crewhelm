@@ -182,6 +182,100 @@ describe("OwnerControlPlane Agent schedules", () => {
     ]);
   });
 
+  it("surfaces deferred scheduled work with the limiting policy and retry time", async () => {
+    const authority = await authorityFor("schedule-inbox-owner", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+    ]);
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("schedule-inbox-agent", "Deferred Schedule Agent"),
+    );
+    const configuration = await controlPlane.getFleetConfiguration(authority, {
+      target: { kind: "fleet" },
+    });
+
+    if (!created.ok || !configuration.ok) {
+      throw new Error("Expected deferred schedule fixtures.");
+    }
+
+    await expect(
+      controlPlane.configureAgentSchedule(authority, {
+        agentId: created.agent.id,
+        expectedAgentRevision: created.agent.revision,
+        expectedScheduleRevision: null,
+        idempotencyKey: "configure-deferred-schedule",
+        schedule: {
+          intervalSeconds: 60,
+          prompt: "This work should be deferred by the fleet model policy.",
+        },
+      }),
+    ).resolves.toMatchObject({ configured: true, ok: true });
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE agent_revisions SET model = ? WHERE agent_id = ? AND revision = ?",
+        "unavailable/test-model",
+        created.agent.id,
+        created.agent.revision,
+      );
+      state.storage.sql.exec(
+        "UPDATE agent_schedules SET next_run_at = ? WHERE agent_id = ?",
+        Date.now() - 1,
+        created.agent.id,
+      );
+    });
+    await runDurableObjectAlarm(controlPlane);
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE agent_schedules SET next_run_at = ? WHERE agent_id = ?",
+        Date.now() - 1,
+        created.agent.id,
+      );
+    });
+    await runDurableObjectAlarm(controlPlane);
+
+    const inbox = await controlPlane.agentInbox(authority, {
+      action: "list",
+      limit: 10,
+    });
+
+    expect(inbox).toMatchObject({
+      action: "list",
+      items: [
+        {
+          agentId: created.agent.id,
+          agentName: "Deferred Schedule Agent",
+          configuration: {
+            agentRevision: created.agent.revision,
+            fleetRevision: configuration.configuration.revision,
+            scheduleRevision: 1,
+          },
+          kind: "deferred",
+          policy: {
+            layer: "fleet",
+            reason: "model_unavailable",
+            retryAt: expect.any(String),
+          },
+        },
+      ],
+      ok: true,
+    });
+    await expect(
+      runInDurableObject(controlPlane, (_instance, state) =>
+        state.storage.sql
+          .exec<{ value: number }>(
+            "SELECT count(*) AS value FROM agent_inbox_items WHERE kind = 'deferred'",
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({ value: 1 });
+  });
+
   it("versions schedule policy and pauses a schedule when its bound Agent revision becomes stale", async () => {
     const authority = await authorityFor("schedule-owner-2", [
       OWNER_WRITE_SCOPE,

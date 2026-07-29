@@ -1,4 +1,5 @@
 export * from "./agent-runtime.js";
+export * from "./agent-inbox.js";
 export * from "./agent-schedules.js";
 export * from "./capabilities.js";
 export * from "./connections.js";

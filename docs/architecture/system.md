@@ -24,14 +24,14 @@ The Worker authenticates requests, derives owner and client authority, and creat
 server per request. There is one SQLite-backed `OwnerControlPlane` per owner and one name-addressed
 `CrewAgent` per logical Agent.
 
-| State owner         | Authoritative facts                                                                                                |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| Worker              | Authenticated request context only                                                                                 |
-| Auth D1             | OAuth state, signing keys, rotating refresh tokens, and token revocation                                           |
-| `OwnerControlPlane` | Agent and connection lifecycle, grants, schedules, admission, budgets, approvals, effect reconciliation, and audit |
-| `CrewAgent`         | Think submissions, transcripts, output, deadlines, and approval waits                                              |
-| AI Gateway          | Optional installation-wide hard spend ceiling and model-call cost metadata                                         |
-| Composio            | Connected-account credentials and refresh                                                                          |
+| State owner         | Authoritative facts                                                                                                    |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Worker              | Authenticated request context only                                                                                     |
+| Auth D1             | OAuth state, signing keys, rotating refresh tokens, and token revocation                                               |
+| `OwnerControlPlane` | Agent and connection lifecycle, grants, schedules, admission, owner inbox, approvals, effect reconciliation, and audit |
+| `CrewAgent`         | Think submissions, transcripts, output, deadlines, and approval waits                                                  |
+| AI Gateway          | Optional installation-wide hard spend ceiling and model-call cost metadata                                             |
+| Composio            | Connected-account credentials and refresh                                                                              |
 
 The control plane owns admission and administration; the Agent owns execution. Cross-object calls
 carry explicit authority because Durable Objects do not share transactions. D1 is not an
@@ -68,7 +68,7 @@ Pending calls retain their provisional cost estimate until exact Gateway cost re
 | Recurring Agent schedules             | `owner/schedules/`        |
 | Disablement, revocation, recovery     | `owner/recovery/`         |
 | Connection lifecycle                  | `owner/connections/`      |
-| Owner-to-Agent capabilities           | `owner/agent-channel/`    |
+| Owner inbox and Agent capabilities    | `owner/agent-channel/`    |
 | Admitted Think execution              | `agent/admitted-runs/`    |
 | MCP presentation                      | `mcp/*-tools.ts`          |
 | Public routing and bounded HTTP input | `http/`                   |
@@ -105,7 +105,9 @@ composition root or external adapter. Split only around a coherent invariant or 
 6. Owner-local alarms claim bounded due schedules, admit exact-revision runs through the same Agent
    channel, and isolate each dispatch so one Agent cannot block unrelated schedules. Each due
    occurrence is claimed at most once; unexpected dispatch failures advance to the next interval
-   and leave bounded durable and diagnostic evidence instead of silently retrying work.
+   and leave bounded durable inbox evidence instead of silently retrying work. Agents publish
+   compact projections through a durable outbox; the owner validates them against admission and
+   serves fleet reads without fan-out. Projections support discovery, not authority.
 7. Agent disablement and connection or capability revocation take effect at admission, approval,
    and dispatch gates. Ambiguous mutating effects remain blocked by their stable effect identity
    until the owner reconciles them from independent evidence.
@@ -125,4 +127,5 @@ composition roots --------------> concrete implementations
 
 Contracts import no runtime, provider, database, or environment APIs. Only composition roots read
 the full environment. Provider adapters do not decide authority, and policy modules do not perform
-provider I/O. See [engineering design](../engineering/design.md) for the boundary test.
+provider I/O. See the [MCP architecture](mcp.md) for fleet-query and tool-surface rules, and
+[engineering design](../engineering/design.md) for the boundary test.

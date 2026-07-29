@@ -8,9 +8,12 @@ import {
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   INTEGRATIONS_READ_SCOPE,
+  MAXIMUM_AGENT_INBOX_ITEMS,
+  MAXIMUM_AGENT_INBOX_PREVIEW_CHARACTERS,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   RUNS_WRITE_SCOPE,
+  agentInboxResultSchema,
   changeAuthorityResultSchema,
   createAgentResultSchema,
   createConnectionLinkResultSchema,
@@ -38,6 +41,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as z from "zod";
 
 import {
+  MCP_AGENT_INBOX_TOOL_NAME,
   MCP_CANCEL_RUN_TOOL_NAME,
   MCP_CONFIGURE_TOOL_NAME,
   MCP_CREATE_AGENT_TOOL_NAME,
@@ -171,6 +175,7 @@ describe("authenticated MCP handler", () => {
       (tool) => tool.name === MCP_LIST_CONNECTIONS_TOOL_NAME,
     );
     const startRunTool = payload.result.tools.find((tool) => tool.name === MCP_START_RUN_TOOL_NAME);
+    const inboxTool = payload.result.tools.find((tool) => tool.name === MCP_AGENT_INBOX_TOOL_NAME);
     const configureScheduleTool = payload.result.tools.find(
       (tool) => tool.name === MCP_CONFIGURE_AGENT_SCHEDULE_TOOL_NAME,
     );
@@ -222,6 +227,12 @@ describe("authenticated MCP handler", () => {
     });
     expect(configureScheduleTool?.annotations).toMatchObject({
       destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+      readOnlyHint: false,
+    });
+    expect(inboxTool?.annotations).toMatchObject({
+      destructiveHint: false,
       idempotentHint: true,
       openWorldHint: false,
       readOnlyHint: false,
@@ -348,7 +359,7 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 12,
+        schemaVersion: 13,
         status: "ready",
       },
     });
@@ -563,6 +574,9 @@ describe("authenticated MCP handler", () => {
       BETTER_AUTH_SECRET: signingSecret,
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
+          agentInbox: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           cancelRun: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -977,6 +991,7 @@ describe("authenticated MCP handler", () => {
         expect(payload.isError).toBe(false);
         expect(result).toMatchObject({
           ok: true,
+          request: { prompt: runInput.prompt },
           run: {
             output: TEST_REPLY,
             outputTruncated: false,
@@ -989,10 +1004,168 @@ describe("authenticated MCP handler", () => {
       },
       { interval: 25, timeout: 5_000 },
     );
-    const replayResponse = await handleAuthenticatedMcpRequest(
+    const inboxResponse = await handleAuthenticatedMcpRequest(
       toolRequest(
         JSON.stringify({
           id: 32,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { action: "list", limit: 10 },
+            name: MCP_AGENT_INBOX_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const inboxPayload = jsonRpcToolResultSchema.parse(await inboxResponse.json()).result;
+    const inbox = agentInboxResultSchema.parse(JSON.parse(inboxPayload.content[0]?.text ?? ""));
+
+    expect(inboxPayload.isError).toBe(false);
+    expect(inbox).toMatchObject({
+      action: "list",
+      items: [
+        {
+          agentId: created.agent.id,
+          agentName: "MCP run Agent",
+          configuration: {
+            agentRevision: created.agent.revision,
+            fleetRevision: 1,
+            scheduleRevision: null,
+          },
+          kind: "outcome",
+          nextAction: "review_output",
+          requestPreview: runInput.prompt,
+          resultPreview: TEST_REPLY,
+          runId: started.run.runId,
+          runStatus: "completed",
+        },
+      ],
+      ok: true,
+    });
+    const overviewResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 321,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { action: "overview" },
+            name: MCP_AGENT_INBOX_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const overviewPayload = jsonRpcToolResultSchema.parse(await overviewResponse.json()).result;
+
+    expect(
+      agentInboxResultSchema.parse(JSON.parse(overviewPayload.content[0]?.text ?? "")),
+    ).toMatchObject({
+      action: "overview",
+      counts: {
+        actionRequired: 0,
+        deferred: 0,
+        exceptions: 0,
+        outcomes: 1,
+        total: 1,
+      },
+      ok: true,
+    });
+
+    if (!inbox.ok || inbox.action !== "list" || inbox.items[0] === undefined) {
+      throw new Error("Expected completed run in Agent inbox.");
+    }
+
+    const item = inbox.items[0];
+    const maximumPage = agentInboxResultSchema.parse({
+      action: "list",
+      items: Array.from({ length: MAXIMUM_AGENT_INBOX_ITEMS }, (_, index) => {
+        const suffix = (index + 1).toString(16).padStart(12, "0");
+        const runId = `run_00000000-0000-4000-8000-${suffix}`;
+
+        return {
+          ...item,
+          itemId: `inbox_${runId}`,
+          requestPreview: "r".repeat(MAXIMUM_AGENT_INBOX_PREVIEW_CHARACTERS),
+          resultPreview: "o".repeat(MAXIMUM_AGENT_INBOX_PREVIEW_CHARACTERS),
+          runId,
+          summary: "s".repeat(MAXIMUM_AGENT_INBOX_PREVIEW_CHARACTERS),
+        };
+      }),
+      nextCursor: null,
+      ok: true,
+    });
+
+    expect(new TextEncoder().encode(JSON.stringify(maximumPage)).byteLength).toBeLessThan(
+      64 * 1_024,
+    );
+
+    const acknowledgeResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 33,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              action: "acknowledge",
+              itemId: item.itemId,
+              version: item.version,
+            },
+            name: MCP_AGENT_INBOX_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const acknowledgePayload = jsonRpcToolResultSchema.parse(
+      await acknowledgeResponse.json(),
+    ).result;
+
+    expect(
+      agentInboxResultSchema.parse(JSON.parse(acknowledgePayload.content[0]?.text ?? "")),
+    ).toMatchObject({
+      acknowledged: true,
+      action: "acknowledge",
+      itemId: item.itemId,
+      ok: true,
+      version: item.version,
+    });
+    const acknowledgedListResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 34,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { action: "list", limit: 10 },
+            name: MCP_AGENT_INBOX_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const acknowledgedListPayload = jsonRpcToolResultSchema.parse(
+      await acknowledgedListResponse.json(),
+    ).result;
+
+    expect(
+      agentInboxResultSchema.parse(JSON.parse(acknowledgedListPayload.content[0]?.text ?? "")),
+    ).toMatchObject({
+      action: "list",
+      items: [],
+      ok: true,
+    });
+
+    const replayResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 35,
           jsonrpc: "2.0",
           method: "tools/call",
           params: {
@@ -1704,6 +1877,7 @@ describe("authenticated MCP handler", () => {
       COMPOSIO_API_KEY: "test-composio-api-key",
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
+          agentInbox: unavailableControlPlane,
           cancelRun: unavailableControlPlane,
           changeAuthority: unavailableControlPlane,
           completeConnectionLink: unavailableControlPlane,
@@ -1811,6 +1985,7 @@ describe("authenticated MCP handler", () => {
       COMPOSIO_API_KEY: "test-composio-api-key",
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
+          agentInbox: unavailableControlPlane,
           cancelRun: unavailableControlPlane,
           changeAuthority: unavailableControlPlane,
           completeConnectionLink: (authorityInput: unknown, input: unknown) =>

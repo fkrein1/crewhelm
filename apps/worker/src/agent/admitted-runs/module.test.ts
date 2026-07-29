@@ -25,6 +25,7 @@ import { deriveOwnerKey } from "../../owner/identity.js";
 import { digestRunPrompt } from "./protocol.js";
 import { admittedTurnMetadataSchema } from "./schema.js";
 import {
+  DEADLINE_TEST_PROMPT,
   LARGE_TEST_PROMPT,
   SLOW_TEST_PROMPT,
   TEST_REPLY,
@@ -797,6 +798,7 @@ describe("CrewAgent admitted execution", () => {
       agentId: input.agentId,
       expectedRevision: input.expectedRevision,
       idempotencyKey: input.idempotencyKey,
+      prompt,
       promptCharacters: prompt.length,
       promptDigest: await digestRunPrompt(prompt),
     });
@@ -829,6 +831,28 @@ describe("CrewAgent admitted execution", () => {
         promptCharacters: prompt.length,
         promptDigest: admission.permit.promptDigest,
       });
+      await state.storage.put(`crewhelm:inbox-projection:${admission.permit.runId}`, {
+        attempts: 1,
+        cleanupAt: acceptedAt + 24 * 60 * 60 * 1_000,
+        projection: {
+          event: {
+            approvalCount: 0,
+            kind: "exception",
+            occurredAt: new Date(acceptedAt + 1).toISOString(),
+            resultPreview: null,
+            runStatus: "failed",
+          },
+          reference: {
+            agentId: admission.permit.agentId,
+            agentRevision: admission.permit.agentRevision,
+            idempotencyKey: admission.permit.idempotencyKey,
+            ownerKey: admission.permit.ownerKey,
+            promptDigest: admission.permit.promptDigest,
+            runId: admission.permit.runId,
+          },
+        },
+        retryAt: acceptedAt + 60_000,
+      });
     });
     expect(
       admittedTurnMetadataSchema.parse({
@@ -849,6 +873,56 @@ describe("CrewAgent admitted execution", () => {
       ok: true,
     });
     await evictDurableObject(stub);
+    await runInDurableObject(stub, async (agent, state) => {
+      await asTestCrewAgent(agent).onStart();
+
+      const schedules = [
+        ...state.storage.sql.exec<{ callback: string; payload: string }>(
+          "SELECT callback, payload FROM cf_agents_schedules WHERE callback = 'syncAgentInbox'",
+        ),
+      ];
+
+      expect(schedules).toHaveLength(1);
+
+      const scheduled = schedules[0];
+
+      if (scheduled === undefined) {
+        throw new Error("Expected durable Agent inbox recovery schedule.");
+      }
+
+      const outboxKey = `crewhelm:inbox-projection:${admission.permit.runId}`;
+      await state.storage.delete(outboxKey);
+      await asTestCrewAgent(agent).syncAgentInbox(JSON.parse(scheduled.payload));
+
+      const restored = await state.storage.get<Record<string, unknown>>(outboxKey);
+      expect(restored).toMatchObject({
+        projection: {
+          reference: {
+            runId: admission.permit.runId,
+          },
+        },
+      });
+      await state.storage.put(outboxKey, { ...restored, retryAt: acceptedAt });
+      await asTestCrewAgent(agent).onStart();
+    });
+    await expect(
+      controlPlane.agentInbox(authority, {
+        action: "list",
+        agentId: created.agent.id,
+        kinds: ["exception"],
+      }),
+    ).resolves.toMatchObject({
+      action: "list",
+      items: [
+        {
+          kind: "exception",
+          requestPreview: prompt,
+          runId: admission.permit.runId,
+          runStatus: "failed",
+        },
+      ],
+      ok: true,
+    });
 
     const resumed = await controlPlane.startRun(authority, input);
 
@@ -1063,6 +1137,58 @@ describe("CrewAgent admitted execution", () => {
     if (approval === undefined) {
       throw new Error("Expected pending owner approval.");
     }
+
+    const inbox = await controlPlane.agentInbox(authority, {
+      action: "list",
+      limit: 10,
+    });
+
+    expect(inbox).toMatchObject({
+      action: "list",
+      items: [
+        {
+          approvalCount: 1,
+          kind: "action_required",
+          nextAction: "decide_approval",
+          runId: started.run.runId,
+          runStatus: "running",
+        },
+      ],
+      ok: true,
+    });
+
+    if (!inbox.ok || inbox.action !== "list" || inbox.items[0] === undefined) {
+      throw new Error("Expected approval in Agent inbox.");
+    }
+
+    await vi.waitFor(
+      async () => {
+        const current = await controlPlane.agentInbox(authority, {
+          action: "list",
+          kinds: ["action_required"],
+          limit: 1,
+        });
+
+        if (!current.ok || current.action !== "list" || current.items[0] === undefined) {
+          throw new Error("Expected current approval inbox item.");
+        }
+
+        await expect(
+          controlPlane.agentInbox(authority, {
+            action: "acknowledge",
+            itemId: current.items[0].itemId,
+            version: current.items[0].version,
+          }),
+        ).resolves.toEqual({
+          error: {
+            code: "inbox_item_not_acknowledgeable",
+            message: "Agent inbox request denied.",
+          },
+          ok: false,
+        });
+      },
+      { interval: 25, timeout: 5_000 },
+    );
 
     await expect(
       controlPlane.decideRunToolApproval(authority, {
@@ -1326,6 +1452,26 @@ describe("CrewAgent admitted execution", () => {
       "run.cancellation_requested",
       "run.cancelled",
     ]);
+    await expect(
+      fixture.controlPlane.agentInbox(fixture.authority, {
+        action: "list",
+        agentId: fixture.agentId,
+        kinds: ["outcome"],
+      }),
+    ).resolves.toMatchObject({
+      action: "list",
+      items: [
+        {
+          approvalCount: 0,
+          kind: "outcome",
+          nextAction: "inspect_run",
+          requestPreview: TOOL_TEST_PROMPT,
+          runId: fixture.runId,
+          runStatus: "cancelled",
+        },
+      ],
+      ok: true,
+    });
     await expect(
       fixture.controlPlane.listRunToolApprovals(fixture.authority, {
         runId: fixture.runId,
@@ -1621,11 +1767,11 @@ describe("CrewAgent admitted execution", () => {
       agentId: created.agent.id,
       expectedRevision: created.agent.revision,
       idempotencyKey: "crew-agent-run-603",
-      prompt: SLOW_TEST_PROMPT,
+      prompt: DEADLINE_TEST_PROMPT,
     });
 
     if (!started.ok) {
-      throw new Error("Expected deadline-bound CrewAgent run.");
+      throw new Error(`Expected deadline-bound CrewAgent run: ${started.error.code}`);
     }
 
     const deadlineStub = crewAgentNamespace().getByName(

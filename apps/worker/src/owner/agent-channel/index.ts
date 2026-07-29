@@ -7,3 +7,4 @@ export {
   deniedListRunToolApprovals,
   deniedStartRun,
 } from "./module.js";
+export { deniedAgentInbox } from "./inbox.js";

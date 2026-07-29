@@ -73,14 +73,20 @@ export const runStatusSchema = z.enum([
 ]);
 export const runTriggerSchema = z.enum(["manual", "schedule"]);
 
-export const createRunAdmissionInputSchema = z.strictObject({
-  agentId: agentIdSchema,
-  expectedRevision: agentRevisionNumberSchema,
-  idempotencyKey: runAdmissionIdempotencyKeySchema,
-  promptCharacters: z.number().int().min(1).max(MAXIMUM_RUN_PROMPT_CHARACTERS),
-  promptDigest: sha256DigestSchema,
-  trigger: runTriggerSchema.default("manual"),
-});
+export const createRunAdmissionInputSchema = z
+  .strictObject({
+    agentId: agentIdSchema,
+    expectedRevision: agentRevisionNumberSchema,
+    idempotencyKey: runAdmissionIdempotencyKeySchema,
+    prompt: runPromptSchema.optional(),
+    promptCharacters: z.number().int().min(1).max(MAXIMUM_RUN_PROMPT_CHARACTERS),
+    promptDigest: sha256DigestSchema,
+    trigger: runTriggerSchema.default("manual"),
+  })
+  .refine((input) => input.prompt === undefined || input.prompt.length === input.promptCharacters, {
+    message: "Prompt character count must match the admitted prompt.",
+    path: ["promptCharacters"],
+  });
 
 export const runBudgetReservationSchema = z.strictObject({
   fleetConfigurationRevision: z.number().int().positive().safe(),
@@ -451,6 +457,9 @@ export const startRunResultSchema = z.discriminatedUnion("ok", [
 export const inspectRunResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     ok: z.literal(true),
+    request: z.strictObject({
+      prompt: runPromptSchema.nullable(),
+    }),
     run: runSchema,
     timeline: z.array(runTimelineEventSchema).max(MAXIMUM_RUN_TIMELINE_EVENTS),
   }),
