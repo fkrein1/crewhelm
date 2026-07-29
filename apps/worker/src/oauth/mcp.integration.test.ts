@@ -483,6 +483,7 @@ describe("public OAuth to MCP integration", () => {
       body: new URLSearchParams({ oauth_query: loginQuery }),
       headers: {
         "content-type": "application/x-www-form-urlencoded",
+        "sec-fetch-dest": "document",
         "sec-fetch-mode": "navigate",
         "sec-fetch-site": "same-origin",
       },
@@ -616,12 +617,27 @@ describe("public OAuth to MCP integration", () => {
       },
       method: "POST",
     });
+    const crossSiteNullOriginResponse = await request(workerEnv, "/oauth/consent", {
+      body: new URLSearchParams({ decision: "approve", oauth_query: consentQuery }),
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        cookie: cookies.header(),
+        origin: "null",
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "cross-site",
+      },
+      method: "POST",
+    });
     const consentResponse = await request(workerEnv, "/oauth/consent", {
       body: new URLSearchParams({ decision: "approve", oauth_query: consentQuery }),
       headers: {
         "content-type": "application/x-www-form-urlencoded",
         cookie: cookies.header(),
-        origin,
+        origin: "null",
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "same-origin",
       },
       method: "POST",
     });
@@ -630,6 +646,7 @@ describe("public OAuth to MCP integration", () => {
 
     expect(speculativeGetResponse.status).toBe(404);
     expect(unauthenticatedApproveResponse.status).toBe(401);
+    expect(crossSiteNullOriginResponse.status).toBe(400);
     expect(consentResponse.status).toBe(302);
     expect(clientLocation.origin).toBe("https://client.example");
     expect(clientLocation.searchParams.get("state")).toBe("integration-client-state");
