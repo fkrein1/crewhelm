@@ -21,7 +21,8 @@ Trust changes at:
 4. the control plane to `CrewAgent`;
 5. Crewhelm to fixed Composio catalog, connection, and execution endpoints;
 6. recipes and model or provider output entering trusted policy;
-7. build automation and the bootstrap CLI reaching release or Cloudflare resources.
+7. the Worker reaching its dedicated Cloudflare AI Gateway;
+8. build automation and the bootstrap CLI reaching release or Cloudflare resources.
 
 ## Threats and controls
 
@@ -35,6 +36,7 @@ Trust changes at:
 | Stale, replayed, or amplified authority                | Bind permits and approvals to owner, client, Agent revision, action digest, budget, nonce, and short expiry; recheck current policy immediately before execution       |
 | Duplicate or partial external effects                  | Reserve idempotency before dispatch, use single-use permits, make cancellation and dispatch mutually exclusive, and block equivalent writes while outcomes are unknown |
 | Runaway execution or cost                              | Bound models, turns, tools, schedules, concurrency, payloads, output, duration, and cost before work starts                                                            |
+| Model-driven policy escalation                         | Expose fleet mutation as preview-only to MCP; require a deterministic owner step-up path to apply a revision                                                           |
 | Unsafe persistence or recovery                         | Apply ordered checksummed migrations before admission; preserve revocation during backup, restore, deletion, and recovery                                              |
 | Supply-chain or deployment compromise                  | Pin dependencies and automation, minimize CI permissions, validate release artifacts, and require explicit deployment authority                                        |
 
@@ -80,6 +82,10 @@ exact owner, client, Agent revision, prompt, idempotency key, and budget. `CrewA
 its namespace or authority-bearing framework entrypoints to public callers. Interrupted inference
 is charged when it cannot be proven unspent and is not silently repeated.
 
+Run and tool authority is also bound to the exact fleet-configuration revision admitted. Any later
+configuration revision invalidates unconsumed admission, approval, and dispatch authority; the
+owner starts a new run under the new policy.
+
 Tool execution rechecks the Agent lifecycle, current immutable grant, connection, effect, target,
 approval, and budget before issuing a single-use adapter permit. Disabling an Agent or revoking a
 connection or capability is owner-local, idempotent, audited, and blocks later admission,
@@ -124,10 +130,23 @@ identifiers, user content, and request or response bodies. Initial 100-percent c
 sampling must be reduced under an explicit retention and cost policy before sustained high-volume
 operation.
 
+The dedicated AI Gateway is a second, installation-wide rolling spend guard. Crewhelm reserves
+cost locally before a call and persists that reservation with pending Gateway log IDs until exact
+cost reconciliation, so a delayed log cannot become zero-valued at a window boundary. Gateway
+enforcement and log availability are eventually consistent, so small in-flight overshoot remains
+a residual risk; bounded local reservations, concurrency, run duration, and the Gateway rule limit
+the exposure. Gateway request and response payload logging is disabled, while model, token, cost,
+latency, status, and opaque Crewhelm correlation metadata remain available for diagnosis.
+
 The bootstrap CLI holds operator deployment authority. It uses pinned Wrangler without a shell,
 an allowlisted environment, explicit account and database identity, validated release artifacts,
 and bounded output. Ambiguous remote mutations stop with resources preserved for inspection; they
 are not assumed successful or automatically repeated.
+
+AI Gateway management may use a process-scoped `CREWHELM_CLOUDFLARE_API_TOKEN` limited to AI
+Gateway Read and Edit. Bootstrap validates the existing rule without changing it, preserves its
+limit when no explicit budget is supplied, deploys matching Worker configuration, then applies and
+reads back any requested Gateway change.
 
 ## Update triggers
 

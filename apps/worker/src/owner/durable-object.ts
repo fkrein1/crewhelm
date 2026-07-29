@@ -5,6 +5,7 @@ import {
   CONNECTION_CONFIGS_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
+  DEFAULT_FLEET_AI_DAILY_SPEND_MICROUSD,
   changeAuthorityInputSchema,
   completeAgentConnectionConfigurationInputSchema,
   configureAgentScheduleInputSchema,
@@ -49,6 +50,8 @@ import {
   type ReconcileToolExecutionResult,
   type ConfigureAgentScheduleResult,
   type GetAgentScheduleResult,
+  type ConfigureFleetConfigurationResult,
+  type GetFleetConfigurationResult,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
@@ -71,6 +74,7 @@ import {
   deniedConnectionRead,
   deniedIntegrationEnablement,
 } from "./connections/index.js";
+import { FleetConfigurations, deniedFleetConfiguration } from "./configuration/index.js";
 import { CONTROL_PLANE_SCHEMA_VERSION, migrateControlPlane } from "./migrations.js";
 import { controlPlane, controlPlaneSchema, type ControlPlaneDatabaseSchema } from "./schema.js";
 
@@ -83,6 +87,7 @@ import {
 } from "./runs/index.js";
 import { recordScheduleEvent } from "../observability/schedules.js";
 import { AgentSchedules, deniedAgentSchedule, type DueAgentSchedule } from "./schedules/index.js";
+import { AiGatewayUsage } from "./usage/index.js";
 
 const INVALID_RUN_ADMISSION = {
   error: {
@@ -112,6 +117,8 @@ export class OwnerControlPlane extends DurableObject {
   readonly #agentChannel: AgentChannel;
   readonly #authorityControls: AuthorityControls;
   readonly #agentSchedules: AgentSchedules;
+  readonly #fleetConfigurations: FleetConfigurations;
+  readonly #aiGatewayUsage: AiGatewayUsage;
 
   constructor(state: DurableObjectState, environment: Cloudflare.Env) {
     super(state, environment);
@@ -121,12 +128,33 @@ export class OwnerControlPlane extends DurableObject {
       logger: false,
       schema: controlPlaneSchema,
     });
-    this.#runAdmissions = new RunAdmissions(this.#objectName, this.#database, this.#storage);
-    this.#toolExecutions = new ToolExecutions(this.#objectName, this.#database, this.#storage);
-    this.#agents = new AgentRegistry(this.#database);
+    const installationAiDailyLimitMicrousd = Number(
+      environment.AI_GATEWAY_DAILY_LIMIT_MICROUSD ?? DEFAULT_FLEET_AI_DAILY_SPEND_MICROUSD,
+    );
+    this.#fleetConfigurations = new FleetConfigurations(
+      this.#database,
+      Number.isSafeInteger(installationAiDailyLimitMicrousd) && installationAiDailyLimitMicrousd > 0
+        ? installationAiDailyLimitMicrousd
+        : DEFAULT_FLEET_AI_DAILY_SPEND_MICROUSD,
+    );
+    this.#aiGatewayUsage = new AiGatewayUsage(
+      this.#database,
+      this.#storage,
+      environment.AI,
+      environment.AI_GATEWAY_ID,
+    );
+    this.#runAdmissions = new RunAdmissions(this.#objectName, this.#database, this.#storage, () =>
+      this.#fleetConfigurations.current(),
+    );
+    this.#toolExecutions = new ToolExecutions(this.#objectName, this.#database, this.#storage, () =>
+      this.#fleetConfigurations.current(),
+    );
+    this.#agents = new AgentRegistry(this.#database, () => this.#fleetConfigurations.currentData());
     this.#connections = new Connections(this.#database, this.#storage);
     this.#authorityControls = new AuthorityControls(this.#database);
-    this.#agentSchedules = new AgentSchedules(this.#database, this.#storage);
+    this.#agentSchedules = new AgentSchedules(this.#database, this.#storage, () =>
+      this.#fleetConfigurations.currentData(),
+    );
     this.#agentChannel = new AgentChannel(
       this.#objectName,
       this.#database,
@@ -154,6 +182,33 @@ export class OwnerControlPlane extends DurableObject {
         status: "ready",
       },
     });
+  }
+
+  getFleetConfiguration(authorityInput: unknown, input: unknown): GetFleetConfigurationResult {
+    const authorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
+
+    if (!authorization.ok) {
+      return deniedFleetConfiguration(authorization.code);
+    }
+
+    return this.#fleetConfigurations.get(input);
+  }
+
+  async configureFleetConfiguration(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<ConfigureFleetConfigurationResult> {
+    const authorization = this.#authorize(authorityInput, AUTONOMY_WRITE_SCOPE);
+
+    if (!authorization.ok) {
+      return deniedFleetConfiguration(authorization.code);
+    }
+
+    return this.#fleetConfigurations.configure(authorization.authority, input);
+  }
+
+  recordAiGatewayCall(input: unknown): Promise<void> {
+    return this.#migrationReady ? this.#aiGatewayUsage.record(input) : Promise.resolve();
   }
 
   async createAgent(authorityInput: unknown, input: unknown): Promise<CreateAgentResult> {
@@ -418,6 +473,7 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     const currentTime = Date.now();
+    await this.#aiGatewayUsage.reconcilePending(currentTime);
     this.#toolExecutions.reconcileExpired(currentTime);
     this.#runAdmissions.cleanup(currentTime);
     const dueSchedules = this.#agentSchedules.claimDue(currentTime);
@@ -442,8 +498,15 @@ export class OwnerControlPlane extends DurableObject {
     const nextRunCleanup = this.#runAdmissions.nextCleanupAt();
     const nextScheduledRun = this.#agentSchedules.nextAlarmAt();
     const nextToolReconciliation = this.#toolExecutions.nextReconciliationAt();
+    const nextAiUsageReconciliation = this.#aiGatewayUsage.nextReconciliationAt();
     const nextAlarm =
-      [nextConnectionCleanup, nextRunCleanup, nextScheduledRun, nextToolReconciliation]
+      [
+        nextAiUsageReconciliation,
+        nextConnectionCleanup,
+        nextRunCleanup,
+        nextScheduledRun,
+        nextToolReconciliation,
+      ]
         .filter((candidate): candidate is number => candidate !== null)
         .toSorted((left, right) => left - right)[0] ?? null;
 

@@ -19,6 +19,33 @@ import { describe, expect, it } from "vitest";
 import { agentInput, agentUpdate, authorityFor, fixedAgentFailure } from "../testkit.js";
 
 describe("OwnerControlPlane agents", () => {
+  it("uses fleet defaults when Agent creation omits model and execution limits", async () => {
+    const authority = await authorityFor("agent-omakase-1", [OWNER_READ_SCOPE, OWNER_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const configuration = await stub.getFleetConfiguration(authority, {
+      target: { kind: "fleet" },
+    });
+
+    if (!configuration.ok) {
+      throw new Error("Expected fleet defaults.");
+    }
+
+    await expect(
+      stub.createAgent(authority, {
+        idempotencyKey: "agent-omakase-create-1",
+        instructions: "Use the fleet defaults for this personal Agent.",
+        name: "Omakase Agent",
+      }),
+    ).resolves.toMatchObject({
+      agent: {
+        executionLimits: configuration.configuration.data.execution,
+        model: configuration.configuration.data.models.default,
+      },
+      created: true,
+      ok: true,
+    });
+  });
+
   it("creates an immutable initial Agent revision and lists only a bounded summary", async () => {
     const authority = await authorityFor("201", [
       OWNER_READ_SCOPE,

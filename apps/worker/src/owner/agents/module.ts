@@ -43,6 +43,7 @@ import {
   type ConfigureAgentConnectionResult,
   type ConfigureAgentConnectionInput,
   type ComposioToolCapabilityGrant,
+  type FleetConfigurationData,
   type LookupAgentConnectionConfigurationResult,
   type ResolvedConnectionForAttachment,
 } from "@crewhelm/contracts";
@@ -95,12 +96,7 @@ async function digestCanonicalRequest(canonicalRequest: string): Promise<string>
 async function digestAgentCreation(input: CreateAgentInput): Promise<string> {
   return digestCanonicalRequest(
     JSON.stringify({
-      executionLimits: {
-        maxDurationSeconds: input.executionLimits.maxDurationSeconds,
-        maxModelTokens: input.executionLimits.maxModelTokens,
-        maxToolCalls: input.executionLimits.maxToolCalls,
-        maxTurns: input.executionLimits.maxTurns,
-      },
+      executionLimits: input.executionLimits,
       instructions: input.instructions,
       model: input.model,
       name: input.name,
@@ -168,10 +164,15 @@ export function deniedConnectionAttachment(
 }
 
 export class AgentRegistry {
+  readonly #currentFleetConfiguration: () => FleetConfigurationData;
   readonly #database: ControlPlaneDatabase;
 
-  constructor(database: ControlPlaneDatabase) {
+  constructor(
+    database: ControlPlaneDatabase,
+    currentFleetConfiguration: () => FleetConfigurationData,
+  ) {
     this.#database = database;
+    this.#currentFleetConfiguration = currentFleetConfiguration;
   }
 
   resolveConnectionForAttachment(input: unknown): ResolvedConnectionForAttachment {
@@ -577,6 +578,9 @@ export class AgentRegistry {
     }
 
     const requestDigest = await digestAgentCreation(request.data);
+    const fleetConfiguration = this.#currentFleetConfiguration();
+    const executionLimits = request.data.executionLimits ?? fleetConfiguration.execution;
+    const model = request.data.model ?? fleetConfiguration.models.default;
 
     return this.#database.transaction((transaction) => {
       const existingRow = transaction
@@ -621,6 +625,10 @@ export class AgentRegistry {
         });
       }
 
+      if (!fleetConfiguration.models.allowed.some((candidate) => candidate === model)) {
+        return deniedAgent("invalid_request");
+      }
+
       const agentCount = transaction.select({ value: count() }).from(agents).get()?.value ?? 0;
 
       if (agentCount >= MAXIMUM_AGENTS_PER_OWNER) {
@@ -637,9 +645,9 @@ export class AgentRegistry {
           agentId,
           capabilityGrants: [],
           createdAt,
-          executionLimits: request.data.executionLimits,
+          executionLimits,
           instructions: request.data.instructions,
-          model: request.data.model,
+          model,
           name: request.data.name,
           revision: 1,
         })
@@ -667,10 +675,10 @@ export class AgentRegistry {
       const agent = agentSchema.parse({
         capabilityGrants: [],
         createdAt: new Date(createdAt).toISOString(),
-        executionLimits: request.data.executionLimits,
+        executionLimits,
         id: agentId,
         instructions: request.data.instructions,
-        model: request.data.model,
+        model,
         name: request.data.name,
         revision: 1,
         status: "active",

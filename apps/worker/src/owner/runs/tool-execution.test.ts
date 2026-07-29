@@ -1,5 +1,6 @@
 import {
   AGENTS_WRITE_SCOPE,
+  AUTONOMY_WRITE_SCOPE,
   COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
   CONNECTIONS_WRITE_SCOPE,
   OWNER_READ_SCOPE,
@@ -10,11 +11,12 @@ import {
   type ComposioToolCapabilityGrant,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
-import { evictDurableObject, runInDurableObject } from "cloudflare:test";
+import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
 import { deriveOwnerKey } from "../identity.js";
+import { controlPlaneMigrations } from "../../../control-plane-migrations/index.js";
 import { digestRunPrompt } from "../../agent/admitted-runs/index.js";
 import { digestExternalEffect } from "./tool-execution.js";
 
@@ -26,8 +28,44 @@ async function authorityFor(subject: string): Promise<OwnerAuthority> {
   return ownerAuthoritySchema.parse({
     clientId: "https://client.example/mcp.json",
     ownerKey: await deriveOwnerKey({ issuer: "https://github.com", subject }),
-    scopes: [OWNER_READ_SCOPE, OWNER_WRITE_SCOPE, AGENTS_WRITE_SCOPE, CONNECTIONS_WRITE_SCOPE],
+    scopes: [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+    ],
   });
+}
+
+async function configureToolTestFleet(
+  authority: OwnerAuthority,
+  controlPlane: ReturnType<typeof env.OWNER_CONTROL_PLANE.getByName>,
+): Promise<void> {
+  const current = await controlPlane.getFleetConfiguration(authority, {
+    target: { kind: "fleet" },
+  });
+
+  if (!current.ok) {
+    throw new Error("Expected tool-test fleet configuration.");
+  }
+
+  const configured = await controlPlane.configureFleetConfiguration(authority, {
+    expectedRevision: current.configuration.revision,
+    idempotencyKey: "configure-tool-test-fleet",
+    mode: "apply",
+    patch: {
+      integrations: {
+        duplicateToolCallLimit: 4,
+        maxCallsPerToolPerRun: 4,
+      },
+    },
+    target: { kind: "fleet" },
+  });
+
+  if (!configured.ok) {
+    throw new Error("Expected tool-test fleet limits.");
+  }
 }
 
 async function toolExecutionFixture(
@@ -37,6 +75,7 @@ async function toolExecutionFixture(
 ) {
   const authority = await authorityFor(subject);
   const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+  await configureToolTestFleet(authority, controlPlane);
   const created = await controlPlane.createAgent(authority, {
     executionLimits: {
       maxDurationSeconds: 45,
@@ -210,7 +249,66 @@ async function approveFixtureAction(
   });
 }
 
+async function advanceFleetRevision(
+  fixture: Awaited<ReturnType<typeof toolExecutionFixture>>,
+  idempotencyKey: string,
+): Promise<void> {
+  const current = await fixture.controlPlane.getFleetConfiguration(fixture.authority, {
+    target: { kind: "fleet" },
+  });
+
+  if (!current.ok) {
+    throw new Error("Expected fleet configuration.");
+  }
+
+  await expect(
+    fixture.controlPlane.configureFleetConfiguration(fixture.authority, {
+      expectedRevision: current.configuration.revision,
+      idempotencyKey,
+      mode: "apply",
+      patch: { schedules: { minimumIntervalSeconds: 120 } },
+      target: { kind: "fleet" },
+    }),
+  ).resolves.toMatchObject({ applied: true, ok: true });
+}
+
 describe("admitted tool execution", () => {
+  it("rejects evaluation and dispatch after the admitted fleet revision changes", async () => {
+    const evaluationFixture = await toolExecutionFixture("stale-fleet-evaluation", "read");
+    await advanceFleetRevision(evaluationFixture, "advance-stale-evaluation-fleet");
+    await expect(
+      evaluationFixture.controlPlane.evaluateToolExecution({
+        ...evaluationFixture.reference,
+        action: evaluationFixture.action,
+      }),
+    ).resolves.toEqual({
+      error: {
+        code: "invalid_execution",
+        message: "Tool execution denied.",
+        reason: "admission_unavailable",
+      },
+      ok: false,
+    });
+
+    const dispatchFixture = await toolExecutionFixture("stale-fleet-dispatch", "read");
+    const reserved = await dispatchFixture.controlPlane.reserveToolExecution({
+      ...dispatchFixture.reference,
+      action: dispatchFixture.action,
+    });
+
+    if (!reserved.ok || reserved.state !== "allowed") {
+      throw new Error("Expected stale-dispatch tool permit.");
+    }
+
+    await advanceFleetRevision(dispatchFixture, "advance-stale-dispatch-fleet");
+    await expect(
+      dispatchFixture.controlPlane.resolveToolExecutionConnection(reserved.permit),
+    ).resolves.toEqual({
+      error: { code: "invalid_execution", message: "Tool execution denied." },
+      ok: false,
+    });
+  });
+
   it("backfills legacy grants to approval-required before they can execute", async () => {
     const fixture = await toolExecutionFixture("legacy-grant-authorization", "write");
 
@@ -221,13 +319,7 @@ describe("admitted tool execution", () => {
          WHERE grant_id = ?`,
         fixture.grantId,
       );
-      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version = 9");
-    });
-    await evictDurableObject(fixture.controlPlane);
-
-    await expect(fixture.controlPlane.status(fixture.authority)).resolves.toMatchObject({
-      ok: true,
-      status: { schemaVersion: 9 },
+      state.storage.sql.exec(controlPlaneMigrations[8]?.sql ?? "");
     });
     await expect(
       fixture.controlPlane.evaluateToolExecution({
@@ -300,6 +392,7 @@ describe("admitted tool execution", () => {
   it("reserves, completes, and exhausts an exact read grant", async () => {
     const authority = await authorityFor("tool-execution-701");
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    await configureToolTestFleet(authority, controlPlane);
     const created = await controlPlane.createAgent(authority, {
       executionLimits: {
         maxDurationSeconds: 45,
@@ -497,6 +590,7 @@ describe("admitted tool execution", () => {
     });
     const abandonedAction = {
       ...action,
+      inputDigest: "c".repeat(64),
       toolCallId: "tool_call_77777777-7777-4777-8777-777777777777",
     };
     const abandoned = await controlPlane.reserveToolExecution({
@@ -557,6 +651,7 @@ describe("admitted tool execution", () => {
     ).resolves.toMatchObject({ ok: true, reconciled: true });
     const cancellationAction = {
       ...action,
+      inputDigest: "e".repeat(64),
       toolCallId: "tool_call_66666666-6666-4666-8666-666666666666",
     };
     const cancellationReserved = await controlPlane.reserveToolExecution({
@@ -656,6 +751,14 @@ describe("admitted tool execution", () => {
           admission.permit.runId,
         ),
       ]).toEqual([]);
+      expect(
+        state.storage.sql
+          .exec<{ calls: number }>(
+            "SELECT COUNT(*) AS calls FROM integration_usage_events WHERE run_id = ?",
+            admission.permit.runId,
+          )
+          .one(),
+      ).toEqual({ calls: 3 });
     });
   });
 

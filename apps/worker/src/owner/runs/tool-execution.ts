@@ -19,6 +19,7 @@ import {
   type ReconcileToolExecutionResult,
   type ResolveToolExecutionConnectionResult,
   type ToolExecutionPermit,
+  type FleetConfiguration,
   type OwnerAuthority,
   type ToolExecutionEvaluationFailureReason,
 } from "@crewhelm/contracts";
@@ -32,6 +33,7 @@ import {
   auditEvents,
   capabilityGrants,
   connections,
+  integrationUsageEvents,
   runAdmissions,
   toolApprovals,
   toolExecutions,
@@ -39,6 +41,7 @@ import {
 } from "../schema.js";
 import { evaluateApprovedComposioToolAction, evaluateComposioToolAction } from "./policy.js";
 
+const INTEGRATION_USAGE_WINDOW_MS = 30 * 24 * 60 * 60 * 1_000;
 const INVALID_TOOL_EXECUTION = {
   error: {
     code: "invalid_execution",
@@ -124,6 +127,7 @@ function createNonce(): string {
 }
 
 export class ToolExecutions {
+  readonly #currentFleetConfiguration: () => FleetConfiguration;
   readonly #database: ControlPlaneDatabase;
   readonly #objectName: string | undefined;
   readonly #storage: DurableObjectStorage;
@@ -132,7 +136,9 @@ export class ToolExecutions {
     objectName: string | undefined,
     database: ControlPlaneDatabase,
     storage: DurableObjectStorage,
+    currentFleetConfiguration: () => FleetConfiguration,
   ) {
+    this.#currentFleetConfiguration = currentFleetConfiguration;
     this.#database = database;
     this.#objectName = objectName;
     this.#storage = storage;
@@ -305,12 +311,27 @@ export class ToolExecutions {
           effectDigest,
           expiresAt: executionDeadline,
           grantId: request.data.action.grantId,
+          inputDigest: request.data.action.inputDigest,
           nonceDigest: permitDigest,
           runId: request.data.runId,
           startedAt: evaluatedAt,
           status: "reserved",
           toolCallId: request.data.action.toolCallId,
         })
+        .run();
+      transaction
+        .insert(integrationUsageEvents)
+        .values({
+          agentId: request.data.agentId,
+          grantId: request.data.action.grantId,
+          recordedAt: evaluatedAt,
+          runId: request.data.runId,
+          toolCallId: request.data.action.toolCallId,
+        })
+        .run();
+      transaction
+        .delete(integrationUsageEvents)
+        .where(lte(integrationUsageEvents.recordedAt, evaluatedAt - INTEGRATION_USAGE_WINDOW_MS))
         .run();
       transaction
         .insert(auditEvents)
@@ -642,6 +663,7 @@ export class ToolExecutions {
           actionDigest: toolExecutions.actionDigest,
           agentStatus: agents.status,
           cancellationRequestedAt: runAdmissions.cancellationRequestedAt,
+          budgetReservation: runAdmissions.budgetReservation,
           clientId: runAdmissions.clientId,
           connectionId: capabilityGrants.connectionId,
           connectionStatus: connections.status,
@@ -670,6 +692,8 @@ export class ToolExecutions {
         row.status !== "reserved" ||
         row.expiresAt <= dispatchedAt ||
         row.cancellationRequestedAt !== null ||
+        row.budgetReservation.fleetConfigurationRevision !==
+          this.#currentFleetConfiguration().revision ||
         row.agentStatus !== "active" ||
         row.currentAgentRevision !== permit.data.action.agentRevision ||
         row.connectionStatus !== "active" ||
@@ -757,7 +781,9 @@ export class ToolExecutions {
       admission === undefined ||
       admission.status !== "redeemed" ||
       admission.cancellationRequestedAt !== null ||
-      admission.cleanupAt <= evaluatedAt
+      admission.cleanupAt <= evaluatedAt ||
+      admission.budgetReservation.fleetConfigurationRevision !==
+        this.#currentFleetConfiguration().revision
     ) {
       return { ok: false, reason: "admission_unavailable" };
     }
@@ -852,6 +878,30 @@ export class ToolExecutions {
           ),
         )
         .get()?.value ?? 0;
+    const sameToolInputCallsUsed =
+      database
+        .select({ value: count() })
+        .from(toolExecutions)
+        .where(
+          and(
+            eq(toolExecutions.runId, request.runId),
+            eq(toolExecutions.grantId, request.action.grantId),
+            eq(toolExecutions.inputDigest, request.action.inputDigest),
+          ),
+        )
+        .get()?.value ?? 0;
+    const fleetCallsPerDayUsed =
+      database
+        .select({ value: count() })
+        .from(integrationUsageEvents)
+        .where(gt(integrationUsageEvents.recordedAt, evaluatedAt - 24 * 60 * 60 * 1_000))
+        .get()?.value ?? 0;
+    const fleetCallsPerThirtyDaysUsed =
+      database
+        .select({ value: count() })
+        .from(integrationUsageEvents)
+        .where(gt(integrationUsageEvents.recordedAt, evaluatedAt - INTEGRATION_USAGE_WINDOW_MS))
+        .get()?.value ?? 0;
     const deadlineAt = admission.createdAt + request.budgetReservation.maxDurationSeconds * 1_000;
 
     return {
@@ -875,10 +925,22 @@ export class ToolExecutions {
                 : ("unavailable" as const),
           currentAgentRevision: currentAgent.currentRevision,
           evaluatedAt: new Date(evaluatedAt).toISOString(),
+          fleetCallsPerDayUsed,
+          fleetCallsPerThirtyDaysUsed,
           grantCallsUsed,
           grantId: request.action.grantId,
           grantStatus: grantRow?.grantStatus ?? "revoked",
           killSwitchActive: false,
+          limits: {
+            callsPerDay: request.budgetReservation.integrationLimits.callsPerDay,
+            callsPerThirtyDays: request.budgetReservation.integrationLimits.callsPerThirtyDays,
+            duplicateToolCallLimit:
+              request.budgetReservation.integrationLimits.duplicateToolCallLimit,
+            maxCallsPerToolPerRun:
+              request.budgetReservation.integrationLimits.maxCallsPerToolPerRun,
+            maxConcurrencyPerGrant:
+              request.budgetReservation.integrationLimits.maxConcurrencyPerGrant,
+          },
           ownerKey: request.ownerKey,
           remainingCostMicrousd: grant.data.limits.maxCostMicrousdPerCall,
           remainingDurationMs: Math.max(0, deadlineAt - evaluatedAt),
@@ -888,6 +950,7 @@ export class ToolExecutions {
             request.budgetReservation.maxToolCalls - admission.toolCallsConsumed,
           ),
           runId: request.runId,
+          sameToolInputCallsUsed,
         },
       },
       ok: true,

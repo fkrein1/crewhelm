@@ -71,7 +71,7 @@ function exactInput(): ComposioToolGateInput {
       toolSlug: "PROJECT_TOOLKIT_READ_ITEM",
     },
     policy: {
-      activeGrantCalls: 1,
+      activeGrantCalls: 0,
       agentId,
       agentStatus: "active",
       capabilityId: COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
@@ -79,16 +79,26 @@ function exactInput(): ComposioToolGateInput {
       connectionStatus: "active",
       currentAgentRevision: 7,
       evaluatedAt: "2026-07-27T18:20:00.000Z",
-      grantCallsUsed: 2,
+      fleetCallsPerDayUsed: 20,
+      fleetCallsPerThirtyDaysUsed: 200,
+      grantCallsUsed: 0,
       grantId,
       grantStatus: "active",
       killSwitchActive: false,
+      limits: {
+        callsPerDay: 300,
+        callsPerThirtyDays: 8_000,
+        duplicateToolCallLimit: 2,
+        maxCallsPerToolPerRun: 2,
+        maxConcurrencyPerGrant: 1,
+      },
       ownerKey,
       remainingCostMicrousd: 3_000,
       remainingDurationMs: 12_000,
       remainingOutputBytes: 32_000,
       remainingToolCalls: 2,
       runId,
+      sameToolInputCallsUsed: 0,
     },
   };
 }
@@ -281,11 +291,34 @@ describe("ToolGate Composio policy", () => {
 
   it("denies exhausted grant concurrency", async () => {
     const input = exactInput();
-    input.policy.activeGrantCalls = 2;
+    input.policy.activeGrantCalls = 1;
 
     expect(await evaluateComposioToolAction(input)).toEqual({
       decision: "deny",
       reason: "concurrency_exhausted",
+    });
+  });
+
+  it("denies repeated identical tool input as a likely loop", async () => {
+    const input = exactInput();
+    input.policy.sameToolInputCallsUsed = input.policy.limits.duplicateToolCallLimit;
+
+    expect(await evaluateComposioToolAction(input)).toEqual({
+      decision: "deny",
+      reason: "loop_detected",
+    });
+  });
+
+  it.each([
+    ["daily", { fleetCallsPerDayUsed: 300 }],
+    ["thirty-day", { fleetCallsPerThirtyDaysUsed: 8_000 }],
+  ])("denies an exhausted fleet %s integration-call limit", async (_label, policyChange) => {
+    const input = exactInput();
+    Object.assign(input.policy, policyChange);
+
+    expect(await evaluateComposioToolAction(input)).toEqual({
+      decision: "deny",
+      reason: "rate_exhausted",
     });
   });
 

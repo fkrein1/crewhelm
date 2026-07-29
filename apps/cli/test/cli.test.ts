@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { CLI_HELP, runCli, type CliDependencies } from "../src/cli.js";
+import { CLI_HELP, parseCli, runCli, type CliDependencies } from "../src/cli.js";
 import { doctorReportSchema } from "../src/doctor.js";
 
 function requestPath(input: RequestInfo | URL): string {
@@ -38,14 +38,14 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "connection-configs:read",
           "connection-configs:write",
           "integrations:read",
+          "offline_access",
         ],
       };
     } else {
       payload = {
         authorization_endpoint: "https://crewhelm.example/api/auth/oauth2/authorize",
-        authorization_response_iss_parameter_supported: true,
         code_challenge_methods_supported: ["S256"],
-        grant_types_supported: ["authorization_code"],
+        grant_types_supported: ["authorization_code", "refresh_token"],
         issuer: "https://crewhelm.example/api/auth",
         jwks_uri: "https://crewhelm.example/api/auth/jwks",
         registration_endpoint: "https://crewhelm.example/api/auth/oauth2/register",
@@ -63,6 +63,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "connection-configs:read",
           "connection-configs:write",
           "integrations:read",
+          "offline_access",
         ],
         token_endpoint: "https://crewhelm.example/api/auth/oauth2/token",
         token_endpoint_auth_methods_supported: ["none"],
@@ -100,8 +101,18 @@ describe("Crewhelm CLI", () => {
 
     await expect(runCli([], harness.dependencies)).resolves.toBe(0);
     expect(harness.output).toEqual([CLI_HELP]);
+    expect(CLI_HELP).toContain("CREWHELM_CLOUDFLARE_API_TOKEN");
     expect(CLI_HELP).toContain("CREWHELM_COMPOSIO_API_KEY");
     expect(harness.dependencies.fetch).not.toHaveBeenCalled();
+  });
+
+  it("accepts a bounded installation AI budget in dollars", () => {
+    expect(
+      parseCli(["bootstrap", "--endpoint", "https://crewhelm.example", "--ai-budget-usd", "2.50"]),
+    ).toMatchObject({
+      aiDailySpendUsd: 2.5,
+      kind: "bootstrap",
+    });
   });
 
   it("reports a healthy Worker in human-readable form", async () => {
@@ -240,7 +251,11 @@ describe("Crewhelm CLI", () => {
         ],
         rules: [{ fallthrough: true, globs: ["**/*.sql"], type: "Text" }],
         triggers: { crons: ["17 * * * *"] },
-        vars: { PUBLIC_ORIGIN: "https://crewhelm.example" },
+        vars: {
+          AI_GATEWAY_DAILY_LIMIT_MICROUSD: "1000000",
+          AI_GATEWAY_ID: "crewhelm",
+          PUBLIC_ORIGIN: "https://crewhelm.example",
+        },
       }),
     );
     const harness = createHarness(undefined, {
@@ -290,6 +305,9 @@ describe("Crewhelm CLI", () => {
         "--worker-name",
         "Invalid_Name",
       ],
+    },
+    {
+      arguments_: ["bootstrap", "--endpoint", "https://crewhelm.example", "--ai-budget-usd", "0"],
     },
   ])("returns a usage error for $arguments_ without making a request", async ({ arguments_ }) => {
     const harness = createHarness();

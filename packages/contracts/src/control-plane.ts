@@ -159,10 +159,16 @@ export const agentMutationIdempotencyKeySchema = z
   .regex(/^[A-Za-z0-9._~-]+$/, "Expected an opaque idempotency key.");
 export const agentCreationIdempotencyKeySchema = agentMutationIdempotencyKeySchema;
 export const createAgentInputSchema = z.strictObject({
-  executionLimits: agentExecutionLimitsSchema,
+  executionLimits: agentExecutionLimitsSchema
+    .describe(
+      "Optional Agent-specific ceilings. Omit to inherit the current fleet execution defaults.",
+    )
+    .optional(),
   idempotencyKey: agentCreationIdempotencyKeySchema,
   instructions: agentInstructionsSchema,
-  model: agentModelSchema,
+  model: agentModelSchema
+    .describe("Optional model override. Omit to use the current fleet default model.")
+    .optional(),
   name: agentNameSchema,
 });
 export const getAgentInputSchema = z.strictObject({

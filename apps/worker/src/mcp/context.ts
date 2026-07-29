@@ -8,10 +8,12 @@ export interface OwnerControlPlaneClient {
   createAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
   completeConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;
   completeIntegrationEnablement(authorityInput: unknown, input: unknown): Promise<unknown>;
+  configureFleetConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
   decideRunToolApproval(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgentRevision(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgentSchedule(authorityInput: unknown, input: unknown): Promise<unknown>;
+  getFleetConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
   inspectRun(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgentRevisions(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgentRuns(authorityInput: unknown, input: unknown): Promise<unknown>;

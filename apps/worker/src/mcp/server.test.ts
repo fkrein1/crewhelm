@@ -2,6 +2,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  AUTONOMY_WRITE_SCOPE,
   CONNECTION_CONFIGS_READ_SCOPE,
   CONNECTION_CONFIGS_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
@@ -14,9 +15,11 @@ import {
   createConnectionLinkResultSchema,
   configureAgentConnectionResultSchema,
   controlPlaneStatusResultSchema,
+  configureFleetConfigurationResultSchema,
   enableIntegrationResultSchema,
   getAgentRevisionResultSchema,
   getAgentResultSchema,
+  getFleetConfigurationResultSchema,
   integrationAuthConfigListResultSchema,
   integrationCatalogSearchResultSchema,
   inspectIntegrationToolResultSchema,
@@ -35,12 +38,14 @@ import * as z from "zod";
 
 import {
   MCP_CANCEL_RUN_TOOL_NAME,
+  MCP_CONFIGURE_TOOL_NAME,
   MCP_CREATE_AGENT_TOOL_NAME,
   MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
   MCP_ENABLE_INTEGRATION_TOOL_NAME,
   MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME,
   MCP_CONFIGURE_AGENT_SCHEDULE_TOOL_NAME,
   MCP_GET_AGENT_TOOL_NAME,
+  MCP_GET_CONFIGURATION_TOOL_NAME,
   MCP_GET_AGENT_REVISION_TOOL_NAME,
   MCP_GET_AGENT_SCHEDULE_TOOL_NAME,
   MCP_INSPECT_INTEGRATION_TOOL_NAME,
@@ -87,6 +92,8 @@ const jsonRpcToolListSchema = z.looseObject({
           openWorldHint: z.boolean(),
           readOnlyHint: z.boolean(),
         }),
+        description: z.string(),
+        inputSchema: z.looseObject({}),
         name: z.string(),
       }),
     ),
@@ -177,6 +184,12 @@ describe("authenticated MCP handler", () => {
     );
     const decideApprovalTool = payload.result.tools.find(
       (tool) => tool.name === MCP_DECIDE_RUN_TOOL_APPROVAL_TOOL_NAME,
+    );
+    const getConfigurationTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_GET_CONFIGURATION_TOOL_NAME,
+    );
+    const configureTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_CONFIGURE_TOOL_NAME,
     );
     const recoveryTools = payload.result.tools.filter(
       (tool) =>
@@ -282,6 +295,29 @@ describe("authenticated MCP handler", () => {
           tool.annotations.readOnlyHint,
       ),
     ).toBe(true);
+    expect(getConfigurationTool).toMatchObject({
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: true,
+      },
+      description: expect.stringContaining("deterministic owner step-up path"),
+    });
+    expect(getConfigurationTool?.description).toContain("--ai-budget-usd");
+    expect(configureTool).toMatchObject({
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: true,
+      },
+      description: expect.stringContaining("never applies policy changes"),
+    });
+    expect(JSON.stringify(configureTool?.inputSchema)).toContain(
+      "Current revision returned by crewhelm_get_config",
+    );
+    expect(JSON.stringify(configureTool?.inputSchema)).toContain("bounds accidental loops");
   });
 
   it("returns owner control-plane status through the read-only MCP tool", async () => {
@@ -311,10 +347,105 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 9,
+        schemaVersion: 11,
         status: "ready",
       },
     });
+  });
+
+  it("reads and previews a documented fleet configuration change through MCP", async () => {
+    const authority = await ownerAuthority("mcp-configuration-owner", [
+      OWNER_READ_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+    ]);
+    const readResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 1,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { target: { kind: "fleet" } },
+            name: MCP_GET_CONFIGURATION_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const readResult = jsonRpcToolResultSchema.parse(await readResponse.json()).result;
+    const current = getFleetConfigurationResultSchema.parse(
+      JSON.parse(readResult.content[0]?.text ?? ""),
+    );
+
+    expect(current).toMatchObject({ configuration: { revision: 1 }, ok: true });
+    if (!current.ok) {
+      throw new Error("Expected MCP fleet configuration.");
+    }
+
+    const previewResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 2,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              expectedRevision: current.configuration.revision,
+              mode: "preview",
+              patch: { integrations: { duplicateToolCallLimit: 3 } },
+              target: { kind: "fleet" },
+            },
+            name: MCP_CONFIGURE_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const previewResult = jsonRpcToolResultSchema.parse(await previewResponse.json()).result;
+
+    expect(
+      configureFleetConfigurationResultSchema.parse(
+        JSON.parse(previewResult.content[0]?.text ?? ""),
+      ),
+    ).toMatchObject({
+      applied: false,
+      configuration: {
+        data: { integrations: { duplicateToolCallLimit: 3 } },
+        revision: 2,
+      },
+      ok: true,
+    });
+
+    const applyResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 3,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              expectedRevision: current.configuration.revision,
+              idempotencyKey: "model-must-not-apply-fleet-config",
+              mode: "apply",
+              patch: { integrations: { duplicateToolCallLimit: 3 } },
+              target: { kind: "fleet" },
+            },
+            name: MCP_CONFIGURE_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const applyResult = jsonRpcToolResultSchema.parse(await applyResponse.json()).result;
+    const unchanged = await env.OWNER_CONTROL_PLANE.getByName(
+      authority.ownerKey,
+    ).getFleetConfiguration(authority, { target: { kind: "fleet" } });
+
+    expect(applyResult.isError).toBe(true);
+    expect(unchanged).toMatchObject({ configuration: { revision: 1 }, ok: true });
   });
 
   it("disables an Agent through the recovery MCP tool", async () => {
@@ -332,7 +463,7 @@ describe("authenticated MCP handler", () => {
       },
       idempotencyKey: "mcp-recovery-agent",
       instructions: "Stop immediately when disabled.",
-      model: "anthropic/claude-sonnet-4",
+      model: "@cf/meta/llama-4-scout-17b-16e-instruct",
       name: "Recovery Agent",
     });
 
@@ -439,6 +570,9 @@ describe("authenticated MCP handler", () => {
           configureAgentConnection: async () => {
             throw new Error("do-not-reflect-this");
           },
+          configureFleetConfiguration: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           configureAgentSchedule: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -458,6 +592,9 @@ describe("authenticated MCP handler", () => {
             throw new Error("do-not-reflect-this");
           },
           getAgentSchedule: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          getFleetConfiguration: async () => {
             throw new Error("do-not-reflect-this");
           },
           inspectRun: async () => {
@@ -568,7 +705,7 @@ describe("authenticated MCP handler", () => {
       },
       idempotencyKey: "mcp-create-agent-1",
       instructions: "Keep a concise owner-controlled work queue.",
-      model: "anthropic/claude-sonnet-4",
+      model: "@cf/meta/llama-4-scout-17b-16e-instruct",
       name: "Work queue",
     };
     const createResponse = await handleAuthenticatedMcpRequest(
@@ -1569,10 +1706,12 @@ describe("authenticated MCP handler", () => {
           completeIntegrationEnablement: unavailableControlPlane,
           configureAgentConnection: unavailableControlPlane,
           configureAgentSchedule: unavailableControlPlane,
+          configureFleetConfiguration: unavailableControlPlane,
           createAgent: unavailableControlPlane,
           getAgent: unavailableControlPlane,
           getAgentRevision: unavailableControlPlane,
           getAgentSchedule: unavailableControlPlane,
+          getFleetConfiguration: unavailableControlPlane,
           inspectRun: unavailableControlPlane,
           decideRunToolApproval: unavailableControlPlane,
           listAgentRevisions: unavailableControlPlane,
@@ -1677,10 +1816,12 @@ describe("authenticated MCP handler", () => {
           completeIntegrationEnablement: unavailableControlPlane,
           configureAgentConnection: unavailableControlPlane,
           configureAgentSchedule: unavailableControlPlane,
+          configureFleetConfiguration: unavailableControlPlane,
           createAgent: unavailableControlPlane,
           getAgent: unavailableControlPlane,
           getAgentRevision: unavailableControlPlane,
           getAgentSchedule: unavailableControlPlane,
+          getFleetConfiguration: unavailableControlPlane,
           inspectRun: unavailableControlPlane,
           decideRunToolApproval: unavailableControlPlane,
           listAgentRevisions: unavailableControlPlane,

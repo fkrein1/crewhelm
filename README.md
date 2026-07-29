@@ -43,7 +43,8 @@ pnpm --filter @crewhelm/cli build
 node apps/cli/dist/crewhelm.js bootstrap \
   --endpoint https://YOUR_WORKER_HOST \
   --worker-name crewhelm \
-  --database-name crewhelm-auth
+  --database-name crewhelm-auth \
+  --ai-budget-usd 1
 ```
 
 Bootstrap selects the only Cloudflare account available to the authenticated Wrangler identity. If
@@ -53,16 +54,21 @@ Before a new deployment, provide `CREWHELM_GITHUB_CLIENT_ID`,
 `CREWHELM_COMPOSIO_API_KEY` through the process environment. The owner value is the stable numeric
 GitHub user ID, not a login or email. Avoid putting either secret directly in shell history.
 
-Bootstrap creates or reuses the exact D1 database name, applies packaged migrations, generates the
-Better Auth secret, deploys the packaged Worker and secrets together, and then diagnoses the public
-origin. Bootstrap endpoints must use HTTPS. A retry preserves the D1 database and any secrets on an
-existing Worker. Reusing an existing database requires its exact UUID through `--database-id`;
-bootstrap verifies its table and migration provenance before changing it. Supply all three GitHub
-settings together to update an existing deployment; omit all three to preserve its current OAuth
-secrets. Supply `CREWHELM_COMPOSIO_API_KEY` to set or rotate the Composio project key; omit it on an
-existing deployment to preserve the current key. Before any database change, bootstrap verifies
-that an existing Worker already holds every required secret or that the missing value was supplied
-for the pending deployment.
+Bootstrap creates or reuses the exact D1 database and a dedicated AI Gateway, applies packaged
+migrations, generates the Better Auth secret, deploys the packaged Worker and secrets together,
+and then diagnoses the public origin. The Gateway enforces a rolling daily spend ceiling; it
+defaults to $1 when created and can be set with `--ai-budget-usd`. Later runs preserve a verified
+existing limit unless that option is supplied explicitly. Bootstrap endpoints must use HTTPS. A retry
+preserves the D1 database and any secrets on an existing Worker. Reusing an existing database
+requires its exact UUID through `--database-id`; bootstrap verifies its table and migration
+provenance before changing it. Supply all three GitHub settings together to update an existing
+deployment; omit all three to preserve its current OAuth secrets. Supply
+`CREWHELM_COMPOSIO_API_KEY` to set or rotate the Composio project key; omit it on an existing
+deployment to preserve the current key. If Wrangler's OAuth credential cannot manage AI Gateways,
+set `CREWHELM_CLOUDFLARE_API_TOKEN` to an account API token with AI Gateway Read and Edit; keep it
+process-scoped and out of shell history. Before any database change, bootstrap verifies that an
+existing Worker already holds every required secret or that the missing value was supplied for the
+pending deployment.
 
 Diagnose without deploying:
 
@@ -121,6 +127,12 @@ loopback HTTP redirects.
 The MCP surface exposes:
 
 - `crewhelm_status` — return control-plane readiness; requires `control:read`.
+- `crewhelm_get_config` — return the current versioned fleet defaults, limits, and installation
+  ceilings; requires `control:read`.
+- `crewhelm_configure` — preview a revision-checked partial fleet configuration update without
+  applying it; requires `autonomy:write`. Policy application stays behind a deterministic owner
+  step-up path outside model authority. Its MCP schema documents every field and the microUSD money
+  unit.
 - `crewhelm_list_agents` — return bounded Agent summaries; requires `control:read`.
 - `crewhelm_get_agent` — return one Agent's current immutable definition; requires `agents:read`.
 - `crewhelm_list_agent_revisions` — list bounded immutable revision summaries for one Agent,

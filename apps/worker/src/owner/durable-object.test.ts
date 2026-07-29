@@ -1,6 +1,7 @@
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  AUTONOMY_WRITE_SCOPE,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   runBudgetReservationSchema,
@@ -70,7 +71,7 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toEqual({
       ok: true,
       status: {
-        schemaVersion: 9,
+        schemaVersion: 11,
         status: "ready",
       },
     });
@@ -128,9 +129,118 @@ describe("OwnerControlPlane", () => {
           name: "0008_backfill_tool_authorization",
           version: 9,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0009_colorful_skullbuster",
+          version: 10,
+        },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0010_famous_george_stacy",
+          version: 11,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });
+  });
+
+  it("backfills the exact pending Gateway reservation from a populated v10 database", async () => {
+    const authority = await authorityFor("1011", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const current = await stub.getFleetConfiguration(authority, { target: { kind: "fleet" } });
+
+    if (!current.ok) {
+      throw new Error("Expected migration fixture fleet configuration.");
+    }
+
+    await expect(
+      stub.configureFleetConfiguration(authority, {
+        expectedRevision: current.configuration.revision,
+        idempotencyKey: "configure-migration-reservation-1011",
+        mode: "apply",
+        patch: { ai: { runReservationMicrousd: 250_000 } },
+        target: { kind: "fleet" },
+      }),
+    ).resolves.toMatchObject({ applied: true, ok: true });
+
+    const created = await stub.createAgent(authority, agentInput("migration-reservation-agent"));
+
+    if (!created.ok) {
+      throw new Error("Expected migration reservation Agent.");
+    }
+
+    const prompt = "Preserve the exact pending reservation during migration.";
+    const admission = await stub.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "migration-reservation-run-1011",
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
+    });
+
+    if (!admission.ok || admission.state !== "issued") {
+      throw new Error("Expected migration reservation admission.");
+    }
+    expect(admission.permit.budgetReservation.aiSpendReservationMicrousd).toBe(250_000);
+
+    await runInDurableObject(stub, (_instance, state) => {
+      const recordedAt = Date.now();
+      state.storage.sql.exec("DROP TABLE ai_gateway_calls");
+      state.storage.sql.exec(
+        `CREATE TABLE ai_gateway_calls (
+           gateway_log_id TEXT PRIMARY KEY NOT NULL,
+           run_id TEXT NOT NULL,
+           agent_id TEXT NOT NULL,
+           status TEXT NOT NULL,
+           cost_microusd INTEGER,
+           input_tokens INTEGER,
+           output_tokens INTEGER,
+           recorded_at INTEGER NOT NULL,
+           settled_at INTEGER,
+           next_reconciliation_at INTEGER NOT NULL,
+           reconciliation_attempts INTEGER DEFAULT 0 NOT NULL
+         )`,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO ai_gateway_calls (
+           gateway_log_id,
+           run_id,
+           agent_id,
+           status,
+           recorded_at,
+           next_reconciliation_at
+         ) VALUES (?, ?, ?, 'pending', ?, ?)`,
+        "gateway-log-migration-1011",
+        admission.permit.runId,
+        admission.permit.agentId,
+        recordedAt,
+        recordedAt,
+      );
+      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version = 11");
+    });
+    await evictDurableObject(stub);
+
+    await expect(stub.status(authority)).resolves.toMatchObject({
+      ok: true,
+      status: { schemaVersion: 11, status: "ready" },
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec<{ reservation_microusd: number }>(
+            `SELECT reservation_microusd
+             FROM ai_gateway_calls
+             WHERE gateway_log_id = ?`,
+            "gateway-log-migration-1011",
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({ reservation_microusd: 250_000 });
   });
 
   it("fails closed for missing scopes and extra authority data", async () => {
@@ -178,12 +288,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 9, status: "ready" },
+      status: { schemaVersion: 11, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 9, status: "ready" },
+      status: { schemaVersion: 11, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -304,6 +414,11 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec("DROP TABLE agent_schedule_updates");
       state.storage.sql.exec("DROP TABLE agent_schedules");
       state.storage.sql.exec("DROP TABLE agent_schedule_revisions");
+      state.storage.sql.exec("DROP TABLE ai_gateway_calls");
+      state.storage.sql.exec("DROP TABLE fleet_configuration_updates");
+      state.storage.sql.exec("DROP TABLE fleet_configurations");
+      state.storage.sql.exec("DROP TABLE fleet_configuration_revisions");
+      state.storage.sql.exec("DROP TABLE integration_usage_events");
       state.storage.sql.exec("DROP TABLE integration_enablement_requests");
       state.storage.sql.exec("DROP TABLE tool_executions");
       state.storage.sql.exec("DROP TABLE tool_approvals");
@@ -395,7 +510,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 9, status: "ready" },
+      status: { schemaVersion: 11, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       const rows = [
@@ -463,6 +578,8 @@ describe("OwnerControlPlane", () => {
         { version: 7 },
         { version: 8 },
         { version: 9 },
+        { version: 10 },
+        { version: 11 },
       ]);
     });
   });
@@ -525,14 +642,15 @@ describe("OwnerControlPlane", () => {
       );
       state.storage.sql.exec(
         `INSERT INTO tool_executions
-           (tool_call_id, run_id, grant_id, action_digest, effect_digest, nonce_digest, status,
+           (tool_call_id, run_id, grant_id, action_digest, effect_digest, input_digest, nonce_digest, status,
             cost_microusd, output_bytes, expires_at, started_at, dispatched_at, completed_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'completed', 0, 16, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', 0, 16, ?, ?, ?, ?)`,
         toolCallId,
         admission.permit.runId,
         "grant_90136000-0000-4000-8000-000000000001",
         "a".repeat(64),
         "f".repeat(64),
+        "0".repeat(64),
         "b".repeat(43),
         completedAt + 1,
         startedAt,
@@ -541,14 +659,15 @@ describe("OwnerControlPlane", () => {
       );
       state.storage.sql.exec(
         `INSERT INTO tool_executions
-           (tool_call_id, run_id, grant_id, action_digest, effect_digest, nonce_digest, status,
+           (tool_call_id, run_id, grant_id, action_digest, effect_digest, input_digest, nonce_digest, status,
             cost_microusd, output_bytes, expires_at, started_at, dispatched_at, completed_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'unknown', 0, 0, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'unknown', 0, 0, ?, ?, ?, ?)`,
         unknownToolCallId,
         admission.permit.runId,
         "grant_90136000-0000-4000-8000-000000000001",
         "c".repeat(64),
         "d".repeat(64),
+        "0".repeat(64),
         "e".repeat(43),
         completedAt + 1,
         startedAt,
@@ -559,6 +678,11 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec("DROP TABLE agent_schedule_updates");
       state.storage.sql.exec("DROP TABLE agent_schedules");
       state.storage.sql.exec("DROP TABLE agent_schedule_revisions");
+      state.storage.sql.exec("DROP TABLE ai_gateway_calls");
+      state.storage.sql.exec("DROP TABLE fleet_configuration_updates");
+      state.storage.sql.exec("DROP TABLE fleet_configurations");
+      state.storage.sql.exec("DROP TABLE fleet_configuration_revisions");
+      state.storage.sql.exec("DROP TABLE integration_usage_events");
       state.storage.sql.exec(
         `CREATE TABLE legacy_tool_executions AS
          SELECT
@@ -587,7 +711,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 9, status: "ready" },
+      status: { schemaVersion: 11, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       expect(
@@ -683,7 +807,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec(
         `INSERT INTO control_plane_migrations (version, name, checksum, applied_at)
          VALUES (?, ?, ?, ?)`,
-        10,
+        12,
         "future_migration",
         "f".repeat(64),
         Date.now(),

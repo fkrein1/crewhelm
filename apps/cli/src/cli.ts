@@ -19,7 +19,7 @@ import {
 export const CLI_HELP = `Crewhelm bootstrap CLI
 
 Usage:
-  crewhelm bootstrap --endpoint <origin> [--account-id <id>] [--worker-name <name>] [--database-name <name>] [--database-id <uuid>] [--timeout-ms <milliseconds>] [--json]
+  crewhelm bootstrap --endpoint <origin> [--account-id <id>] [--worker-name <name>] [--database-name <name>] [--database-id <uuid>] [--ai-budget-usd <dollars>] [--timeout-ms <milliseconds>] [--json]
   crewhelm doctor --endpoint <origin> [--timeout-ms <milliseconds>] [--json]
   crewhelm --help
 
@@ -27,6 +27,8 @@ The bootstrap command creates or reuses D1, deploys the packaged Worker, and dia
 New deployments read GitHub OAuth settings from CREWHELM_GITHUB_CLIENT_ID,
 CREWHELM_GITHUB_CLIENT_SECRET, and CREWHELM_OWNER_GITHUB_USER_ID, plus the Composio project key
 from CREWHELM_COMPOSIO_API_KEY.
+Set CREWHELM_CLOUDFLARE_API_TOKEN to a scoped account token with AI Gateway Read and Edit when the
+Wrangler OAuth credential cannot manage Gateways.
 The doctor command validates bounded health and MCP OAuth discovery responses.
 --timeout-ms applies to each diagnostic request.
 Bootstrap requires HTTPS. Doctor permits HTTP only for exact loopback hosts.
@@ -38,6 +40,7 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     accountId: bootstrapOptionsSchema.shape.accountId,
+    aiDailySpendUsd: bootstrapOptionsSchema.shape.aiDailySpendUsd,
     databaseId: bootstrapOptionsSchema.shape.databaseId,
     databaseName: bootstrapOptionsSchema.shape.databaseName,
     json: z.boolean(),
@@ -86,6 +89,7 @@ export function parseCli(arguments_: readonly string[]): CliCommand {
 
   const kind = arguments_[0];
   let accountId: string | undefined;
+  let aiDailySpendUsd: number | undefined;
   let databaseId: string | undefined;
   let databaseName = "crewhelm-auth";
   let endpoint: string | undefined;
@@ -120,6 +124,12 @@ export function parseCli(arguments_: readonly string[]): CliCommand {
 
     if (flag === "--account-id" && kind === "bootstrap") {
       accountId = requireFlagValue(arguments_, index, flag);
+      index += 1;
+      continue;
+    }
+
+    if (flag === "--ai-budget-usd" && kind === "bootstrap") {
+      aiDailySpendUsd = Number(requireFlagValue(arguments_, index, flag));
       index += 1;
       continue;
     }
@@ -176,6 +186,7 @@ export function parseCli(arguments_: readonly string[]): CliCommand {
     kind === "bootstrap"
       ? cliCommandSchema.safeParse({
           accountId,
+          aiDailySpendUsd,
           databaseId,
           databaseName,
           json,

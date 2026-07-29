@@ -7,6 +7,8 @@ const PROTECTED_RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource"
 const AUTHORIZATION_SERVER_METADATA_PATH = "/.well-known/oauth-authorization-server/api/auth";
 const AUTH_BASE_PATH = "/api/auth";
 const MCP_PATH = "/mcp";
+const OFFLINE_ACCESS_SCOPE = "offline_access";
+const OAUTH_SCOPES = [...OWNER_SCOPES, OFFLINE_ACCESS_SCOPE] as const;
 
 const deploymentOriginInputSchema = z.string().trim().min(1).max(2_048);
 const doctorCheckSchema = z.strictObject({
@@ -148,7 +150,7 @@ function isTimeout(error: unknown): boolean {
   return error instanceof Error && error.name === "TimeoutError";
 }
 
-function stringArrayContaining(value: string): z.ZodType {
+function stringArrayContaining(value: string) {
   return z
     .array(z.string().min(1).max(128))
     .min(1)
@@ -177,16 +179,17 @@ function checkDefinitions(origin: URL): [CheckDefinition, CheckDefinition, Check
         bearer_methods_supported: z.tuple([z.literal("header")]),
         resource: z.literal(`${origin.origin}${MCP_PATH}`),
         scopes_supported: z.tuple([
-          z.literal(OWNER_SCOPES[0]),
-          z.literal(OWNER_SCOPES[1]),
-          z.literal(OWNER_SCOPES[2]),
-          z.literal(OWNER_SCOPES[3]),
-          z.literal(OWNER_SCOPES[4]),
-          z.literal(OWNER_SCOPES[5]),
-          z.literal(OWNER_SCOPES[6]),
-          z.literal(OWNER_SCOPES[7]),
-          z.literal(OWNER_SCOPES[8]),
-          z.literal(OWNER_SCOPES[9]),
+          z.literal(OAUTH_SCOPES[0]),
+          z.literal(OAUTH_SCOPES[1]),
+          z.literal(OAUTH_SCOPES[2]),
+          z.literal(OAUTH_SCOPES[3]),
+          z.literal(OAUTH_SCOPES[4]),
+          z.literal(OAUTH_SCOPES[5]),
+          z.literal(OAUTH_SCOPES[6]),
+          z.literal(OAUTH_SCOPES[7]),
+          z.literal(OAUTH_SCOPES[8]),
+          z.literal(OAUTH_SCOPES[9]),
+          z.literal(OAUTH_SCOPES[10]),
         ]),
       }),
       subject: "Protected-resource",
@@ -199,9 +202,10 @@ function checkDefinitions(origin: URL): [CheckDefinition, CheckDefinition, Check
       path: AUTHORIZATION_SERVER_METADATA_PATH,
       schema: z.looseObject({
         authorization_endpoint: z.literal(`${authBaseUrl}/oauth2/authorize`),
-        authorization_response_iss_parameter_supported: z.literal(true),
         code_challenge_methods_supported: z.tuple([z.literal("S256")]),
-        grant_types_supported: z.tuple([z.literal("authorization_code")]),
+        grant_types_supported: stringArrayContaining("authorization_code").refine((values) =>
+          values.includes("refresh_token"),
+        ),
         issuer: z.literal(authBaseUrl),
         jwks_uri: z.literal(`${authBaseUrl}/jwks`),
         registration_endpoint: z.literal(`${authBaseUrl}/oauth2/register`),
@@ -209,16 +213,17 @@ function checkDefinitions(origin: URL): [CheckDefinition, CheckDefinition, Check
         response_types_supported: z.tuple([z.literal("code")]),
         revocation_endpoint: z.literal(`${authBaseUrl}/oauth2/revoke`),
         scopes_supported: z.tuple([
-          z.literal(OWNER_SCOPES[0]),
-          z.literal(OWNER_SCOPES[1]),
-          z.literal(OWNER_SCOPES[2]),
-          z.literal(OWNER_SCOPES[3]),
-          z.literal(OWNER_SCOPES[4]),
-          z.literal(OWNER_SCOPES[5]),
-          z.literal(OWNER_SCOPES[6]),
-          z.literal(OWNER_SCOPES[7]),
-          z.literal(OWNER_SCOPES[8]),
-          z.literal(OWNER_SCOPES[9]),
+          z.literal(OAUTH_SCOPES[0]),
+          z.literal(OAUTH_SCOPES[1]),
+          z.literal(OAUTH_SCOPES[2]),
+          z.literal(OAUTH_SCOPES[3]),
+          z.literal(OAUTH_SCOPES[4]),
+          z.literal(OAUTH_SCOPES[5]),
+          z.literal(OAUTH_SCOPES[6]),
+          z.literal(OAUTH_SCOPES[7]),
+          z.literal(OAUTH_SCOPES[8]),
+          z.literal(OAUTH_SCOPES[9]),
+          z.literal(OAUTH_SCOPES[10]),
         ]),
         token_endpoint: z.literal(`${authBaseUrl}/oauth2/token`),
         token_endpoint_auth_methods_supported: stringArrayContaining("none"),
