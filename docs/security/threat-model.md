@@ -57,16 +57,9 @@ lease. Explicit revocation is immediate. Emergency global revocation uses a fres
 binding; the old database is quarantined and must never be rebound because doing so could
 reactivate clients, sessions, signing keys, or tokens.
 
-Crewhelm permits only the explicit `control:read`, `control:write`, `agents:read`, `agents:write`,
-`autonomy:write`, `connections:read`, `connections:write`, `connection-configs:read`,
-`connection-configs:write`, and `integrations:read` capability scopes, plus standard
-`offline_access` for refresh. Tokens and existing client registrations are never silently widened.
-GitHub login uses no upstream scope, and its transient token is not persisted.
-
-Authorization-server metadata does not advertise the optional authorization response `iss`
-parameter because current Codex clients discard it before validation. Crewhelm still emits `iss`;
-fixed issuer and endpoints, exact redirect binding, S256 PKCE, authorization-code binding, and
-audience-bound token validation remain enforced.
+Crewhelm accepts only explicitly defined capability scopes plus standard `offline_access` for
+refresh. Tokens and existing client registrations are never silently widened. GitHub login uses no
+upstream scope, and its transient token is not persisted.
 
 Revisit this model before adding another identity provider, broader mutations, a multi-owner
 service, or longer token lifetimes.
@@ -126,9 +119,8 @@ durable transition. They may contain operation outcomes and durations, provider 
 error identifiers, integration or tool slugs, and opaque owner-local Agent, connection, grant, run,
 tool-call, or connection-link correlation identifiers. These identifiers support recovery
 diagnosis without identifying a provider account. Events exclude credentials, provider account
-identifiers, user content, and request or response bodies. Initial 100-percent custom-event
-sampling must be reduced under an explicit retention and cost policy before sustained high-volume
-operation.
+identifiers, user content, and request or response bodies. Sampling and retention must follow an
+explicit cost and data-retention policy.
 
 The dedicated AI Gateway is a second, installation-wide rolling spend guard. Crewhelm reserves
 cost locally before a call and persists that reservation with pending Gateway log IDs until exact

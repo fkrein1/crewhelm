@@ -10,8 +10,8 @@ execution limits.
 
 ## Agent revision
 
-An immutable snapshot of an agent's configuration and installed recipe. A configuration change
-creates a new revision; a run records the revision it uses.
+An immutable snapshot of an agent's configuration. A configuration change creates a new revision;
+a run records the revision it uses.
 
 ## Bootstrap CLI
 
@@ -20,8 +20,7 @@ Crewhelm control plane. It is not the ongoing administration surface.
 
 ## Capability grant
 
-A bounded permission to perform a class of actions. A recipe may request a capability; only the
-control plane can grant it.
+A bounded permission to perform a class of actions. Only the control plane can grant it.
 
 ## Connection
 
@@ -30,9 +29,9 @@ agents by an opaque identifier, never by the underlying credential.
 
 ## Control plane
 
-The owner-authoritative source of truth for agent, connection, recipe, and policy definitions,
-along with run admission and administrative lifecycle. Runtime execution state belongs to the
-agent or Workflow performing it.
+The owner-authoritative source of truth for Agent, connection, and policy definitions, along with
+run admission and administrative lifecycle. Runtime execution state belongs to the Agent or
+Workflow performing it.
 
 ## MCP client
 
@@ -41,8 +40,10 @@ Crewhelm's MCP interface.
 
 ## Recipe
 
-A versioned, declarative template for an agent's model, instructions, requested capabilities,
-connection requirements, and limits. A recipe contains neither credentials nor executable code.
+A planned, versioned declarative template for an Agent's model, instructions, requested
+capabilities, connection requirements, and limits. Recipes are part of the long-term product
+vision and are not yet an implemented control-plane resource. They contain neither credentials nor
+executable code.
 
 ## Run
 

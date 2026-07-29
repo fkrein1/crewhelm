@@ -7,6 +7,8 @@
   "type": "module",
   "scripts": {
     "build": "node ./scripts/build.mjs",
+    "docs:mcp": "vitest run apps/worker/src/mcp/documentation.test.ts --update --maxWorkers=50%",
+    "docs:mcp:check": "vitest run apps/worker/src/mcp/documentation.test.ts --maxWorkers=50%",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint --type-aware --type-check --deny-warnings --report-unused-disable-directives .",
