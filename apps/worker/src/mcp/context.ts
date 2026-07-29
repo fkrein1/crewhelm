@@ -2,6 +2,7 @@ import type { OwnerAuthority } from "@crewhelm/contracts";
 
 export interface OwnerControlPlaneClient {
   agentInbox(authorityInput: unknown, input: unknown): Promise<unknown>;
+  batchDisableAgents(authorityInput: unknown, input: unknown): Promise<unknown>;
   cancelRun(authorityInput: unknown, input: unknown): Promise<unknown>;
   changeAuthority(authorityInput: unknown, input: unknown): Promise<unknown>;
   configureAgentConnection(authorityInput: unknown, input: unknown): Promise<unknown>;

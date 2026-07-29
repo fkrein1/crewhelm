@@ -1,5 +1,7 @@
 import {
   agentIdSchema,
+  batchDisableAgentsInputSchema,
+  batchDisableAgentsResultSchema,
   capabilityGrantIdSchema,
   changeAuthorityResultSchema,
   connectionIdSchema,
@@ -12,6 +14,7 @@ import * as z from "zod";
 import type { McpToolContext } from "./context.js";
 import { controlPlaneToolResult } from "./tool-result.js";
 
+export const MCP_BATCH_DISABLE_AGENTS_TOOL_NAME = "crewhelm_batch_disable_agents";
 export const MCP_REVOKE_AUTHORITY_TOOL_NAME = "crewhelm_revoke_authority";
 export const MCP_RECONCILE_TOOL_EXECUTION_TOOL_NAME = "crewhelm_reconcile_tool_execution";
 const changeAuthorityToolInputShape = {
@@ -31,6 +34,27 @@ const changeAuthorityToolInputShape = {
 
 export function registerRecoveryTools(server: McpServer, context: McpToolContext): void {
   const { authority, controlPlane } = context;
+
+  server.registerTool(
+    MCP_BATCH_DISABLE_AGENTS_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: false,
+      },
+      description:
+        "Disable up to 25 exact authenticated-owner Crewhelm Agent revisions and return one ordered compact receipt per Agent.",
+      inputSchema: batchDisableAgentsInputSchema,
+      title: "Disable a bounded Crewhelm Agent batch",
+    },
+    async (input) =>
+      controlPlaneToolResult(
+        () => controlPlane.batchDisableAgents(authority, input),
+        batchDisableAgentsResultSchema,
+      ),
+  );
 
   server.registerTool(
     MCP_REVOKE_AUTHORITY_TOOL_NAME,

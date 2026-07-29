@@ -1,1 +1,1 @@
-export { AuthorityControls, deniedAuthorityControl } from "./module.js";
+export { AuthorityControls, deniedAuthorityControl, deniedBatchAgentDisable } from "./module.js";

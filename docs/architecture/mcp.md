@@ -18,6 +18,11 @@ response budget. Exact get and inspect tools retain detailed configuration, gran
 outputs, and timelines. The authenticated MCP catalog is also held to explicit CI budgets for tool
 count and serialized input-schema size.
 
+Fleet mutations remain explicit rather than selector-driven. Bounded Agent shutdown accepts at
+most 25 unique Agent IDs with exact expected revisions, applies owner-local changes in one durable
+transaction, and returns one compact ordered receipt per input. Revision conflicts and missing
+Agents do not prevent safe targets in the same request from being disabled.
+
 New fleets default to 100 Agents, 100 connections, and 25 concurrent runs. The capacity migration
 preserves the former 1,000-connection and 1,000-admission ceilings for existing fleets so an upgrade
 does not silently tighten operating policy; owners can lower those values through a revisioned

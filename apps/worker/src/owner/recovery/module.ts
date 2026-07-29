@@ -1,5 +1,9 @@
 import {
+  batchDisableAgentsResultSchema,
   changeAuthorityResultSchema,
+  type BatchDisableAgentReceipt,
+  type BatchDisableAgentsInput,
+  type BatchDisableAgentsResult,
   type ChangeAuthorityInput,
   type ChangeAuthorityResult,
   type OwnerAuthority,
@@ -17,13 +21,27 @@ import {
 } from "../schema.js";
 
 type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
+type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+type RecoveryDatabase = Database | Transaction;
 type Failure = Extract<ChangeAuthorityResult, { ok: false }>;
+type BatchFailure = Extract<BatchDisableAgentsResult, { ok: false }>;
+type AgentDisableOutcome = BatchDisableAgentReceipt["outcome"];
 
 export function deniedAuthorityControl(code: Failure["error"]["code"]): Failure {
   return {
     error: {
       code,
       message: "Authority control request denied.",
+    },
+    ok: false,
+  };
+}
+
+export function deniedBatchAgentDisable(code: BatchFailure["error"]["code"]): BatchFailure {
+  return {
+    error: {
+      code,
+      message: "Batch Agent disable request denied.",
     },
     ok: false,
   };
@@ -40,39 +58,19 @@ export class AuthorityControls {
     const changedAt = Date.now();
     const result = this.#database.transaction((transaction) => {
       if (input.target === "agent") {
-        const row = transaction
-          .select({ status: agents.status })
-          .from(agents)
-          .where(eq(agents.agentId, input.agentId))
-          .get();
+        const outcome = this.#disableAgent(
+          transaction,
+          authority,
+          { agentId: input.agentId },
+          changedAt,
+        );
 
-        if (row === undefined) {
+        if (outcome === "agent_not_found") {
           return deniedAuthorityControl("agent_not_found");
         }
 
-        const changed =
-          row.status === "active" &&
-          transaction
-            .update(agents)
-            .set({ disabledAt: changedAt, status: "disabled" })
-            .where(and(eq(agents.agentId, input.agentId), eq(agents.status, "active")))
-            .returning({ agentId: agents.agentId })
-            .all().length === 1;
-
-        if (changed) {
-          transaction
-            .insert(auditEvents)
-            .values({
-              action: "agent.disabled",
-              clientId: authority.clientId,
-              occurredAt: changedAt,
-              subjectId: input.agentId,
-            })
-            .run();
-        }
-
         return changeAuthorityResultSchema.parse({
-          changed,
+          changed: outcome === "disabled",
           ok: true,
           state: { agentId: input.agentId, status: "disabled", target: "agent" },
         });
@@ -195,5 +193,95 @@ export class AuthorityControls {
     }
 
     return result;
+  }
+
+  disableAgents(
+    authority: OwnerAuthority,
+    input: BatchDisableAgentsInput,
+  ): BatchDisableAgentsResult {
+    const changedAt = Date.now();
+    const result = this.#database.transaction((transaction) =>
+      batchDisableAgentsResultSchema.parse({
+        ok: true,
+        receipts: input.agents.map((agent) => ({
+          ...agent,
+          outcome: this.#disableAgent(transaction, authority, agent, changedAt),
+        })),
+      }),
+    );
+
+    if (!result.ok) {
+      return result;
+    }
+
+    for (const receipt of result.receipts) {
+      if (receipt.outcome === "disabled" || receipt.outcome === "already_disabled") {
+        recordRecoveryEvent({
+          agentId: receipt.agentId,
+          operation: "agent.disable",
+          outcome: receipt.outcome === "disabled" ? "changed" : "replayed",
+        });
+      }
+    }
+
+    return result;
+  }
+
+  #disableAgent(
+    database: RecoveryDatabase,
+    authority: OwnerAuthority,
+    input: { agentId: string; expectedRevision?: number },
+    changedAt: number,
+  ): AgentDisableOutcome {
+    const row = database
+      .select({
+        currentRevision: agents.currentRevision,
+        status: agents.status,
+      })
+      .from(agents)
+      .where(eq(agents.agentId, input.agentId))
+      .get();
+
+    if (row === undefined) {
+      return "agent_not_found";
+    }
+
+    if (input.expectedRevision !== undefined && row.currentRevision !== input.expectedRevision) {
+      return "revision_conflict";
+    }
+
+    if (row.status === "disabled") {
+      return "already_disabled";
+    }
+
+    const changed =
+      database
+        .update(agents)
+        .set({ disabledAt: changedAt, status: "disabled" })
+        .where(
+          and(
+            eq(agents.agentId, input.agentId),
+            eq(agents.currentRevision, row.currentRevision),
+            eq(agents.status, "active"),
+          ),
+        )
+        .returning({ agentId: agents.agentId })
+        .all().length === 1;
+
+    if (!changed) {
+      return "revision_conflict";
+    }
+
+    database
+      .insert(auditEvents)
+      .values({
+        action: "agent.disabled",
+        clientId: authority.clientId,
+        occurredAt: changedAt,
+        subjectId: input.agentId,
+      })
+      .run();
+
+    return "disabled";
   }
 }

@@ -14,6 +14,7 @@ import {
   OWNER_WRITE_SCOPE,
   RUNS_WRITE_SCOPE,
   agentInboxResultSchema,
+  batchDisableAgentsResultSchema,
   changeAuthorityResultSchema,
   createAgentResultSchema,
   createConnectionLinkResultSchema,
@@ -42,6 +43,7 @@ import * as z from "zod";
 
 import {
   MCP_AGENT_INBOX_TOOL_NAME,
+  MCP_BATCH_DISABLE_AGENTS_TOOL_NAME,
   MCP_CANCEL_RUN_TOOL_NAME,
   MCP_CONFIGURE_TOOL_NAME,
   MCP_CREATE_AGENT_TOOL_NAME,
@@ -224,6 +226,7 @@ describe("authenticated MCP handler", () => {
     );
     const recoveryTools = payload.result.tools.filter(
       (tool) =>
+        tool.name === MCP_BATCH_DISABLE_AGENTS_TOOL_NAME ||
         tool.name === MCP_REVOKE_AUTHORITY_TOOL_NAME ||
         tool.name === MCP_RECONCILE_TOOL_EXECUTION_TOOL_NAME,
     );
@@ -294,7 +297,7 @@ describe("authenticated MCP handler", () => {
       openWorldHint: false,
       readOnlyHint: false,
     });
-    expect(recoveryTools).toHaveLength(2);
+    expect(recoveryTools).toHaveLength(3);
     expect(
       recoveryTools.every(
         (tool) =>
@@ -538,6 +541,74 @@ describe("authenticated MCP handler", () => {
     });
   });
 
+  it("disables exact Agent revisions through the bounded recovery MCP tool", async () => {
+    const authority = await ownerAuthority("mcp-batch-recovery-owner", [
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+    ]);
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await Promise.all([
+      controlPlane.createAgent(authority, {
+        executionLimits: {
+          maxDurationSeconds: 60,
+          maxModelTokens: 2_000,
+          maxToolCalls: 1,
+          maxTurns: 2,
+        },
+        idempotencyKey: "mcp-batch-recovery-agent-1",
+        instructions: "Stop immediately when disabled.",
+        model: "@cf/meta/llama-4-scout-17b-16e-instruct",
+        name: "Batch Recovery Agent One",
+      }),
+      controlPlane.createAgent(authority, {
+        executionLimits: {
+          maxDurationSeconds: 60,
+          maxModelTokens: 2_000,
+          maxToolCalls: 1,
+          maxTurns: 2,
+        },
+        idempotencyKey: "mcp-batch-recovery-agent-2",
+        instructions: "Stop immediately when disabled.",
+        model: "@cf/meta/llama-4-scout-17b-16e-instruct",
+        name: "Batch Recovery Agent Two",
+      }),
+    ]);
+
+    if (!created[0].ok || !created[1].ok) {
+      throw new Error("Expected batch recovery Agents.");
+    }
+
+    const agents = [created[0].agent, created[1].agent].map((agent) => ({
+      agentId: agent.id,
+      expectedRevision: agent.revision,
+    }));
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 2,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { agents },
+            name: MCP_BATCH_DISABLE_AGENTS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload: unknown = await response.json();
+    const result = jsonRpcToolResultSchema.parse(payload).result;
+
+    expect(result.isError).toBe(false);
+    expect(batchDisableAgentsResultSchema.parse(JSON.parse(result.content[0]?.text ?? ""))).toEqual(
+      {
+        ok: true,
+        receipts: agents.map((agent) => ({ ...agent, outcome: "disabled" })),
+      },
+    );
+  });
+
   it("rejects missing or malformed authority before MCP parsing", async () => {
     const request = toolRequest('{"do-not-reflect":"secret"}');
     const response = await handleAuthenticatedMcpRequest(request, env, {
@@ -600,6 +671,9 @@ describe("authenticated MCP handler", () => {
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
           agentInbox: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          batchDisableAgents: async () => {
             throw new Error("do-not-reflect-this");
           },
           cancelRun: async () => {
@@ -1903,6 +1977,7 @@ describe("authenticated MCP handler", () => {
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
           agentInbox: unavailableControlPlane,
+          batchDisableAgents: unavailableControlPlane,
           cancelRun: unavailableControlPlane,
           changeAuthority: unavailableControlPlane,
           completeConnectionLink: unavailableControlPlane,
@@ -2011,6 +2086,7 @@ describe("authenticated MCP handler", () => {
       OWNER_CONTROL_PLANE: {
         getByName: () => ({
           agentInbox: unavailableControlPlane,
+          batchDisableAgents: unavailableControlPlane,
           cancelRun: unavailableControlPlane,
           changeAuthority: unavailableControlPlane,
           completeConnectionLink: (authorityInput: unknown, input: unknown) =>
