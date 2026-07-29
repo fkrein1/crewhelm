@@ -9,8 +9,10 @@ import { createWranglerRunner } from "./wrangler.js";
 
 const interactive = process.stdin.isTTY && process.stdout.isTTY;
 const dependencies = {
+  color: interactive && process.env.NO_COLOR === undefined,
   deploymentAssetsDirectory: fileURLToPath(new URL("./deployment", import.meta.url)),
   fetch: globalThis.fetch,
+  interactive,
   openUrl: openInDefaultBrowser,
   ...(interactive ? { promptSecret, promptText } : {}),
   readEnvironment: (name: string) => process.env[name],

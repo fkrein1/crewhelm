@@ -9,6 +9,7 @@ import { agentSmokeReportSchema } from "../src/agent-smoke.js";
 import { CLI_HELP, parseCli, runCli, type CliDependencies } from "../src/cli.js";
 import { doctorReportSchema } from "../src/doctor.js";
 import { readInstallation } from "../src/installation.js";
+import { CLI_BANNER } from "../src/presentation.js";
 
 const DATABASE_ID = "c58217fd-fe09-447b-b79c-5d63ed1cedc0";
 const DEPLOYMENT_VERSION_ID = "37bcd44d-e373-41a2-8a47-eb03cce01d32";
@@ -189,9 +190,85 @@ describe("Crewhelm CLI", () => {
 
     await expect(runCli([], harness.dependencies)).resolves.toBe(0);
     expect(harness.output).toEqual([CLI_HELP]);
-    expect(CLI_HELP).toContain("CREWHELM_CLOUDFLARE_API_TOKEN");
-    expect(CLI_HELP).toContain("CREWHELM_COMPOSIO_API_KEY");
+    expect(CLI_HELP).toContain("Examples:");
+    expect(CLI_HELP).toContain("$ crewhelm up");
+    expect(CLI_HELP).not.toContain("CREWHELM_CLOUDFLARE_API_TOKEN");
     expect(harness.dependencies.fetch).not.toHaveBeenCalled();
+  });
+
+  it("colors the root hierarchy when interactive", async () => {
+    const harness = createHarness(undefined, { color: true, interactive: true });
+
+    await expect(runCli([], harness.dependencies)).resolves.toBe(0);
+    expect(harness.output.join("")).toContain(CLI_BANNER.split("\n")[0]);
+    expect(harness.output.join("")).toContain("\u001B[");
+    expect(harness.errors).toEqual([]);
+  });
+
+  it("prints command-specific help through the injected output", async () => {
+    const harness = createHarness(undefined, { color: true, interactive: true });
+
+    await expect(runCli(["doctor", "--help"], harness.dependencies)).resolves.toBe(0);
+    expect(harness.output.join("")).toContain("crewhelm doctor [options]");
+    expect(harness.output.join("")).toContain("--authenticated");
+    expect(harness.output.join("")).not.toContain("--confirm-production");
+    expect(harness.output.join("")).toContain("\u001B[");
+    expect(harness.errors).toEqual([]);
+
+    const upHarness = createHarness();
+
+    await expect(runCli(["up", "--help"], upHarness.dependencies)).resolves.toBe(0);
+    expect(upHarness.output.join("")).toContain("Automation:");
+    expect(upHarness.output.join("")).toContain("CREWHELM_COMPOSIO_API_KEY");
+    expect(upHarness.output.join("")).toContain("CREWHELM_CLOUDFLARE_API_TOKEN");
+    expect(upHarness.output.join("")).toContain("Safety:");
+  });
+
+  it("adds a color-safe banner and progress only for interactive human output", async () => {
+    const harness = createHarness(undefined, { color: true, interactive: true });
+
+    await expect(
+      runCli(["up", "--endpoint", "https://crewhelm.example"], harness.dependencies),
+    ).resolves.toBe(1);
+    expect(harness.output[0]).toContain(CLI_BANNER.split("\n")[0]);
+    expect(harness.output[0]).toContain("\u001B[");
+    expect(harness.errors.join("")).toContain("Loading packaged deployment assets");
+    expect(harness.errors.join("")).toContain("\u001B[");
+
+    const plainHarness = createHarness(undefined, { color: true, interactive: true });
+
+    await expect(runCli(["--no-color", "--help"], plainHarness.dependencies)).resolves.toBe(0);
+    expect(plainHarness.output.join("")).toContain(CLI_BANNER);
+    expect(plainHarness.output.join("")).not.toContain("\u001B[");
+  });
+
+  it("keeps JSON setup non-interactive and stdout clean", async () => {
+    const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-cli-json-test-"));
+    const promptText = vi.fn<(message: string) => Promise<string>>();
+    const promptSecret = vi.fn<(message: string) => Promise<string>>();
+    const createGitHubApp = vi.fn<NonNullable<CliDependencies["createGitHubApp"]>>();
+    const harness = createHarness(undefined, {
+      createGitHubApp,
+      interactive: true,
+      promptSecret,
+      promptText,
+    });
+
+    try {
+      await expect(
+        runCli(
+          ["up", "--json", "--installation", resolve(directory, "installation.json")],
+          harness.dependencies,
+        ),
+      ).resolves.toBe(2);
+      expect(promptText).not.toHaveBeenCalled();
+      expect(promptSecret).not.toHaveBeenCalled();
+      expect(createGitHubApp).not.toHaveBeenCalled();
+      expect(harness.output).toEqual([]);
+      expect(harness.errors.join("")).toContain("up requires an HTTPS endpoint on the first run.");
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 
   it("accepts a bounded installation AI budget in dollars", () => {
@@ -201,6 +278,9 @@ describe("Crewhelm CLI", () => {
       aiDailySpendUsd: 2.5,
       kind: "up",
     });
+    expect(
+      parseCli(["doctor", "--endpoint", "https://crewhelm.example", "--no-color"]),
+    ).toMatchObject({ kind: "doctor" });
   });
 
   it.each([
@@ -367,11 +447,24 @@ describe("Crewhelm CLI", () => {
     expect(harness.output.join("")).not.toContain("secret-provider-diagnostic");
   });
 
-  it("does not reflect an invalid command value", async () => {
+  it.each([
+    {
+      arguments_: ["secret-command-value"],
+      secret: "secret-command-value",
+    },
+    {
+      arguments_: ["doctor", "--endpoint", "https://crewhelm.example", "--secret-option-value"],
+      secret: "secret-option-value",
+    },
+    {
+      arguments_: ["doctor", "--endpoint", "https://crewhelm.example", "secret-positional-value"],
+      secret: "secret-positional-value",
+    },
+  ])("does not reflect invalid input from $arguments_", async ({ arguments_, secret }) => {
     const harness = createHarness();
 
-    await expect(runCli(["secret-command-value"], harness.dependencies)).resolves.toBe(2);
-    expect(harness.errors.join("")).not.toContain("secret-command-value");
+    await expect(runCli(arguments_, harness.dependencies)).resolves.toBe(2);
+    expect(harness.errors.join("")).not.toContain(secret);
     expect(harness.dependencies.fetch).not.toHaveBeenCalled();
   });
 

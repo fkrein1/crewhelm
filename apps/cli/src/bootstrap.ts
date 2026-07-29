@@ -344,8 +344,9 @@ export const bootstrapReportSchema = z.strictObject({
 
 export type BootstrapFailure = z.infer<typeof bootstrapFailureSchema>;
 export type BootstrapOptions = z.infer<typeof bootstrapOptionsSchema>;
+export type BootstrapProgressStage = z.infer<typeof bootstrapFailureStageSchema>;
 export type BootstrapReport = z.infer<typeof bootstrapReportSchema>;
-type BootstrapFailureStage = z.infer<typeof bootstrapFailureStageSchema>;
+type BootstrapFailureStage = BootstrapProgressStage;
 type DeploymentTemplate = z.infer<typeof deploymentTemplateSchema>;
 type GitHubSecrets = z.infer<typeof githubSecretsSchema>;
 type CloudflareCredentials = z.infer<typeof cloudflareCredentialsSchema>;
@@ -356,6 +357,11 @@ export interface ExistingInstallationCoordinates {
   databaseName: string;
   origin: string;
   workerName: string;
+}
+
+export interface BootstrapProgress {
+  message: string;
+  stage: BootstrapProgressStage;
 }
 
 interface DeploymentAssets {
@@ -383,6 +389,7 @@ export interface BootstrapDependencies extends DoctorDependencies {
   openCloudflareApiTokens?: () => Promise<void>;
   promptSecret?: (message: string) => Promise<string>;
   readEnvironment: (name: string) => string | undefined;
+  reportProgress?: (progress: BootstrapProgress) => void;
   recoverExistingInstallation?: {
     expectedDatabaseId?: string;
     expectedDatabaseName?: string;
@@ -404,6 +411,14 @@ export class BootstrapError extends Error {
 
 function commandFailed(stage: BootstrapFailureStage, message: string): BootstrapError {
   return new BootstrapError(stage, message);
+}
+
+function reportProgress(
+  dependencies: BootstrapDependencies,
+  stage: BootstrapFailureStage,
+  message: string,
+): void {
+  dependencies.reportProgress?.({ message, stage });
 }
 
 async function createPrivateWorkspace(): Promise<string> {
@@ -1529,11 +1544,13 @@ export async function bootstrapDeployment(
   options: BootstrapOptions,
   dependencies: BootstrapDependencies,
 ): Promise<BootstrapReport> {
+  reportProgress(dependencies, "assets", "Loading packaged deployment assets");
   const assets = await loadDeploymentAssets(dependencies);
   const cwd = await createPrivateWorkspace();
 
   try {
     const neutralConfigPath = await writeAccountConfig(cwd);
+    reportProgress(dependencies, "authentication", "Authenticating with Cloudflare");
     const account = await authenticate(options, cwd, neutralConfigPath, dependencies);
     const accountConfigPath = await writeAccountConfig(cwd, account.id);
     const context = { accountId: account.id, accountConfigPath, cwd, dependencies };
@@ -1550,6 +1567,7 @@ export async function bootstrapDeployment(
       );
     }
 
+    reportProgress(dependencies, "worker", "Inspecting the existing Worker");
     const workerInventory = await readWorkerInventory(options.workerName, context);
     const deploymentOptions = await recoverExistingInstallation(
       options,
@@ -1584,6 +1602,7 @@ export async function bootstrapDeployment(
     let gatewayCredentials: CloudflareCredentials | undefined;
 
     if (deploymentOptions.aiDailySpendUsd !== undefined) {
+      reportProgress(dependencies, "gateway", "Planning the AI Gateway spend limit");
       gatewayCredentials = await readCloudflareCredentials({ cwd, dependencies });
 
       try {
@@ -1640,12 +1659,14 @@ export async function bootstrapDeployment(
       }
     }
 
+    reportProgress(dependencies, "database", "Preparing the D1 database");
     const { action: databaseAction, database } = await ensureDatabase(
       deploymentOptions,
       assets.migrations,
       context,
     );
     const aiGatewayId = aiGatewayPlan?.id ?? deploymentOptions.aiGatewayId;
+    reportProgress(dependencies, "configuration", "Preparing deployment configuration");
     const configPath = await stageDeployment(
       deploymentOptions,
       account.id,
@@ -1654,6 +1675,7 @@ export async function bootstrapDeployment(
       assets,
       context,
     );
+    reportProgress(dependencies, "migrations", "Applying D1 migrations");
     const migration = await runCloudflare(
       context,
       ["d1", "migrations", "apply", "AUTH_DB", "--remote", "--config", configPath],
@@ -1671,6 +1693,7 @@ export async function bootstrapDeployment(
     }
 
     if (aiGatewayPlan !== undefined && gatewayCredentials !== undefined) {
+      reportProgress(dependencies, "gateway", "Applying the AI Gateway spend limit");
       await applyAiGatewayPlan(aiGatewayPlan, account.id, gatewayCredentials, dependencies);
     }
 
@@ -1717,6 +1740,11 @@ export async function bootstrapDeployment(
     const deploymentUnchanged =
       secretsPath === undefined && currentDeploymentHasMessage(workerInventory, deploymentMessage);
 
+    reportProgress(
+      dependencies,
+      "deployment",
+      deploymentUnchanged ? "Reconciling Worker routes and schedules" : "Deploying the Worker",
+    );
     if (!deploymentUnchanged) {
       const deployment = await runCloudflare(context, deployArguments, "deployment");
 
@@ -1754,6 +1782,7 @@ export async function bootstrapDeployment(
       }
     }
 
+    reportProgress(dependencies, "deployment", "Verifying the deployed control plane");
     const doctor: DoctorReport = await diagnoseDeployment(deploymentOptions, dependencies);
 
     return bootstrapReportSchema.parse({
