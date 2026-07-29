@@ -31,6 +31,7 @@ import {
 } from "@crewhelm/contracts";
 import { and, asc, count, eq, gt, lte, min, sql } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
+import { alias } from "drizzle-orm/sqlite-core";
 
 import { recordConnectionLinkCompletion } from "../../observability/integrations.js";
 import {
@@ -834,11 +835,13 @@ export class Connections {
       return deniedConnectionRead("invalid_request");
     }
 
+    const listedConnections = alias(connections, "listed_connections");
     const latestAuthorizationOutcome = sql<ConnectionSummary["authorizationOutcome"]>`coalesce(
       (
         SELECT ${connectionAuthorizationReturns.status}
         FROM ${connectionAuthorizationReturns}
-        WHERE ${connectionAuthorizationReturns.connectionId} = ${connections.connectionId}
+        WHERE ${connectionAuthorizationReturns.connectionId}
+          = "listed_connections"."connection_id"
         ORDER BY ${connectionAuthorizationReturns.createdAt} DESC,
           ${connectionAuthorizationReturns.reservationId} DESC
         LIMIT 1
@@ -848,7 +851,8 @@ export class Connections {
     const integrationSlug = sql<string | null>`(
       SELECT ${integrationEnablementRequests.integrationSlug}
       FROM ${integrationEnablementRequests}
-      WHERE ${integrationEnablementRequests.authConfigId} = ${connections.authConfigId}
+      WHERE ${integrationEnablementRequests.authConfigId}
+        = "listed_connections"."auth_config_id"
         AND ${integrationEnablementRequests.status} = 'completed'
       ORDER BY ${integrationEnablementRequests.completedAt} DESC,
         ${integrationEnablementRequests.reservationId} DESC
@@ -856,16 +860,16 @@ export class Connections {
     )`;
     const rows = this.#database
       .select({
-        accountLabel: connections.accountLabel,
-        authConfigId: connections.authConfigId,
+        accountLabel: listedConnections.accountLabel,
+        authConfigId: listedConnections.authConfigId,
         authorizationOutcome: latestAuthorizationOutcome,
-        connectionId: connections.connectionId,
-        createdAt: connections.createdAt,
+        connectionId: listedConnections.connectionId,
+        createdAt: listedConnections.createdAt,
         integrationSlug,
-        providerConnectionId: connections.providerConnectionId,
-        status: connections.status,
+        providerConnectionId: listedConnections.providerConnectionId,
+        status: listedConnections.status,
       })
-      .from(connections)
+      .from(listedConnections)
       .where(
         and(
           request.data.authorizationOutcome === undefined
@@ -873,7 +877,7 @@ export class Connections {
             : eq(latestAuthorizationOutcome, request.data.authorizationOutcome),
           request.data.cursor === undefined
             ? undefined
-            : gt(connections.connectionId, request.data.cursor),
+            : gt(listedConnections.connectionId, request.data.cursor),
           request.data.integration === undefined
             ? undefined
             : sql`EXISTS (
@@ -881,14 +885,15 @@ export class Connections {
                 FROM ${integrationEnablementRequests}
                 WHERE ${integrationEnablementRequests.integrationSlug} = ${request.data.integration}
                   AND ${integrationEnablementRequests.status} = 'completed'
-                  AND ${integrationEnablementRequests.authConfigId} = ${connections.authConfigId}
+                  AND ${integrationEnablementRequests.authConfigId}
+                    = "listed_connections"."auth_config_id"
               )`,
           request.data.status === undefined
             ? undefined
-            : eq(connections.status, request.data.status),
+            : eq(listedConnections.status, request.data.status),
         ),
       )
-      .orderBy(asc(connections.connectionId))
+      .orderBy(asc(listedConnections.connectionId))
       .limit(request.data.limit + 1)
       .all();
     const summaries = rows.map((row) => this.#summaryFromRow(row));
