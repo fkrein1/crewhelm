@@ -185,6 +185,10 @@ export class AgentChannel {
     };
   }
 
+  repairFailedRun(runId: string): boolean {
+    return this.#inbox.repairFailedRun(runId);
+  }
+
   recordInboxRun(input: unknown): Promise<RecordAgentInboxRunResult> {
     return this.#inbox.recordRun(input);
   }
@@ -324,7 +328,6 @@ export class AgentChannel {
     pendingApprovals: PendingToolApproval[] = [],
     authorizationTrace: RunTimelineEvent[] = [],
   ): RunTimelineEvent[] {
-    this.#toolExecutions.reconcileExpired(Date.now());
     const events = new Map<string, RunTimelineEvent>();
     const add = (
       event: RunTimelineEvent["event"],
@@ -454,6 +457,36 @@ export class AgentChannel {
       .slice(0, MAXIMUM_RUN_TIMELINE_EVENTS);
   }
 
+  #authoritativeRun(run: Run, authorizationTrace: RunTimelineEvent[]): Run {
+    if (run.status !== "completed") {
+      return run;
+    }
+
+    const executionStates = this.#database
+      .select({
+        reconciliation: toolExecutions.reconciliation,
+        status: toolExecutions.status,
+      })
+      .from(toolExecutions)
+      .where(eq(toolExecutions.runId, run.runId))
+      .all();
+    const hasCompletedExecution = executionStates.some(
+      (execution) => execution.status === "completed",
+    );
+    const hasUnresolvedExecution = executionStates.some(
+      (execution) => execution.status === "unknown" && execution.reconciliation === null,
+    );
+    const hasOnlyFailedExecutions =
+      !hasCompletedExecution && executionStates.some((execution) => execution.status === "failed");
+    const hasAuthorizationBlock = authorizationTrace.some(
+      (event) => event.event === "tool.authorization_blocked",
+    );
+
+    return hasAuthorizationBlock || hasUnresolvedExecution || hasOnlyFailedExecutions
+      ? { ...run, status: "failed" }
+      : run;
+  }
+
   async start(
     authority: OwnerAuthority,
     input: unknown,
@@ -570,10 +603,19 @@ export class AgentChannel {
       trigger: storedAdmission.trigger,
     };
 
+    this.#toolExecutions.reconcileExpired(Date.now());
+    const authoritativeRun = this.#authoritativeRun(run, inspected.trace);
+    const timeline = this.#timeline(storedAdmission, authoritativeRun, [], inspected.trace);
+    const alignedRun = alignRunCompletion(authoritativeRun, timeline);
+
+    if (alignedRun.status === "failed") {
+      this.#inbox.repairFailedRun(alignedRun.runId);
+    }
+
     return startRunResultSchema.parse({
       created: admission.state === "issued" && admission.created,
       ok: true,
-      run: alignRunCompletion(run, this.#timeline(storedAdmission, run, [], inspected.trace)),
+      run: alignedRun,
     });
   }
 
@@ -660,17 +702,24 @@ export class AgentChannel {
         }
       : inspectedRun;
 
+    this.#toolExecutions.reconcileExpired(Date.now());
+    const authoritativeRun = this.#authoritativeRun(run, inspected.trace);
     const timeline = this.#timeline(
       admission,
-      run,
+      authoritativeRun,
       pending.state === "available" ? pending.approvals : [],
       inspected.trace,
     );
+    const alignedRun = alignRunCompletion(authoritativeRun, timeline);
+
+    if (alignedRun.status === "failed") {
+      this.#inbox.repairFailedRun(alignedRun.runId);
+    }
 
     return inspectRunResultSchema.parse({
       ok: true,
       request: { prompt: admission.prompt },
-      run: alignRunCompletion(run, timeline),
+      run: alignedRun,
       timeline,
     });
   }

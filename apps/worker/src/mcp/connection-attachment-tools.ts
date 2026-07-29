@@ -76,6 +76,7 @@ export function registerConnectionAttachmentTools(
             ...input,
             providerConnectionId: null,
             tools: [],
+            verifiedAccountLabel: null,
             verifiedToolkitSlug: null,
           });
         }
@@ -128,6 +129,7 @@ export function registerConnectionAttachmentTools(
           ...input,
           providerConnectionId: resolved.data.providerConnectionId,
           tools: configuredTools,
+          verifiedAccountLabel: verified.accountLabel,
           verifiedToolkitSlug: verified.toolkitSlug,
         });
       }, configureAgentConnectionResultSchema),

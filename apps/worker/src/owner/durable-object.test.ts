@@ -89,7 +89,7 @@ describe("OwnerControlPlane", () => {
           },
         },
         configurationRevision: 1,
-        schemaVersion: 14,
+        schemaVersion: 15,
         status: "ready",
         usage: {
           agents: { active: 0, total: 0 },
@@ -101,6 +101,7 @@ describe("OwnerControlPlane", () => {
             outcomes: 0,
             total: 0,
           },
+          recovery: { unresolvedEffects: 0 },
           runs: { active: 0 },
         },
       },
@@ -184,8 +185,33 @@ describe("OwnerControlPlane", () => {
           name: "0013_scale_fleet_configuration",
           version: 14,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0014_closed_patriot",
+          version: 15,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      for (const [index, accountLabel] of [
+        "line\nbreak",
+        `delete${String.fromCharCode(127)}`,
+      ].entries()) {
+        expect(() =>
+          state.storage.sql.exec(
+            `INSERT INTO connections
+               (connection_id, provider, provider_connection_id, auth_config_id, account_label,
+                status, created_at)
+             VALUES (?, 'composio', ?, ?, ?, 'initiated', ?)`,
+            `connection_00000000-0000-4000-8000-${(index + 1).toString().padStart(12, "0")}`,
+            `ca_control_character_${index}`,
+            `ac_control_character_${index}`,
+            accountLabel,
+            Date.now(),
+          ),
+        ).toThrow("CHECK constraint failed");
+      }
     });
   });
 
@@ -575,7 +601,7 @@ describe("OwnerControlPlane", () => {
          WHERE run_id = ?`,
         admission.permit.runId,
       );
-      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version = 14");
+      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 14");
     });
     await evictDurableObject(stub);
 
@@ -693,7 +719,7 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 14, status: "ready" },
+      status: { schemaVersion: 15, status: "ready" },
     });
     await expect(
       runInDurableObject(stub, (_instance, state) =>
@@ -754,12 +780,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 14, status: "ready" },
+      status: { schemaVersion: 15, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 14, status: "ready" },
+      status: { schemaVersion: 15, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -979,7 +1005,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 14, status: "ready" },
+      status: { schemaVersion: 15, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       const rows = [
@@ -1052,6 +1078,7 @@ describe("OwnerControlPlane", () => {
         { version: 12 },
         { version: 13 },
         { version: 14 },
+        { version: 15 },
       ]);
     });
   });
@@ -1186,7 +1213,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 14, status: "ready" },
+      status: { schemaVersion: 15, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       expect(
@@ -1282,7 +1309,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec(
         `INSERT INTO control_plane_migrations (version, name, checksum, applied_at)
          VALUES (?, ?, ?, ?)`,
-        15,
+        16,
         "future_migration",
         "f".repeat(64),
         Date.now(),

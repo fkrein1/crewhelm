@@ -145,6 +145,7 @@ export const connections = sqliteTable(
     provider: text("provider", { enum: ["composio"] }).notNull(),
     providerConnectionId: text("provider_connection_id").notNull().unique(),
     authConfigId: text("auth_config_id").notNull(),
+    accountLabel: text("account_label"),
     status: text("status", {
       enum: ["initiated", "active", "revoked", "unavailable"],
     }).notNull(),
@@ -158,6 +159,12 @@ export const connections = sqliteTable(
       sql`${table.status} IN ('initiated', 'active', 'revoked', 'unavailable')`,
     ),
     check("connections_created_at_positive", sql`${table.createdAt} > 0`),
+    check(
+      "connections_account_label",
+      sql`${table.accountLabel} IS NULL
+        OR (length(${table.accountLabel}) BETWEEN 1 AND 160
+          AND ${table.accountLabel} NOT GLOB '*[^ -~]*')`,
+    ),
     check(
       "connections_revocation_state",
       sql`(

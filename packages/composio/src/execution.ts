@@ -16,6 +16,7 @@ const MAXIMUM_CONNECTION_RESPONSE_BYTES = 256 * 1_024;
 
 const composioApiKeySchema = z.string().min(16).max(4_096).regex(/^\S+$/);
 const connectedAccountSchema = z.object({
+  alias: z.unknown().optional(),
   id: composioConnectedAccountIdSchema,
   status: z.literal("ACTIVE"),
   toolkit: z.object({
@@ -55,7 +56,7 @@ export interface ComposioRuntime {
   verifyConnection(
     providerConnectionId: string,
     signal?: AbortSignal,
-  ): Promise<{ ok: true; toolkitSlug: string } | { ok: false }>;
+  ): Promise<{ accountLabel: string | null; ok: true; toolkitSlug: string } | { ok: false }>;
 }
 
 export interface ComposioRuntimeOptions {
@@ -85,6 +86,26 @@ export type ComposioRuntimeResponseEvent =
       outcome: "accepted" | "invalid_response" | "provider_rejected" | "transport_error";
       status: number | null;
     };
+
+function accountLabel(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const label = value.trim();
+  let printable = true;
+
+  for (const character of label) {
+    const codePoint = character.codePointAt(0);
+
+    if (codePoint === undefined || codePoint < 32 || codePoint > 126) {
+      printable = false;
+      break;
+    }
+  }
+
+  return label.length >= 1 && label.length <= 160 && printable ? label : null;
+}
 type WithoutDuration<Event> = Event extends unknown ? Omit<Event, "durationMs"> : never;
 
 function containsSecret(value: unknown, secret: string): boolean {
@@ -488,7 +509,11 @@ export function createComposioRuntime(options: ComposioRuntimeOptions): Composio
           },
           startedAt,
         );
-        return { ok: true, toolkitSlug: account.data.toolkit.slug };
+        return {
+          accountLabel: accountLabel(account.data.alias),
+          ok: true,
+          toolkitSlug: account.data.toolkit.slug,
+        };
       } catch {
         recordResponse(
           {

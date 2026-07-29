@@ -21,6 +21,7 @@ export interface OwnerControlPlaneClient {
   listAgentRuns(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgents(authorityInput: unknown, input: unknown): Promise<unknown>;
   listConnections(authorityInput: unknown, input: unknown): Promise<unknown>;
+  listUnresolvedToolEffects(authorityInput: unknown, input: unknown): Promise<unknown>;
   listRunToolApprovals(authorityInput: unknown, input: unknown): Promise<unknown>;
   lookupAgentConnectionConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
   reserveConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;

@@ -80,20 +80,36 @@ type ControlPlaneTransaction = Parameters<Parameters<ControlPlaneDatabase["trans
 type RunAdmissionDatabase = ControlPlaneDatabase | ControlPlaneTransaction;
 type StoredRunAdmission = typeof runAdmissions.$inferSelect;
 
-const PROJECTED_RUN_STATUS = sql<RunSummary["status"]>`CASE
-  WHEN ${runAdmissions.cancelledAt} IS NOT NULL THEN 'cancelled'
-  WHEN ${runAdmissions.cancellationRequestedAt} IS NOT NULL THEN 'cancelling'
-  WHEN ${runAdmissions.status} = 'issued' THEN 'queued'
-  WHEN ${runAdmissions.status} = 'expired' THEN 'failed'
-  WHEN ${agentInboxItems.runStatus} IS NOT NULL THEN ${agentInboxItems.runStatus}
-  ELSE 'running'
-END`;
-const PROJECTED_RUN_COMPLETED_AT = sql<number | null>`CASE
-  WHEN ${runAdmissions.cancelledAt} IS NOT NULL THEN ${runAdmissions.cancelledAt}
-  WHEN ${agentInboxItems.runStatus} IN ('cancelled', 'completed', 'failed')
-    THEN ${agentInboxItems.occurredAt}
-  ELSE NULL
-END`;
+function projectedRunStatus(currentTime: number) {
+  return sql<RunSummary["status"]>`CASE
+    WHEN ${runAdmissions.cancelledAt} IS NOT NULL THEN 'cancelled'
+    WHEN ${runAdmissions.cancellationRequestedAt} IS NOT NULL THEN 'cancelling'
+    WHEN ${runAdmissions.status} = 'issued' THEN 'queued'
+    WHEN ${runAdmissions.status} = 'expired' THEN 'failed'
+    WHEN ${agentInboxItems.runStatus} IS NOT NULL THEN ${agentInboxItems.runStatus}
+    WHEN ${runAdmissions.redeemedAt} IS NOT NULL
+      AND ${runAdmissions.redeemedAt}
+        + json_extract(${runAdmissions.budgetReservation}, '$.maxDurationSeconds') * 1000
+        <= ${currentTime}
+      THEN 'failed'
+    ELSE 'running'
+  END`;
+}
+
+function projectedRunCompletedAt(currentTime: number) {
+  return sql<number | null>`CASE
+    WHEN ${runAdmissions.cancelledAt} IS NOT NULL THEN ${runAdmissions.cancelledAt}
+    WHEN ${agentInboxItems.runStatus} IN ('cancelled', 'completed', 'failed')
+      THEN ${agentInboxItems.occurredAt}
+    WHEN ${runAdmissions.redeemedAt} IS NOT NULL
+      AND ${runAdmissions.redeemedAt}
+        + json_extract(${runAdmissions.budgetReservation}, '$.maxDurationSeconds') * 1000
+        <= ${currentTime}
+      THEN ${runAdmissions.redeemedAt}
+        + json_extract(${runAdmissions.budgetReservation}, '$.maxDurationSeconds') * 1000
+    ELSE NULL
+  END`;
+}
 
 function encodeBase64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -803,6 +819,9 @@ export class RunAdmissions {
   }
 
   list(input: ListAgentRunsInput): { nextCursor: string | null; runs: RunSummary[] } | undefined {
+    const currentTime = Date.now();
+    const projectedStatus = projectedRunStatus(currentTime);
+    const projectedCompletedAt = projectedRunCompletedAt(currentTime);
     const filters = and(
       input.agentId === undefined ? undefined : eq(runAdmissions.agentId, input.agentId),
       input.createdAfter === undefined
@@ -811,7 +830,7 @@ export class RunAdmissions {
       input.createdBefore === undefined
         ? undefined
         : lte(runAdmissions.createdAt, Date.parse(input.createdBefore)),
-      input.status === undefined ? undefined : eq(PROJECTED_RUN_STATUS, input.status),
+      input.status === undefined ? undefined : eq(projectedStatus, input.status),
       input.trigger === undefined ? undefined : eq(runAdmissions.trigger, input.trigger),
     );
     const cursorRow =
@@ -835,11 +854,11 @@ export class RunAdmissions {
       .select({
         agentId: runAdmissions.agentId,
         agentRevision: runAdmissions.agentRevision,
-        completedAt: PROJECTED_RUN_COMPLETED_AT,
+        completedAt: projectedCompletedAt,
         createdAt: runAdmissions.createdAt,
         runId: runAdmissions.runId,
         startedAt: runAdmissions.redeemedAt,
-        status: PROJECTED_RUN_STATUS,
+        status: projectedStatus,
         trigger: runAdmissions.trigger,
       })
       .from(runAdmissions)
@@ -971,12 +990,14 @@ export class RunAdmissions {
   }
 
   #activeCount(database: RunAdmissionDatabase): number {
+    const currentTime = Date.now();
+
     return (
       database
         .select({ value: count() })
         .from(runAdmissions)
         .leftJoin(agentInboxItems, eq(agentInboxItems.runId, runAdmissions.runId))
-        .where(inArray(PROJECTED_RUN_STATUS, ["queued", "running", "cancelling"]))
+        .where(inArray(projectedRunStatus(currentTime), ["queued", "running", "cancelling"]))
         .get()?.value ?? 0
     );
   }

@@ -68,7 +68,7 @@ function formatStandingIntegrationSmokeHelp(style: ChalkInstance): string {
   return `
 ${style.yellow.bold("Production rehearsal:")}
   Creates one draft to the reserved, non-deliverable example.invalid domain.
-  Requires an exact active Gmail connection and retains the draft for verification.
+  Requires an exact authorized Gmail connection and retains the draft for verification.
   Revokes the grant, disables the Agent, and revokes temporary Full control before exit.
   Requires ${style.yellow("--confirm-production")} and an HTTPS endpoint.
 `;
@@ -332,7 +332,7 @@ function createCliProgram(
       "Create one non-deliverable Gmail draft through an exact, one-call standing capability grant.",
     )
     .requiredOption("--endpoint <origin>", "HTTPS Crewhelm deployment origin")
-    .requiredOption("--connection-id <id>", "exact active Crewhelm Gmail connection")
+    .requiredOption("--connection-id <id>", "exact authorized Crewhelm Gmail connection")
     .requiredOption("--confirm-production", "confirm the mutating production rehearsal")
     .option("--run-timeout-ms <milliseconds>", "maximum Agent run duration", "120000")
     .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")

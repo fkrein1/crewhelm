@@ -1,9 +1,8 @@
 import * as z from "zod";
 
-import { MAXIMUM_FLEET_LIST_ITEMS } from "./fleet-capacity.js";
-
 export const MAXIMUM_CONNECTION_LINK_REQUESTS_PER_OWNER = 5_000;
 export const CONNECTION_LINK_UNKNOWN_RECOVERY_MS = 30 * 60 * 1_000;
+export const MAXIMUM_CONNECTION_LIST_ITEMS = 20;
 
 export const connectionAuthConfigIdSchema = z
   .string()
@@ -63,11 +62,33 @@ export const connectionAuthorizationOutcomeSchema = z.enum([
   "untracked",
 ]);
 export const connectionStatusSchema = z.enum(["initiated", "active", "revoked", "unavailable"]);
+function isPrintableAccountLabel(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+
+    if (codePoint === undefined || codePoint < 32 || codePoint > 126) {
+      return false;
+    }
+  }
+
+  return true;
+}
 export const connectionSummarySchema = z.strictObject({
+  accountLabel: z
+    .string()
+    .min(1)
+    .max(160)
+    .refine(isPrintableAccountLabel, "Expected a printable ASCII connection account label.")
+    .nullable(),
   authorizationOutcome: connectionAuthorizationOutcomeSchema,
   authConfigId: connectionAuthConfigIdSchema,
   connectionId: connectionIdSchema,
   createdAt: z.iso.datetime(),
+  integrationSlug: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9_-]{0,127}$/, "Expected a Composio integration slug.")
+    .nullable(),
+  providerConnectionId: composioConnectedAccountIdSchema,
   status: connectionStatusSchema,
 });
 export const listConnectionsInputSchema = z.strictObject({
@@ -80,7 +101,7 @@ export const listConnectionsInputSchema = z.strictObject({
     .regex(/^[a-z0-9][a-z0-9_-]{0,127}$/, "Expected a Composio integration slug.")
     .optional()
     .describe("Return connections created for this enabled integration."),
-  limit: z.number().int().min(1).max(MAXIMUM_FLEET_LIST_ITEMS).default(25),
+  limit: z.number().int().min(1).max(MAXIMUM_CONNECTION_LIST_ITEMS).default(20),
   status: connectionStatusSchema.optional().describe("Return connections in this lifecycle state."),
 });
 
@@ -172,7 +193,7 @@ export const recordConnectionAuthorizationReturnResultSchema = z.discriminatedUn
 ]);
 export const listConnectionsResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
-    connections: z.array(connectionSummarySchema).max(MAXIMUM_FLEET_LIST_ITEMS),
+    connections: z.array(connectionSummarySchema).max(MAXIMUM_CONNECTION_LIST_ITEMS),
     nextCursor: connectionIdSchema.nullable(),
     ok: z.literal(true),
   }),

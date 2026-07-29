@@ -237,10 +237,13 @@ describe("Crewhelm Worker", () => {
     await expect(fixture.controlPlane.listConnections(fixture.authority, {})).resolves.toEqual({
       connections: [
         {
+          accountLabel: null,
           authorizationOutcome: "returned",
           authConfigId: "ac_github_managed",
           connectionId: fixture.connectionId,
           createdAt: expect.any(String),
+          integrationSlug: null,
+          providerConnectionId: fixture.providerConnectionId,
           status: "initiated",
         },
       ],

@@ -101,6 +101,11 @@ export const controlPlaneStatusSchema = z.strictObject({
     runs: z.strictObject({
       active: z.number().int().nonnegative().safe(),
     }),
+    recovery: z
+      .strictObject({
+        unresolvedEffects: z.number().int().nonnegative().safe(),
+      })
+      .optional(),
   }),
 });
 

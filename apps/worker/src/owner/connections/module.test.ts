@@ -149,10 +149,13 @@ describe("OwnerControlPlane connections", () => {
     ).resolves.toEqual({
       connections: [
         {
+          accountLabel: null,
           authorizationOutcome: "untracked",
           authConfigId: "ac_github_filters",
           connectionId: "connection_00000000-0000-4000-8000-000000000011",
           createdAt: "1970-01-01T00:00:00.011Z",
+          integrationSlug: "github",
+          providerConnectionId: "ca_filters_github",
           status: "active",
         },
       ],
@@ -395,10 +398,13 @@ describe("OwnerControlPlane connections", () => {
     await expect(stub.listConnections(authority, {})).resolves.toEqual({
       connections: [
         {
+          accountLabel: null,
           authorizationOutcome: "returned",
           authConfigId: "ac_github_managed",
           connectionId: completion.connectionLink.connectionId,
           createdAt: expect.any(String),
+          integrationSlug: null,
+          providerConnectionId,
           status: "initiated",
         },
       ],
@@ -603,18 +609,19 @@ describe("OwnerControlPlane connections", () => {
     expect(firstPage).toEqual({
       connections: [
         {
+          accountLabel: null,
           authorizationOutcome: "untracked",
           authConfigId: "ac_github_managed",
           connectionId: "connection_00000000-0000-4000-8000-000000000001",
           createdAt: "1970-01-01T00:00:00.001Z",
+          integrationSlug: null,
+          providerConnectionId: "ca_private_1",
           status: "initiated",
         },
       ],
       nextCursor: "connection_00000000-0000-4000-8000-000000000001",
       ok: true,
     });
-    expect(JSON.stringify(firstPage)).not.toContain("ca_private");
-
     await evictDurableObject(stub);
     await expect(
       stub.listConnections(authority, {
@@ -624,10 +631,13 @@ describe("OwnerControlPlane connections", () => {
     ).resolves.toEqual({
       connections: [
         {
+          accountLabel: null,
           authorizationOutcome: "untracked",
           authConfigId: "ac_slack_managed",
           connectionId: "connection_00000000-0000-4000-8000-000000000002",
           createdAt: "1970-01-01T00:00:00.002Z",
+          integrationSlug: null,
+          providerConnectionId: "ca_private_2",
           status: "initiated",
         },
       ],

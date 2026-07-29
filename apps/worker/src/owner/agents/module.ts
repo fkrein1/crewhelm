@@ -422,7 +422,9 @@ export class AgentRegistry {
             request.data.providerConnectionId !== connection.providerConnectionId ||
             request.data.verifiedToolkitSlug === null)) ||
         (detaching &&
-          (request.data.providerConnectionId !== null || request.data.verifiedToolkitSlug !== null))
+          (request.data.providerConnectionId !== null ||
+            request.data.verifiedAccountLabel !== null ||
+            request.data.verifiedToolkitSlug !== null))
       ) {
         return deniedConnectionAttachment("connection_unavailable");
       }
@@ -548,7 +550,10 @@ export class AgentRegistry {
       if (!detaching) {
         transaction
           .update(connections)
-          .set({ status: "active" })
+          .set({
+            accountLabel: request.data.verifiedAccountLabel,
+            status: "active",
+          })
           .where(eq(connections.connectionId, request.data.connectionId))
           .run();
       }

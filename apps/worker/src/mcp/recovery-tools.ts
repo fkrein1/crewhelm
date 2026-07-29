@@ -5,6 +5,8 @@ import {
   capabilityGrantIdSchema,
   changeAuthorityResultSchema,
   connectionIdSchema,
+  listUnresolvedToolEffectsInputSchema,
+  listUnresolvedToolEffectsResultSchema,
   reconcileToolExecutionInputSchema,
   reconcileToolExecutionResultSchema,
 } from "@crewhelm/contracts";
@@ -17,6 +19,7 @@ import { controlPlaneToolResult } from "./tool-result.js";
 export const MCP_BATCH_DISABLE_AGENTS_TOOL_NAME = "crewhelm_batch_disable_agents";
 export const MCP_REVOKE_AUTHORITY_TOOL_NAME = "crewhelm_revoke_authority";
 export const MCP_RECONCILE_TOOL_EXECUTION_TOOL_NAME = "crewhelm_reconcile_tool_execution";
+export const MCP_LIST_UNRESOLVED_TOOL_EFFECTS_TOOL_NAME = "crewhelm_list_unresolved_tool_effects";
 const changeAuthorityToolInputShape = {
   agentId: agentIdSchema
     .optional()
@@ -74,6 +77,27 @@ export function registerRecoveryTools(server: McpServer, context: McpToolContext
       controlPlaneToolResult(
         () => controlPlane.changeAuthority(authority, input),
         changeAuthorityResultSchema,
+      ),
+  );
+
+  server.registerTool(
+    MCP_LIST_UNRESOLVED_TOOL_EFFECTS_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: true,
+      },
+      description:
+        "List bounded owner-local summaries of provider effects that require independent verification before explicit reconciliation.",
+      inputSchema: listUnresolvedToolEffectsInputSchema,
+      title: "List unresolved provider effects",
+    },
+    async (input) =>
+      controlPlaneToolResult(
+        () => controlPlane.listUnresolvedToolEffects(authority, input),
+        listUnresolvedToolEffectsResultSchema,
       ),
   );
 

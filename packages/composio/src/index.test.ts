@@ -856,6 +856,7 @@ describe("Composio runtime adapter", () => {
     const onResponse = vi.fn<(event: unknown) => void>();
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       catalogResponse({
+        alias: "Work project",
         id: "ca_project_123",
         state: { val: { access_token: "provider-secret" } },
         status: "ACTIVE",
@@ -873,7 +874,11 @@ describe("Composio runtime adapter", () => {
       new URL("https://backend.composio.dev/api/v3.1/connected_accounts/ca_project_123"),
     );
     expect(new Headers(request?.[1]?.headers).get("x-api-key")).toBe(apiKey);
-    expect(result).toEqual({ ok: true, toolkitSlug: "project_toolkit" });
+    expect(result).toEqual({
+      accountLabel: "Work project",
+      ok: true,
+      toolkitSlug: "project_toolkit",
+    });
     expect(JSON.stringify(result)).not.toContain("provider-secret");
     expect(onResponse).toHaveBeenCalledExactlyOnceWith({
       durationMs: expect.any(Number),
