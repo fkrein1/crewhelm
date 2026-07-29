@@ -50,6 +50,10 @@
             "integration_id": 15368
           },
           {
+            "context": "Audit GitHub Actions",
+            "integration_id": 15368
+          },
+          {
             "context": "DCO",
             "integration_id": 1861
           }

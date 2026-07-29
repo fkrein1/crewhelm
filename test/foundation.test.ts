@@ -103,15 +103,18 @@ function hasExactPermissions(value: unknown, expected: Record<string, "read" | "
 function workflowPolicyErrors(name: string, workflow: Record<string, unknown>): string[] {
   const errors: string[] = [];
   const triggers = workflowTriggers(workflow["on"]);
+  const forbiddenTriggers = ["issue_comment", "pull_request_target", "workflow_run"];
   const expectedPermissions: Record<string, "read" | "write"> =
-    name === "codeql.yml" ? { contents: "read", "security-events": "write" } : { contents: "read" };
+    name === "codeql.yml" ? {} : { contents: "read" };
 
   if (triggers.length === 0) {
     errors.push("Workflow must declare a trigger.");
   }
 
-  if (triggers.includes("pull_request_target")) {
-    errors.push("pull_request_target is forbidden.");
+  for (const trigger of forbiddenTriggers) {
+    if (triggers.includes(trigger)) {
+      errors.push(`${trigger} is forbidden.`);
+    }
   }
 
   if (!hasExactPermissions(workflow["permissions"], expectedPermissions)) {
@@ -125,8 +128,25 @@ function workflowPolicyErrors(name: string, workflow: Record<string, unknown>): 
   }
 
   for (const [jobName, job] of Object.entries(jobs)) {
-    if (isRecord(job) && "permissions" in job) {
+    if (!isRecord(job)) {
+      continue;
+    }
+
+    const expectedJobPermissions =
+      name === "codeql.yml" && jobName === "analyze"
+        ? { contents: "read" as const, "security-events": "write" as const }
+        : undefined;
+
+    if (
+      expectedJobPermissions
+        ? !hasExactPermissions(job["permissions"], expectedJobPermissions)
+        : "permissions" in job
+    ) {
       errors.push(`Job ${jobName} must not override workflow permissions.`);
+    }
+
+    if (job["runs-on"] !== "ubuntu-24.04") {
+      errors.push(`Job ${jobName} must use the pinned GitHub-hosted runner.`);
     }
   }
 
@@ -499,6 +519,16 @@ describe("repository foundation", () => {
     const dependabot = parseYamlObject(await read(".github/dependabot.yml"));
     const dependabotUpdates = dependabot["updates"];
     const pnpmSetupInputs: unknown[] = [];
+    const pullRequestAuthorityViolations: string[] = [];
+    const allowedActions = new Set([
+      "actions/checkout",
+      "actions/dependency-review-action",
+      "actions/setup-node",
+      "github/codeql-action/analyze",
+      "github/codeql-action/init",
+      "pnpm/action-setup",
+      "zizmorcore/zizmor-action",
+    ]);
 
     expect(workflows.length).toBeGreaterThan(0);
     expect(dependabot["version"]).toBe(2);
@@ -516,6 +546,9 @@ describe("repository foundation", () => {
     );
 
     expect(npmUpdates).toMatchObject({
+      cooldown: {
+        "default-days": 7,
+      },
       groups: {
         "development-tooling": {
           "dependency-type": "development",
@@ -530,6 +563,9 @@ describe("repository foundation", () => {
       ],
     });
     expect(githubActionsUpdates).toMatchObject({
+      cooldown: {
+        "default-days": 7,
+      },
       groups: {
         "github-actions": {
           patterns: ["*"],
@@ -549,6 +585,17 @@ describe("repository foundation", () => {
       const externalActions: string[] = [];
       const checkoutSettings: unknown[] = [];
       const shellCommands: string[] = [];
+      const serializedWorkflow = JSON.stringify(workflow);
+
+      if (workflowTriggers(workflow["on"]).includes("pull_request")) {
+        if (/\bsecrets(?:\.|\[)/.test(serializedWorkflow)) {
+          pullRequestAuthorityViolations.push(`${name} references secrets.`);
+        }
+
+        if (serializedWorkflow.includes('"id-token"')) {
+          pullRequestAuthorityViolations.push(`${name} requests OIDC authority.`);
+        }
+      }
 
       visitRecords(workflow, (record) => {
         const action = record["uses"];
@@ -573,6 +620,7 @@ describe("repository foundation", () => {
 
       for (const action of externalActions) {
         expect(action).toMatch(/^[^@\s]+@[0-9a-f]{40}$/);
+        expect(allowedActions).toContain(action.slice(0, action.lastIndexOf("@")));
       }
 
       for (const settings of checkoutSettings) {
@@ -584,11 +632,16 @@ describe("repository foundation", () => {
       }
     }
 
+    expect(pullRequestAuthorityViolations).toEqual([]);
     expect(pnpmSetupInputs).toEqual([{ run_install: false }]);
 
     const workflowByName = Object.fromEntries(
       workflows.map(({ name, workflow }) => [name, workflow]),
     );
+    expect(workflowTriggers(workflowByName["actions-security.yml"]?.["on"]).toSorted()).toEqual([
+      "pull_request",
+      "push",
+    ]);
     expect(workflowTriggers(workflowByName["ci.yml"]?.["on"]).toSorted()).toEqual([
       "pull_request",
       "push",
@@ -603,19 +656,19 @@ describe("repository foundation", () => {
     ]);
 
     const baseWorkflow = {
-      jobs: { verify: { runsOn: "ubuntu-24.04", steps: [] } },
+      jobs: { verify: { "runs-on": "ubuntu-24.04", steps: [] } },
       permissions: { contents: "read" },
     };
-    const forbiddenTriggerForms = [
-      { ...baseWorkflow, on: "pull_request_target" },
-      { ...baseWorkflow, on: ["pull_request", "pull_request_target"] },
-      { ...baseWorkflow, on: { pull_request_target: {} } },
-    ];
+    for (const trigger of ["issue_comment", "pull_request_target", "workflow_run"]) {
+      const forbiddenTriggerForms = [
+        { ...baseWorkflow, on: trigger },
+        { ...baseWorkflow, on: ["pull_request", trigger] },
+        { ...baseWorkflow, on: { [trigger]: {} } },
+      ];
 
-    for (const workflow of forbiddenTriggerForms) {
-      expect(workflowPolicyErrors("ci.yml", workflow)).toContain(
-        "pull_request_target is forbidden.",
-      );
+      for (const workflow of forbiddenTriggerForms) {
+        expect(workflowPolicyErrors("ci.yml", workflow)).toContain(`${trigger} is forbidden.`);
+      }
     }
 
     expect(
@@ -630,6 +683,40 @@ describe("repository foundation", () => {
         on: "pull_request",
       }),
     ).toContain("Job verify must not override workflow permissions.");
+    expect(
+      workflowPolicyErrors("ci.yml", {
+        ...baseWorkflow,
+        jobs: {
+          verify: {
+            "runs-on": "self-hosted",
+            steps: [],
+          },
+        },
+        on: "pull_request",
+      }),
+    ).toContain("Job verify must use the pinned GitHub-hosted runner.");
+
+    const actionsSecurity = workflows.find(({ name }) => name === "actions-security.yml");
+    expect(actionsSecurity).toBeDefined();
+
+    let zizmorInputs: Record<string, unknown> | undefined;
+    visitRecords(actionsSecurity?.workflow, (record) => {
+      if (
+        typeof record["uses"] === "string" &&
+        record["uses"].startsWith("zizmorcore/zizmor-action@") &&
+        isRecord(record["with"])
+      ) {
+        zizmorInputs = record["with"];
+      }
+    });
+    expect(zizmorInputs).toEqual({
+      "advanced-security": false,
+      annotations: true,
+      "min-confidence": "medium",
+      "min-severity": "low",
+      persona: "auditor",
+      version: "v1.28.0",
+    });
     expect(
       workflowPolicyErrors("ci.yml", {
         ...baseWorkflow,
@@ -744,6 +831,7 @@ describe("repository foundation", () => {
         { context: "Verify", integration_id: 15368 },
         { context: "Dependency review", integration_id: 15368 },
         { context: "Analyze JavaScript and TypeScript", integration_id: 15368 },
+        { context: "Audit GitHub Actions", integration_id: 15368 },
         { context: "DCO", integration_id: 1861 },
       ],
     });
