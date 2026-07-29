@@ -6,7 +6,9 @@ import {
   DEFAULT_FLEET_MAX_CONCURRENT_RUNS,
   DEFAULT_FLEET_MAX_CONNECTIONS,
   DEFAULT_FLEET_RUN_RETENTION_SECONDS,
+  DEFAULT_RUNNABLE_AGENT_MODEL,
   OWNER_READ_SCOPE,
+  RUNNABLE_AGENT_MODELS,
 } from "@crewhelm/contracts";
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -34,6 +36,10 @@ describe("OwnerControlPlane fleet configuration", () => {
             maxConnections: DEFAULT_FLEET_MAX_CONNECTIONS,
           },
           integrations: { callsPerDay: DEFAULT_FLEET_INTEGRATION_CALLS_PER_DAY },
+          models: {
+            allowed: [...RUNNABLE_AGENT_MODELS].toSorted(),
+            default: DEFAULT_RUNNABLE_AGENT_MODEL,
+          },
           retention: {
             inboxSeconds: DEFAULT_FLEET_INBOX_RETENTION_SECONDS,
             runSeconds: DEFAULT_FLEET_RUN_RETENTION_SECONDS,

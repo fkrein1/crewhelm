@@ -34,8 +34,12 @@ export const MAXIMUM_RUN_MODEL_OUTPUT_TOKENS = 16 * 1_024;
 export const MAXIMUM_RUN_OUTPUT_CHARACTERS = 64 * 1_024;
 export const MAXIMUM_RUN_PROMPT_CHARACTERS = 16 * 1_024;
 export const MAXIMUM_RUN_TIMELINE_EVENTS = 512;
+export const DEFAULT_RUNNABLE_AGENT_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
 export const RUNNABLE_AGENT_MODELS = [
+  "@cf/ibm-granite/granite-4.0-h-micro",
   "@cf/meta/llama-4-scout-17b-16e-instruct",
+  "@cf/openai/gpt-oss-20b",
+  "@cf/qwen/qwen3-30b-a3b-fp8",
   "@cf/zai-org/glm-4.7-flash",
 ] as const;
 

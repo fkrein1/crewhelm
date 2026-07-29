@@ -307,12 +307,15 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
           "properties": {
             "allowed": {
               "minItems": 1,
-              "maxItems": 2,
+              "maxItems": 5,
               "type": "array",
               "items": {
                 "type": "string",
                 "enum": [
+                  "@cf/ibm-granite/granite-4.0-h-micro",
                   "@cf/meta/llama-4-scout-17b-16e-instruct",
+                  "@cf/openai/gpt-oss-20b",
+                  "@cf/qwen/qwen3-30b-a3b-fp8",
                   "@cf/zai-org/glm-4.7-flash"
                 ]
               },
@@ -321,7 +324,10 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
             "default": {
               "type": "string",
               "enum": [
+                "@cf/ibm-granite/granite-4.0-h-micro",
                 "@cf/meta/llama-4-scout-17b-16e-instruct",
+                "@cf/openai/gpt-oss-20b",
+                "@cf/qwen/qwen3-30b-a3b-fp8",
                 "@cf/zai-org/glm-4.7-flash"
               ],
               "description": "New model used when Agent creation omits a model."
