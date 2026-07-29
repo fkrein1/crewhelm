@@ -338,6 +338,7 @@ export class RunAdmissions {
           expiresAt,
           idempotencyKey: request.data.idempotencyKey,
           nonceDigest,
+          prompt: request.data.prompt ?? null,
           promptDigest: request.data.promptDigest,
           requestDigest,
           runId,

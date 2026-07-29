@@ -1,5 +1,6 @@
 import type {
   Agent,
+  AgentInboxDeferredReason,
   AgentExecutionLimits,
   AgentScheduleConfiguration,
   ComposioToolCapabilityGrant,
@@ -348,6 +349,7 @@ export const runAdmissions = sqliteTable(
     runId: text("run_id").notNull(),
     agentId: text("agent_id").notNull(),
     agentRevision: integer("agent_revision").notNull(),
+    prompt: text("prompt"),
     promptDigest: text("prompt_digest").notNull(),
     trigger: text("trigger", { enum: ["manual", "schedule"] })
       .notNull()
@@ -380,6 +382,10 @@ export const runAdmissions = sqliteTable(
       .where(sql`${table.status} = 'issued'`),
     check("run_admissions_request_digest_length", sql`length(${table.requestDigest}) = 43`),
     check("run_admissions_agent_revision_positive", sql`${table.agentRevision} > 0`),
+    check(
+      "run_admissions_prompt_length",
+      sql`${table.prompt} IS NULL OR length(${table.prompt}) BETWEEN 1 AND 16384`,
+    ),
     check("run_admissions_prompt_digest_length", sql`length(${table.promptDigest}) = 64`),
     check("run_admissions_trigger", sql`${table.trigger} IN ('manual', 'schedule')`),
     check("run_admissions_nonce_digest_length", sql`length(${table.nonceDigest}) = 43`),
@@ -662,6 +668,148 @@ export const auditEvents = sqliteTable(
   (table) => [check("audit_events_occurred_at_positive", sql`${table.occurredAt} > 0`)],
 );
 
+export const agentInboxAcknowledgements = sqliteTable(
+  "agent_inbox_acknowledgements",
+  {
+    itemId: text("item_id").notNull(),
+    version: text("version").notNull(),
+    acknowledgedAt: integer("acknowledged_at").notNull(),
+    cleanupAt: integer("cleanup_at").notNull(),
+    clientId: text("client_id").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.itemId, table.version] }),
+    index("agent_inbox_acknowledgements_cleanup").on(table.cleanupAt),
+    check("agent_inbox_acknowledgements_acknowledged_at", sql`${table.acknowledgedAt} > 0`),
+    check(
+      "agent_inbox_acknowledgements_cleanup_after_acknowledgement",
+      sql`${table.cleanupAt} > ${table.acknowledgedAt}`,
+    ),
+  ],
+);
+
+export const agentInboxItems = sqliteTable(
+  "agent_inbox_items",
+  {
+    itemId: text("item_id").primaryKey(),
+    agentId: text("agent_id").notNull(),
+    agentRevision: integer("agent_revision").notNull(),
+    fleetRevision: integer("fleet_revision").notNull(),
+    scheduleRevision: integer("schedule_revision"),
+    runId: text("run_id"),
+    trigger: text("trigger", { enum: ["manual", "schedule"] }),
+    runStatus: text("run_status", {
+      enum: ["cancelled", "completed", "failed", "running"],
+    }),
+    kind: text("kind", {
+      enum: ["action_required", "deferred", "exception", "outcome"],
+    }).notNull(),
+    approvalCount: integer("approval_count").notNull().default(0),
+    requestPreview: text("request_preview").notNull(),
+    resultPreview: text("result_preview"),
+    reason: text("reason").$type<AgentInboxDeferredReason>(),
+    scheduledAt: integer("scheduled_at"),
+    retryAt: integer("retry_at"),
+    occurredAt: integer("occurred_at").notNull(),
+    version: text("version").notNull(),
+    cleanupAt: integer("cleanup_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("agent_inbox_items_run").on(table.runId),
+    uniqueIndex("agent_inbox_items_schedule_occurrence").on(
+      table.agentId,
+      table.scheduleRevision,
+      table.scheduledAt,
+    ),
+    foreignKey({
+      columns: [table.agentId, table.agentRevision],
+      foreignColumns: [agentRevisions.agentId, agentRevisions.revision],
+    }).onDelete("restrict"),
+    index("agent_inbox_items_agent_occurred").on(table.agentId, table.occurredAt),
+    index("agent_inbox_items_cleanup").on(table.cleanupAt),
+    index("agent_inbox_items_kind_occurred").on(table.kind, table.occurredAt),
+    index("agent_inbox_items_occurred").on(table.occurredAt),
+    check("agent_inbox_items_agent_revision", sql`${table.agentRevision} > 0`),
+    check("agent_inbox_items_fleet_revision", sql`${table.fleetRevision} > 0`),
+    check(
+      "agent_inbox_items_schedule_revision",
+      sql`${table.scheduleRevision} IS NULL OR ${table.scheduleRevision} > 0`,
+    ),
+    check(
+      "agent_inbox_items_kind",
+      sql`${table.kind} IN ('action_required', 'deferred', 'exception', 'outcome')`,
+    ),
+    check("agent_inbox_items_approval_count", sql`${table.approvalCount} BETWEEN 0 AND 100`),
+    check(
+      "agent_inbox_items_request_preview",
+      sql`length(${table.requestPreview}) BETWEEN 1 AND 240`,
+    ),
+    check(
+      "agent_inbox_items_result_preview",
+      sql`${table.resultPreview} IS NULL OR length(${table.resultPreview}) BETWEEN 1 AND 240`,
+    ),
+    check(
+      "agent_inbox_items_reason",
+      sql`${table.reason} IS NULL OR ${table.reason} IN (
+        'active_run',
+        'admission_limit_exceeded',
+        'agent_not_found',
+        'agent_unavailable',
+        'budget_exhausted',
+        'capability_unavailable',
+        'dispatch_exception',
+        'idempotency_conflict',
+        'model_unavailable',
+        'record_dispatch_conflict',
+        'revision_conflict',
+        'run_unavailable'
+      )`,
+    ),
+    check(
+      "agent_inbox_items_shape",
+      sql`(
+        (${table.kind} = 'deferred'
+          AND ${table.runId} IS NULL
+          AND ${table.trigger} IS NULL
+          AND ${table.runStatus} IS NULL
+          AND ${table.scheduleRevision} IS NOT NULL
+          AND ${table.reason} IS NOT NULL
+          AND ${table.scheduledAt} IS NOT NULL
+          AND ${table.approvalCount} = 0
+          AND ${table.resultPreview} IS NULL)
+        OR
+        (${table.kind} <> 'deferred'
+          AND ${table.runId} IS NOT NULL
+          AND ${table.trigger} IS NOT NULL
+          AND ${table.runStatus} IS NOT NULL
+          AND ${table.scheduleRevision} IS NULL
+          AND ${table.reason} IS NULL
+          AND ${table.scheduledAt} IS NULL
+          AND ${table.retryAt} IS NULL
+          AND ((${table.kind} = 'action_required' AND ${table.approvalCount} > 0)
+            OR (${table.kind} <> 'action_required' AND ${table.approvalCount} = 0))
+          AND ((${table.kind} = 'action_required' AND ${table.runStatus} = 'running')
+            OR (${table.kind} = 'exception' AND ${table.runStatus} = 'failed')
+            OR (${table.kind} = 'outcome'
+              AND ${table.runStatus} IN ('cancelled', 'completed'))))
+      )`,
+    ),
+    check(
+      "agent_inbox_items_scheduled_at",
+      sql`${table.scheduledAt} IS NULL OR ${table.scheduledAt} > 0`,
+    ),
+    check(
+      "agent_inbox_items_retry_at",
+      sql`${table.retryAt} IS NULL OR ${table.retryAt} > ${table.scheduledAt}`,
+    ),
+    check("agent_inbox_items_occurred_at", sql`${table.occurredAt} > 0`),
+    check(
+      "agent_inbox_items_cleanup_after_occurrence",
+      sql`${table.cleanupAt} > ${table.occurredAt}`,
+    ),
+  ],
+);
+
 export const connectionLinkRequests = sqliteTable(
   "connection_link_requests",
   {
@@ -839,6 +987,8 @@ export const controlPlaneMigrations = sqliteTable(
 export const controlPlaneSchema = {
   aiGatewayCalls,
   agentCreations,
+  agentInboxAcknowledgements,
+  agentInboxItems,
   agentRevisions,
   agentScheduleRevisions,
   agentSchedules,

@@ -7,7 +7,10 @@ import {
   crewAgentObjectName,
   inspectAdmittedRunInputSchema,
   inspectAdmittedRunResultSchema,
+  MAXIMUM_AGENT_INBOX_PREVIEW_CHARACTERS,
   MAXIMUM_RUN_OUTPUT_CHARACTERS,
+  recordAgentInboxRunInputSchema,
+  recordAgentInboxRunResultSchema,
   redeemRunReceiverCapabilityResultSchema,
   RUN_ADMISSION_RETENTION_MS,
   resumeRunAdmissionInputSchema,
@@ -38,6 +41,7 @@ import {
   type ComposioToolCapabilityGrant,
   type ToolExecutionPermit,
   type PendingToolApproval,
+  type RecordAgentInboxRunInput,
   type ToolAuthorizationTimelineEvent,
 } from "@crewhelm/contracts";
 import { createComposioRuntime } from "@crewhelm/composio";
@@ -51,6 +55,7 @@ import {
   type ActionContext,
   type AddMessagesOptions,
   type ChatOptions,
+  type ChatResponseResult,
   type DeleteSubmissionsOptions,
   type ListSubmissionsOptions,
   type RunTurnOptions,
@@ -82,18 +87,25 @@ import {
 } from "../../observability/execution.js";
 import { digestRunPrompt, digestToolInput } from "./protocol.js";
 import {
+  agentInboxProjectionOutboxSchema,
   admittedRunRecordSchema,
   admittedTurnMetadataSchema,
   pendingToolApprovalRecordSchema,
+  scheduledInboxProjectionInputSchema,
   scheduledRunInputSchema,
   type AdmittedRunRecord,
   type AdmittedTurnMetadata,
+  type AgentInboxProjectionOutbox,
 } from "./schema.js";
 
 const RUNTIME_ADMISSION_UNAVAILABLE = "CrewAgent runtime admission is not available.";
+const INBOX_PROJECTION_PREFIX = "crewhelm:inbox-projection:";
 const RUN_RECORD_PREFIX = "crewhelm:run:";
 const RUN_TRACE_PREFIX = "crewhelm:run-trace:";
 const TOOL_APPROVAL_PREFIX = "crewhelm:tool-approval:";
+const INBOX_PROJECTION_MINIMUM_RETRY_MS = 60_000;
+const INBOX_PROJECTION_MAXIMUM_RETRY_MS = 60 * 60 * 1_000;
+const INBOX_PROJECTION_SAFETY_WAKEUP_MS = 1_000;
 const MAXIMUM_RUN_OUTPUT_PARTS = 256;
 const EXECUTION_OUTCOME_PREFIX = "[execute tool]";
 const EXECUTION_OUTCOME_MARKER = " Outcome: ";
@@ -201,6 +213,10 @@ function runTraceKey(runId: string): string {
   return `${RUN_TRACE_PREFIX}${runId}`;
 }
 
+function inboxProjectionKey(runId: string): string {
+  return `${INBOX_PROJECTION_PREFIX}${runId}`;
+}
+
 function toolApprovalPrefix(runId: string): string {
   return `${TOOL_APPROVAL_PREFIX}${runId}:`;
 }
@@ -231,6 +247,16 @@ async function canonicalToolCallId(runId: string, toolCallId: string): Promise<s
 
 function isoTimestamp(timestamp: number | undefined): string | undefined {
   return timestamp === undefined ? undefined : new Date(timestamp).toISOString();
+}
+
+function resultPreview(message: UIMessage): string | null {
+  const text = message.parts
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join(" ")
+    .replaceAll(/\s+/g, " ")
+    .trim();
+
+  return text.length === 0 ? null : text.slice(0, MAXIMUM_AGENT_INBOX_PREVIEW_CHARACTERS);
 }
 
 function publicRunStatus(status: ThinkSubmissionInspection["status"]): Run["status"] {
@@ -280,6 +306,29 @@ export class CrewAgent extends Think {
         }
 
         await this.#scheduleRunLifecycle(runId, record.data);
+      }
+    }
+
+    const projections = await this.ctx.storage.list({ prefix: INBOX_PROJECTION_PREFIX });
+
+    for (const [key, stored] of projections) {
+      const outbox = agentInboxProjectionOutboxSchema.safeParse(stored);
+      const runId = key.slice(INBOX_PROJECTION_PREFIX.length);
+
+      if (
+        !outbox.success ||
+        !runIdSchema.safeParse(runId).success ||
+        outbox.data.projection.reference.runId !== runId
+      ) {
+        continue;
+      }
+
+      if (Date.now() >= outbox.data.cleanupAt) {
+        await this.#deleteInboxProjectionIfCurrent(key, outbox.data);
+      } else if (Date.now() >= outbox.data.retryAt) {
+        await this.#deliverInboxProjection(runId, outbox.data.attempts);
+      } else {
+        await this.#scheduleInboxProjection(outbox.data, outbox.data.retryAt);
       }
     }
   }
@@ -1232,6 +1281,34 @@ export class CrewAgent extends Think {
     await this.cancelAdmittedSubmission(request.data.runId, "Crewhelm run deadline exceeded.");
   }
 
+  async syncAgentInbox(input: unknown): Promise<void> {
+    const request = scheduledInboxProjectionInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return;
+    }
+
+    const runId = request.data.outbox.projection.reference.runId;
+    const key = inboxProjectionKey(runId);
+    const stored = agentInboxProjectionOutboxSchema.safeParse(await this.ctx.storage.get(key));
+    const outbox = stored.success ? stored.data : request.data.outbox;
+
+    if (!stored.success && Date.now() >= outbox.cleanupAt) {
+      return;
+    }
+
+    if (!stored.success) {
+      await this.ctx.storage.put(key, outbox);
+    }
+
+    if (Date.now() < outbox.retryAt) {
+      await this.#scheduleInboxProjection(outbox, outbox.retryAt);
+      return;
+    }
+
+    await this.#deliverInboxProjection(runId, request.data.outbox.attempts);
+  }
+
   async cleanupAdmittedRun(input: unknown): Promise<void> {
     const request = scheduledRunInputSchema.safeParse(input);
 
@@ -1269,6 +1346,7 @@ export class CrewAgent extends Think {
       prefix: toolApprovalPrefix(request.data.runId),
     });
     await Promise.all([...approvalRecords.keys()].map((key) => this.ctx.storage.delete(key)));
+    await this.ctx.storage.delete(inboxProjectionKey(request.data.runId));
     await this.ctx.storage.delete(runTraceKey(request.data.runId));
     await this.ctx.storage.delete(runRecordKey(request.data.runId));
   }
@@ -1497,6 +1575,56 @@ export class CrewAgent extends Think {
     }
   }
 
+  override async onChatResponse(result: ChatResponseResult): Promise<void> {
+    const metadata = admittedTurnMetadataSchema.safeParse(this.activeTurnMetadata);
+    const runId = metadata.success ? metadata.data.crewhelmRun.runId : result.requestId;
+    const record = await this.#readRunRecord(runId);
+
+    if (record === undefined || result.requestId !== runId) {
+      return;
+    }
+
+    const approvalRecords = await this.ctx.storage.list({
+      prefix: toolApprovalPrefix(runId),
+    });
+    const approvalCount = approvalRecords.size;
+    const status = result.status === "aborted" ? "cancelled" : result.status;
+    const kind =
+      approvalCount > 0
+        ? "action_required"
+        : status === "completed" || status === "cancelled"
+          ? "outcome"
+          : "exception";
+
+    await this.#publishInboxProjection(
+      record,
+      recordAgentInboxRunInputSchema.parse({
+        event: {
+          approvalCount: kind === "action_required" ? approvalCount : 0,
+          kind,
+          occurredAt: new Date().toISOString(),
+          resultPreview: kind === "outcome" ? resultPreview(result.message) : null,
+          runStatus:
+            kind === "action_required"
+              ? "running"
+              : status === "completed"
+                ? "completed"
+                : status === "cancelled"
+                  ? "cancelled"
+                  : "failed",
+        },
+        reference: {
+          agentId: record.configuration.agentId,
+          agentRevision: record.configuration.revision,
+          idempotencyKey: record.idempotencyKey,
+          ownerKey: record.configuration.ownerKey,
+          promptDigest: record.promptDigest,
+          runId,
+        },
+      }),
+    );
+  }
+
   override authorizeAction(
     context?: ActionAuthorizationContext,
   ): ActionAuthorizationDecision | Promise<ActionAuthorizationDecision> {
@@ -1667,6 +1795,32 @@ export class CrewAgent extends Think {
           toolCallId: action.toolCallId,
         }),
       );
+      const record = await this.#readRunRecord(reference.runId);
+
+      if (record !== undefined) {
+        this.ctx.waitUntil(
+          this.#publishInboxProjection(
+            record,
+            recordAgentInboxRunInputSchema.parse({
+              event: {
+                approvalCount: 1,
+                kind: "action_required",
+                occurredAt: new Date(requestedAt).toISOString(),
+                resultPreview: null,
+                runStatus: "running",
+              },
+              reference: {
+                agentId: reference.agentId,
+                agentRevision: reference.agentRevision,
+                idempotencyKey: reference.idempotencyKey,
+                ownerKey: reference.ownerKey,
+                promptDigest: reference.promptDigest,
+                runId: reference.runId,
+              },
+            }),
+          ),
+        );
+      }
     }
 
     if (evaluation.data.decision.decision === "allow") {
@@ -2174,6 +2328,131 @@ export class CrewAgent extends Think {
       promptDigest: record.promptDigest,
       runId: metadata.runId,
     };
+  }
+
+  async #publishInboxProjection(
+    record: AdmittedRunRecord,
+    projection: RecordAgentInboxRunInput,
+  ): Promise<void> {
+    const currentTime = Date.now();
+    const outbox = agentInboxProjectionOutboxSchema.parse({
+      attempts: 0,
+      cleanupAt: record.cleanupAt,
+      projection,
+      retryAt: currentTime,
+    });
+
+    const recovery = await this.#scheduleInboxProjection(
+      outbox,
+      currentTime + INBOX_PROJECTION_SAFETY_WAKEUP_MS,
+    );
+    await this.ctx.storage.put(inboxProjectionKey(projection.reference.runId), outbox);
+    const delivered = await this.#deliverInboxProjection(projection.reference.runId, 0);
+
+    if (delivered) {
+      await super.cancelSchedule(recovery.id);
+    }
+  }
+
+  async #deliverInboxProjection(runId: string, scheduledAttempts: number): Promise<boolean> {
+    const key = inboxProjectionKey(runId);
+    const stored = agentInboxProjectionOutboxSchema.safeParse(await this.ctx.storage.get(key));
+
+    if (!stored.success) {
+      return false;
+    }
+
+    const currentTime = Date.now();
+
+    if (currentTime >= stored.data.cleanupAt) {
+      await this.#deleteInboxProjectionIfCurrent(key, stored.data);
+      return true;
+    }
+
+    try {
+      const result = recordAgentInboxRunResultSchema.safeParse(
+        await this.env.OWNER_CONTROL_PLANE.getByName(
+          stored.data.projection.reference.ownerKey,
+        ).recordAgentInboxRun(stored.data.projection),
+      );
+
+      if (result.success) {
+        await this.#deleteInboxProjectionIfCurrent(key, stored.data);
+        return true;
+      }
+    } catch {
+      // The durable outbox retries transient owner-control-plane delivery failures.
+    }
+
+    const attempts = Math.min(100, Math.max(stored.data.attempts, scheduledAttempts) + 1);
+    const delay = Math.min(
+      INBOX_PROJECTION_MAXIMUM_RETRY_MS,
+      INBOX_PROJECTION_MINIMUM_RETRY_MS * 2 ** Math.min(6, attempts - 1),
+    );
+    const retryAt = currentTime + delay;
+
+    if (retryAt >= stored.data.cleanupAt) {
+      return false;
+    }
+
+    const replacement = agentInboxProjectionOutboxSchema.parse({
+      ...stored.data,
+      attempts,
+      retryAt,
+    });
+
+    await this.#scheduleInboxProjection(replacement, retryAt);
+    await this.#replaceInboxProjectionIfCurrent(key, stored.data, replacement);
+    return false;
+  }
+
+  async #scheduleInboxProjection(
+    outbox: AgentInboxProjectionOutbox,
+    retryAt: number,
+  ): Promise<{ id: string }> {
+    const wakeupAt = Math.ceil(retryAt / 1_000) * 1_000;
+
+    return super.schedule(
+      new Date(wakeupAt),
+      "syncAgentInbox",
+      {
+        outbox,
+        wakeupAt,
+      },
+      { idempotent: true },
+    );
+  }
+
+  async #deleteInboxProjectionIfCurrent(
+    key: string,
+    expected: AgentInboxProjectionOutbox,
+  ): Promise<void> {
+    await this.ctx.storage.transaction(async (transaction) => {
+      const current = agentInboxProjectionOutboxSchema.safeParse(await transaction.get(key));
+
+      if (current.success && JSON.stringify(current.data) === JSON.stringify(expected)) {
+        await transaction.delete(key);
+      }
+    });
+  }
+
+  async #replaceInboxProjectionIfCurrent(
+    key: string,
+    expected: AgentInboxProjectionOutbox,
+    replacement: AgentInboxProjectionOutbox,
+  ): Promise<boolean> {
+    let replaced = false;
+
+    await this.ctx.storage.transaction(async (transaction) => {
+      const current = agentInboxProjectionOutboxSchema.safeParse(await transaction.get(key));
+
+      if (current.success && JSON.stringify(current.data) === JSON.stringify(expected)) {
+        await transaction.put(key, replacement);
+        replaced = true;
+      }
+    });
+
+    return replaced;
   }
 
   async #readRunRecord(runId: string): Promise<AdmittedRunRecord | undefined> {

@@ -100,6 +100,7 @@ For interactive exploration, use the
 - [Domain language](CONTEXT.md)
 - [Product philosophy](docs/product/philosophy.md)
 - [System architecture](docs/architecture/system.md)
+- [MCP architecture](docs/architecture/mcp.md)
 - [Engineering design](docs/engineering/design.md)
 - [Security invariants](docs/security/invariants.md)
 - [Threat model and recovery](docs/security/threat-model.md)

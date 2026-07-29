@@ -10,6 +10,7 @@ import migration8 from "./0008_backfill_tool_authorization.sql";
 import migration9 from "./0009_colorful_skullbuster.sql";
 import migration10 from "./0010_famous_george_stacy.sql";
 import migration11 from "./0011_remove_fleet_ai_budget.sql";
+import migration12 from "./0012_acoustic_killraven.sql";
 
 export const controlPlaneMigrations = [
   {
@@ -71,6 +72,11 @@ export const controlPlaneMigrations = [
     name: "0011_remove_fleet_ai_budget",
     sql: migration11,
     version: 12,
+  },
+  {
+    name: "0012_acoustic_killraven",
+    sql: migration12,
+    version: 13,
   },
 ] as const;
 

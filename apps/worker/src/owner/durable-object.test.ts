@@ -72,7 +72,7 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toEqual({
       ok: true,
       status: {
-        schemaVersion: 12,
+        schemaVersion: 13,
         status: "ready",
       },
     });
@@ -145,8 +145,197 @@ describe("OwnerControlPlane", () => {
           name: "0011_remove_fleet_ai_budget",
           version: 12,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0012_acoustic_killraven",
+          version: 13,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
+    });
+  });
+
+  it("accepts only current projections for an exact redeemed run admission", async () => {
+    const authority = await authorityFor("inbox-projection", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("inbox-projection-agent"));
+    const prompt = "Retain this exact task behind the compact inbox projection.";
+
+    if (!created.ok) {
+      throw new Error("Expected inbox projection Agent.");
+    }
+
+    const admission = await stub.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "inbox-projection-run",
+      prompt,
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
+    });
+
+    if (!admission.ok || admission.state !== "issued") {
+      throw new Error("Expected inbox projection admission.");
+    }
+
+    const reference = {
+      agentId: admission.permit.agentId,
+      agentRevision: admission.permit.agentRevision,
+      idempotencyKey: admission.permit.idempotencyKey,
+      ownerKey: admission.permit.ownerKey,
+      promptDigest: admission.permit.promptDigest,
+      runId: admission.permit.runId,
+    };
+    const occurredAt = Date.now() + 10;
+    const completed = {
+      event: {
+        approvalCount: 0,
+        kind: "outcome" as const,
+        occurredAt: new Date(occurredAt).toISOString(),
+        resultPreview: "A bounded outcome is ready.",
+        runStatus: "completed" as const,
+      },
+      reference,
+    };
+
+    await expect(stub.recordAgentInboxRun(completed)).resolves.toMatchObject({
+      error: { code: "invalid_admission" },
+      ok: false,
+    });
+    await expect(stub.confirmRunAdmission(admission.permit)).resolves.toMatchObject({
+      confirmed: true,
+      ok: true,
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `WITH digits(value) AS (
+           VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
+         ),
+         numbers(value) AS (
+           SELECT
+             ones.value
+             + 10 * tens.value
+             + 100 * hundreds.value
+             + 1000 * thousands.value
+             + 10000 * ten_thousands.value
+             + 1
+           FROM digits AS ones
+           CROSS JOIN digits AS tens
+           CROSS JOIN digits AS hundreds
+           CROSS JOIN digits AS thousands
+           CROSS JOIN digits AS ten_thousands
+           ORDER BY 1
+           LIMIT 10001
+         )
+         INSERT INTO agent_inbox_items (
+           item_id,
+           agent_id,
+           agent_revision,
+           fleet_revision,
+           run_id,
+           trigger,
+           run_status,
+           kind,
+           approval_count,
+           request_preview,
+           result_preview,
+           occurred_at,
+           version,
+           cleanup_at
+         )
+         SELECT
+           'inbox_run_00000000-0000-4000-8000-' || printf('%012x', value),
+           ?,
+           ?,
+           1,
+           'run_00000000-0000-4000-8000-' || printf('%012x', value),
+           'manual',
+           'completed',
+           'outcome',
+           0,
+           'Bounded capacity fixture.',
+           'Fixture outcome.',
+           value,
+           '1970-01-01T00:00:00.001Z',
+           ?
+         FROM numbers`,
+        created.agent.id,
+        created.agent.revision,
+        Date.now() + 60_000,
+      );
+      state.storage.sql.exec(
+        `UPDATE agent_inbox_items
+         SET kind = 'action_required',
+             run_status = 'running',
+             approval_count = 1,
+             result_preview = NULL
+         WHERE run_id = 'run_00000000-0000-4000-8000-000000000001'`,
+      );
+    });
+    await expect(
+      stub.recordAgentInboxRun({
+        ...completed,
+        reference: { ...reference, promptDigest: "0".repeat(64) },
+      }),
+    ).resolves.toMatchObject({
+      error: { code: "invalid_admission" },
+      ok: false,
+    });
+    await expect(stub.recordAgentInboxRun(completed)).resolves.toEqual({
+      ok: true,
+      recorded: true,
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec<{ action_required: number; value: number }>(
+            `SELECT
+               count(*) AS value,
+               count(*) FILTER (WHERE kind = 'action_required') AS action_required
+             FROM agent_inbox_items`,
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({ action_required: 1, value: 10_000 });
+    await expect(
+      stub.recordAgentInboxRun({
+        event: {
+          approvalCount: 1,
+          kind: "action_required",
+          occurredAt: new Date(occurredAt - 1).toISOString(),
+          resultPreview: null,
+          runStatus: "running",
+        },
+        reference,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      recorded: false,
+    });
+    await expect(
+      stub.agentInbox(authority, {
+        action: "list",
+        agentId: created.agent.id,
+        limit: 1,
+      }),
+    ).resolves.toMatchObject({
+      action: "list",
+      items: [
+        {
+          kind: "outcome",
+          requestPreview: prompt,
+          resultPreview: completed.event.resultPreview,
+          runId: admission.permit.runId,
+          runStatus: "completed",
+        },
+      ],
+      ok: true,
     });
   });
 
@@ -164,7 +353,9 @@ describe("OwnerControlPlane", () => {
            json('{"dailySpendMicrousd":5000000,"runReservationMicrousd":50000}')
          )`,
       );
-      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version = 12");
+      state.storage.sql.exec("DROP TABLE agent_inbox_acknowledgements");
+      state.storage.sql.exec("DROP TABLE agent_inbox_items");
+      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 12");
     });
     await evictDurableObject(stub);
 
@@ -255,13 +446,15 @@ describe("OwnerControlPlane", () => {
         recordedAt,
         recordedAt,
       );
+      state.storage.sql.exec("DROP TABLE agent_inbox_acknowledgements");
+      state.storage.sql.exec("DROP TABLE agent_inbox_items");
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 11");
     });
     await evictDurableObject(stub);
 
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 12, status: "ready" },
+      status: { schemaVersion: 13, status: "ready" },
     });
     await expect(
       runInDurableObject(stub, (_instance, state) =>
@@ -322,12 +515,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 12, status: "ready" },
+      status: { schemaVersion: 13, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 12, status: "ready" },
+      status: { schemaVersion: 13, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -517,6 +710,8 @@ describe("OwnerControlPlane", () => {
          FROM migration_v2_run_rows`,
       );
       state.storage.sql.exec("DROP TABLE migration_v2_run_rows");
+      state.storage.sql.exec("DROP TABLE agent_inbox_acknowledgements");
+      state.storage.sql.exec("DROP TABLE agent_inbox_items");
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 3");
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
 
@@ -545,7 +740,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 12, status: "ready" },
+      status: { schemaVersion: 13, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       const rows = [
@@ -616,6 +811,7 @@ describe("OwnerControlPlane", () => {
         { version: 10 },
         { version: 11 },
         { version: 12 },
+        { version: 13 },
       ]);
     });
   });
@@ -741,6 +937,8 @@ describe("OwnerControlPlane", () => {
       );
       state.storage.sql.exec("DROP TABLE run_admissions");
       state.storage.sql.exec("ALTER TABLE legacy_run_admissions RENAME TO run_admissions");
+      state.storage.sql.exec("DROP TABLE agent_inbox_acknowledgements");
+      state.storage.sql.exec("DROP TABLE agent_inbox_items");
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 5");
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
     });
@@ -748,7 +946,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 12, status: "ready" },
+      status: { schemaVersion: 13, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       expect(
@@ -844,7 +1042,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec(
         `INSERT INTO control_plane_migrations (version, name, checksum, applied_at)
          VALUES (?, ?, ?, ?)`,
-        13,
+        14,
         "future_migration",
         "f".repeat(64),
         Date.now(),

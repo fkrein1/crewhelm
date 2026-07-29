@@ -15,6 +15,7 @@ import { digestToolInput } from "./protocol.js";
 
 const TEST_REPLY = "Crewhelm completed the admitted test run.";
 const LARGE_TEST_PROMPT = "Return an output larger than the retained character boundary.";
+const DEADLINE_TEST_PROMPT = "Hold this test run well beyond its short deadline.";
 const SLOW_TEST_PROMPT = "Hold this test run beyond its deadline.";
 const TOOL_TEST_PROMPT = "Use the exact admitted test tool.";
 const TOOL_RESULT_FALLBACK_TEST_PROMPT =
@@ -125,9 +126,11 @@ export class TestCrewAgent extends CrewAgent {
               },
             },
           ],
-          initialDelayInMs: JSON.stringify(options.prompt).includes(SLOW_TEST_PROMPT)
-            ? 3_000
-            : null,
+          initialDelayInMs: JSON.stringify(options.prompt).includes(DEADLINE_TEST_PROMPT)
+            ? 10_000
+            : JSON.stringify(options.prompt).includes(SLOW_TEST_PROMPT)
+              ? 3_000
+              : null,
         }),
       };
     },
@@ -268,6 +271,7 @@ export class TestCrewAgent extends CrewAgent {
 }
 
 export {
+  DEADLINE_TEST_PROMPT,
   LARGE_TEST_PROMPT,
   SLOW_TEST_PROMPT,
   TEST_REPLY,

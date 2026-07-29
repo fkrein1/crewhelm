@@ -33,6 +33,7 @@ export type DueAgentSchedule = {
   intervalSeconds: number;
   lastRunId: string | null;
   prompt: string;
+  retryAt: number;
   scheduleRevision: number;
   scheduledAt: number;
 };
@@ -424,6 +425,7 @@ export class AgentSchedules {
             intervalSeconds: configuration.data.intervalSeconds,
             lastRunId: row.lastRunId,
             prompt: configuration.data.prompt,
+            retryAt: nextRunAt,
             scheduleRevision: row.scheduleRevision,
             scheduledAt: row.nextRunAt,
           });

@@ -19,12 +19,15 @@ import {
   startRunResultSchema,
   runTimelineEventSchema,
   type CancelRunResult,
+  type AgentInboxDeferredReason,
+  type AgentInboxResult,
   type DecideRunToolApprovalResult,
   type InspectRunResult,
   type ListAgentRunsResult,
   type ListRunToolApprovalsResult,
   type OwnerAuthority,
   type PendingToolApproval,
+  type RecordAgentInboxRunResult,
   type RedeemRunReceiverCapabilityResult,
   type Run,
   type RunTimelineEvent,
@@ -46,6 +49,7 @@ import {
 } from "../schema.js";
 import type { RunAdmissions, ToolExecutions } from "../runs/index.js";
 import { RunReceiverCapabilities } from "./protocol.js";
+import { AgentInbox } from "./inbox.js";
 
 type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type StartRunFailure = Extract<StartRunResult, { ok: false }>;
@@ -147,6 +151,7 @@ export class AgentChannel {
   readonly #capabilities: RunReceiverCapabilities;
   readonly #crewAgents: DurableObjectNamespace<CrewAgent>;
   readonly #database: Database;
+  readonly #inbox: AgentInbox;
   readonly #toolExecutions: ToolExecutions;
 
   constructor(
@@ -160,7 +165,34 @@ export class AgentChannel {
     this.#capabilities = new RunReceiverCapabilities(objectName, admissions);
     this.#crewAgents = crewAgents;
     this.#database = database;
+    this.#inbox = new AgentInbox(objectName, database);
     this.#toolExecutions = executionStore;
+  }
+
+  inbox(authority: OwnerAuthority, input: unknown): AgentInboxResult {
+    return this.#inbox.handle(authority, input);
+  }
+
+  recordInboxRun(input: unknown): Promise<RecordAgentInboxRunResult> {
+    return this.#inbox.recordRun(input);
+  }
+
+  recordScheduledDeferral(input: {
+    agentId: string;
+    agentRevision: number;
+    fleetRevision: number;
+    occurredAt: number;
+    prompt: string;
+    reason: AgentInboxDeferredReason;
+    retryAt: number | null;
+    scheduleRevision: number;
+    scheduledAt: number;
+  }): void {
+    this.#inbox.recordDeferral(input);
+  }
+
+  clearScheduledDeferral(agentId: string): void {
+    this.#inbox.clearDeferral(agentId);
   }
 
   redeem(input: unknown): RedeemRunReceiverCapabilityResult {
@@ -425,6 +457,7 @@ export class AgentChannel {
       agentId: request.data.agentId,
       expectedRevision: request.data.expectedRevision,
       idempotencyKey: request.data.idempotencyKey,
+      prompt: request.data.prompt,
       promptCharacters: request.data.prompt.length,
       promptDigest: await digestRunPrompt(request.data.prompt),
       trigger,
@@ -565,6 +598,7 @@ export class AgentChannel {
 
       return inspectRunResultSchema.parse({
         ok: true,
+        request: { prompt: admission.prompt },
         run,
         timeline: this.#timeline(admission, run, [], inspected?.trace ?? []),
       });
@@ -582,6 +616,7 @@ export class AgentChannel {
 
       return inspectRunResultSchema.parse({
         ok: true,
+        request: { prompt: admission.prompt },
         run,
         timeline: this.#timeline(admission, run),
       });
@@ -622,6 +657,7 @@ export class AgentChannel {
 
     return inspectRunResultSchema.parse({
       ok: true,
+      request: { prompt: admission.prompt },
       run: alignRunCompletion(run, timeline),
       timeline,
     });
@@ -709,6 +745,12 @@ export class AgentChannel {
     }
 
     if (admission.cancelledAt !== null) {
+      await this.#recordCancellationOutcome(
+        authority,
+        admission,
+        new Date(admission.cancelledAt).toISOString(),
+      );
+
       return cancelRunResultSchema.parse({
         cancelled: true,
         ok: true,
@@ -783,6 +825,8 @@ export class AgentChannel {
             return deniedCancelRun("run_unavailable");
           }
 
+          await this.#recordCancellationOutcome(authority, admission, new Date().toISOString());
+
           return cancelRunResultSchema.parse({
             cancelled: true,
             ok: true,
@@ -806,10 +850,36 @@ export class AgentChannel {
       return deniedCancelRun("run_unavailable");
     }
 
+    await this.#recordCancellationOutcome(authority, admission, new Date().toISOString());
+
     return cancelRunResultSchema.parse({
       cancelled: true,
       ok: true,
       runId: admission.runId,
+    });
+  }
+
+  async #recordCancellationOutcome(
+    authority: OwnerAuthority,
+    admission: StoredRunAdmission,
+    occurredAt: string,
+  ): Promise<void> {
+    await this.#inbox.recordRun({
+      event: {
+        approvalCount: 0,
+        kind: "outcome",
+        occurredAt,
+        resultPreview: null,
+        runStatus: "cancelled",
+      },
+      reference: {
+        agentId: admission.agentId,
+        agentRevision: admission.agentRevision,
+        idempotencyKey: admission.idempotencyKey,
+        ownerKey: authority.ownerKey,
+        promptDigest: admission.promptDigest,
+        runId: admission.runId,
+      },
     });
   }
 

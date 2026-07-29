@@ -1,4 +1,5 @@
 import {
+  agentInboxInputSchema,
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
   AUTONOMY_WRITE_SCOPE,
@@ -14,6 +15,8 @@ import {
   RUNS_WRITE_SCOPE,
   ownerAuthoritySchema,
   type ControlPlaneStatusResult,
+  type AgentInboxDeferredReason,
+  type AgentInboxResult,
   type CancelRunResult,
   type CreateAgentResult,
   type CreateConnectionLinkResult,
@@ -32,6 +35,7 @@ import {
   type DecideRunToolApprovalResult,
   type OwnerAuthority,
   type OwnerScope,
+  type RecordAgentInboxRunResult,
   type RecordConnectionAuthorizationReturnResult,
   type RedeemRunReceiverCapabilityResult,
   type ReserveConnectionLinkResult,
@@ -59,6 +63,7 @@ import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlit
 
 import {
   AgentChannel,
+  deniedAgentInbox,
   deniedCancelRun,
   deniedDecideRunToolApproval,
   deniedInspectRun,
@@ -102,9 +107,34 @@ type AuthorityErrorCode =
   | "invalid_authority"
   | "owner_mismatch";
 type RunAdmissionRequestFailure = Extract<CreateRunAdmissionResult, { ok: false }>;
+type StartRunFailureCode = Extract<StartRunResult, { ok: false }>["error"]["code"];
 type AuthorityResult =
   | { authority: OwnerAuthority; ok: true }
   | { code: AuthorityErrorCode; ok: false };
+
+function scheduledRunFailureReason(code: StartRunFailureCode): AgentInboxDeferredReason {
+  switch (code) {
+    case "admission_limit_exceeded":
+    case "agent_not_found":
+    case "agent_unavailable":
+    case "budget_exhausted":
+    case "capability_unavailable":
+    case "idempotency_conflict":
+    case "model_unavailable":
+    case "revision_conflict":
+    case "run_unavailable":
+      return code;
+    case "incompatible_schema":
+    case "insufficient_scope":
+    case "invalid_authority":
+    case "invalid_request":
+    case "owner_mismatch":
+      return "run_unavailable";
+    default:
+      return "run_unavailable";
+  }
+}
+
 export class OwnerControlPlane extends DurableObject {
   readonly #database: DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
   readonly #objectName: string | undefined;
@@ -351,6 +381,34 @@ export class OwnerControlPlane extends DurableObject {
       : deniedListAgentRuns(authorization.code);
   }
 
+  async agentInbox(authorityInput: unknown, input: unknown): Promise<AgentInboxResult> {
+    const request = agentInboxInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return deniedAgentInbox("invalid_request");
+    }
+
+    const requiredScope =
+      request.data.action === "acknowledge" ? RUNS_WRITE_SCOPE : AGENTS_READ_SCOPE;
+    const authorization = this.#authorize(authorityInput, requiredScope);
+
+    return authorization.ok
+      ? this.#agentChannel.inbox(authorization.authority, request.data)
+      : deniedAgentInbox(authorization.code);
+  }
+
+  recordAgentInboxRun(input: unknown): Promise<RecordAgentInboxRunResult> {
+    return this.#migrationReady
+      ? this.#agentChannel.recordInboxRun(input)
+      : Promise.resolve({
+          error: {
+            code: "invalid_admission",
+            message: "Agent inbox projection denied.",
+          },
+          ok: false,
+        });
+  }
+
   async configureAgentSchedule(
     authorityInput: unknown,
     input: unknown,
@@ -471,6 +529,7 @@ export class OwnerControlPlane extends DurableObject {
 
       if (dispatch.status === "rejected" && schedule !== undefined) {
         this.#agentSchedules.recordSkipped(schedule.agentId, currentTime, "unavailable");
+        this.#recordScheduledDeferral(schedule, currentTime, "dispatch_exception");
         recordScheduleEvent({
           agentId: schedule.agentId,
           outcome: "failed",
@@ -637,6 +696,7 @@ export class OwnerControlPlane extends DurableObject {
           // Completed run admissions eventually age out of the control plane.
         } else {
           this.#agentSchedules.recordSkipped(schedule.agentId, currentTime, "unavailable");
+          this.#recordScheduledDeferral(schedule, currentTime, "run_unavailable");
           recordScheduleEvent({
             agentId: schedule.agentId,
             outcome: "skipped_unavailable",
@@ -645,6 +705,7 @@ export class OwnerControlPlane extends DurableObject {
         }
       } else if (!["cancelled", "completed", "failed"].includes(previous.run.status)) {
         this.#agentSchedules.recordSkipped(schedule.agentId, currentTime, "active_run");
+        this.#recordScheduledDeferral(schedule, currentTime, "active_run");
         recordScheduleEvent({
           agentId: schedule.agentId,
           outcome: "skipped_active",
@@ -666,6 +727,11 @@ export class OwnerControlPlane extends DurableObject {
 
     if (!started.ok) {
       this.#agentSchedules.recordSkipped(schedule.agentId, currentTime, "unavailable");
+      this.#recordScheduledDeferral(
+        schedule,
+        currentTime,
+        scheduledRunFailureReason(started.error.code),
+      );
       recordScheduleEvent({
         agentId: schedule.agentId,
         outcome: "failed",
@@ -683,6 +749,7 @@ export class OwnerControlPlane extends DurableObject {
 
     if (!recorded) {
       await this.#agentChannel.cancel(authority, { runId: started.run.runId });
+      this.#recordScheduledDeferral(schedule, currentTime, "record_dispatch_conflict");
       recordScheduleEvent({
         agentId: schedule.agentId,
         outcome: "failed",
@@ -691,10 +758,29 @@ export class OwnerControlPlane extends DurableObject {
       return;
     }
 
+    this.#agentChannel.clearScheduledDeferral(schedule.agentId);
     recordScheduleEvent({
       agentId: schedule.agentId,
       outcome: "dispatched",
       runId: started.run.runId,
+    });
+  }
+
+  #recordScheduledDeferral(
+    schedule: DueAgentSchedule,
+    occurredAt: number,
+    reason: AgentInboxDeferredReason,
+  ): void {
+    this.#agentChannel.recordScheduledDeferral({
+      agentId: schedule.agentId,
+      agentRevision: schedule.agentRevision,
+      fleetRevision: this.#fleetConfigurations.current().revision,
+      occurredAt,
+      prompt: schedule.prompt,
+      reason,
+      retryAt: schedule.retryAt,
+      scheduleRevision: schedule.scheduleRevision,
+      scheduledAt: schedule.scheduledAt,
     });
   }
 
