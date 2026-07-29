@@ -62,6 +62,12 @@ Diagnose without deploying:
 node apps/cli/dist/crewhelm.js doctor --endpoint https://YOUR_WORKER_HOST
 ```
 
+Add `--authenticated` for an end-to-end installation check. The CLI opens the owner login,
+requests only temporary **View only** access, verifies MCP discovery and fleet status, then
+attempts and verifies access-token revocation. The diagnosis fails if cleanup cannot be confirmed;
+the token expires after 15 minutes regardless. The default diagnosis remains public and
+non-interactive.
+
 Both commands support `--json`. Public endpoints require HTTPS; exact loopback HTTP is accepted
 for local development.
 

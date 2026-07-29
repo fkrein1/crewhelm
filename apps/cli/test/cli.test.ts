@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { authenticatedDoctorReportSchema } from "../src/authenticated-doctor.js";
 import { CLI_HELP, parseCli, runCli, type CliDependencies } from "../src/cli.js";
 import { doctorReportSchema } from "../src/doctor.js";
 
@@ -145,6 +146,33 @@ describe("Crewhelm CLI", () => {
     expect(harness.output.join("")).toContain(
       "PASS oauth-authorization-server https://crewhelm.example/.well-known/oauth-authorization-server/api/auth",
     );
+    expect(harness.errors).toEqual([]);
+  });
+
+  it("routes the explicit authenticated doctor flag to a stable layered report", async () => {
+    const harness = createHarness(healthyDeploymentFetch());
+
+    expect(
+      parseCli(["doctor", "--endpoint", "https://crewhelm.example", "--authenticated"]),
+    ).toMatchObject({
+      authenticated: true,
+      kind: "doctor",
+    });
+    await expect(
+      runCli(
+        ["doctor", "--endpoint", "https://crewhelm.example", "--authenticated", "--json"],
+        harness.dependencies,
+      ),
+    ).resolves.toBe(1);
+
+    const report = authenticatedDoctorReportSchema.parse(JSON.parse(harness.output.join("")));
+    expect(report.public.ok).toBe(true);
+    expect(report.checks[0]).toMatchObject({
+      code: "invalid_payload",
+      name: "oauth-owner-access",
+      status: "fail",
+    });
+    expect(report.checks.slice(1).every((check) => check.status === "skip")).toBe(true);
     expect(harness.errors).toEqual([]);
   });
 

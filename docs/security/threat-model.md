@@ -61,6 +61,13 @@ Crewhelm accepts only explicitly defined capability scopes plus standard `offlin
 refresh. Tokens and existing client registrations are never silently widened. GitHub login uses no
 upstream scope, and its transient token is not persisted.
 
+Authenticated CLI diagnosis uses an explicit browser flow with a random exact-loopback callback,
+state, and S256 PKCE. It registers a leased native client for `crewhelm:view` only, requests no
+refresh token, bounds every OAuth and MCP response, keeps authorization values out of reports, and
+attempts to revoke the temporary access token on both success and later-stage failure. It verifies
+that the token no longer reaches MCP; cleanup that cannot be confirmed is reported as a failed
+diagnosis rather than hidden.
+
 Revisit this model before adding another identity provider, broader mutations, a multi-owner
 service, or longer token lifetimes.
 

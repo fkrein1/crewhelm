@@ -1,6 +1,10 @@
 import * as z from "zod";
 
 import {
+  diagnoseAuthenticatedDeployment,
+  type AuthenticatedDoctorReport,
+} from "./authenticated-doctor.js";
+import {
   bootstrapDeployment,
   BootstrapError,
   bootstrapOptionsSchema,
@@ -27,7 +31,7 @@ export const CLI_HELP = `Crewhelm CLI
 
 Usage:
   crewhelm up [--endpoint <origin>] [--installation <path>] [--setup-github] [--account-id <id>] [--worker-name <name>] [--database-name <name>] [--database-id <uuid>] [--ai-budget-usd <dollars>] [--timeout-ms <milliseconds>] [--json]
-  crewhelm doctor --endpoint <origin> [--timeout-ms <milliseconds>] [--json]
+  crewhelm doctor --endpoint <origin> [--authenticated] [--timeout-ms <milliseconds>] [--json]
   crewhelm --help
 
 The up command creates or safely upgrades one Crewhelm installation, preserving deployed secrets
@@ -42,6 +46,8 @@ CREWHELM_OWNER_GITHUB_USER_ID, and CREWHELM_COMPOSIO_API_KEY.
 Set CREWHELM_CLOUDFLARE_API_TOKEN to a scoped account token with AI Gateway Edit when the
 Wrangler OAuth credential cannot manage Gateways.
 The doctor command validates bounded health and MCP OAuth discovery responses.
+Use --authenticated to open the browser, verify temporary view-only owner access and fleet status,
+and verify diagnostic-token revocation before exit.
 --timeout-ms applies to each diagnostic request.
 Up requires HTTPS. Doctor permits HTTP only for exact loopback hosts.
 `;
@@ -64,6 +70,7 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
     workerName: bootstrapOptionsSchema.shape.workerName.optional(),
   }),
   z.strictObject({
+    authenticated: z.boolean(),
     json: z.boolean(),
     kind: z.literal("doctor"),
     origin: z.instanceof(URL),
@@ -103,6 +110,7 @@ export function parseCli(arguments_: readonly string[]): CliCommand {
 
   const kind = arguments_[0];
   let accountId: string | undefined;
+  let authenticated = false;
   let aiDailySpendUsd: number | undefined;
   let databaseId: string | undefined;
   let databaseName: string | undefined;
@@ -129,6 +137,11 @@ export function parseCli(arguments_: readonly string[]): CliCommand {
 
     if (flag === "--json") {
       json = true;
+      continue;
+    }
+
+    if (flag === "--authenticated" && kind === "doctor") {
+      authenticated = true;
       continue;
     }
 
@@ -227,6 +240,7 @@ export function parseCli(arguments_: readonly string[]): CliCommand {
           workerName,
         })
       : cliCommandSchema.safeParse({
+          authenticated,
           json,
           kind,
           origin,
@@ -243,6 +257,7 @@ export function parseCli(arguments_: readonly string[]): CliCommand {
 }
 
 export interface CliDependencies extends BootstrapDependencies {
+  openUrl?: (url: URL) => Promise<void>;
   promptText?: (message: string) => Promise<string>;
   writeError: (text: string) => void;
   writeOutput: (text: string) => void;
@@ -255,6 +270,17 @@ function formatDoctorReport(report: DoctorReport): string {
       return `${prefix} ${check.name} ${check.endpoint}\n${check.message}\n`;
     })
     .join("");
+}
+
+function formatAuthenticatedDoctorReport(report: AuthenticatedDoctorReport): string {
+  const authenticatedChecks = report.checks
+    .map((check) => {
+      const prefix = check.status === "pass" ? "PASS" : check.status === "fail" ? "FAIL" : "SKIP";
+      return `${prefix} ${check.name} ${check.endpoint}\n${check.message}\n`;
+    })
+    .join("");
+
+  return `${formatDoctorReport(report.public)}${authenticatedChecks}`;
 }
 
 function formatBootstrapReport(report: BootstrapReport): string {
@@ -443,6 +469,21 @@ export async function runCli(
 
       throw error;
     }
+  }
+
+  if (command.authenticated) {
+    const report = await diagnoseAuthenticatedDeployment(command, {
+      fetch: dependencies.fetch,
+      openUrl:
+        dependencies.openUrl ??
+        (async () => {
+          throw new Error("Browser unavailable.");
+        }),
+    });
+    dependencies.writeOutput(
+      command.json ? `${JSON.stringify(report)}\n` : formatAuthenticatedDoctorReport(report),
+    );
+    return report.ok ? 0 : 1;
   }
 
   const report = await diagnoseDeployment(command, dependencies);
