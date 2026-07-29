@@ -4,6 +4,7 @@ import {
   diagnoseAuthenticatedDeployment,
   type AuthenticatedDoctorReport,
 } from "./authenticated-doctor.js";
+import { agentSmokeReportSchema, runAgentSmoke, type AgentSmokeReport } from "./agent-smoke.js";
 import {
   bootstrapDeployment,
   BootstrapError,
@@ -33,6 +34,7 @@ export const CLI_HELP = `Crewhelm CLI
 Usage:
   crewhelm up [--endpoint <origin>] [--installation <path>] [--setup-github] [--account-id <id>] [--worker-name <name>] [--database-name <name>] [--database-id <uuid>] [--ai-budget-usd <dollars>] [--timeout-ms <milliseconds>] [--json]
   crewhelm doctor --endpoint <origin> [--authenticated] [--timeout-ms <milliseconds>] [--json]
+  crewhelm smoke agent --endpoint <origin> --confirm-production [--run-timeout-ms <milliseconds>] [--timeout-ms <milliseconds>] [--json]
   crewhelm --help
 
 The up command creates or safely upgrades one Crewhelm installation, preserving deployed secrets
@@ -51,6 +53,8 @@ Wrangler OAuth credential cannot manage Gateways.
 The doctor command validates bounded health and MCP OAuth discovery responses.
 Use --authenticated to open the browser, verify temporary view-only owner access and fleet status,
 and verify diagnostic-token revocation before exit.
+The smoke agent command is an explicit mutating production rehearsal. It requests temporary Full
+control, runs one zero-grant disposable Agent, disables it, and verifies token revocation.
 --timeout-ms applies to each diagnostic request.
 Up requires HTTPS. Doctor permits HTTP only for exact loopback hosts.
 `;
@@ -79,6 +83,18 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
     origin: z.instanceof(URL),
     timeoutMs: z.number().int().min(100).max(30_000),
   }),
+  z.strictObject({
+    confirmProduction: z.literal(true),
+    json: z.boolean(),
+    kind: z.literal("agent-smoke"),
+    origin: z.instanceof(URL).refine((origin) => origin.protocol === "https:"),
+    runTimeoutMs: z
+      .number()
+      .int()
+      .min(1_000)
+      .max(10 * 60 * 1_000),
+    timeoutMs: z.number().int().min(100).max(30_000),
+  }),
 ]);
 
 export type CliCommand = z.infer<typeof cliCommandSchema>;
@@ -98,34 +114,39 @@ function requireFlagValue(arguments_: readonly string[], index: number, flag: st
 }
 
 export function parseCli(arguments_: readonly string[]): CliCommand {
+  const agentSmoke = arguments_[0] === "smoke" && arguments_[1] === "agent";
+
   if (
     arguments_.length === 0 ||
     arguments_[0] === "--help" ||
     arguments_[0] === "-h" ||
-    ((arguments_[0] === "up" || arguments_[0] === "doctor") && arguments_.includes("--help"))
+    ((arguments_[0] === "up" || arguments_[0] === "doctor" || agentSmoke) &&
+      arguments_.includes("--help"))
   ) {
     return { kind: "help" };
   }
 
-  if (arguments_[0] !== "up" && arguments_[0] !== "doctor") {
+  if (arguments_[0] !== "up" && arguments_[0] !== "doctor" && !agentSmoke) {
     throw new CliUsageError("Unknown command.");
   }
 
-  const kind = arguments_[0];
+  const kind = agentSmoke ? "agent-smoke" : arguments_[0];
   let accountId: string | undefined;
   let authenticated = false;
   let aiDailySpendUsd: number | undefined;
+  let confirmProduction = false;
   let databaseId: string | undefined;
   let databaseName: string | undefined;
   let endpoint: string | undefined;
   let installationPath = "crewhelm.installation.json";
   let json = false;
+  let runTimeoutMs = 2 * 60 * 1_000;
   let setupGitHub = false;
   let timeoutMs: number = 5_000;
   let workerName: string | undefined;
   const seenFlags = new Set<string>();
 
-  for (let index = 1; index < arguments_.length; index += 1) {
+  for (let index = agentSmoke ? 2 : 1; index < arguments_.length; index += 1) {
     const flag = arguments_[index];
 
     if (!flag?.startsWith("--")) {
@@ -145,6 +166,11 @@ export function parseCli(arguments_: readonly string[]): CliCommand {
 
     if (flag === "--authenticated" && kind === "doctor") {
       authenticated = true;
+      continue;
+    }
+
+    if (flag === "--confirm-production" && kind === "agent-smoke") {
+      confirmProduction = true;
       continue;
     }
 
@@ -196,6 +222,12 @@ export function parseCli(arguments_: readonly string[]): CliCommand {
       continue;
     }
 
+    if (flag === "--run-timeout-ms" && kind === "agent-smoke") {
+      runTimeoutMs = Number(requireFlagValue(arguments_, index, flag));
+      index += 1;
+      continue;
+    }
+
     if (flag === "--worker-name" && kind === "up") {
       workerName = requireFlagValue(arguments_, index, flag);
       index += 1;
@@ -205,8 +237,12 @@ export function parseCli(arguments_: readonly string[]): CliCommand {
     throw new CliUsageError("Unknown flag.");
   }
 
-  if (!endpoint && kind === "doctor") {
+  if (!endpoint && (kind === "doctor" || kind === "agent-smoke")) {
     throw new CliUsageError(`${kind} requires --endpoint.`);
+  }
+
+  if (kind === "agent-smoke" && !confirmProduction) {
+    throw new CliUsageError("smoke agent requires --confirm-production.");
   }
 
   let origin: URL | undefined;
@@ -222,8 +258,10 @@ export function parseCli(arguments_: readonly string[]): CliCommand {
       throw error;
     }
 
-    if (kind === "up" && origin.protocol !== "https:") {
-      throw new CliUsageError("up requires an HTTPS endpoint.");
+    if ((kind === "up" || kind === "agent-smoke") && origin.protocol !== "https:") {
+      throw new CliUsageError(
+        `${kind === "agent-smoke" ? "smoke agent" : kind} requires an HTTPS endpoint.`,
+      );
     }
   }
 
@@ -242,18 +280,25 @@ export function parseCli(arguments_: readonly string[]): CliCommand {
           timeoutMs,
           workerName,
         })
-      : cliCommandSchema.safeParse({
-          authenticated,
-          json,
-          kind,
-          origin,
-          timeoutMs,
-        });
+      : kind === "doctor"
+        ? cliCommandSchema.safeParse({
+            authenticated,
+            json,
+            kind,
+            origin,
+            timeoutMs,
+          })
+        : cliCommandSchema.safeParse({
+            confirmProduction,
+            json,
+            kind,
+            origin,
+            runTimeoutMs,
+            timeoutMs,
+          });
 
   if (!command.success) {
-    throw new CliUsageError(
-      "A timeout, dollar limit, account ID, database ID, or deployment name was invalid. Names use lowercase letters, numbers, and hyphens.",
-    );
+    throw new CliUsageError("One or more command values were invalid or outside their bounds.");
   }
 
   return command.data;
@@ -284,6 +329,25 @@ function formatAuthenticatedDoctorReport(report: AuthenticatedDoctorReport): str
     .join("");
 
   return `${formatDoctorReport(report.public)}${authenticatedChecks}`;
+}
+
+function formatAgentSmokeReport(report: AgentSmokeReport): string {
+  const smokeChecks = report.checks
+    .map((check) => {
+      const prefix = check.status === "pass" ? "PASS" : check.status === "fail" ? "FAIL" : "SKIP";
+      return `${prefix} ${check.name} ${check.endpoint}\n${check.message}\n`;
+    })
+    .join("");
+  const fixture =
+    report.agentId && report.runId
+      ? `Agent ${report.agentId}; run ${report.runId}; terminal status ${report.runStatus ?? "unknown"}.\n`
+      : "";
+  const capacity =
+    report.activeAgentsBefore !== undefined && report.activeAgentsAfter !== undefined
+      ? `Active Agents ${report.activeAgentsBefore} -> ${report.activeAgentsAfter} after cleanup.\n`
+      : "";
+
+  return `${formatDoctorReport(report.public)}${smokeChecks}${fixture}${capacity}`;
 }
 
 function formatBootstrapReport(report: BootstrapReport): string {
@@ -496,6 +560,23 @@ export async function runCli(
 
       throw error;
     }
+  }
+
+  if (command.kind === "agent-smoke") {
+    const report = agentSmokeReportSchema.parse(
+      await runAgentSmoke(command, {
+        fetch: dependencies.fetch,
+        openUrl:
+          dependencies.openUrl ??
+          (async () => {
+            throw new Error("Browser unavailable.");
+          }),
+      }),
+    );
+    dependencies.writeOutput(
+      command.json ? `${JSON.stringify(report)}\n` : formatAgentSmokeReport(report),
+    );
+    return report.ok ? 0 : 1;
   }
 
   if (command.authenticated) {

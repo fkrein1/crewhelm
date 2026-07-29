@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { authenticatedDoctorReportSchema } from "../src/authenticated-doctor.js";
+import { agentSmokeReportSchema } from "../src/agent-smoke.js";
 import { CLI_HELP, parseCli, runCli, type CliDependencies } from "../src/cli.js";
 import { doctorReportSchema } from "../src/doctor.js";
 import { readInstallation } from "../src/installation.js";
@@ -283,6 +284,62 @@ describe("Crewhelm CLI", () => {
       status: "fail",
     });
     expect(report.checks.slice(1).every((check) => check.status === "skip")).toBe(true);
+    expect(harness.errors).toEqual([]);
+  });
+
+  it("requires explicit production confirmation for the Agent smoke command", () => {
+    expect(() => parseCli(["smoke", "agent", "--endpoint", "https://crewhelm.example"])).toThrow(
+      "smoke agent requires --confirm-production.",
+    );
+    expect(() =>
+      parseCli(["smoke", "agent", "--endpoint", "http://127.0.0.1:8787", "--confirm-production"]),
+    ).toThrow("smoke agent requires an HTTPS endpoint.");
+  });
+
+  it("parses bounded Agent smoke timeouts and routes public failures without authorization", async () => {
+    expect(
+      parseCli([
+        "smoke",
+        "agent",
+        "--endpoint",
+        "https://crewhelm.example",
+        "--confirm-production",
+        "--run-timeout-ms",
+        "45000",
+        "--timeout-ms",
+        "2000",
+      ]),
+    ).toMatchObject({
+      confirmProduction: true,
+      kind: "agent-smoke",
+      runTimeoutMs: 45_000,
+      timeoutMs: 2_000,
+    });
+
+    const openUrl = vi.fn<(url: URL) => Promise<void>>();
+    const harness = createHarness(
+      vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(null, { status: 503 })),
+      { openUrl },
+    );
+
+    await expect(
+      runCli(
+        [
+          "smoke",
+          "agent",
+          "--endpoint",
+          "https://crewhelm.example",
+          "--confirm-production",
+          "--json",
+        ],
+        harness.dependencies,
+      ),
+    ).resolves.toBe(1);
+
+    const report = agentSmokeReportSchema.parse(JSON.parse(harness.output.join("")));
+    expect(report.public.ok).toBe(false);
+    expect(report.checks.every((check) => check.status === "skip")).toBe(true);
+    expect(openUrl).not.toHaveBeenCalled();
     expect(harness.errors).toEqual([]);
   });
 
