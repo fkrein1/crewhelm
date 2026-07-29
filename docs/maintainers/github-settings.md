@@ -22,3 +22,5 @@ These controls live in GitHub. Keep them aligned with the versioned workflows an
   bypass actors.
 - Keep zero required approvals only while one write-capable maintainer exists. Then require one
   approval and code-owner review.
+- If a required check blocks its repair, remove only that context, land the repair under every
+  remaining rule, restore it, and verify the live ruleset.
