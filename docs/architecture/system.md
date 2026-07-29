@@ -37,26 +37,11 @@ The control plane owns admission and administration; the Agent owns execution. C
 carry explicit authority because Durable Objects do not share transactions. D1 is not an
 authoritative store for control-plane or Agent domain state.
 
-Each run snapshots one fleet-configuration revision and records a provisional cost estimate for
-later reconciliation. Admission, approval, and tool dispatch require that exact revision to remain
-current, so an owner policy change invalidates older authority. The MCP surface can read and preview
-configuration; applying a change is reserved for a deterministic owner step-up path outside model
-authority.
-
-Bootstrap recommends but does not require one dedicated AI Gateway per Crewhelm fleet. When
-enabled, its rolling cost rule is the only fleet-wide hard dollar ceiling. Routine upgrades
-preserve the Gateway route without requiring management credentials; `--ai-budget-usd` explicitly
-creates or changes the rule and verifies the result through Cloudflare.
-
-Cloudflare Workers Logs provide bounded diagnostic telemetry but do not authorize work or replace
-the owner-local audit record. Invocation logs and automatic traces remain disabled because the
-Worker handles secret-bearing OAuth and connection callback URLs. The
-[threat model](../security/threat-model.md#observability-and-deployment) defines permitted event
-data.
-
-When enabled, AI Gateway logs retain provider/model, token, cost, latency, status, and bounded
-Crewhelm run and Agent correlation metadata. Request and response payload logging is disabled.
-Pending calls retain their provisional cost estimate until exact Gateway cost reconciliation.
+Runs and tool calls are bound to the admitted Agent and fleet-configuration revisions.
+Configuration changes invalidate unconsumed authority. The optional AI Gateway provides the
+fleet-wide dollar ceiling. The
+[threat model](../security/threat-model.md#observability-and-deployment) defines telemetry and
+cost-reconciliation controls.
 
 ## Module map
 
@@ -74,48 +59,23 @@ Pending calls retain their provisional cost estimate until exact Gateway cost re
 | Public routing and bounded HTTP input | `http/`                   |
 | OAuth persistence and protocol        | `oauth/`                  |
 
-`index.ts`, Durable Object entrypoints, and protocol servers are composition roots. They select
-authority and connect modules; capability behavior stays in the owning folder. Tests live beside
-the behavior they cover.
-
-A capability folder exposes its public API through `index.ts`. Policy, persistence, transactions,
-and failure handling remain internal to that folder. Another capability may import its facade, but
-not its internal files; shared packages are reserved for provider adapters and stable contracts.
-
-A routine change should require the owning module, its contract, its tests, and at most one
-composition root or external adapter. Split only around a coherent invariant or reason to change.
+Entrypoints compose capability modules. Each module exposes its public API through `index.ts`;
+policy, persistence, transactions, and failure handling remain internal.
 
 ## Authority flow
 
-1. The Worker derives the owner key from verified issuer and subject claims, validates operation
-   scope, and selects the owner object. Bearer tokens stop at the Worker.
-2. `OwnerControlPlane` revalidates owner binding and scope. For execution it issues a short-lived,
-   single-use permit bound to the exact Agent revision, run, prompt, idempotency key, and budget.
-3. `CrewAgent` redeems the permit and claims reserved model work before inference. Think's
-   authority-bearing inherited entrypoints remain blocked.
-4. Tool discovery grants no execution authority. Configuring an Agent connection verifies the
-   exact active Composio account, snapshots bounded public schemas for selected pinned versions,
-   and creates a new immutable Agent revision.
-5. `ToolGate` evaluates the exact grant and current policy immediately before a single-use
-   execution reservation. The production adapter atomically consumes the complete permit to claim
-   the opaque account once, verifies the account and toolkit again, then executes through
-   Composio's fixed direct-tool endpoint. Owner cancellation and provider dispatch race in the
-   same control-plane transaction boundary: cancellation is refused after dispatch, and dispatch
-   is refused after cancellation.
-6. Owner-local alarms claim bounded due schedules, admit exact-revision runs through the same Agent
-   channel, and isolate each dispatch so one Agent cannot block unrelated schedules. Each due
-   occurrence is claimed at most once; unexpected dispatch failures advance to the next interval
-   and leave bounded durable inbox evidence instead of silently retrying work. Agents publish
-   compact projections through a durable outbox; the owner validates them against admission and
-   serves fleet reads without fan-out. Projections support discovery, not authority.
-7. Agent disablement and connection or capability revocation take effect at admission, approval,
-   and dispatch gates. Ambiguous mutating effects remain blocked by their stable effect identity
-   until the owner reconciles them from independent evidence.
-8. Connect Links create owner-facing setup flows. Browser returns record lifecycle evidence; they
-   do not by themselves activate a connection or authorize execution.
+1. The Worker verifies identity and scope, then selects the owner object. Bearer tokens stop at the
+   Worker.
+2. `OwnerControlPlane` revalidates authority and admits work against immutable Agent and fleet
+   revisions, issuing a bounded single-use permit.
+3. `CrewAgent` redeems the permit before inference. Discovery and configuration grant no execution
+   authority.
+4. `ToolGate` rechecks the grant, policy, connection, effect, approval, and budget before Composio
+   dispatch. Ambiguous mutations remain blocked until reconciled.
+5. Schedules use the same admission path. Projections support discovery, never authority. Connect
+   Links record setup lifecycle but do not activate or authorize connections.
 
-Control-plane migrations are ordered and checksummed; incompatible state fails closed before RPC
-admission. Auth D1 remains authoritative only for OAuth protocol state.
+Control-plane migrations are ordered and checksummed; incompatible state fails closed.
 
 ## Dependency direction
 
