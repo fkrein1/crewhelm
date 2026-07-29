@@ -1,68 +1,24 @@
 # GitHub repository settings
 
-Keep these controls aligned with the live public repository. They are enforced partly by GitHub
-and partly by the versioned workflows in `.github/workflows/`. The importable
-`.github/rulesets/main.json` file is the source of truth for the live `Protected main` ruleset.
+These controls live in GitHub. Keep them aligned with the versioned workflows and the desired
+`Protected main` ruleset in `.github/rulesets/main.json`.
+
+## Repository
+
+- Use `main` as the default branch.
+- Allow rebase merges. Enable auto-merge, branch updates, and deletion of merged branches.
 
 ## Security
 
-- Enable the dependency graph; the required dependency-review workflow fails closed without it.
-- Enable private vulnerability reporting.
-- Enable Dependabot alerts and security updates.
-- Enable secret scanning and push protection.
-- Require Actions to use full commit SHA pins.
-- Allow only actions enumerated by the repository foundation test.
-- Require approval for workflow runs from all external contributors; inspect executable changes
-  before approval.
-- Forbid `pull_request_target`, `workflow_run`, and `issue_comment`. Public pull-request jobs use
-  pinned GitHub-hosted runners with read-only access, no secrets, and no OIDC authority.
-- Privileged jobs never restore untrusted caches or execute untrusted artifacts.
-- Install the Developer Certificate of Origin (`DCO`) GitHub App for this repository only, with
-  read access to code, metadata, and pull requests and write access to checks.
+- Enable the dependency graph, private vulnerability reporting, Dependabot alerts and security
+  updates, secret scanning, and push protection.
+- Give Actions read-only default permissions. Allow selected actions only, require full commit SHA
+  pins, and require approval for all external contributors.
+- Install the Developer Certificate of Origin (`DCO`) GitHub App for this repository only.
 
-## Main branch ruleset
+## Protected main
 
-- Target the default branch and keep enforcement active.
-- Require every change to arrive through a pull request.
-- Require zero approvals while there is only one write-capable maintainer so the author is not
-  deadlocked. CODEOWNERS still requests review. Raise this to one approval and require code-owner
-  review when a second maintainer is available.
-- Require all review conversations to be resolved.
-- Require strict, up-to-date `Verify`, `Dependency review`,
-  `Analyze JavaScript and TypeScript`, `Audit GitHub Actions`, and `DCO` status checks.
-- Block CodeQL analysis errors and high-or-higher code-scanning alerts.
-- Block force pushes and branch deletion, including for administrators; configure no standing
+- Keep the live ruleset identical to `.github/rulesets/main.json`, with active enforcement and no
   bypass actors.
-
-## Check placement
-
-| Event                          | Verify         | CodeQL analysis | Actions audit  | Dependency review | DCO            |
-| ------------------------------ | -------------- | --------------- | -------------- | ----------------- | -------------- |
-| Pull request opened or updated | Required       | Required        | Required       | Required          | Required       |
-| Push to `main` after merge     | Monitoring     | Monitoring      | Monitoring     | Not applicable    | Not applicable |
-| Weekly schedule                | Not applicable | Monitoring      | Not applicable | Not applicable    | Not applicable |
-
-Dependency review is a pull-request-only comparison and must not be configured as a post-merge
-`main` check. Merge queue is intentionally disabled for the current single-maintainer workflow; if
-it is enabled later, add and validate `merge_group` triggers before making queue checks required.
-
-## Merge settings
-
-- Allow rebase merges so intentional semantic commits remain in history.
-- Disable merge commits and squash merges.
-- Enable auto-merge, branch-update suggestions, and automatic deletion of merged head branches.
-- Merge only after required checks pass. Codex may perform the merge only when the user has granted
-  repository merge authority.
-
-## Ruleset recovery
-
-If a required provider is unavailable or a check configuration prevents its own repair, use
-explicit, audited maintainer authority to remove only the failing required context. Land the repair
-through a pull request under every remaining control, restore the context, and read back the active
-ruleset. Do not disable the pull-request, force-push, deletion, or remaining check rules.
-
-Before the first npm release, keep the CLI private until package identity and ownership are
-settled. Build and validate the tarball without publish authority; a fresh cache-free job may only
-stage that tarball through one protected OIDC workflow. Allow only `npm stage publish`, disallow
-traditional publish tokens, require independent 2FA approval, keep provenance enabled, and test
-publication monitoring and recovery.
+- Keep zero required approvals only while one write-capable maintainer exists. Then require one
+  approval and code-owner review.
