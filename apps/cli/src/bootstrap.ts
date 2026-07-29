@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { chmod, cp, lstat, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -22,6 +22,7 @@ const REQUIRED_SECRET_NAMES = [
 ] as const;
 type RequiredSecretName = (typeof REQUIRED_SECRET_NAMES)[number];
 const CLOUDFLARE_API_TOKEN_ENVIRONMENT = "CREWHELM_CLOUDFLARE_API_TOKEN";
+const CLOUDFLARE_GATEWAY_DENIED_MESSAGE = `Cloudflare denied AI Gateway management. Set ${CLOUDFLARE_API_TOKEN_ENVIRONMENT} to an account API token with AI Gateway Edit.`;
 const COMPOSIO_API_KEY_ENVIRONMENT = "CREWHELM_COMPOSIO_API_KEY";
 const GITHUB_SECRET_ENVIRONMENT = {
   clientId: "CREWHELM_GITHUB_CLIENT_ID",
@@ -52,14 +53,14 @@ const EXPECTED_MIGRATIONS = [
   "0009_connection_config_write_scope.sql",
   "0010_oauth_offline_access.sql",
   "0011_autonomy_write_scope.sql",
+  "0012_access_levels.sql",
 ] as const;
 const MAX_WORKER_SCRIPT_BYTES = 10 * 1_048_576;
 const MAX_SOURCE_MAP_BYTES = 25 * 1_048_576;
 const MAX_TEMPLATE_BYTES = 1_048_576;
 const MAX_MIGRATION_BYTES = 1_048_576;
 const MAX_WORKER_TEXT_MODULES = 20;
-const DEFAULT_AI_DAILY_SPEND_USD = 1;
-const MICROUSD_PER_USD = 1_000_000;
+const DEPLOYMENT_DIGEST_HEX_LENGTH = 40;
 const WORKER_TEXT_MODULE_NAME = /^[0-9a-f]{40}-[0-9]{4}_[a-z0-9_]{1,128}\.sql$/u;
 const WORKER_TEXT_MODULE_IMPORT = /from "\.\/([^"]+\.sql)";/gu;
 const WORKER_NOT_FOUND_CODE = /\[code:\s*10007\]/u;
@@ -246,9 +247,11 @@ const deploymentTemplateSchema = z.strictObject({
 export const bootstrapOptionsSchema = z.strictObject({
   accountId: accountIdSchema.optional(),
   aiDailySpendUsd: z.number().finite().min(0.01).max(1_000).optional(),
+  aiGatewayId: deploymentNameSchema.optional(),
   databaseId: databaseIdSchema.optional(),
   databaseName: deploymentNameSchema,
   origin: z.instanceof(URL).refine((origin) => origin.protocol === "https:"),
+  setupGitHub: z.boolean().optional(),
   timeoutMs: z.number().int().min(100).max(30_000),
   workerName: deploymentNameSchema,
 });
@@ -282,12 +285,17 @@ export const bootstrapReportSchema = z.strictObject({
     id: databaseIdSchema,
     name: z.string(),
   }),
-  aiGateway: z.strictObject({
-    dailySpendUsd: z.number().positive(),
-    id: deploymentNameSchema,
-  }),
+  aiGateway: z.discriminatedUnion("enabled", [
+    z.strictObject({
+      enabled: z.literal(false),
+    }),
+    z.strictObject({
+      enabled: z.literal(true),
+      id: deploymentNameSchema,
+    }),
+  ]),
   deployment: z.strictObject({
-    action: z.enum(["created", "updated"]),
+    action: z.enum(["created", "updated", "unchanged"]),
     origin: z.url(),
     workerName: z.string(),
   }),
@@ -303,6 +311,7 @@ type GitHubSecrets = z.infer<typeof githubSecretsSchema>;
 type CloudflareCredentials = z.infer<typeof cloudflareCredentialsSchema>;
 
 interface DeploymentAssets {
+  digest: string;
   migrations: readonly string[];
   template: DeploymentTemplate;
   workerTextModules: readonly string[];
@@ -320,7 +329,10 @@ interface WorkerInventory {
 }
 
 export interface BootstrapDependencies extends DoctorDependencies {
+  createGitHubApp?: (options: { origin: URL; workerName: string }) => Promise<GitHubSecrets>;
   deploymentAssetsDirectory: string;
+  openCloudflareApiTokens?: () => Promise<void>;
+  promptSecret?: (message: string) => Promise<string>;
   readEnvironment: (name: string) => string | undefined;
   runWrangler: RunWrangler;
 }
@@ -468,15 +480,32 @@ async function loadDeploymentAssets(
       }
     }
 
-    const template = deploymentTemplateSchema.parse(
-      JSON.parse(
-        await readFile(
-          resolve(dependencies.deploymentAssetsDirectory, "wrangler-template.json"),
-          "utf8",
-        ),
-      ),
+    const templateText = await readFile(
+      resolve(dependencies.deploymentAssetsDirectory, "wrangler-template.json"),
+      "utf8",
     );
-    return { migrations: migrationNames, template, workerTextModules };
+    const template = deploymentTemplateSchema.parse(JSON.parse(templateText));
+    const digest = createHash("sha256");
+
+    for (const name of [
+      "index.js",
+      "index.js.map",
+      "wrangler-template.json",
+      ...workerTextModules,
+      ...migrationNames.map((migration) => `migrations/${migration}`),
+    ]) {
+      digest.update(name);
+      digest.update("\0");
+      digest.update(await readFile(resolve(dependencies.deploymentAssetsDirectory, name)));
+      digest.update("\0");
+    }
+
+    return {
+      digest: digest.digest("hex"),
+      migrations: migrationNames,
+      template,
+      workerTextModules,
+    };
   } catch {
     throw commandFailed("assets", "Packaged deployment assets are invalid.");
   }
@@ -545,7 +574,7 @@ async function readCloudflareCredentials(
     if (!parsed.success) {
       throw commandFailed(
         "gateway",
-        `Set ${CLOUDFLARE_API_TOKEN_ENVIRONMENT} to a valid account API token with AI Gateway Read and Edit.`,
+        `Set ${CLOUDFLARE_API_TOKEN_ENVIRONMENT} to a valid account API token with AI Gateway Edit.`,
       );
     }
 
@@ -683,7 +712,13 @@ async function planAiGateway(
   credentials: CloudflareCredentials,
   dependencies: BootstrapDependencies,
 ): Promise<AiGatewayPlan> {
-  const gatewayId = options.workerName;
+  const dailySpendUsd = options.aiDailySpendUsd;
+
+  if (dailySpendUsd === undefined) {
+    throw commandFailed("gateway", "An explicit AI Gateway daily spend limit is required.");
+  }
+
+  const gatewayId = options.aiGatewayId ?? options.workerName;
   const collectionUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-gateway/gateways`;
   const gatewayUrl = `${collectionUrl}/${gatewayId}`;
   const existing = await cloudflareApiRequest(dependencies, credentials, gatewayUrl, {
@@ -691,10 +726,7 @@ async function planAiGateway(
   });
 
   if (existing.status === 401 || existing.status === 403) {
-    throw commandFailed(
-      "gateway",
-      `Cloudflare denied AI Gateway management. Set ${CLOUDFLARE_API_TOKEN_ENVIRONMENT} to an account API token with AI Gateway Read and Edit.`,
-    );
+    throw commandFailed("gateway", CLOUDFLARE_GATEWAY_DENIED_MESSAGE);
   }
 
   if (existing.status !== 404 && !existing.success) {
@@ -703,7 +735,7 @@ async function planAiGateway(
 
   if (existing.status === 404) {
     return {
-      dailySpendUsd: options.aiDailySpendUsd ?? DEFAULT_AI_DAILY_SPEND_USD,
+      dailySpendUsd,
       exists: false,
       id: gatewayId,
       needsMutation: true,
@@ -711,19 +743,6 @@ async function planAiGateway(
   }
 
   const configured = parseConfiguredAiGateway(existing.result, gatewayId);
-
-  if (configured === undefined && options.aiDailySpendUsd === undefined) {
-    throw commandFailed(
-      "gateway",
-      "The existing AI Gateway spend limit could not be verified. Pass --ai-budget-usd to repair it explicitly.",
-    );
-  }
-
-  const dailySpendUsd = options.aiDailySpendUsd ?? configured?.spend_limits.rules[0].limit;
-
-  if (dailySpendUsd === undefined) {
-    throw commandFailed("gateway", "Cloudflare AI Gateway spend limit could not be determined.");
-  }
 
   return {
     dailySpendUsd,
@@ -739,7 +758,7 @@ async function applyAiGatewayPlan(
   accountId: string,
   credentials: CloudflareCredentials,
   dependencies: BootstrapDependencies,
-): Promise<{ dailySpendUsd: number; id: string }> {
+): Promise<{ id: string }> {
   const collectionUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-gateway/gateways`;
   const gatewayUrl = `${collectionUrl}/${plan.id}`;
 
@@ -767,13 +786,10 @@ async function applyAiGatewayPlan(
     !verified.success ||
     parseConfiguredAiGateway(verified.result, plan.id, plan.dailySpendUsd) === undefined
   ) {
-    throw commandFailed(
-      "gateway",
-      "Cloudflare AI Gateway configuration could not be verified after deployment.",
-    );
+    throw commandFailed("gateway", "Cloudflare AI Gateway configuration could not be verified.");
   }
 
-  return { dailySpendUsd: plan.dailySpendUsd, id: plan.id };
+  return { id: plan.id };
 }
 
 async function writeAccountConfig(cwd: string, accountId?: string): Promise<string> {
@@ -848,10 +864,11 @@ async function readWorkerSecretNames(
   }
 }
 
-function readGitHubSecrets(
+async function readGitHubSecrets(
   workerExists: boolean,
+  options: BootstrapOptions,
   dependencies: BootstrapDependencies,
-): GitHubSecrets | undefined {
+): Promise<GitHubSecrets | undefined> {
   const candidate = {
     clientId: dependencies.readEnvironment(GITHUB_SECRET_ENVIRONMENT.clientId),
     clientSecret: dependencies.readEnvironment(GITHUB_SECRET_ENVIRONMENT.clientSecret),
@@ -859,8 +876,21 @@ function readGitHubSecrets(
   };
   const suppliedCount = Object.values(candidate).filter((value) => value !== undefined).length;
 
-  if (workerExists && suppliedCount === 0) {
+  if (workerExists && suppliedCount === 0 && !options.setupGitHub) {
     return undefined;
+  }
+
+  if (suppliedCount === 0 && dependencies.createGitHubApp) {
+    try {
+      return githubSecretsSchema.parse(
+        await dependencies.createGitHubApp({
+          origin: options.origin,
+          workerName: options.workerName,
+        }),
+      );
+    } catch {
+      throw commandFailed("configuration", "Private GitHub App setup did not complete.");
+    }
   }
 
   if (suppliedCount !== 3) {
@@ -879,14 +909,22 @@ function readGitHubSecrets(
   return parsed.data;
 }
 
-function readComposioApiKey(
+async function readComposioApiKey(
   workerExists: boolean,
   dependencies: BootstrapDependencies,
-): string | undefined {
-  const candidate = dependencies.readEnvironment(COMPOSIO_API_KEY_ENVIRONMENT);
+): Promise<string | undefined> {
+  let candidate = dependencies.readEnvironment(COMPOSIO_API_KEY_ENVIRONMENT);
 
   if (workerExists && candidate === undefined) {
     return undefined;
+  }
+
+  if (candidate === undefined && dependencies.promptSecret) {
+    try {
+      candidate = await dependencies.promptSecret("Composio project API key: ");
+    } catch {
+      throw commandFailed("configuration", "Composio API key input did not complete.");
+    }
   }
 
   const parsed = composioApiKeySchema.safeParse(candidate);
@@ -1129,7 +1167,7 @@ async function stageDeployment(
   options: BootstrapOptions,
   accountId: string,
   database: { name: string; uuid: string },
-  aiGateway: { dailySpendUsd: number; id: string },
+  aiGateway: { id: string } | undefined,
   assets: DeploymentAssets,
   context: CloudflareContext,
 ): Promise<string> {
@@ -1175,10 +1213,7 @@ async function stageDeployment(
       },
       triggers: assets.template.triggers,
       vars: {
-        AI_GATEWAY_DAILY_LIMIT_MICROUSD: String(
-          Math.round(aiGateway.dailySpendUsd * MICROUSD_PER_USD),
-        ),
-        AI_GATEWAY_ID: aiGateway.id,
+        ...(aiGateway === undefined ? {} : { AI_GATEWAY_ID: aiGateway.id }),
         PUBLIC_ORIGIN: options.origin.origin,
       },
     };
@@ -1248,6 +1283,10 @@ function hasDeploymentMessage(inventory: WorkerInventory, message: string): bool
   );
 }
 
+function currentDeploymentHasMessage(inventory: WorkerInventory, message: string): boolean {
+  return inventory.deployments.at(-1)?.annotations?.["workers/message"] === message;
+}
+
 export function createBootstrapFailure(error: BootstrapError): BootstrapFailure {
   return bootstrapFailureSchema.parse({
     schemaVersion: 1,
@@ -1267,29 +1306,106 @@ export async function bootstrapDeployment(
   try {
     const neutralConfigPath = await writeAccountConfig(cwd);
     const account = await authenticate(options, cwd, neutralConfigPath, dependencies);
-    const credentials = await readCloudflareCredentials({ cwd, dependencies });
     const accountConfigPath = await writeAccountConfig(cwd, account.id);
     const context = { accountConfigPath, cwd, dependencies };
-    const workerInventory = await readWorkerInventory(options.workerName, context);
-    const githubSecrets = readGitHubSecrets(workerInventory.exists, dependencies);
-    const composioApiKey = readComposioApiKey(workerInventory.exists, dependencies);
+    const configuredGatewayToken = dependencies.readEnvironment(CLOUDFLARE_API_TOKEN_ENVIRONMENT);
 
-    if (workerInventory.exists) {
-      const existingSecretNames = await readWorkerSecretNames(options.workerName, context);
+    if (
+      options.aiDailySpendUsd !== undefined &&
+      configuredGatewayToken !== undefined &&
+      !cloudflareApiTokenSchema.safeParse(configuredGatewayToken).success
+    ) {
+      throw commandFailed(
+        "gateway",
+        `Set ${CLOUDFLARE_API_TOKEN_ENVIRONMENT} to a valid account API token with AI Gateway Edit.`,
+      );
+    }
+
+    const workerInventory = await readWorkerInventory(options.workerName, context);
+    const existingSecretNames = workerInventory.exists
+      ? await readWorkerSecretNames(options.workerName, context)
+      : undefined;
+    const suppliedGitHubSecretCount = Object.values(GITHUB_SECRET_ENVIRONMENT).filter(
+      (name) => dependencies.readEnvironment(name) !== undefined,
+    ).length;
+    let githubSecrets =
+      (workerInventory.exists && !options.setupGitHub) ||
+      (!workerInventory.exists &&
+        (suppliedGitHubSecretCount > 0 || dependencies.createGitHubApp === undefined))
+        ? await readGitHubSecrets(workerInventory.exists, options, dependencies)
+        : undefined;
+    let composioApiKey =
+      workerInventory.exists ||
+      dependencies.readEnvironment(COMPOSIO_API_KEY_ENVIRONMENT) !== undefined ||
+      dependencies.promptSecret === undefined
+        ? await readComposioApiKey(workerInventory.exists, dependencies)
+        : undefined;
+
+    if (existingSecretNames !== undefined && !options.setupGitHub) {
       requireCompleteSecretSet(existingSecretNames, githubSecrets, composioApiKey);
     }
 
-    const aiGatewayPlan = await planAiGateway(options, account.id, credentials, dependencies);
+    let aiGatewayPlan: AiGatewayPlan | undefined;
+    let gatewayCredentials: CloudflareCredentials | undefined;
+
+    if (options.aiDailySpendUsd !== undefined) {
+      gatewayCredentials = await readCloudflareCredentials({ cwd, dependencies });
+
+      try {
+        aiGatewayPlan = await planAiGateway(options, account.id, gatewayCredentials, dependencies);
+      } catch (error) {
+        if (
+          !(error instanceof BootstrapError) ||
+          error.message !== CLOUDFLARE_GATEWAY_DENIED_MESSAGE ||
+          dependencies.readEnvironment(CLOUDFLARE_API_TOKEN_ENVIRONMENT) !== undefined ||
+          dependencies.promptSecret === undefined
+        ) {
+          throw error;
+        }
+
+        if (dependencies.openCloudflareApiTokens) {
+          try {
+            await dependencies.openCloudflareApiTokens();
+          } catch {
+            throw commandFailed("gateway", "Cloudflare API token setup page could not be opened.");
+          }
+        }
+
+        let token: string;
+
+        try {
+          token = await dependencies.promptSecret(
+            "Cloudflare account API token with AI Gateway Edit: ",
+          );
+        } catch {
+          throw commandFailed("gateway", "Cloudflare API token input did not complete.");
+        }
+
+        const parsed = cloudflareApiTokenSchema.safeParse(token);
+
+        if (!parsed.success) {
+          throw commandFailed(
+            "gateway",
+            `Set ${CLOUDFLARE_API_TOKEN_ENVIRONMENT} to a valid account API token with AI Gateway Edit.`,
+          );
+        }
+
+        gatewayCredentials = { token: parsed.data, type: "api_token" };
+        aiGatewayPlan = await planAiGateway(options, account.id, gatewayCredentials, dependencies);
+      }
+    }
+
     const { action: databaseAction, database } = await ensureDatabase(
       options,
       assets.migrations,
       context,
     );
+    const aiGatewayId = aiGatewayPlan?.id ?? options.aiGatewayId;
     const configPath = await stageDeployment(
       options,
       account.id,
       database,
-      aiGatewayPlan,
+      aiGatewayId === undefined ? undefined : { id: aiGatewayId },
       assets,
       context,
     );
@@ -1309,13 +1425,29 @@ export async function bootstrapDeployment(
       );
     }
 
+    if (aiGatewayPlan !== undefined && gatewayCredentials !== undefined) {
+      await applyAiGatewayPlan(aiGatewayPlan, account.id, gatewayCredentials, dependencies);
+    }
+
+    githubSecrets ??= await readGitHubSecrets(workerInventory.exists, options, dependencies);
+    composioApiKey ??= await readComposioApiKey(workerInventory.exists, dependencies);
+
+    if (existingSecretNames !== undefined) {
+      requireCompleteSecretSet(existingSecretNames, githubSecrets, composioApiKey);
+    }
+
     const secretsPath = await writeSecretsFile(
       cwd,
       githubSecrets,
       composioApiKey,
       workerInventory.exists,
     );
-    const deploymentMessage = `Crewhelm bootstrap ${randomUUID()}`;
+    const deploymentDigest = createHash("sha256")
+      .update(assets.digest)
+      .update("\0")
+      .update(await readFile(configPath))
+      .digest("hex");
+    const deploymentMessage = `Crewhelm ${deploymentDigest.slice(0, DEPLOYMENT_DIGEST_HEX_LENGTH)}`;
     const deployArguments = [
       "deploy",
       "--config",
@@ -1333,34 +1465,46 @@ export async function bootstrapDeployment(
       deployArguments.push("--secrets-file", secretsPath);
     }
 
-    const deployment = await runCloudflare(context, deployArguments, "deployment");
+    const deploymentUnchanged =
+      secretsPath === undefined && currentDeploymentHasMessage(workerInventory, deploymentMessage);
 
-    if (deployment.outcome !== "completed" || deployment.exitCode !== 0) {
-      const reconciled = await readWorkerInventory(options.workerName, context);
+    if (!deploymentUnchanged) {
+      const deployment = await runCloudflare(context, deployArguments, "deployment");
 
-      if (!hasDeploymentMessage(reconciled, deploymentMessage)) {
-        throw commandFailed(
-          "deployment",
-          "Worker deployment outcome could not be confirmed. Inspect Cloudflare before retrying.",
-        );
+      if (deployment.outcome !== "completed" || deployment.exitCode !== 0) {
+        const reconciled = await readWorkerInventory(options.workerName, context);
+
+        if (!hasDeploymentMessage(reconciled, deploymentMessage)) {
+          throw commandFailed(
+            "deployment",
+            "Worker deployment outcome could not be confirmed. Inspect Cloudflare before retrying.",
+          );
+        }
+
+        const triggerReconciliation = await runCloudflare(context, deployArguments, "deployment");
+
+        if (triggerReconciliation.outcome !== "completed" || triggerReconciliation.exitCode !== 0) {
+          throw commandFailed(
+            "deployment",
+            "Worker code was deployed, but route or schedule reconciliation failed.",
+          );
+        }
       }
-
-      const triggerReconciliation = await runCloudflare(context, deployArguments, "deployment");
+    } else {
+      const triggerReconciliation = await runCloudflare(
+        context,
+        ["triggers", "deploy", "--config", configPath, "--name", options.workerName],
+        "deployment",
+      );
 
       if (triggerReconciliation.outcome !== "completed" || triggerReconciliation.exitCode !== 0) {
         throw commandFailed(
           "deployment",
-          "Worker code was deployed, but route or schedule reconciliation failed.",
+          "Worker code is current, but route or schedule reconciliation failed.",
         );
       }
     }
 
-    const aiGateway = await applyAiGatewayPlan(
-      aiGatewayPlan,
-      account.id,
-      credentials,
-      dependencies,
-    );
     const doctor: DoctorReport = await diagnoseDeployment(options, dependencies);
 
     return bootstrapReportSchema.parse({
@@ -1369,14 +1513,15 @@ export async function bootstrapDeployment(
       account: {
         id: account.id,
       },
-      aiGateway,
+      aiGateway:
+        aiGatewayId === undefined ? { enabled: false } : { enabled: true, id: aiGatewayId },
       database: {
         action: databaseAction,
         id: database.uuid,
         name: database.name,
       },
       deployment: {
-        action: workerInventory.exists ? "updated" : "created",
+        action: !workerInventory.exists ? "created" : deploymentUnchanged ? "unchanged" : "updated",
         origin: options.origin.origin,
         workerName: options.workerName,
       },

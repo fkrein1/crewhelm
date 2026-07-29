@@ -10,6 +10,7 @@ import {
   INTEGRATIONS_READ_SCOPE,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
+  RUNS_WRITE_SCOPE,
   changeAuthorityResultSchema,
   createAgentResultSchema,
   createConnectionLinkResultSchema,
@@ -347,7 +348,7 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 11,
+        schemaVersion: 12,
         status: "ready",
       },
     });
@@ -452,6 +453,7 @@ describe("authenticated MCP handler", () => {
     const authority = await ownerAuthority("mcp-recovery-owner", [
       OWNER_WRITE_SCOPE,
       AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
     ]);
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const created = await controlPlane.createAgent(authority, {
@@ -695,6 +697,7 @@ describe("authenticated MCP handler", () => {
       OWNER_WRITE_SCOPE,
       AGENTS_READ_SCOPE,
       AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
     ]);
     const input = {
       executionLimits: {
@@ -893,6 +896,7 @@ describe("authenticated MCP handler", () => {
       OWNER_WRITE_SCOPE,
       AGENTS_READ_SCOPE,
       AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
     ]);
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const created = await controlPlane.createAgent(authority, {

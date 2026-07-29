@@ -14,7 +14,7 @@ flowchart LR
     Worker --> Auth["Auth D1"]
     Worker --> Owner["OwnerControlPlane"]
     Owner --> Agent["CrewAgent / Think"]
-    Agent --> Gateway["Dedicated AI Gateway"]
+    Agent -. optional .-> Gateway["Dedicated AI Gateway"]
     Worker --> Catalog["Composio catalog and Connect Links"]
     Agent --> Gate["ToolGate and execution reservation"]
     Gate --> Composio["Trusted adapter / Composio"]
@@ -30,23 +30,23 @@ server per request. There is one SQLite-backed `OwnerControlPlane` per owner and
 | Auth D1             | OAuth state, signing keys, rotating refresh tokens, and token revocation                                           |
 | `OwnerControlPlane` | Agent and connection lifecycle, grants, schedules, admission, budgets, approvals, effect reconciliation, and audit |
 | `CrewAgent`         | Think submissions, transcripts, output, deadlines, and approval waits                                              |
-| AI Gateway          | Installation-wide rolling spend ceiling and model-call cost metadata                                               |
+| AI Gateway          | Optional installation-wide hard spend ceiling and model-call cost metadata                                         |
 | Composio            | Connected-account credentials and refresh                                                                          |
 
 The control plane owns admission and administration; the Agent owns execution. Cross-object calls
 carry explicit authority because Durable Objects do not share transactions. D1 is not an
 authoritative store for control-plane or Agent domain state.
 
-Each run snapshots one fleet-configuration revision and reserves spend before execution. Admission,
-approval, and tool dispatch require that exact revision to remain current, so an owner policy
-change invalidates older authority. The MCP surface can read and preview configuration; applying a
-change is reserved for a deterministic owner step-up path outside model authority.
+Each run snapshots one fleet-configuration revision and records a provisional cost estimate for
+later reconciliation. Admission, approval, and tool dispatch require that exact revision to remain
+current, so an owner policy change invalidates older authority. The MCP surface can read and preview
+configuration; applying a change is reserved for a deterministic owner step-up path outside model
+authority.
 
-Bootstrap provisions one dedicated AI Gateway per Crewhelm fleet. The Worker reservation is the
-fast owner-local guard; the Gateway rolling cost rule is the installation ceiling. Bootstrap reads
-and preserves an existing verified rule unless the operator explicitly supplies
-`--ai-budget-usd`, deploys the matching Worker configuration, then applies and reads back the
-Gateway rule.
+Bootstrap recommends but does not require one dedicated AI Gateway per Crewhelm fleet. When
+enabled, its rolling cost rule is the only fleet-wide hard dollar ceiling. Routine upgrades
+preserve the Gateway route without requiring management credentials; `--ai-budget-usd` explicitly
+creates or changes the rule and verifies the result through Cloudflare.
 
 Cloudflare Workers Logs provide bounded diagnostic telemetry but do not authorize work or replace
 the owner-local audit record. Invocation logs and automatic traces remain disabled because the
@@ -54,10 +54,9 @@ Worker handles secret-bearing OAuth and connection callback URLs. The
 [threat model](../security/threat-model.md#observability-and-deployment) defines permitted event
 data.
 
-AI Gateway logs retain provider/model, token, cost, latency, status, and bounded Crewhelm run and
-Agent correlation metadata. Request and response payload logging is disabled. Pending calls retain
-their admitted spend reservation until exact Gateway cost reconciliation, including across the
-rolling-window boundary.
+When enabled, AI Gateway logs retain provider/model, token, cost, latency, status, and bounded
+Crewhelm run and Agent correlation metadata. Request and response payload logging is disabled.
+Pending calls retain their provisional cost estimate until exact Gateway cost reconciliation.
 
 ## Module map
 

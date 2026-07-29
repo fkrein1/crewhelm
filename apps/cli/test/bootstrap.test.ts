@@ -147,19 +147,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
         authorization_servers: ["https://crewhelm.example/api/auth"],
         bearer_methods_supported: ["header"],
         resource: "https://crewhelm.example/mcp",
-        scopes_supported: [
-          "control:read",
-          "control:write",
-          "agents:read",
-          "agents:write",
-          "autonomy:write",
-          "connections:read",
-          "connections:write",
-          "connection-configs:read",
-          "connection-configs:write",
-          "integrations:read",
-          "offline_access",
-        ],
+        scopes_supported: ["crewhelm:view", "crewhelm:use", "crewhelm:full", "offline_access"],
       };
     } else {
       payload = {
@@ -172,19 +160,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
         response_modes_supported: ["query"],
         response_types_supported: ["code"],
         revocation_endpoint: "https://crewhelm.example/api/auth/oauth2/revoke",
-        scopes_supported: [
-          "control:read",
-          "control:write",
-          "agents:read",
-          "agents:write",
-          "autonomy:write",
-          "connections:read",
-          "connections:write",
-          "connection-configs:read",
-          "connection-configs:write",
-          "integrations:read",
-          "offline_access",
-        ],
+        scopes_supported: ["crewhelm:view", "crewhelm:use", "crewhelm:full", "offline_access"],
         token_endpoint: "https://crewhelm.example/api/auth/oauth2/token",
         token_endpoint_auth_methods_supported: ["none"],
       };
@@ -227,6 +203,7 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
   );
   await writeFile(resolve(assets, "migrations", "0010_oauth_offline_access.sql"), "SELECT 1;\n");
   await writeFile(resolve(assets, "migrations", "0011_autonomy_write_scope.sql"), "SELECT 1;\n");
+  await writeFile(resolve(assets, "migrations", "0012_access_levels.sql"), "SELECT 1;\n");
   await writeFile(
     resolve(assets, "wrangler-template.json"),
     JSON.stringify({
@@ -336,6 +313,7 @@ function successfulReuseWrangler(events: string[] = []): RunWrangler {
             "0009_connection_config_write_scope.sql",
             "0010_oauth_offline_access.sql",
             "0011_autonomy_write_scope.sql",
+            "0012_access_levels.sql",
           ])
         : queryResult(AUTH_TABLES);
     }
@@ -378,14 +356,14 @@ describe("Cloudflare bootstrap", () => {
     try {
       await expect(
         bootstrapDeployment(
-          REUSE_OPTIONS,
+          { ...REUSE_OPTIONS, aiDailySpendUsd: 5 },
           createDependencies(fixture.assets, runWrangler, {
             CREWHELM_CLOUDFLARE_API_TOKEN: "short",
           }),
         ),
       ).rejects.toMatchObject({
         message:
-          "Set CREWHELM_CLOUDFLARE_API_TOKEN to a valid account API token with AI Gateway Read and Edit.",
+          "Set CREWHELM_CLOUDFLARE_API_TOKEN to a valid account API token with AI Gateway Edit.",
         name: "BootstrapError",
         stage: "gateway",
       });
@@ -396,7 +374,7 @@ describe("Cloudflare bootstrap", () => {
     }
   });
 
-  it("updates the explicit Gateway limit only after deployment and verifies read-back", async () => {
+  it("updates an explicit Gateway limit before credential provisioning and verifies read-back", async () => {
     const fixture = await createDeploymentAssets();
     const events: string[] = [];
     const dependencies = createDependencies(fixture.assets, successfulReuseWrangler(events));
@@ -436,19 +414,62 @@ describe("Cloudflare bootstrap", () => {
         dependencies,
       );
 
-      expect(report.aiGateway).toEqual({ dailySpendUsd: 5, id: OPTIONS.workerName });
+      expect(report.aiGateway).toEqual({ enabled: true, id: OPTIONS.workerName });
       expect(events.filter((event) => event.startsWith("gateway:"))).toEqual([
         "gateway:GET",
         "gateway:PUT",
         "gateway:GET",
       ]);
-      expect(events.indexOf("gateway:PUT")).toBeGreaterThan(events.indexOf("wrangler:deploy"));
+      expect(events.indexOf("gateway:PUT")).toBeGreaterThan(events.indexOf("wrangler:d1"));
+      expect(events.indexOf("gateway:PUT")).toBeLessThan(events.indexOf("wrangler:deploy"));
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
     }
   });
 
-  it("requires an explicit repair when an existing Gateway limit cannot be verified", async () => {
+  it("opens Cloudflare token setup and retries Gateway management with hidden input", async () => {
+    const fixture = await createDeploymentAssets();
+    const dependencies = createDependencies(fixture.assets, successfulReuseWrangler());
+    const deploymentFetch = healthyDeploymentFetch();
+    const openCloudflareApiTokens = vi.fn<() => Promise<void>>(async () => {});
+    const promptSecret = vi.fn<(message: string) => Promise<string>>(
+      async () => "scoped-gateway-token-value",
+    );
+
+    dependencies.openCloudflareApiTokens = openCloudflareApiTokens;
+    dependencies.promptSecret = promptSecret;
+    dependencies.fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+
+      if (url.hostname !== "api.cloudflare.com") {
+        return deploymentFetch(input, init);
+      }
+
+      const authorization = new Headers(init?.headers).get("authorization");
+
+      return authorization === "Bearer test-token"
+        ? Response.json({ result: null, success: false }, { status: 403 })
+        : Response.json(gatewayPayload(5));
+    });
+
+    try {
+      const report = await bootstrapDeployment(
+        { ...REUSE_OPTIONS, aiDailySpendUsd: 5 },
+        dependencies,
+      );
+
+      expect(report.aiGateway).toEqual({ enabled: true, id: OPTIONS.workerName });
+      expect(openCloudflareApiTokens).toHaveBeenCalledOnce();
+      expect(promptSecret).toHaveBeenCalledWith(
+        "Cloudflare account API token with AI Gateway Edit: ",
+      );
+      expect(JSON.stringify(report)).not.toContain("scoped-gateway-token-value");
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("does not inspect or configure AI Gateway when setup skips it", async () => {
     const fixture = await createDeploymentAssets();
     const events: string[] = [];
     const dependencies = createDependencies(fixture.assets, successfulReuseWrangler(events));
@@ -463,13 +484,14 @@ describe("Cloudflare bootstrap", () => {
     });
 
     try {
-      await expect(bootstrapDeployment(REUSE_OPTIONS, dependencies)).rejects.toMatchObject({
-        message:
-          "The existing AI Gateway spend limit could not be verified. Pass --ai-budget-usd to repair it explicitly.",
-        name: "BootstrapError",
-        stage: "gateway",
+      const report = await bootstrapDeployment(REUSE_OPTIONS, dependencies);
+      const gatewayRequests = vi.mocked(dependencies.fetch).mock.calls.filter(([input]) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        return url.hostname === "api.cloudflare.com";
       });
-      expect(events.some((event) => event === "wrangler:d1")).toBe(false);
+
+      expect(report.aiGateway).toEqual({ enabled: false });
+      expect(gatewayRequests).toHaveLength(0);
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
     }
@@ -555,6 +577,7 @@ describe("Cloudflare bootstrap", () => {
               "0009_connection_config_write_scope.sql",
               "0010_oauth_offline_access.sql",
               "0011_autonomy_write_scope.sql",
+              "0012_access_levels.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
@@ -708,6 +731,7 @@ describe("Cloudflare bootstrap", () => {
               "0009_connection_config_write_scope.sql",
               "0010_oauth_offline_access.sql",
               "0011_autonomy_write_scope.sql",
+              "0012_access_levels.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
@@ -741,7 +765,7 @@ describe("Cloudflare bootstrap", () => {
       const report = await bootstrapDeployment(REUSE_OPTIONS, dependencies);
 
       expect(report.ok).toBe(true);
-      expect(report.aiGateway).toEqual({ dailySpendUsd: 1, id: OPTIONS.workerName });
+      expect(report.aiGateway).toEqual({ enabled: false });
       expect(JSON.stringify(report)).not.toContain(HOSTILE_ACCOUNT_NAME);
       expect(JSON.stringify(report)).not.toContain("test-token");
       expect(JSON.stringify(report)).not.toContain(cloudflareApiToken);
@@ -768,8 +792,8 @@ describe("Cloudflare bootstrap", () => {
         "OWNER_GITHUB_USER_ID",
       ]);
       expect(stagedConfig?.vars.PUBLIC_ORIGIN).toBe(OPTIONS.origin.origin);
-      expect(stagedConfig?.vars.AI_GATEWAY_DAILY_LIMIT_MICROUSD).toBe("1000000");
-      expect(stagedConfig?.vars.AI_GATEWAY_ID).toBe(OPTIONS.workerName);
+      expect(stagedConfig?.vars.AI_GATEWAY_DAILY_LIMIT_MICROUSD).toBeUndefined();
+      expect(stagedConfig?.vars.AI_GATEWAY_ID).toBeUndefined();
       expect(deployArguments).not.toContain("--secrets-file");
       expect(deployArguments).toContain("--strict");
       expect(allWranglerCalls.mock.calls.some(([arguments_]) => arguments_[0] === "auth")).toBe(
@@ -780,14 +804,7 @@ describe("Cloudflare bootstrap", () => {
         return url.hostname === "api.cloudflare.com";
       });
 
-      expect(gatewayRequests).toHaveLength(2);
-      expect(
-        gatewayRequests.every(([, init]) => {
-          const headers = new Headers(init?.headers);
-          return headers.get("authorization") === `Bearer ${cloudflareApiToken}`;
-        }),
-      ).toBe(true);
-      expect(gatewayRequests.every(([, init]) => init?.method === "GET")).toBe(true);
+      expect(gatewayRequests).toHaveLength(0);
       expect(
         runWrangler.mock.calls.every(([, runOptions]) => runOptions?.cwd === stagedDirectory),
       ).toBe(true);
@@ -798,6 +815,121 @@ describe("Cloudflare bootstrap", () => {
       ).toBe(true);
       expect(stagedDirectory).toBeDefined();
       await expect(access(stagedDirectory!)).rejects.toThrow("ENOENT");
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("skips an identical Worker upload on a repeat upgrade", async () => {
+    const fixture = await createDeploymentAssets();
+    const events: string[] = [];
+    const baseRunner = successfulReuseWrangler(events);
+    let deploymentMessage: string | undefined;
+    const runWrangler: RunWrangler = async (arguments_, options) => {
+      if (arguments_[0] === "deployments") {
+        events.push("wrangler:deployments");
+        return success(
+          deploymentMessage
+            ? JSON.stringify([
+                {
+                  annotations: { "workers/message": "Automatic deployment on upload." },
+                  id: "1e12da6f-e0f5-4989-8bea-6efbe8fc5811",
+                },
+                {
+                  annotations: { "workers/message": deploymentMessage },
+                  id: "31a2e99c-0bd4-46e0-9cbb-e9e9f0178024",
+                },
+              ])
+            : "[]",
+        );
+      }
+
+      if (arguments_[0] === "deploy") {
+        events.push("wrangler:deploy");
+        const messageIndex = arguments_.indexOf("--message");
+        deploymentMessage = arguments_[messageIndex + 1];
+        return success("");
+      }
+
+      return baseRunner(arguments_, options);
+    };
+    const dependencies = createDependencies(fixture.assets, runWrangler);
+
+    try {
+      const first = await bootstrapDeployment(REUSE_OPTIONS, dependencies);
+      const second = await bootstrapDeployment(REUSE_OPTIONS, dependencies);
+
+      expect(first.deployment.action).toBe("updated");
+      expect(second.deployment.action).toBe("unchanged");
+      expect(events.filter((event) => event === "wrangler:deploy")).toHaveLength(1);
+      expect(events.filter((event) => event === "wrangler:triggers")).toHaveLength(1);
+      expect(deploymentMessage).toMatch(/^Crewhelm [a-f0-9]{40}$/);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("fails closed when trigger reconciliation fails for unchanged Worker code", async () => {
+    const fixture = await createDeploymentAssets();
+    const baseRunner = successfulReuseWrangler();
+    let deploymentMessage: string | undefined;
+    const runWrangler: RunWrangler = async (arguments_, options) => {
+      if (arguments_[0] === "deployments") {
+        return success(
+          deploymentMessage
+            ? JSON.stringify([
+                {
+                  annotations: { "workers/message": deploymentMessage },
+                  id: "31a2e99c-0bd4-46e0-9cbb-e9e9f0178024",
+                },
+              ])
+            : "[]",
+        );
+      }
+
+      if (arguments_[0] === "deploy") {
+        const messageIndex = arguments_.indexOf("--message");
+        deploymentMessage = arguments_[messageIndex + 1];
+        return success();
+      }
+
+      if (arguments_[0] === "triggers") {
+        return { exitCode: 1, outcome: "completed", stderr: "", stdout: "" };
+      }
+
+      return baseRunner(arguments_, options);
+    };
+    const dependencies = createDependencies(fixture.assets, runWrangler);
+
+    try {
+      await expect(bootstrapDeployment(REUSE_OPTIONS, dependencies)).resolves.toMatchObject({
+        deployment: { action: "updated" },
+      });
+      await expect(bootstrapDeployment(REUSE_OPTIONS, dependencies)).rejects.toMatchObject({
+        message: "Worker code is current, but route or schedule reconciliation failed.",
+        stage: "deployment",
+      });
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("preserves an existing Gateway route without requiring Gateway API access", async () => {
+    const fixture = await createDeploymentAssets();
+    const dependencies = createDependencies(fixture.assets, successfulReuseWrangler());
+
+    try {
+      const report = await bootstrapDeployment(
+        { ...REUSE_OPTIONS, aiGatewayId: OPTIONS.workerName },
+        dependencies,
+      );
+      const gatewayRequests = vi.mocked(dependencies.fetch).mock.calls.filter(([input]) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        return url.hostname === "api.cloudflare.com";
+      });
+
+      expect(report.aiGateway).toEqual({ enabled: true, id: OPTIONS.workerName });
+      expect(gatewayRequests).toHaveLength(0);
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
     }
@@ -894,6 +1026,54 @@ describe("Cloudflare bootstrap", () => {
       expect(deployArguments?.join(" ")).not.toContain(suppliedSecret);
       expect(stagedDirectory).toBeDefined();
       await expect(access(stagedDirectory!)).rejects.toThrow("ENOENT");
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("does not create a GitHub App before infrastructure validation succeeds", async () => {
+    const fixture = await createDeploymentAssets();
+    const createGitHubApp = vi.fn<
+      (options: { origin: URL; workerName: string }) => Promise<{
+        clientId: string;
+        clientSecret: string;
+        ownerUserId: string;
+      }>
+    >(async () => ({
+      clientId: "github-client-id",
+      clientSecret: "github-client-secret",
+      ownerUserId: "123456",
+    }));
+    const runWrangler = vi.fn<RunWrangler>(async (arguments_) => {
+      if (arguments_[0] === "whoami") {
+        return whoami();
+      }
+
+      if (arguments_[0] === "deployments") {
+        return {
+          exitCode: 1,
+          outcome: "completed",
+          stderr: "This Worker does not exist. [code: 10007]",
+          stdout: "",
+        };
+      }
+
+      if (arguments_[0] === "d1" && arguments_[1] === "list") {
+        return { exitCode: 1, outcome: "completed", stderr: "", stdout: "" };
+      }
+
+      return success();
+    });
+    const dependencies = createDependencies(fixture.assets, runWrangler, {
+      CREWHELM_COMPOSIO_API_KEY: "composio-project-key",
+    });
+    dependencies.createGitHubApp = createGitHubApp;
+
+    try {
+      await expect(bootstrapDeployment(OPTIONS, dependencies)).rejects.toMatchObject({
+        stage: "database",
+      });
+      expect(createGitHubApp).not.toHaveBeenCalled();
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
     }
@@ -1075,6 +1255,7 @@ describe("Cloudflare bootstrap", () => {
               "0009_connection_config_write_scope.sql",
               "0010_oauth_offline_access.sql",
               "0011_autonomy_write_scope.sql",
+              "0012_access_levels.sql",
             ])
           : queryResult(AUTH_TABLES);
       }

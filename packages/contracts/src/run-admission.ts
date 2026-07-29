@@ -83,7 +83,6 @@ export const createRunAdmissionInputSchema = z.strictObject({
 });
 
 export const runBudgetReservationSchema = z.strictObject({
-  aiSpendReservationMicrousd: z.number().int().min(1).safe(),
   fleetConfigurationRevision: z.number().int().positive().safe(),
   integrationLimits: runIntegrationLimitsSchema,
   maxDurationSeconds: agentExecutionLimitsSchema.shape.maxDurationSeconds,

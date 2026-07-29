@@ -323,7 +323,10 @@ async function normalizeAuthorizationServerMetadata(response: Response): Promise
     return response;
   }
 
-  const metadata = { ...body };
+  const metadata = {
+    ...body,
+    scopes_supported: [...OAUTH_SCOPES],
+  };
   Reflect.deleteProperty(metadata, "authorization_response_iss_parameter_supported");
 
   return fixedJsonResponse(metadata, response.status, response.headers);

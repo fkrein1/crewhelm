@@ -275,6 +275,10 @@ export class CrewAgent extends Think {
       const runId = key.slice(RUN_RECORD_PREFIX.length);
 
       if (record.success && runIdSchema.safeParse(runId).success) {
+        if (JSON.stringify(stored) !== JSON.stringify(record.data)) {
+          await this.ctx.storage.put(key, record.data);
+        }
+
         await this.#scheduleRunLifecycle(runId, record.data);
       }
     }
@@ -1281,6 +1285,11 @@ export class CrewAgent extends Think {
 
   override getAIBinding(): ReturnType<Think["getAIBinding"]> {
     this.#activeRuntimeConfig();
+    const gatewayId = this.env.AI_GATEWAY_ID;
+
+    if (gatewayId === undefined) {
+      return super.getAIBinding();
+    }
 
     if (this.#gatewayAiBinding !== undefined) {
       return this.#gatewayAiBinding;
@@ -1336,7 +1345,7 @@ export class CrewAgent extends Think {
               },
               gateway: {
                 collectLog: true,
-                id: this.env.AI_GATEWAY_ID,
+                id: gatewayId,
                 metadata: {
                   ...options.gateway?.metadata,
                   crewhelm_agent: reference.agentId,

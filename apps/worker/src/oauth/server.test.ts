@@ -5,8 +5,9 @@ import * as z from "zod";
 
 import type { WorkerEnv } from "../env.js";
 import { createWorker } from "../http/server.js";
+import { VIEW_ACCESS_SCOPE } from "./access-levels.js";
 import { hasActiveClientRegistration, purgeExpiredAuthRecords } from "./server.js";
-import { OAUTH_SCOPES } from "./scopes.js";
+import { OAUTH_ACCEPTED_SCOPES, OAUTH_SCOPES } from "./scopes.js";
 import { readAuthTestMigrations, registerAuthTestDatabase } from "./testkit.js";
 
 const origin = "https://crewhelm.test";
@@ -33,7 +34,7 @@ async function register(
         grant_types: ["authorization_code"],
         redirect_uris: redirectUris,
         response_types: ["code"],
-        scope: OWNER_READ_SCOPE,
+        scope: VIEW_ACCESS_SCOPE,
         token_endpoint_auth_method: "none",
         ...extra,
       }),
@@ -91,7 +92,9 @@ describe("OAuth server boundary", () => {
       .bind(`${origin}/mcp`)
       .first();
     expect(resource).not.toBeNull();
-    expect(JSON.parse(JSON.parse(String(resource?.allowedScopes)))).toEqual([...OAUTH_SCOPES]);
+    expect(JSON.parse(JSON.parse(String(resource?.allowedScopes)))).toEqual([
+      ...OAUTH_ACCEPTED_SCOPES,
+    ]);
   });
 
   it("preserves the Codex native client's refresh grant and requires a valid token", async () => {
@@ -112,7 +115,7 @@ describe("OAuth server boundary", () => {
     authorize.searchParams.set("redirect_uri", "http://127.0.0.1:43123/callback/crewhelm");
     authorize.searchParams.set("resource", `${origin}/mcp`);
     authorize.searchParams.set("response_type", "code");
-    authorize.searchParams.set("scope", OWNER_READ_SCOPE);
+    authorize.searchParams.set("scope", VIEW_ACCESS_SCOPE);
     const authorizeWithoutPkce = await createWorker().fetch(new Request(authorize), workerEnv());
 
     expect(registration.application_type).toBe("native");
@@ -160,7 +163,7 @@ describe("OAuth server boundary", () => {
     authorize.searchParams.append("resource", `${origin}/mcp`);
     authorize.searchParams.append("resource", "https://other.example/mcp");
     authorize.searchParams.set("response_type", "code");
-    authorize.searchParams.set("scope", OWNER_READ_SCOPE);
+    authorize.searchParams.set("scope", VIEW_ACCESS_SCOPE);
 
     const authorizeResponse = await createWorker().fetch(new Request(authorize), workerEnv());
 
@@ -213,7 +216,7 @@ describe("OAuth server boundary", () => {
     });
   });
 
-  it("widens the seeded MCP resource through idempotent D1 scope migrations", async () => {
+  it("keeps old and new runtimes usable through idempotent D1 scope migrations", async () => {
     const registration = registrationSchema.parse(
       await (await register(["https://migration-client.example/callback"])).json(),
     );
@@ -238,7 +241,8 @@ describe("OAuth server boundary", () => {
         candidate.name === "0008_connection_config_read_scope.sql" ||
         candidate.name === "0009_connection_config_write_scope.sql" ||
         candidate.name === "0010_oauth_offline_access.sql" ||
-        candidate.name === "0011_autonomy_write_scope.sql",
+        candidate.name === "0011_autonomy_write_scope.sql" ||
+        candidate.name === "0012_access_levels.sql",
     );
 
     expect(migrations.map((migration) => migration.name)).toEqual([
@@ -252,6 +256,7 @@ describe("OAuth server boundary", () => {
       "0009_connection_config_write_scope.sql",
       "0010_oauth_offline_access.sql",
       "0011_autonomy_write_scope.sql",
+      "0012_access_levels.sql",
     ]);
     for (const migration of migrations) {
       for (const query of migration.queries) {
@@ -271,8 +276,52 @@ describe("OAuth server boundary", () => {
       .bind(registration.client_id)
       .first();
 
-    expect(JSON.parse(JSON.parse(String(resource?.allowedScopes)))).toEqual([...OAUTH_SCOPES]);
-    expect(JSON.parse(JSON.parse(String(client?.scopes)))).toEqual([OWNER_READ_SCOPE]);
+    expect(JSON.parse(JSON.parse(String(resource?.allowedScopes)))).toEqual([
+      "control:read",
+      "control:write",
+      "agents:read",
+      "agents:write",
+      "autonomy:write",
+      "connections:read",
+      "connections:write",
+      "connection-configs:read",
+      "connection-configs:write",
+      "integrations:read",
+      ...OAUTH_SCOPES,
+    ]);
+    expect(JSON.parse(JSON.parse(String(client?.scopes)))).toEqual([VIEW_ACCESS_SCOPE]);
+  });
+
+  it("leaves unrecognized OAuth resource authority unchanged", async () => {
+    await register(["https://fail-closed-migration.example/callback"]);
+    const restrictedScopes = JSON.stringify(JSON.stringify([OWNER_READ_SCOPE]));
+
+    await workerEnv()
+      .AUTH_DB.prepare(
+        `UPDATE "oauthResource"
+         SET "allowedScopes" = ?
+         WHERE "identifier" = ?`,
+      )
+      .bind(restrictedScopes, `${origin}/mcp`)
+      .run();
+    const migration = readAuthTestMigrations().find(
+      (candidate) => candidate.name === "0012_access_levels.sql",
+    );
+
+    if (migration === undefined) {
+      throw new Error("Expected access-level migration.");
+    }
+
+    for (const query of migration.queries) {
+      await workerEnv().AUTH_DB.prepare(query).run();
+    }
+
+    const resource = await workerEnv()
+      .AUTH_DB.prepare(`SELECT "allowedScopes" FROM "oauthResource" WHERE "identifier" = ?`)
+      .bind(`${origin}/mcp`)
+      .first();
+
+    expect(resource?.allowedScopes).toBe(restrictedScopes);
   });
 
   it.each([
@@ -336,7 +385,7 @@ describe("OAuth server boundary", () => {
       authorize.searchParams.set("code_challenge_method", "S256");
       authorize.searchParams.set("redirect_uri", "https://client.example/callback");
       authorize.searchParams.set("response_type", "code");
-      authorize.searchParams.set("scope", OWNER_READ_SCOPE);
+      authorize.searchParams.set("scope", VIEW_ACCESS_SCOPE);
 
       if (resource !== undefined) {
         authorize.searchParams.set("resource", resource);

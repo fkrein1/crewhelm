@@ -5,8 +5,7 @@ declare global {
   namespace Cloudflare {
     interface Env {
       AI: Ai;
-      AI_GATEWAY_DAILY_LIMIT_MICROUSD: string;
-      AI_GATEWAY_ID: string;
+      AI_GATEWAY_ID?: string;
       AUTH_DB: D1Database;
       BETTER_AUTH_SECRET: string;
       COMPOSIO_API_KEY?: string;

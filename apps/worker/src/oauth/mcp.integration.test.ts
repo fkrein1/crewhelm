@@ -1,4 +1,4 @@
-import { createExecutionContext, env, runInDurableObject } from "cloudflare:test";
+import { createExecutionContext, env } from "cloudflare:test";
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
@@ -10,15 +10,12 @@ import {
   INTEGRATIONS_READ_SCOPE,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
+  RUNS_WRITE_SCOPE,
   createAgentResultSchema,
-  createConnectionLinkResultSchema,
   controlPlaneStatusResultSchema,
   getAgentRevisionResultSchema,
   getAgentResultSchema,
-  integrationCatalogSearchResultSchema,
   listAgentRevisionsResultSchema,
-  listAgentsResultSchema,
-  listConnectionsResultSchema,
   ownerAuthoritySchema,
   ownerKeySchema,
   updateAgentResultSchema,
@@ -31,30 +28,33 @@ import type { WorkerEnv } from "../env.js";
 import { handleWorkerRequest } from "../http/server.js";
 import {
   MCP_CREATE_AGENT_TOOL_NAME,
-  MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
   MCP_GET_AGENT_TOOL_NAME,
   MCP_GET_AGENT_REVISION_TOOL_NAME,
   MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
-  MCP_LIST_AGENTS_TOOL_NAME,
-  MCP_LIST_CONNECTIONS_TOOL_NAME,
-  MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_STATUS_TOOL_NAME,
   MCP_UPDATE_AGENT_TOOL_NAME,
 } from "../mcp/server.js";
 import { deriveOwnerKey } from "../owner/identity.js";
-import { exchangeGithubAuthorizationCode } from "./auth.js";
+import { digestRunPrompt } from "../agent/admitted-runs/index.js";
 import {
+  createCrewhelmAuth,
+  exchangeGithubAuthorizationCode,
+  verifyMcpAccessToken,
+} from "./auth.js";
+import { FULL_ACCESS_SCOPE, USE_ACCESS_SCOPE, VIEW_ACCESS_SCOPE } from "./access-levels.js";
+import {
+  LEGACY_OAUTH_SCOPES,
   OAUTH_DEFAULT_SCOPE_CLAIM,
   OFFLINE_ACCESS_SCOPE,
   oauthScopeClaimSchema,
 } from "./scopes.js";
-import { registerAuthTestDatabase } from "./testkit.js";
+import { readAuthTestMigrations, registerAuthTestDatabase } from "./testkit.js";
 
 const origin = "https://crewhelm.test";
 const redirectUri = "https://client.example/oauth/callback";
 const ownerGithubUserId = "123456";
 const githubToken = "transient-github-token-must-not-be-stored";
-const reversedOwnerScopeClaim = `${INTEGRATIONS_READ_SCOPE} ${CONNECTION_CONFIGS_WRITE_SCOPE} ${CONNECTION_CONFIGS_READ_SCOPE} ${CONNECTIONS_WRITE_SCOPE} ${CONNECTIONS_READ_SCOPE} ${AUTONOMY_WRITE_SCOPE} ${AGENTS_WRITE_SCOPE} ${AGENTS_READ_SCOPE} ${OWNER_WRITE_SCOPE} ${OWNER_READ_SCOPE}`;
+const reversedAccessLevelClaim = `${OFFLINE_ACCESS_SCOPE} ${FULL_ACCESS_SCOPE}`;
 const registrationSchema = z.looseObject({
   client_id: z.string().min(1),
   token_endpoint_auth_method: z.literal("none"),
@@ -99,7 +99,6 @@ function integrationEnv(
 ): WorkerEnv {
   return {
     AI: env.AI,
-    AI_GATEWAY_DAILY_LIMIT_MICROUSD: "1000000",
     AI_GATEWAY_ID: "crewhelm-test",
     AUTH_DB: env.AUTH_DB,
     AUTH_RATE_LIMIT: rateLimit,
@@ -253,29 +252,35 @@ async function fetchUrl(input: RequestInfo | URL): Promise<string> {
 async function completeOAuthFlow(
   workerEnv: WorkerEnv,
   scope: string,
+  existingClientId?: string,
 ): Promise<{
   consentPage: string;
   token: z.infer<typeof tokenSchema>;
 }> {
   const cookies = new CookieJar();
-  const registrationResponse = await request(workerEnv, "/api/auth/oauth2/register", {
-    body: JSON.stringify({
-      client_name: "Scoped integration client",
-      grant_types: ["authorization_code"],
-      redirect_uris: [redirectUri],
-      require_pkce: true,
-      response_types: ["code"],
-      scope,
-      token_endpoint_auth_method: "none",
-    }),
-    headers: { "content-type": "application/json" },
-    method: "POST",
-  });
-  const registration = registrationSchema.parse(await registrationResponse.json());
+  const clientId =
+    existingClientId ??
+    registrationSchema.parse(
+      await (
+        await request(workerEnv, "/api/auth/oauth2/register", {
+          body: JSON.stringify({
+            client_name: "Scoped integration client",
+            grant_types: ["authorization_code"],
+            redirect_uris: [redirectUri],
+            require_pkce: true,
+            response_types: ["code"],
+            scope,
+            token_endpoint_auth_method: "none",
+          }),
+          headers: { "content-type": "application/json" },
+          method: "POST",
+        })
+      ).json(),
+    ).client_id;
   const verifier = "crewhelm-scoped-verifier-0123456789abcdef0123456789";
   const authorize = new URL(`${origin}/api/auth/oauth2/authorize`);
 
-  authorize.searchParams.set("client_id", registration.client_id);
+  authorize.searchParams.set("client_id", clientId);
   authorize.searchParams.set("code_challenge", await codeChallenge(verifier));
   authorize.searchParams.set("code_challenge_method", "S256");
   authorize.searchParams.set("redirect_uri", redirectUri);
@@ -360,7 +365,7 @@ async function completeOAuthFlow(
   const authorizationCode = new URL(consentNavigation.redirectUrl).searchParams.get("code");
   const tokenResponse = await request(workerEnv, "/api/auth/oauth2/token", {
     body: new URLSearchParams({
-      client_id: registration.client_id,
+      client_id: clientId,
       code: authorizationCode ?? "",
       code_verifier: verifier,
       grant_type: "authorization_code",
@@ -393,7 +398,7 @@ describe("public OAuth to MCP integration", () => {
         redirect_uris: [redirectUri],
         require_pkce: true,
         response_types: ["code"],
-        scope: `${reversedOwnerScopeClaim} ${OFFLINE_ACCESS_SCOPE}`,
+        scope: reversedAccessLevelClaim,
         token_endpoint_auth_method: "none",
       }),
       headers: {
@@ -413,7 +418,7 @@ describe("public OAuth to MCP integration", () => {
     authorize.searchParams.append("resource", `${origin}/mcp`);
     authorize.searchParams.append("resource", `${origin}/mcp`);
     authorize.searchParams.set("response_type", "code");
-    authorize.searchParams.set("scope", `${reversedOwnerScopeClaim} ${OFFLINE_ACCESS_SCOPE}`);
+    authorize.searchParams.set("scope", reversedAccessLevelClaim);
     authorize.searchParams.set("state", "integration-client-state");
     const authorizeResponse = await request(workerEnv, `${authorize.pathname}${authorize.search}`, {
       headers: {
@@ -578,28 +583,9 @@ describe("public OAuth to MCP integration", () => {
     );
     expect(consentPage).toContain("&lt;script&gt;Integration MCP client&lt;/script&gt;");
     expect(consentPage).not.toContain("<script>Integration MCP client</script>");
-    expect(consentPage).toContain("View control-plane status and Agent summaries.");
-    expect(consentPage).toContain("View full Agent definitions, including instructions.");
-    expect(consentPage).toContain(
-      "Start runs, decide approvals, and replace Agent definitions or exposed connection tools through immutable revisions.",
-    );
-    expect(consentPage).toContain(
-      "Grant exact tools standing authority and create recurring Agent schedules that continue after this session.",
-    );
-    expect(consentPage).toContain(
-      "Create Agent definitions with bounded configuration and no capability grants.",
-    );
-    expect(consentPage).toContain(
-      "Search the Composio integration catalog and inspect exact tool schemas. Search terms and selected integration slugs are sent to Composio.",
-    );
-    expect(consentPage).toContain(
-      "Create private, short-lived Composio Connect Links. The selected auth configuration and an opaque owner key are sent to Composio; provider credentials stay with Composio.",
-    );
+    expect(consentPage).toContain("<strong>Full control:</strong>");
     expect(consentPage).toContain(
       "Keep this MCP client signed in using a rotating, revocable refresh token.",
-    );
-    expect(consentPage).toContain(
-      "List enabled Composio auth configurations for a selected integration. The integration slug is sent to Composio; provider credentials are not returned.",
     );
     const actionsScriptResponse = await request(workerEnv, "/oauth/actions.js");
 
@@ -783,7 +769,7 @@ describe("public OAuth to MCP integration", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(toolResult.content[0].text))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 11,
+        schemaVersion: 12,
         status: "ready",
       },
     });
@@ -957,224 +943,108 @@ describe("public OAuth to MCP integration", () => {
     expect(JSON.stringify(revocations.results)).not.toContain(token.access_token);
   });
 
-  it("keeps a signed read-only token unable to create or persist an Agent", async () => {
-    const workerEnv = integrationEnv(allowRateLimit(), "123457");
-    const { consentPage, token } = await completeOAuthFlow(workerEnv, OWNER_READ_SCOPE);
-
-    expect(token.scope).toBe(OWNER_READ_SCOPE);
-    expect(consentPage).toContain("View control-plane status and Agent summaries.");
-    expect(consentPage).not.toContain("View full Agent definitions, including instructions.");
-    expect(consentPage).not.toContain(
-      "Start runs, decide approvals, and replace Agent definitions or exposed connection tools through immutable revisions.",
-    );
-    expect(consentPage).not.toContain(
-      "Create Agent definitions with bounded configuration and no capability grants.",
-    );
-    expect(consentPage).not.toContain(
-      "Search the Composio integration catalog and inspect exact tool schemas. Search terms and selected integration slugs are sent to Composio.",
-    );
-    expect(consentPage).not.toContain(
-      "List enabled Composio auth configurations for a selected integration.",
-    );
-    const ownerKey = await deriveOwnerKey({
-      issuer: "https://github.com",
-      subject: workerEnv.OWNER_GITHUB_USER_ID,
-    });
-    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(ownerKey);
-    const auditCount = () =>
-      runInDurableObject(controlPlane, (_instance, state) =>
-        state.storage.sql.exec("SELECT COUNT(*) AS event_count FROM audit_events").one(),
-      );
-    const listBeforeResponse = await callMcp(
-      workerEnv,
-      token.access_token,
-      MCP_LIST_AGENTS_TOOL_NAME,
-    );
-    const listBeforeResult = toolResultSchema.parse(await listBeforeResponse.json()).result;
-    const agentsBefore = listAgentsResultSchema.parse(JSON.parse(listBeforeResult.content[0].text));
-    const auditBefore = await auditCount();
-
-    expect(listBeforeResult.isError).toBe(false);
-    expect(agentsBefore.ok).toBe(true);
-    const createResponse = await callMcp(
-      workerEnv,
-      token.access_token,
-      MCP_CREATE_AGENT_TOOL_NAME,
-      {
-        executionLimits: {
-          maxDurationSeconds: 180,
-          maxModelTokens: 12_000,
-          maxToolCalls: 0,
-          maxTurns: 3,
-        },
-        idempotencyKey: "read-only-create-agent",
-        instructions: "This signed read-only token must not persist an Agent.",
-        model: "@cf/meta/llama-4-scout-17b-16e-instruct",
-        name: "Denied read-only Agent",
-      },
-    );
-    const createResult = toolResultSchema.parse(await createResponse.json()).result;
-
-    expect(createResult.isError).toBe(true);
-    expect(createAgentResultSchema.parse(JSON.parse(createResult.content[0].text))).toEqual({
-      error: {
-        code: "insufficient_scope",
-        message: "Agent request denied.",
-      },
-      ok: false,
-    });
-    const definitionResponse = await callMcp(
-      workerEnv,
-      token.access_token,
-      MCP_GET_AGENT_TOOL_NAME,
-      {
-        id: "agent_00000000-0000-4000-8000-000000000000",
-      },
-    );
-    const definitionResult = toolResultSchema.parse(await definitionResponse.json()).result;
-    const definitionText = definitionResult.content[0].text;
-
-    expect(definitionResult.isError).toBe(true);
-    expect(getAgentResultSchema.parse(JSON.parse(definitionText))).toEqual({
-      error: {
-        code: "insufficient_scope",
-        message: "Agent request denied.",
-      },
-      ok: false,
-    });
-    expect(definitionText).not.toContain("instructions");
-    const listResponse = await callMcp(workerEnv, token.access_token, MCP_LIST_AGENTS_TOOL_NAME);
-    const listResult = toolResultSchema.parse(await listResponse.json()).result;
-
-    expect(listResult.isError).toBe(false);
-    expect(listAgentsResultSchema.parse(JSON.parse(listResult.content[0].text))).toEqual(
-      agentsBefore,
-    );
-    await expect(auditCount()).resolves.toEqual(auditBefore);
-  });
-
-  it("requires explicit Agent-definition read consent before returning instructions", async () => {
+  it("keeps a pre-upgrade client and rotating refresh token usable", async () => {
     const workerEnv = integrationEnv(allowRateLimit(), "123460");
-    const { consentPage, token } = await completeOAuthFlow(workerEnv, AGENTS_READ_SCOPE);
-    const ownerKey = await deriveOwnerKey({
-      issuer: "https://github.com",
-      subject: workerEnv.OWNER_GITHUB_USER_ID,
+    const registrationResponse = await request(workerEnv, "/api/auth/oauth2/register", {
+      body: JSON.stringify({
+        client_name: "Pre-upgrade MCP client",
+        grant_types: ["authorization_code", "refresh_token"],
+        redirect_uris: [redirectUri],
+        require_pkce: true,
+        response_types: ["code"],
+        scope: OAUTH_DEFAULT_SCOPE_CLAIM,
+        token_endpoint_auth_method: "none",
+      }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
     });
-    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(ownerKey);
-    const created = await controlPlane.createAgent(
-      {
-        clientId: "test-seed-client",
-        ownerKey,
-        scopes: [OWNER_WRITE_SCOPE],
-      },
-      {
-        executionLimits: {
-          maxDurationSeconds: 180,
-          maxModelTokens: 12_000,
-          maxToolCalls: 0,
-          maxTurns: 3,
-        },
-        idempotencyKey: "agent-read-scope-seed",
-        instructions: "Instruction text requires explicit Agent-definition read consent.",
-        model: "@cf/meta/llama-4-scout-17b-16e-instruct",
-        name: "Definition scope Agent",
-      },
+    const registration = registrationSchema.parse(await registrationResponse.json());
+    const legacyScopes = [...LEGACY_OAUTH_SCOPES, OFFLINE_ACCESS_SCOPE];
+    const legacyScopeClaim = legacyScopes.join(" ");
+    const storedLegacyScopes = JSON.stringify(JSON.stringify(legacyScopes));
+
+    await workerEnv.AUTH_DB.prepare(`UPDATE "oauthClient" SET "scopes" = ? WHERE "clientId" = ?`)
+      .bind(storedLegacyScopes, registration.client_id)
+      .run();
+    await workerEnv.AUTH_DB.prepare(
+      `UPDATE "oauthResource" SET "allowedScopes" = ? WHERE "identifier" = ?`,
+    )
+      .bind(storedLegacyScopes, `${origin}/mcp`)
+      .run();
+
+    const { consentPage, token } = await completeOAuthFlow(
+      workerEnv,
+      legacyScopeClaim,
+      registration.client_id,
+    );
+    const refreshableToken = refreshableTokenSchema.parse(token);
+
+    expect(consentPage).toContain("Existing client access");
+    expect(token.scope).toBe(legacyScopeClaim);
+    expect((await callMcp(workerEnv, token.access_token)).status).toBe(200);
+
+    const migration = readAuthTestMigrations().find(
+      (candidate) => candidate.name === "0012_access_levels.sql",
     );
 
-    expect(token.scope).toBe(AGENTS_READ_SCOPE);
-    expect(consentPage).not.toContain("View control-plane status and Agent summaries.");
-    expect(consentPage).toContain("View full Agent definitions, including instructions.");
-    expect(consentPage).not.toContain(
-      "Start runs, decide approvals, and replace Agent definitions or exposed connection tools through immutable revisions.",
-    );
-    if (!created.ok) {
-      throw new Error("Expected test Agent creation to succeed.");
+    if (migration === undefined) {
+      throw new Error("Expected access-level migration.");
     }
 
-    const response = await callMcp(workerEnv, token.access_token, MCP_GET_AGENT_TOOL_NAME, {
-      id: created.agent.id,
-    });
-    const toolResult = toolResultSchema.parse(await response.json()).result;
+    for (const query of migration.queries) {
+      await workerEnv.AUTH_DB.prepare(query).run();
+    }
 
-    expect(toolResult.isError).toBe(false);
-    expect(getAgentResultSchema.parse(JSON.parse(toolResult.content[0].text))).toEqual({
-      agent: created.agent,
-      ok: true,
+    const refreshedResponse = await request(workerEnv, "/api/auth/oauth2/token", {
+      body: new URLSearchParams({
+        client_id: registration.client_id,
+        grant_type: "refresh_token",
+        refresh_token: refreshableToken.refresh_token,
+        resource: `${origin}/mcp`,
+      }),
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      method: "POST",
     });
+    const refreshedToken = refreshableTokenSchema.parse(await refreshedResponse.json());
+
+    expect(refreshedResponse.status).toBe(200);
+    expect(refreshedToken.scope).toBe(legacyScopeClaim);
+    expect(refreshedToken.refresh_token).not.toBe(refreshableToken.refresh_token);
+    expect((await callMcp(workerEnv, token.access_token)).status).toBe(200);
+    expect((await callMcp(workerEnv, refreshedToken.access_token)).status).toBe(200);
   });
 
-  it("grants Agent revisions without widening creation or read authority", async () => {
-    const workerEnv = integrationEnv(allowRateLimit(), "123461");
-    const { consentPage, token } = await completeOAuthFlow(workerEnv, AGENTS_WRITE_SCOPE);
-    const ownerKey = await deriveOwnerKey({
-      issuer: "https://github.com",
-      subject: workerEnv.OWNER_GITHUB_USER_ID,
-    });
-    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(ownerKey);
-    const created = await controlPlane.createAgent(
-      {
-        clientId: "test-seed-client",
-        ownerKey,
-        scopes: [OWNER_WRITE_SCOPE],
-      },
-      {
-        executionLimits: {
-          maxDurationSeconds: 180,
-          maxModelTokens: 12_000,
-          maxToolCalls: 0,
-          maxTurns: 3,
-        },
-        idempotencyKey: "agent-update-scope-seed",
-        instructions: "Seed an Agent for an update-only OAuth grant.",
-        model: "@cf/meta/llama-4-scout-17b-16e-instruct",
-        name: "Update scope Agent",
-      },
-    );
-
-    expect(token.scope).toBe(AGENTS_WRITE_SCOPE);
-    expect(consentPage).toContain(
-      "Start runs, decide approvals, and replace Agent definitions or exposed connection tools through immutable revisions.",
-    );
-    expect(consentPage).not.toContain("View control-plane status and Agent summaries.");
-    expect(consentPage).not.toContain("View full Agent definitions, including instructions.");
-    expect(consentPage).not.toContain(
-      "Create Agent definitions with bounded configuration and no capability grants.",
-    );
-    if (!created.ok) {
-      throw new Error("Expected test Agent creation to succeed.");
-    }
-
-    const updateResponse = await callMcp(
+  it("maps View only to read capabilities without mutation access", async () => {
+    const workerEnv = integrationEnv(allowRateLimit(), "123457");
+    const { consentPage, token } = await completeOAuthFlow(workerEnv, VIEW_ACCESS_SCOPE);
+    const claims = await verifyMcpAccessToken(
       workerEnv,
+      createCrewhelmAuth(workerEnv, origin),
+      origin,
       token.access_token,
-      MCP_UPDATE_AGENT_TOOL_NAME,
-      {
-        executionLimits: created.agent.executionLimits,
-        expectedRevision: 1,
-        id: created.agent.id,
-        idempotencyKey: "agent-update-scope-update",
-        instructions: "Update the Agent with an explicit update-only OAuth grant.",
-        model: created.agent.model,
-        name: "Updated scope Agent",
-      },
     );
-    const updateResult = toolResultSchema.parse(await updateResponse.json()).result;
 
-    expect(updateResult.isError).toBe(false);
-    expect(updateAgentResultSchema.parse(JSON.parse(updateResult.content[0].text))).toMatchObject({
-      agent: { id: created.agent.id, name: "Updated scope Agent", revision: 2 },
-      ok: true,
-      updated: true,
-    });
+    expect(token.scope).toBe(VIEW_ACCESS_SCOPE);
+    expect(consentPage).toContain("<strong>View only:</strong>");
+    expect(consentPage).not.toContain("<strong>Use agents:</strong>");
+    expect(consentPage).not.toContain("<strong>Full control:</strong>");
+    expect(claims?.scope).toBe(
+      [
+        OWNER_READ_SCOPE,
+        AGENTS_READ_SCOPE,
+        CONNECTIONS_READ_SCOPE,
+        CONNECTION_CONFIGS_READ_SCOPE,
+        INTEGRATIONS_READ_SCOPE,
+      ].join(" "),
+    );
+
     const createResponse = await callMcp(
       workerEnv,
       token.access_token,
       MCP_CREATE_AGENT_TOOL_NAME,
       {
-        executionLimits: created.agent.executionLimits,
-        idempotencyKey: "agent-update-scope-create",
-        instructions: "An update-only grant must not create this Agent.",
-        model: created.agent.model,
+        idempotencyKey: "view-only-create-agent",
+        instructions: "This Agent must not be created.",
         name: "Denied Agent",
       },
     );
@@ -1185,423 +1055,135 @@ describe("public OAuth to MCP integration", () => {
       error: { code: "insufficient_scope", message: "Agent request denied." },
       ok: false,
     });
-    const listResponse = await callMcp(workerEnv, token.access_token, MCP_LIST_AGENTS_TOOL_NAME);
-    const listResult = toolResultSchema.parse(await listResponse.json()).result;
-
-    expect(listResult.isError).toBe(true);
-    expect(listAgentsResultSchema.parse(JSON.parse(listResult.content[0].text))).toEqual({
-      error: { code: "insufficient_scope", message: "Agent request denied." },
-      ok: false,
-    });
-    const getResponse = await callMcp(workerEnv, token.access_token, MCP_GET_AGENT_TOOL_NAME, {
-      id: created.agent.id,
-    });
-    const getResult = toolResultSchema.parse(await getResponse.json()).result;
-
-    expect(getResult.isError).toBe(true);
-    expect(getAgentResultSchema.parse(JSON.parse(getResult.content[0].text))).toEqual({
-      error: { code: "insufficient_scope", message: "Agent request denied." },
-      ok: false,
-    });
   });
 
-  it("keeps a signed write-only token unable to read owner state", async () => {
+  it("maps Use agents to run operations without configuration access", async () => {
     const workerEnv = integrationEnv(allowRateLimit(), "123458");
-    const { consentPage, token } = await completeOAuthFlow(workerEnv, OWNER_WRITE_SCOPE);
+    const { consentPage, token } = await completeOAuthFlow(workerEnv, USE_ACCESS_SCOPE);
+    const claims = await verifyMcpAccessToken(
+      workerEnv,
+      createCrewhelmAuth(workerEnv, origin),
+      origin,
+      token.access_token,
+    );
 
-    expect(token.scope).toBe(OWNER_WRITE_SCOPE);
-    expect(consentPage).not.toContain("View control-plane status and Agent summaries.");
-    expect(consentPage).not.toContain("View full Agent definitions, including instructions.");
-    expect(consentPage).not.toContain(
-      "Start runs, decide approvals, and replace Agent definitions or exposed connection tools through immutable revisions.",
+    expect(token.scope).toBe(USE_ACCESS_SCOPE);
+    expect(consentPage).toContain("<strong>Use agents:</strong>");
+    expect(consentPage).not.toContain("<strong>Full control:</strong>");
+    expect(claims?.scope).toBe(
+      [
+        OWNER_READ_SCOPE,
+        AGENTS_READ_SCOPE,
+        RUNS_WRITE_SCOPE,
+        CONNECTIONS_READ_SCOPE,
+        CONNECTION_CONFIGS_READ_SCOPE,
+        INTEGRATIONS_READ_SCOPE,
+      ].join(" "),
     );
-    expect(consentPage).toContain(
-      "Create Agent definitions with bounded configuration and no capability grants.",
+    if (claims === null) {
+      throw new Error("Expected verified Use agents claims.");
+    }
+    const controlPlane = workerEnv.OWNER_CONTROL_PLANE.getByName(claims.sub);
+    const seeded = await controlPlane.createAgent(
+      {
+        clientId: "test-seed-client",
+        ownerKey: claims.sub,
+        scopes: [OWNER_WRITE_SCOPE],
+      },
+      {
+        idempotencyKey: "use-agents-seed",
+        instructions: "Run only when admitted through Use agents.",
+        name: "Use agents seed",
+      },
     );
-    expect(consentPage).not.toContain(
-      "Search the Composio integration catalog and inspect exact tool schemas. Search terms and selected integration slugs are sent to Composio.",
+
+    if (!seeded.ok) {
+      throw new Error("Expected Use agents fixture.");
+    }
+
+    const prompt = "Prove that Use agents can admit a bounded run.";
+    const admission = await controlPlane.createRunAdmission(
+      ownerAuthoritySchema.parse({
+        clientId: claims.azp,
+        ownerKey: claims.sub,
+        scopes: claims.scope.split(" "),
+      }),
+      {
+        agentId: seeded.agent.id,
+        expectedRevision: seeded.agent.revision,
+        idempotencyKey: "use-agents-admission",
+        promptCharacters: prompt.length,
+        promptDigest: await digestRunPrompt(prompt),
+      },
     );
+
+    expect(admission).toMatchObject({ created: true, ok: true, state: "issued" });
+
     const createResponse = await callMcp(
       workerEnv,
       token.access_token,
       MCP_CREATE_AGENT_TOOL_NAME,
       {
-        executionLimits: {
-          maxDurationSeconds: 180,
-          maxModelTokens: 12_000,
-          maxToolCalls: 0,
-          maxTurns: 3,
-        },
-        idempotencyKey: "write-only-create-agent",
-        instructions: "Create through a signed write-only token.",
-        model: "@cf/meta/llama-4-scout-17b-16e-instruct",
-        name: "Write-only Agent",
+        idempotencyKey: "use-agents-create-agent",
+        instructions: "Use agents must not create definitions.",
+        name: "Denied Agent",
+      },
+    );
+    const createResult = toolResultSchema.parse(await createResponse.json()).result;
+
+    expect(createResult.isError).toBe(true);
+    expect(createAgentResultSchema.parse(JSON.parse(createResult.content[0].text))).toEqual({
+      error: { code: "insufficient_scope", message: "Agent request denied." },
+      ok: false,
+    });
+  });
+
+  it("maps Full control to every owner capability", async () => {
+    const workerEnv = integrationEnv(allowRateLimit(), "123459");
+    const { consentPage, token } = await completeOAuthFlow(workerEnv, FULL_ACCESS_SCOPE);
+    const claims = await verifyMcpAccessToken(
+      workerEnv,
+      createCrewhelmAuth(workerEnv, origin),
+      origin,
+      token.access_token,
+    );
+
+    expect(token.scope).toBe(FULL_ACCESS_SCOPE);
+    expect(consentPage).toContain("<strong>Full control:</strong>");
+    expect(claims?.scope).toBe(
+      [
+        OWNER_READ_SCOPE,
+        OWNER_WRITE_SCOPE,
+        AGENTS_READ_SCOPE,
+        AGENTS_WRITE_SCOPE,
+        RUNS_WRITE_SCOPE,
+        AUTONOMY_WRITE_SCOPE,
+        CONNECTIONS_READ_SCOPE,
+        CONNECTIONS_WRITE_SCOPE,
+        CONNECTION_CONFIGS_READ_SCOPE,
+        CONNECTION_CONFIGS_WRITE_SCOPE,
+        INTEGRATIONS_READ_SCOPE,
+      ].join(" "),
+    );
+
+    const createResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_CREATE_AGENT_TOOL_NAME,
+      {
+        idempotencyKey: "full-control-create-agent",
+        instructions: "Full control may create Agent definitions.",
+        name: "Full control Agent",
       },
     );
     const createResult = toolResultSchema.parse(await createResponse.json()).result;
 
     expect(createResult.isError).toBe(false);
-    const createdAgent = createAgentResultSchema.parse(JSON.parse(createResult.content[0].text));
-
-    expect(createdAgent).toMatchObject({
-      agent: { name: "Write-only Agent" },
+    expect(createAgentResultSchema.parse(JSON.parse(createResult.content[0].text))).toMatchObject({
+      agent: { name: "Full control Agent" },
       created: true,
       ok: true,
     });
-    if (!createdAgent.ok) {
-      throw new Error("Expected write-only Agent creation to succeed.");
-    }
-    const updateResponse = await callMcp(
-      workerEnv,
-      token.access_token,
-      MCP_UPDATE_AGENT_TOOL_NAME,
-      {
-        executionLimits: createdAgent.agent.executionLimits,
-        expectedRevision: 1,
-        id: createdAgent.agent.id,
-        idempotencyKey: "write-only-update-agent",
-        instructions: "A legacy creation grant must not update this Agent.",
-        model: createdAgent.agent.model,
-        name: "Denied update",
-      },
-    );
-    const updateResult = toolResultSchema.parse(await updateResponse.json()).result;
-
-    expect(updateResult.isError).toBe(true);
-    expect(updateAgentResultSchema.parse(JSON.parse(updateResult.content[0].text))).toEqual({
-      error: { code: "insufficient_scope", message: "Agent request denied." },
-      ok: false,
-    });
-    const listResponse = await callMcp(workerEnv, token.access_token, MCP_LIST_AGENTS_TOOL_NAME);
-    const listResult = toolResultSchema.parse(await listResponse.json()).result;
-
-    expect(listResult.isError).toBe(true);
-    expect(listAgentsResultSchema.parse(JSON.parse(listResult.content[0].text))).toEqual({
-      error: {
-        code: "insufficient_scope",
-        message: "Agent request denied.",
-      },
-      ok: false,
-    });
-    const statusResponse = await callMcp(workerEnv, token.access_token);
-    const statusResult = toolResultSchema.parse(await statusResponse.json()).result;
-
-    expect(statusResult.isError).toBe(true);
-    expect(controlPlaneStatusResultSchema.parse(JSON.parse(statusResult.content[0].text))).toEqual({
-      error: {
-        code: "insufficient_scope",
-        message: "Control-plane request denied.",
-      },
-      ok: false,
-    });
-  });
-
-  it("grants Composio catalog search without widening control-plane read", async () => {
-    const workerEnv = integrationEnv(allowRateLimit(), "123459");
-    const { consentPage, token } = await completeOAuthFlow(workerEnv, INTEGRATIONS_READ_SCOPE);
-
-    expect(token.scope).toBe(INTEGRATIONS_READ_SCOPE);
-    expect(consentPage).not.toContain("View control-plane status and Agent summaries.");
-    expect(consentPage).not.toContain("View full Agent definitions, including instructions.");
-    expect(consentPage).not.toContain(
-      "Create Agent definitions with bounded configuration and no capability grants.",
-    );
-    expect(consentPage).toContain(
-      "Search the Composio integration catalog and inspect exact tool schemas. Search terms and selected integration slugs are sent to Composio.",
-    );
-
-    vi.restoreAllMocks();
-    const composioFetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json({
-        items: [
-          {
-            auth_schemes: ["OAUTH2"],
-            meta: {
-              description: "Search and scrape the web.",
-              tools_count: 18,
-              version: "20260701_00",
-            },
-            name: "Firecrawl",
-            no_auth: false,
-            slug: "firecrawl",
-          },
-        ],
-        next_cursor: null,
-      }),
-    );
-    const catalogResponse = await callMcp(
-      workerEnv,
-      token.access_token,
-      MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
-      { query: "web research" },
-    );
-    const catalogResult = toolResultSchema.parse(await catalogResponse.json()).result;
-
-    expect(composioFetch).toHaveBeenCalledOnce();
-    expect(catalogResult.isError).toBe(false);
-    expect(
-      integrationCatalogSearchResultSchema.parse(JSON.parse(catalogResult.content[0].text)),
-    ).toMatchObject({
-      integrations: [{ slug: "firecrawl" }],
-      nextCursor: null,
-      ok: true,
-    });
-
-    const statusResponse = await callMcp(workerEnv, token.access_token);
-    const statusResult = toolResultSchema.parse(await statusResponse.json()).result;
-
-    expect(statusResult.isError).toBe(true);
-    expect(controlPlaneStatusResultSchema.parse(JSON.parse(statusResult.content[0].text))).toEqual({
-      error: {
-        code: "insufficient_scope",
-        message: "Control-plane request denied.",
-      },
-      ok: false,
-    });
-  });
-
-  it("does not advertise auth-config discovery without catalog read", async () => {
-    const workerEnv = integrationEnv(allowRateLimit(), "123499");
-    const { consentPage, token } = await completeOAuthFlow(
-      workerEnv,
-      CONNECTION_CONFIGS_READ_SCOPE,
-    );
-
-    expect(token.scope).toBe(CONNECTION_CONFIGS_READ_SCOPE);
-    expect(consentPage).not.toContain(
-      "List enabled Composio auth configurations for a selected integration.",
-    );
-  });
-
-  it("grants private connection-link creation without widening catalog or control reads", async () => {
-    const workerEnv = integrationEnv(allowRateLimit(), "123460");
-    const { consentPage, token } = await completeOAuthFlow(workerEnv, CONNECTIONS_WRITE_SCOPE);
-
-    expect(token.scope).toBe(CONNECTIONS_WRITE_SCOPE);
-    expect(consentPage).toContain(
-      "Create private, short-lived Composio Connect Links. The selected auth configuration and an opaque owner key are sent to Composio; provider credentials stay with Composio.",
-    );
-    expect(consentPage).not.toContain(
-      "List enabled Composio auth configurations for a selected integration.",
-    );
-    expect(consentPage).not.toContain("View control-plane status and Agent summaries.");
-    expect(consentPage).not.toContain(
-      "Search the Composio integration catalog and inspect exact tool schemas.",
-    );
-
-    vi.restoreAllMocks();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1_000).toISOString();
-    const composioFetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json(
-        {
-          connected_account_id: "ca_oauth_connection",
-          expires_at: expiresAt,
-          experimental: {
-            account_type: "PRIVATE",
-          },
-          link_token: "ln_oauth_connection",
-          redirect_url: "https://connect.composio.dev/link/ln_oauth_connection",
-        },
-        { status: 201 },
-      ),
-    );
-    const connectionResponse = await callMcp(
-      workerEnv,
-      token.access_token,
-      MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
-      {
-        authConfigId: "ac_linear_managed",
-        idempotencyKey: "oauth-connection-link",
-      },
-    );
-    const connectionResult = toolResultSchema.parse(await connectionResponse.json()).result;
-    const connection = createConnectionLinkResultSchema.parse(
-      JSON.parse(connectionResult.content[0].text),
-    );
-
-    expect(composioFetch).toHaveBeenCalledOnce();
-    expect(connectionResult.isError).toBe(false);
-    expect(connection).toMatchObject({
-      connectionLink: {
-        connectionId: expect.stringMatching(/^connection_/),
-        expiresAt,
-        url: "https://connect.composio.dev/link/ln_oauth_connection",
-      },
-      created: true,
-      ok: true,
-    });
-    expect(JSON.stringify(connection)).not.toContain(workerEnv.COMPOSIO_API_KEY);
-
-    const [, providerRequest] = composioFetch.mock.calls[0] ?? [];
-
-    if (typeof providerRequest?.body !== "string") {
-      throw new TypeError("Expected a serialized Composio connection-link request.");
-    }
-
-    const providerBody = z
-      .strictObject({
-        auth_config_id: z.literal("ac_linear_managed"),
-        callback_url: z.url(),
-        experimental: z.strictObject({
-          account_type: z.literal("PRIVATE"),
-        }),
-        user_id: ownerKeySchema,
-      })
-      .parse(JSON.parse(providerRequest.body));
-    const callbackUrl = new URL(providerBody.callback_url);
-    const callbackSecrets = callbackUrl.pathname.split("/").slice(-2);
-
-    if (callbackSecrets.length !== 2) {
-      throw new TypeError("Expected two callback capability secrets.");
-    }
-
-    expect(callbackUrl.origin).toBe(origin);
-    expect(callbackUrl.pathname).toMatch(
-      /^\/connections\/composio\/callback\/owner_[A-Za-z0-9_-]{43}\/connection_link_[0-9a-f-]{36}\/[1-9][0-9]{12}\/[A-Za-z0-9_-]{43}\/[A-Za-z0-9_-]{43}$/,
-    );
-    for (const callbackSecret of callbackSecrets) {
-      expect(JSON.stringify(connection)).not.toContain(callbackSecret);
-    }
-
-    callbackUrl.searchParams.set("status", "success");
-    callbackUrl.searchParams.set("connected_account_id", "ca_oauth_connection");
-    const callbackResponse = await request(
-      workerEnv,
-      `${callbackUrl.pathname}${callbackUrl.search}`,
-    );
-    const callbackBody = await callbackResponse.text();
-
-    expect(callbackResponse.status).toBe(200);
-    expect(callbackBody).toContain("Authorization returned to Crewhelm");
-    expect(callbackBody).toContain('href="/oauth/styles.css"');
-    expect(callbackBody).not.toContain("ca_oauth_connection");
-    for (const callbackSecret of callbackSecrets) {
-      expect(callbackBody).not.toContain(callbackSecret);
-    }
-
-    const ownerKey = await deriveOwnerKey({
-      issuer: "https://github.com",
-      subject: workerEnv.OWNER_GITHUB_USER_ID,
-    });
-    const readAuthority = ownerAuthoritySchema.parse({
-      clientId: "oauth-callback-inspection",
-      ownerKey,
-      scopes: [CONNECTIONS_READ_SCOPE],
-    });
-
-    await expect(
-      workerEnv.OWNER_CONTROL_PLANE.getByName(ownerKey).listConnections(readAuthority, {}),
-    ).resolves.toMatchObject({
-      connections: [{ authorizationOutcome: "returned", status: "initiated" }],
-      ok: true,
-    });
-
-    const catalogResponse = await callMcp(
-      workerEnv,
-      token.access_token,
-      MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
-      { query: "linear" },
-    );
-    const catalogResult = toolResultSchema.parse(await catalogResponse.json()).result;
-    expect(catalogResult.isError).toBe(true);
-    expect(
-      integrationCatalogSearchResultSchema.parse(JSON.parse(catalogResult.content[0].text)),
-    ).toEqual({
-      error: {
-        code: "insufficient_scope",
-        message: "Integration catalog request denied.",
-      },
-      ok: false,
-    });
-
-    const statusResponse = await callMcp(workerEnv, token.access_token);
-    const statusResult = toolResultSchema.parse(await statusResponse.json()).result;
-    expect(statusResult.isError).toBe(true);
-    expect(
-      controlPlaneStatusResultSchema.parse(JSON.parse(statusResult.content[0].text)),
-    ).toMatchObject({
-      error: { code: "insufficient_scope" },
-      ok: false,
-    });
-  });
-
-  it("grants local connection listing without widening connection mutation", async () => {
-    const workerEnv = integrationEnv(allowRateLimit(), "123461");
-    const { consentPage, token } = await completeOAuthFlow(workerEnv, CONNECTIONS_READ_SCOPE);
-
-    expect(token.scope).toBe(CONNECTIONS_READ_SCOPE);
-    expect(consentPage).toContain(
-      "View bounded Crewhelm connection summaries. Provider account identifiers and credentials are not returned.",
-    );
-    expect(consentPage).not.toContain(
-      "List enabled Composio auth configurations for a selected integration.",
-    );
-
-    vi.restoreAllMocks();
-    const ownerKey = await deriveOwnerKey({
-      issuer: "https://github.com",
-      subject: workerEnv.OWNER_GITHUB_USER_ID,
-    });
-
-    await runInDurableObject(
-      workerEnv.OWNER_CONTROL_PLANE.getByName(ownerKey),
-      (_instance, state) => {
-        state.storage.sql.exec(`
-          INSERT INTO connections
-            (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
-          VALUES
-            ('connection_00000000-0000-4000-8000-000000000004',
-             'composio', 'ca_private_oauth', 'ac_github_managed', 'initiated', 4)
-        `);
-      },
-    );
-    const listResponse = await callMcp(
-      workerEnv,
-      token.access_token,
-      MCP_LIST_CONNECTIONS_TOOL_NAME,
-    );
-    const listResult = toolResultSchema.parse(await listResponse.json()).result;
-    const listText = listResult.content[0].text;
-
-    expect(listResult.isError).toBe(false);
-    expect(listConnectionsResultSchema.parse(JSON.parse(listText))).toEqual({
-      connections: [
-        {
-          authorizationOutcome: "untracked",
-          authConfigId: "ac_github_managed",
-          connectionId: "connection_00000000-0000-4000-8000-000000000004",
-          createdAt: "1970-01-01T00:00:00.004Z",
-          status: "initiated",
-        },
-      ],
-      nextCursor: null,
-      ok: true,
-    });
-    expect(listText).not.toContain("ca_private_oauth");
-
-    const composioFetch = vi.spyOn(globalThis, "fetch");
-    const mutationResponse = await callMcp(
-      workerEnv,
-      token.access_token,
-      MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
-      {
-        authConfigId: "ac_github_managed",
-        idempotencyKey: "read-scope-must-not-mutate",
-      },
-    );
-    const mutationResult = toolResultSchema.parse(await mutationResponse.json()).result;
-
-    expect(mutationResult.isError).toBe(true);
-    expect(
-      createConnectionLinkResultSchema.parse(JSON.parse(mutationResult.content[0].text)),
-    ).toEqual({
-      error: {
-        code: "insufficient_scope",
-        message: "Connection link request denied.",
-      },
-      ok: false,
-    });
-    expect(composioFetch).not.toHaveBeenCalled();
   });
 
   it("logs only a fixed stage for a secret-bearing GitHub token error", async () => {
@@ -1751,6 +1333,7 @@ describe("public OAuth to MCP integration", () => {
         grant_types: ["authorization_code"],
         redirect_uris: [redirectUri],
         response_types: ["code"],
+        scope: VIEW_ACCESS_SCOPE,
         token_endpoint_auth_method: "none",
       }),
       headers: { "content-type": "application/json" },
@@ -1764,7 +1347,7 @@ describe("public OAuth to MCP integration", () => {
     authorize.searchParams.set("redirect_uri", redirectUri);
     authorize.searchParams.set("resource", `${origin}/mcp`);
     authorize.searchParams.set("response_type", "code");
-    authorize.searchParams.set("scope", OWNER_READ_SCOPE);
+    authorize.searchParams.set("scope", VIEW_ACCESS_SCOPE);
     const authorizeResponse = await request(workerEnv, `${authorize.pathname}${authorize.search}`);
     const loginLocation = new URL(responseLocation(authorizeResponse), origin);
     const loginPage = await (

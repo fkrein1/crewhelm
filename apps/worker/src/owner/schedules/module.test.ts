@@ -4,6 +4,7 @@ import {
   AUTONOMY_WRITE_SCOPE,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
+  RUNS_WRITE_SCOPE,
 } from "@crewhelm/contracts";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -17,6 +18,7 @@ describe("OwnerControlPlane Agent schedules", () => {
       OWNER_READ_SCOPE,
       OWNER_WRITE_SCOPE,
       AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
       AUTONOMY_WRITE_SCOPE,
     ]);
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
@@ -72,6 +74,7 @@ describe("OwnerControlPlane Agent schedules", () => {
       OWNER_WRITE_SCOPE,
       AGENTS_READ_SCOPE,
       AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
       AUTONOMY_WRITE_SCOPE,
     ]);
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
@@ -184,6 +187,7 @@ describe("OwnerControlPlane Agent schedules", () => {
       OWNER_WRITE_SCOPE,
       AGENTS_READ_SCOPE,
       AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
       AUTONOMY_WRITE_SCOPE,
     ]);
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
@@ -227,6 +231,26 @@ describe("OwnerControlPlane Agent schedules", () => {
       configured: true,
       ok: true,
       schedule: { revision: 1, status: "active" },
+    });
+    await expect(
+      controlPlane.configureAgentSchedule(
+        {
+          ...authority,
+          scopes: authority.scopes.filter((scope) => scope !== AUTONOMY_WRITE_SCOPE),
+        },
+        {
+          ...input,
+          expectedScheduleRevision: 1,
+          idempotencyKey: "pause-versioned-schedule-without-autonomy",
+          schedule: null,
+        },
+      ),
+    ).resolves.toEqual({
+      error: {
+        code: "insufficient_scope",
+        message: "Agent schedule request denied.",
+      },
+      ok: false,
     });
     await runInDurableObject(controlPlane, async (_instance, state) => {
       await state.storage.deleteAlarm();
@@ -280,6 +304,7 @@ describe("OwnerControlPlane Agent schedules", () => {
       OWNER_WRITE_SCOPE,
       AGENTS_READ_SCOPE,
       AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
       AUTONOMY_WRITE_SCOPE,
     ]);
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);

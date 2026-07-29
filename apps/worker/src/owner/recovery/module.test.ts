@@ -5,6 +5,7 @@ import {
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   OWNER_WRITE_SCOPE,
+  RUNS_WRITE_SCOPE,
   type ComposioToolCapabilityGrant,
 } from "@crewhelm/contracts";
 import { runInDurableObject } from "cloudflare:test";
@@ -24,6 +25,7 @@ describe("owner recovery controls", () => {
       OWNER_WRITE_SCOPE,
       AGENTS_READ_SCOPE,
       AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
     ]);
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const created = await controlPlane.createAgent(authority, agentInput("recovery-agent"));
@@ -101,6 +103,7 @@ describe("owner recovery controls", () => {
     const authority = await authorityFor("recovery-connection", [
       OWNER_WRITE_SCOPE,
       AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
       CONNECTIONS_READ_SCOPE,
       CONNECTIONS_WRITE_SCOPE,
     ]);

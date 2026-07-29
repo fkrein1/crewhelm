@@ -5,13 +5,13 @@ import {
   CONNECTION_CONFIGS_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
-  DEFAULT_FLEET_AI_DAILY_SPEND_MICROUSD,
   changeAuthorityInputSchema,
   completeAgentConnectionConfigurationInputSchema,
   configureAgentScheduleInputSchema,
   controlPlaneStatusResultSchema,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
+  RUNS_WRITE_SCOPE,
   ownerAuthoritySchema,
   type ControlPlaneStatusResult,
   type CancelRunResult,
@@ -128,15 +128,7 @@ export class OwnerControlPlane extends DurableObject {
       logger: false,
       schema: controlPlaneSchema,
     });
-    const installationAiDailyLimitMicrousd = Number(
-      environment.AI_GATEWAY_DAILY_LIMIT_MICROUSD ?? DEFAULT_FLEET_AI_DAILY_SPEND_MICROUSD,
-    );
-    this.#fleetConfigurations = new FleetConfigurations(
-      this.#database,
-      Number.isSafeInteger(installationAiDailyLimitMicrousd) && installationAiDailyLimitMicrousd > 0
-        ? installationAiDailyLimitMicrousd
-        : DEFAULT_FLEET_AI_DAILY_SPEND_MICROUSD,
-    );
+    this.#fleetConfigurations = new FleetConfigurations(this.#database);
     this.#aiGatewayUsage = new AiGatewayUsage(
       this.#database,
       this.#storage,
@@ -225,7 +217,7 @@ export class OwnerControlPlane extends DurableObject {
     authorityInput: unknown,
     input: unknown,
   ): Promise<CreateRunAdmissionResult> {
-    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+    const authorization = this.#authorize(authorityInput, RUNS_WRITE_SCOPE);
 
     if (!authorization.ok) {
       return this.#deniedRunAdmission(authorization.code);
@@ -316,7 +308,7 @@ export class OwnerControlPlane extends DurableObject {
   }
 
   reconcileToolExecution(authorityInput: unknown, input: unknown): ReconcileToolExecutionResult {
-    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+    const authorization = this.#authorize(authorityInput, RUNS_WRITE_SCOPE);
 
     return authorization.ok
       ? this.#toolExecutions.reconcile(authorization.authority, input)
@@ -328,7 +320,7 @@ export class OwnerControlPlane extends DurableObject {
   }
 
   async startRun(authorityInput: unknown, input: unknown): Promise<StartRunResult> {
-    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+    const authorization = this.#authorize(authorityInput, RUNS_WRITE_SCOPE);
 
     return authorization.ok
       ? this.#agentChannel.start(authorization.authority, input)
@@ -336,7 +328,7 @@ export class OwnerControlPlane extends DurableObject {
   }
 
   async cancelRun(authorityInput: unknown, input: unknown): Promise<CancelRunResult> {
-    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+    const authorization = this.#authorize(authorityInput, RUNS_WRITE_SCOPE);
 
     return authorization.ok
       ? this.#agentChannel.cancel(authorization.authority, input)
@@ -363,7 +355,7 @@ export class OwnerControlPlane extends DurableObject {
     authorityInput: unknown,
     input: unknown,
   ): Promise<ConfigureAgentScheduleResult> {
-    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+    const authorization = this.#authorize(authorityInput, AUTONOMY_WRITE_SCOPE);
 
     if (!authorization.ok) {
       return deniedAgentSchedule(authorization.code);
@@ -373,13 +365,6 @@ export class OwnerControlPlane extends DurableObject {
 
     if (!request.success) {
       return deniedAgentSchedule("invalid_request");
-    }
-
-    if (
-      request.data.schedule !== null &&
-      !authorization.authority.scopes.includes(AUTONOMY_WRITE_SCOPE)
-    ) {
-      return deniedAgentSchedule("insufficient_scope");
     }
 
     return this.#agentSchedules.configure(authorization.authority, request.data);
@@ -408,7 +393,7 @@ export class OwnerControlPlane extends DurableObject {
     authorityInput: unknown,
     input: unknown,
   ): Promise<DecideRunToolApprovalResult> {
-    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+    const authorization = this.#authorize(authorityInput, RUNS_WRITE_SCOPE);
 
     return authorization.ok
       ? this.#agentChannel.decideApproval(authorization.authority, input)
@@ -639,7 +624,7 @@ export class OwnerControlPlane extends DurableObject {
     const authority: OwnerAuthority = {
       clientId: "crewhelm:scheduler",
       ownerKey: this.#objectName,
-      scopes: [AGENTS_READ_SCOPE, AGENTS_WRITE_SCOPE],
+      scopes: [AGENTS_READ_SCOPE, RUNS_WRITE_SCOPE],
     };
 
     if (schedule.lastRunId !== null) {

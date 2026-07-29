@@ -1,4 +1,4 @@
-import { HEALTH_PATH, healthReportSchema, OWNER_SCOPES } from "@crewhelm/contracts";
+import { HEALTH_PATH, healthReportSchema } from "@crewhelm/contracts";
 import * as z from "zod";
 
 const MAX_DIAGNOSTIC_RESPONSE_BYTES = 4_096;
@@ -8,7 +8,12 @@ const AUTHORIZATION_SERVER_METADATA_PATH = "/.well-known/oauth-authorization-ser
 const AUTH_BASE_PATH = "/api/auth";
 const MCP_PATH = "/mcp";
 const OFFLINE_ACCESS_SCOPE = "offline_access";
-const OAUTH_SCOPES = [...OWNER_SCOPES, OFFLINE_ACCESS_SCOPE] as const;
+const OAUTH_SCOPES = [
+  "crewhelm:view",
+  "crewhelm:use",
+  "crewhelm:full",
+  OFFLINE_ACCESS_SCOPE,
+] as const;
 
 const deploymentOriginInputSchema = z.string().trim().min(1).max(2_048);
 const doctorCheckSchema = z.strictObject({
@@ -183,13 +188,6 @@ function checkDefinitions(origin: URL): [CheckDefinition, CheckDefinition, Check
           z.literal(OAUTH_SCOPES[1]),
           z.literal(OAUTH_SCOPES[2]),
           z.literal(OAUTH_SCOPES[3]),
-          z.literal(OAUTH_SCOPES[4]),
-          z.literal(OAUTH_SCOPES[5]),
-          z.literal(OAUTH_SCOPES[6]),
-          z.literal(OAUTH_SCOPES[7]),
-          z.literal(OAUTH_SCOPES[8]),
-          z.literal(OAUTH_SCOPES[9]),
-          z.literal(OAUTH_SCOPES[10]),
         ]),
       }),
       subject: "Protected-resource",
@@ -217,13 +215,6 @@ function checkDefinitions(origin: URL): [CheckDefinition, CheckDefinition, Check
           z.literal(OAUTH_SCOPES[1]),
           z.literal(OAUTH_SCOPES[2]),
           z.literal(OAUTH_SCOPES[3]),
-          z.literal(OAUTH_SCOPES[4]),
-          z.literal(OAUTH_SCOPES[5]),
-          z.literal(OAUTH_SCOPES[6]),
-          z.literal(OAUTH_SCOPES[7]),
-          z.literal(OAUTH_SCOPES[8]),
-          z.literal(OAUTH_SCOPES[9]),
-          z.literal(OAUTH_SCOPES[10]),
         ]),
         token_endpoint: z.literal(`${authBaseUrl}/oauth2/token`),
         token_endpoint_auth_methods_supported: stringArrayContaining("none"),
@@ -240,11 +231,13 @@ async function runCheck(
   definition: CheckDefinition,
 ): Promise<DoctorCheck> {
   const endpoint = new URL(definition.path, options.origin);
+  const requestEndpoint = new URL(endpoint);
+  requestEndpoint.searchParams.set("crewhelm-doctor", Date.now().toString(36));
   let response: Response;
   let body: string;
 
   try {
-    response = await dependencies.fetch(endpoint, {
+    response = await dependencies.fetch(requestEndpoint, {
       headers: {
         accept: "application/json",
       },

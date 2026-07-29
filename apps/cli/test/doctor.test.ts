@@ -22,19 +22,7 @@ function protectedResourceResponse(): Response {
     authorization_servers: [`${origin}/api/auth`],
     bearer_methods_supported: ["header"],
     resource: `${origin}/mcp`,
-    scopes_supported: [
-      "control:read",
-      "control:write",
-      "agents:read",
-      "agents:write",
-      "autonomy:write",
-      "connections:read",
-      "connections:write",
-      "connection-configs:read",
-      "connection-configs:write",
-      "integrations:read",
-      "offline_access",
-    ],
+    scopes_supported: ["crewhelm:view", "crewhelm:use", "crewhelm:full", "offline_access"],
   });
 }
 
@@ -49,19 +37,7 @@ function authorizationServerResponse(overrides: Record<string, unknown> = {}): R
     response_modes_supported: ["query"],
     response_types_supported: ["code"],
     revocation_endpoint: `${origin}/api/auth/oauth2/revoke`,
-    scopes_supported: [
-      "control:read",
-      "control:write",
-      "agents:read",
-      "agents:write",
-      "autonomy:write",
-      "connections:read",
-      "connections:write",
-      "connection-configs:read",
-      "connection-configs:write",
-      "integrations:read",
-      "offline_access",
-    ],
+    scopes_supported: ["crewhelm:view", "crewhelm:use", "crewhelm:full", "offline_access"],
     token_endpoint: `${origin}/api/auth/oauth2/token`,
     token_endpoint_auth_methods_supported: ["none", "client_secret_basic"],
     ...overrides,
@@ -135,6 +111,7 @@ describe("deployment diagnosis", () => {
     expect(fetch).toHaveBeenCalledTimes(3);
 
     for (const call of vi.mocked(fetch).mock.calls) {
+      expect(requestUrl(call[0]).searchParams.get("crewhelm-doctor")).toMatch(/^[a-z0-9]+$/);
       expect(call[1]).toEqual(
         expect.objectContaining({
           headers: {

@@ -32,33 +32,29 @@ pnpm verify
 Read [AGENTS.md](AGENTS.md) before using an AI coding agent. Human contribution guidance is in
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Bootstrap
+## Install and upgrade
 
 Build the CLI, then deploy to a Cloudflare account already authenticated with Wrangler:
 
 ```sh
 pnpm --filter @crewhelm/cli build
-node apps/cli/dist/crewhelm.js bootstrap \
-  --endpoint https://YOUR_WORKER_HOST \
-  --worker-name crewhelm \
-  --database-name crewhelm-auth \
-  --ai-budget-usd 1
+node apps/cli/dist/crewhelm.js up \
+  --endpoint https://YOUR_WORKER_HOST
 ```
 
-For a new deployment, provide these process-scoped environment variables:
+On a fresh installation, `crewhelm up` creates a private GitHub App in your browser and securely
+prompts for the Composio project key. Interactive setup recommends Cloudflare AI Gateway spend
+protection, asks for the daily USD limit when enabled, and also lets you skip it. The CLI applies
+packaged migrations, deploys, and diagnoses the public origin. It saves only non-secret
+coordinates in `crewhelm.installation.json`; repeat upgrades preserve deployed secrets and an
+existing Gateway route, and skip an identical Worker upload while still reconciling triggers.
 
-- `CREWHELM_GITHUB_CLIENT_ID`
-- `CREWHELM_GITHUB_CLIENT_SECRET`
-- `CREWHELM_OWNER_GITHUB_USER_ID` — the stable numeric GitHub user ID
-- `CREWHELM_COMPOSIO_API_KEY`
-
-Bootstrap creates or reuses the exact D1 database and a dedicated AI Gateway, applies packaged
-migrations, configures Worker secrets, deploys, and diagnoses the public origin. The Gateway's
-rolling daily ceiling defaults to $1 when created; later runs preserve a verified existing limit
-unless `--ai-budget-usd` is supplied. Use `--account-id` when Wrangler can access multiple
-Cloudflare accounts and `--database-id` when reusing an existing database. If Wrangler's OAuth
-credential cannot manage AI Gateways, provide a process-scoped
-`CREWHELM_CLOUDFLARE_API_TOKEN` with AI Gateway Read and Edit.
+Pass `--ai-budget-usd <dollars>` to enable or change the optional Gateway hard limit. Without a
+Gateway, Crewhelm keeps run and tool-loop safeguards but has no hard dollar ceiling. Use
+`--account-id` when Wrangler can access multiple Cloudflare accounts. If Wrangler's OAuth
+credential cannot manage AI Gateways, the CLI opens Cloudflare's API token page and securely
+prompts for a scoped token with AI Gateway Edit. Environment variables remain available for
+unattended setup; see `crewhelm --help`.
 
 Diagnose without deploying:
 
@@ -72,15 +68,21 @@ for local development.
 ## MCP
 
 The Worker exposes Streamable HTTP MCP at `/mcp`. Clients dynamically register at
-`/api/auth/oauth2/register` and authenticate the configured owner through a GitHub OAuth App:
+`/api/auth/oauth2/register` and authenticate the configured owner through the private GitHub App:
 
 ```text
 https://YOUR_WORKER_HOST/api/auth/callback/github
 ```
 
-OAuth scopes separate control-plane, Agent, autonomy, connection, authentication-configuration,
-and integration access. Tool visibility does not grant execution authority: Crewhelm revalidates
-the owner, scope, immutable Agent revision, capability, approval, connection, budget, and
+Clients request one stable access level: **View only** inspects fleet state, **Use agents** also
+operates runs and decides run-time approvals, and **Full control** reconfigures Agents,
+integrations, automation, and policy. The installation owner defaults to Full control. The Worker
+maps each level to precise internal capabilities before a module handles the request.
+
+Internally, capabilities separate control-plane, Agent, autonomy, connection,
+authentication-configuration, and integration access. Tool visibility does not grant execution
+authority: Crewhelm revalidates the owner, access level, immutable Agent revision, capability,
+approval, connection, budget, and
 single-use permit at the relevant boundaries.
 
 The complete [MCP tool reference](docs/reference/mcp-tools.md) is generated from the authenticated

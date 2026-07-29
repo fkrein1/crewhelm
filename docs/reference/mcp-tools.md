@@ -40,7 +40,7 @@ Attributes: write, destructive, idempotent, closed-world.
 
 **Preview Crewhelm configuration**
 
-Preview one revision-checked partial fleet configuration update. Requires autonomy:write. This tool never applies policy changes; application requires a deterministic owner step-up path outside model authority. Omitted fields do not change. Money is expressed as integer microUSD: 1 USD = 1,000,000 microUSD.
+Preview one revision-checked partial fleet configuration update. Requires autonomy:write. This tool never applies policy changes; application requires a deterministic owner step-up path outside model authority. Omitted fields do not change.
 
 Attributes: read-only, non-destructive, idempotent, closed-world.
 
@@ -65,25 +65,6 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
     "patch": {
       "type": "object",
       "properties": {
-        "ai": {
-          "type": "object",
-          "properties": {
-            "dailySpendMicrousd": {
-              "type": "integer",
-              "minimum": -9007199254740991,
-              "maximum": 9007199254740991,
-              "description": "New rolling daily AI spend limit in microUSD; 1 USD is 1,000,000. Cannot exceed the installation AI Gateway ceiling."
-            },
-            "runReservationMicrousd": {
-              "type": "integer",
-              "minimum": -9007199254740991,
-              "maximum": 9007199254740991,
-              "description": "New provisional microUSD reservation per admitted run; settled Gateway cost replaces it."
-            }
-          },
-          "additionalProperties": false,
-          "description": "AI spend controls."
-        },
         "execution": {
           "type": "object",
           "properties": {
@@ -747,7 +728,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 **Get Crewhelm configuration**
 
-Get the authenticated owner's current fleet configuration, revision, and installation ceilings. Requires control:read. To evaluate a change, pass this revision and a partial patch to crewhelm_configure with mode preview. Policy changes are not model-applicable and require a deterministic owner step-up path. To change the hard AI Gateway installation ceiling, rerun Crewhelm bootstrap with --ai-budget-usd <dollars>.
+Get the authenticated owner's current fleet configuration and revision. Requires control:read. To evaluate a change, pass this revision and a partial patch to crewhelm_configure with mode preview. Policy changes are not model-applicable and require a deterministic owner step-up path. Cloudflare AI Gateway is the optional hard dollar limit; configure it by rerunning crewhelm up with --ai-budget-usd <dollars>.
 
 Attributes: read-only, non-destructive, idempotent, closed-world.
 
