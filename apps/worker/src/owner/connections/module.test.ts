@@ -2,6 +2,7 @@ import {
   CONNECTION_CONFIGS_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
+  AUTONOMY_WRITE_SCOPE,
   OWNER_READ_SCOPE,
   listConnectionsResultSchema,
   recordConnectionAuthorizationReturnResultSchema,
@@ -100,6 +101,110 @@ describe("OwnerControlPlane connections", () => {
         status: "completed",
       },
     ]);
+  });
+
+  it("filters owner-local connection summaries by integration, status, and authorization outcome", async () => {
+    const authority = await authorityFor("connection-filters", [
+      CONNECTION_CONFIGS_WRITE_SCOPE,
+      CONNECTIONS_READ_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const reservation = await stub.reserveIntegrationEnablement(authority, {
+      idempotencyKey: "enable-github-connection-filters",
+      integrationSlug: "github",
+    });
+
+    if (!reservation.ok || reservation.state !== "dispatch") {
+      throw new Error("Expected integration enablement reservation.");
+    }
+
+    await expect(
+      stub.completeIntegrationEnablement(authority, {
+        authConfigId: "ac_github_filters",
+        authScheme: "oauth2",
+        created: true,
+        integrationSlug: "github",
+        managed: true,
+        reservationId: reservation.reservationId,
+      }),
+    ).resolves.toMatchObject({ created: true, ok: true });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(`
+        INSERT INTO connections
+          (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
+        VALUES
+          ('connection_00000000-0000-4000-8000-000000000011',
+           'composio', 'ca_filters_github', 'ac_github_filters', 'active', 11),
+          ('connection_00000000-0000-4000-8000-000000000012',
+           'composio', 'ca_filters_slack', 'ac_slack_filters', 'unavailable', 12)
+      `);
+    });
+
+    await expect(
+      stub.listConnections(authority, {
+        authorizationOutcome: "untracked",
+        integration: "github",
+        status: "active",
+      }),
+    ).resolves.toEqual({
+      connections: [
+        {
+          authorizationOutcome: "untracked",
+          authConfigId: "ac_github_filters",
+          connectionId: "connection_00000000-0000-4000-8000-000000000011",
+          createdAt: "1970-01-01T00:00:00.011Z",
+          status: "active",
+        },
+      ],
+      nextCursor: null,
+      ok: true,
+    });
+    await expect(stub.listConnections(authority, { integration: "slack" })).resolves.toEqual({
+      connections: [],
+      nextCursor: null,
+      ok: true,
+    });
+  });
+
+  it("enforces the current revisioned connection capacity including pending links", async () => {
+    const authority = await authorityFor("connection-configured-capacity", [
+      OWNER_READ_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const current = await stub.getFleetConfiguration(authority, { target: { kind: "fleet" } });
+
+    if (!current.ok) {
+      throw new Error("Expected fleet configuration.");
+    }
+
+    await expect(
+      stub.configureFleetConfiguration(authority, {
+        expectedRevision: current.configuration.revision,
+        idempotencyKey: "connection-configured-capacity-limit",
+        mode: "apply",
+        patch: { capacity: { maxConnections: 1 } },
+        target: { kind: "fleet" },
+      }),
+    ).resolves.toMatchObject({ applied: true, ok: true });
+    await expect(
+      stub.reserveConnectionLink(authority, connectionLinkInput("connection-capacity-first")),
+    ).resolves.toMatchObject({ ok: true, state: "dispatch" });
+    await expect(stub.status(authority)).resolves.toMatchObject({
+      ok: true,
+      status: {
+        usage: {
+          connections: { active: 0, pending: 1, total: 1 },
+        },
+      },
+    });
+    await expect(
+      stub.reserveConnectionLink(authority, {
+        ...connectionLinkInput("connection-capacity-second"),
+        authConfigId: "ac_slack_capacity",
+      }),
+    ).resolves.toEqual(fixedConnectionLinkFailure("connection_limit_exceeded"));
   });
 
   it("reserves, completes, replays, audits, and survives eviction without credentials", async () => {
@@ -298,6 +403,15 @@ describe("OwnerControlPlane connections", () => {
         },
       ],
       nextCursor: null,
+      ok: true,
+    });
+    await expect(
+      stub.listConnections(authority, {
+        authorizationOutcome: "returned",
+        status: "initiated",
+      }),
+    ).resolves.toMatchObject({
+      connections: [{ connectionId: completion.connectionLink.connectionId }],
       ok: true,
     });
 

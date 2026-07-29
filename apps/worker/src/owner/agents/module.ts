@@ -1,6 +1,5 @@
 import {
   AUTONOMY_WRITE_SCOPE,
-  MAXIMUM_AGENTS_PER_OWNER,
   MAXIMUM_REVISIONS_PER_AGENT,
   agentRevisionSchema,
   agentRevisionSummarySchema,
@@ -47,7 +46,7 @@ import {
   type LookupAgentConnectionConfigurationResult,
   type ResolvedConnectionForAttachment,
 } from "@crewhelm/contracts";
-import { and, asc, count, desc, eq, gt, lt } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, lt, sql } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import {
@@ -74,6 +73,14 @@ type StoredAgentRow = {
   status: Agent["status"];
 };
 type StoredAgentRevisionRow = StoredAgentRow & { revisedAt: number };
+type StoredAgentSummaryRow = Pick<
+  StoredAgentRow,
+  "agentId" | "createdAt" | "currentRevision" | "model" | "name" | "status"
+>;
+type StoredAgentRevisionSummaryRow = Pick<
+  StoredAgentRevisionRow,
+  "agentId" | "currentRevision" | "model" | "name" | "revisedAt"
+>;
 type ControlPlaneDatabase = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type ConnectionAttachmentFailure = Extract<ConfigureAgentConnectionResult, { ok: false }>;
 
@@ -85,6 +92,10 @@ function encodeBase64Url(bytes: Uint8Array): string {
   }
 
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+function escapedNamePattern(name: string): string {
+  return `%${name.toLowerCase().replaceAll("!", "!!").replaceAll("%", "!%").replaceAll("_", "!_")}%`;
 }
 
 async function digestCanonicalRequest(canonicalRequest: string): Promise<string> {
@@ -631,7 +642,7 @@ export class AgentRegistry {
 
       const agentCount = transaction.select({ value: count() }).from(agents).get()?.value ?? 0;
 
-      if (agentCount >= MAXIMUM_AGENTS_PER_OWNER) {
+      if (agentCount >= fleetConfiguration.capacity.maxAgents) {
         return deniedAgent("agent_limit_exceeded");
       }
 
@@ -736,15 +747,10 @@ export class AgentRegistry {
     const rows = this.#database
       .select({
         agentId: agents.agentId,
-        capabilityGrants: agentRevisions.capabilityGrants,
-        createdAt: agents.createdAt,
         currentRevision: agentRevisions.revision,
-        executionLimits: agentRevisions.executionLimits,
-        instructions: agentRevisions.instructions,
         model: agentRevisions.model,
         name: agentRevisions.name,
         revisedAt: agentRevisions.createdAt,
-        status: agents.status,
       })
       .from(agents)
       .innerJoin(agentRevisions, eq(agentRevisions.agentId, agents.agentId))
@@ -992,11 +998,8 @@ export class AgentRegistry {
     const rows = this.#database
       .select({
         agentId: agents.agentId,
-        capabilityGrants: agentRevisions.capabilityGrants,
         createdAt: agents.createdAt,
         currentRevision: agents.currentRevision,
-        executionLimits: agentRevisions.executionLimits,
-        instructions: agentRevisions.instructions,
         model: agentRevisions.model,
         name: agentRevisions.name,
         status: agents.status,
@@ -1010,7 +1013,16 @@ export class AgentRegistry {
         ),
       )
       .where(
-        request.data.cursor === undefined ? undefined : gt(agents.agentId, request.data.cursor),
+        and(
+          request.data.cursor === undefined ? undefined : gt(agents.agentId, request.data.cursor),
+          request.data.model === undefined
+            ? undefined
+            : eq(agentRevisions.model, request.data.model),
+          request.data.name === undefined
+            ? undefined
+            : sql`lower(${agentRevisions.name}) LIKE ${escapedNamePattern(request.data.name)} ESCAPE '!'`,
+          request.data.status === undefined ? undefined : eq(agents.status, request.data.status),
+        ),
       )
       .orderBy(asc(agents.agentId))
       .limit(request.data.limit + 1)
@@ -1022,6 +1034,23 @@ export class AgentRegistry {
     const nextCursor = hasMore ? (agentSummaries.at(-1)?.id ?? null) : null;
 
     return listAgentsResultSchema.parse({ agents: agentSummaries, nextCursor, ok: true });
+  }
+
+  usage(): { active: number; total: number } {
+    const rows = this.#database
+      .select({
+        status: agents.status,
+        value: count(),
+      })
+      .from(agents)
+      .groupBy(agents.status)
+      .all();
+    const active = rows.find((row) => row.status === "active")?.value ?? 0;
+
+    return {
+      active,
+      total: rows.reduce((total, row) => total + row.value, 0),
+    };
   }
 
   #agentFromRow(row: StoredAgentRow): Agent {
@@ -1100,32 +1129,24 @@ export class AgentRegistry {
       .all()[0];
   }
 
-  #agentSummaryFromRow(row: StoredAgentRow): AgentSummary {
-    const agent = this.#agentFromRow(row);
-
+  #agentSummaryFromRow(row: StoredAgentSummaryRow): AgentSummary {
     return agentSummarySchema.parse({
-      capabilityGrants: agent.capabilityGrants,
-      createdAt: agent.createdAt,
-      executionLimits: agent.executionLimits,
-      id: agent.id,
-      model: agent.model,
-      name: agent.name,
-      revision: agent.revision,
-      status: agent.status,
+      createdAt: new Date(row.createdAt).toISOString(),
+      id: row.agentId,
+      model: row.model,
+      name: row.name,
+      revision: row.currentRevision,
+      status: row.status,
     });
   }
 
-  #agentRevisionSummaryFromRow(row: StoredAgentRevisionRow): AgentRevisionSummary {
+  #agentRevisionSummaryFromRow(row: StoredAgentRevisionSummaryRow): AgentRevisionSummary {
     return agentRevisionSummarySchema.parse({
-      capabilityGrants: row.capabilityGrants,
-      createdAt: new Date(row.createdAt).toISOString(),
-      executionLimits: row.executionLimits,
       id: row.agentId,
       model: row.model,
       name: row.name,
       revisedAt: new Date(row.revisedAt).toISOString(),
       revision: row.currentRevision,
-      status: row.status,
     });
   }
 }

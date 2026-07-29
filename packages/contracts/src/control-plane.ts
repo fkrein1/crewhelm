@@ -1,5 +1,11 @@
 import * as z from "zod";
 
+import {
+  MAXIMUM_FLEET_LIST_ITEMS,
+  fleetCapacitySchema,
+  fleetRetentionSchema,
+} from "./fleet-capacity.js";
+
 export const AGENTS_READ_SCOPE = "agents:read";
 export const AGENTS_WRITE_SCOPE = "agents:write";
 export const RUNS_WRITE_SCOPE = "runs:write";
@@ -69,8 +75,33 @@ export const ownerAuthoritySchema = z.strictObject({
 });
 
 export const controlPlaneStatusSchema = z.strictObject({
+  capacity: fleetCapacitySchema.extend({
+    retention: fleetRetentionSchema,
+  }),
+  configurationRevision: z.number().int().positive().safe(),
   schemaVersion: z.number().int().positive(),
   status: z.literal("ready"),
+  usage: z.strictObject({
+    agents: z.strictObject({
+      active: z.number().int().nonnegative().safe(),
+      total: z.number().int().nonnegative().safe(),
+    }),
+    connections: z.strictObject({
+      active: z.number().int().nonnegative().safe(),
+      pending: z.number().int().nonnegative().safe(),
+      total: z.number().int().nonnegative().safe(),
+    }),
+    inbox: z.strictObject({
+      actionRequired: z.number().int().nonnegative().safe(),
+      deferred: z.number().int().nonnegative().safe(),
+      exceptions: z.number().int().nonnegative().safe(),
+      outcomes: z.number().int().nonnegative().safe(),
+      total: z.number().int().nonnegative().safe(),
+    }),
+    runs: z.strictObject({
+      active: z.number().int().nonnegative().safe(),
+    }),
+  }),
 });
 
 export const controlPlaneStatusResultSchema = z.discriminatedUnion("ok", [
@@ -104,7 +135,6 @@ export const capabilityGrantIdSchema = z
     /^grant_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     "Expected an opaque Crewhelm capability grant ID.",
   );
-export const MAXIMUM_AGENTS_PER_OWNER = 100;
 export const MAXIMUM_REVISIONS_PER_AGENT = 1_000;
 export const agentNameSchema = z.string().trim().min(1).max(80);
 export const agentModelSchema = z
@@ -135,21 +165,26 @@ export const agentCapabilityGrantsSchema = z
     "Expected unique capability grant IDs in canonical order.",
   );
 export const agentRevisionNumberSchema = z.number().int().positive().safe();
+export const agentStatusSchema = z.enum(["active", "disabled"]);
 export const agentSummarySchema = z.strictObject({
-  capabilityGrants: agentCapabilityGrantsSchema,
   createdAt: z.iso.datetime(),
-  executionLimits: agentExecutionLimitsSchema,
   id: agentIdSchema,
   model: agentModelSchema,
   name: agentNameSchema,
   revision: agentRevisionNumberSchema,
-  status: z.enum(["active", "disabled"]),
+  status: agentStatusSchema,
 });
 export const agentSchema = agentSummarySchema.extend({
+  capabilityGrants: agentCapabilityGrantsSchema,
+  executionLimits: agentExecutionLimitsSchema,
   instructions: agentInstructionsSchema,
 });
-export const agentRevisionSummarySchema = agentSummarySchema.extend({
+export const agentRevisionSummarySchema = z.strictObject({
+  id: agentIdSchema,
+  model: agentModelSchema,
+  name: agentNameSchema,
   revisedAt: z.iso.datetime(),
+  revision: agentRevisionNumberSchema,
 });
 export const agentRevisionSchema = agentSchema.extend({
   revisedAt: z.iso.datetime(),
@@ -182,12 +217,19 @@ export const getAgentRevisionInputSchema = z.strictObject({
 });
 export const listAgentsInputSchema = z.strictObject({
   cursor: agentIdSchema.optional(),
-  limit: z.number().int().min(1).max(50).default(25),
+  limit: z.number().int().min(1).max(MAXIMUM_FLEET_LIST_ITEMS).default(25),
+  model: agentModelSchema.optional().describe("Return Agents using this exact model."),
+  name: agentNameSchema
+    .optional()
+    .describe(
+      "Return Agents whose names contain this value, case-insensitively for ASCII characters.",
+    ),
+  status: agentStatusSchema.optional().describe("Return Agents in this lifecycle state."),
 });
 export const listAgentRevisionsInputSchema = z.strictObject({
   cursor: agentRevisionNumberSchema.optional(),
   id: agentIdSchema,
-  limit: z.number().int().min(1).max(50).default(25),
+  limit: z.number().int().min(1).max(MAXIMUM_FLEET_LIST_ITEMS).default(25),
 });
 export const updateAgentInputSchema = z.strictObject({
   executionLimits: agentExecutionLimitsSchema,
@@ -250,7 +292,7 @@ export const getAgentRevisionResultSchema = z.discriminatedUnion("ok", [
 ]);
 export const listAgentsResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
-    agents: z.array(agentSummarySchema).max(50),
+    agents: z.array(agentSummarySchema).max(MAXIMUM_FLEET_LIST_ITEMS),
     nextCursor: agentIdSchema.nullable(),
     ok: z.literal(true),
   }),
@@ -263,7 +305,7 @@ export const listAgentRevisionsResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     nextCursor: agentRevisionNumberSchema.nullable(),
     ok: z.literal(true),
-    revisions: z.array(agentRevisionSummarySchema).max(50),
+    revisions: z.array(agentRevisionSummarySchema).max(MAXIMUM_FLEET_LIST_ITEMS),
   }),
   z.strictObject({
     error: agentRequestErrorSchema,

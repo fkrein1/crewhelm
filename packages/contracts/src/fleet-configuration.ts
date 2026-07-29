@@ -5,6 +5,7 @@ import {
   MINIMUM_AGENT_SCHEDULE_INTERVAL_SECONDS,
 } from "./agent-schedules.js";
 import { agentExecutionLimitsSchema, agentMutationIdempotencyKeySchema } from "./control-plane.js";
+import { fleetCapacitySchema, fleetRetentionSchema } from "./fleet-capacity.js";
 import {
   MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
   RUNNABLE_AGENT_MODELS,
@@ -58,6 +59,9 @@ const allowedFleetModelsSchema = z
 
 export const fleetConfigurationDataSchema = z
   .strictObject({
+    capacity: fleetCapacitySchema.describe(
+      "Owner-configured fleet capacity; internal safety ceilings still apply.",
+    ),
     execution: fleetExecutionLimitsSchema.describe(
       "Fleet ceilings applied to every run; lower Agent limits continue to win.",
     ),
@@ -107,6 +111,9 @@ export const fleetConfigurationDataSchema = z
         .max(MAXIMUM_AGENT_SCHEDULE_INTERVAL_SECONDS)
         .describe("Smallest interval that a newly configured recurring Agent schedule may use."),
     }),
+    retention: fleetRetentionSchema.describe(
+      "How long run detail and operational inbox projections are retained.",
+    ),
   })
   .refine(
     (configuration) =>
@@ -126,10 +133,18 @@ export const fleetConfigurationDataSchema = z
   .refine(
     (configuration) => configuration.models.allowed.includes(configuration.models.default),
     "The default model must be allowed.",
+  )
+  .refine(
+    (configuration) => configuration.retention.runSeconds <= configuration.retention.inboxSeconds,
+    "Run retention must not exceed inbox retention so owner-local terminal projections remain available.",
   );
 
 export const fleetConfigurationPatchSchema = z
   .strictObject({
+    capacity: fleetCapacitySchema
+      .partial()
+      .describe("Fleet resource capacity within Crewhelm's internal safety ceilings.")
+      .optional(),
     execution: fleetExecutionLimitsSchema
       .partial()
       .describe("Fleet-wide per-run ceilings; lower Agent-specific limits still win.")
@@ -186,6 +201,10 @@ export const fleetConfigurationPatchSchema = z
       })
       .describe("Fleet model selection defaults and allowlist.")
       .optional(),
+    retention: fleetRetentionSchema
+      .partial()
+      .describe("Run-detail and operational-inbox retention in seconds.")
+      .optional(),
     schedules: z
       .strictObject({
         minimumIntervalSeconds: z
@@ -202,8 +221,10 @@ export const fleetConfigurationPatchSchema = z
   .refine(
     (patch) =>
       patch.execution !== undefined ||
+      patch.capacity !== undefined ||
       patch.integrations !== undefined ||
       patch.models !== undefined ||
+      patch.retention !== undefined ||
       patch.schedules !== undefined,
     "Expected at least one configuration section.",
   );

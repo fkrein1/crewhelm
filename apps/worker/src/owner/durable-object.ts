@@ -172,7 +172,9 @@ export class OwnerControlPlane extends DurableObject {
       this.#fleetConfigurations.current(),
     );
     this.#agents = new AgentRegistry(this.#database, () => this.#fleetConfigurations.currentData());
-    this.#connections = new Connections(this.#database, this.#storage);
+    this.#connections = new Connections(this.#database, this.#storage, () =>
+      this.#fleetConfigurations.currentData(),
+    );
     this.#authorityControls = new AuthorityControls(this.#database);
     this.#agentSchedules = new AgentSchedules(this.#database, this.#storage, () =>
       this.#fleetConfigurations.currentData(),
@@ -183,6 +185,7 @@ export class OwnerControlPlane extends DurableObject {
       environment.CREW_AGENT,
       this.#runAdmissions,
       this.#toolExecutions,
+      () => this.#fleetConfigurations.currentData(),
     );
     this.#storage.sql.exec("PRAGMA foreign_keys = ON");
     void this.ctx.blockConcurrencyWhile(async () => {
@@ -197,11 +200,23 @@ export class OwnerControlPlane extends DurableObject {
       return this.#deniedStatus(authorization.code);
     }
 
+    const configuration = this.#fleetConfigurations.current();
+
     return controlPlaneStatusResultSchema.parse({
       ok: true,
       status: {
+        capacity: {
+          ...configuration.data.capacity,
+          retention: configuration.data.retention,
+        },
+        configurationRevision: configuration.revision,
         schemaVersion: CONTROL_PLANE_SCHEMA_VERSION,
         status: "ready",
+        usage: {
+          agents: this.#agents.usage(),
+          connections: this.#connections.usage(),
+          ...this.#agentChannel.usage(),
+        },
       },
     });
   }

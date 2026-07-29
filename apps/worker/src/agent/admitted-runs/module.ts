@@ -12,7 +12,6 @@ import {
   recordAgentInboxRunInputSchema,
   recordAgentInboxRunResultSchema,
   redeemRunReceiverCapabilityResultSchema,
-  RUN_ADMISSION_RETENTION_MS,
   resumeRunAdmissionInputSchema,
   runIdSchema,
   completeToolExecutionResultSchema,
@@ -947,7 +946,7 @@ export class CrewAgent extends Think {
 
       record = admittedRunRecordSchema.parse({
         budgetReservation: permit.budgetReservation,
-        cleanupAt: acceptedAt + RUN_ADMISSION_RETENTION_MS,
+        cleanupAt: acceptedAt + permit.budgetReservation.retentionSeconds * 1_000,
         clientId: permit.clientId,
         configuration: verified.data.configuration,
         createdAt: acceptedAt,
