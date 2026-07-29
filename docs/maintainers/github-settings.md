@@ -14,7 +14,6 @@ These controls live in GitHub. Keep them aligned with the versioned workflows an
   updates, secret scanning, and push protection.
 - Give Actions read-only default permissions. Allow selected actions only, require full commit SHA
   pins, and require approval for all external contributors.
-- Install the Developer Certificate of Origin (`DCO`) GitHub App for this repository only.
 
 ## Protected main
 

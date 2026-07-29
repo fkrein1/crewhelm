@@ -832,7 +832,6 @@ describe("repository foundation", () => {
         { context: "Dependency review", integration_id: 15368 },
         { context: "Analyze JavaScript and TypeScript", integration_id: 15368 },
         { context: "Audit GitHub Actions", integration_id: 15368 },
-        { context: "DCO", integration_id: 1861 },
       ],
     });
     expect(ruleByType["code_scanning"]?.["parameters"]).toEqual({
