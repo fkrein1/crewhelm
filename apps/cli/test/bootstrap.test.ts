@@ -9,6 +9,7 @@ import {
   bootstrapDeployment,
   type BootstrapDependencies,
   type BootstrapOptions,
+  type BootstrapProgress,
 } from "../src/bootstrap.js";
 import { type RunWrangler, type WranglerResult } from "../src/wrangler.js";
 
@@ -409,9 +410,11 @@ describe("Cloudflare bootstrap", () => {
     const fixture = await createDeploymentAssets();
     const databaseName = "crewhelm-development-auth";
     const events: string[] = [];
+    const progress: string[] = [];
     const persist = vi.fn<(installation: unknown) => Promise<void>>(async () => {});
     const dependencies = {
       ...createDependencies(fixture.assets, recoveryWrangler({ databaseName, events })),
+      reportProgress: ({ stage }: BootstrapProgress) => progress.push(stage),
       recoverExistingInstallation: { persist },
     };
 
@@ -435,6 +438,16 @@ describe("Cloudflare bootstrap", () => {
       expect(events).not.toContain("d1:create");
       expect(events.indexOf("versions:view")).toBeLessThan(events.indexOf("d1:migrations"));
       expect(events.indexOf("d1:execute")).toBeLessThan(events.indexOf("d1:migrations"));
+      expect(progress).toEqual([
+        "assets",
+        "authentication",
+        "worker",
+        "database",
+        "configuration",
+        "migrations",
+        "deployment",
+        "deployment",
+      ]);
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
     }
