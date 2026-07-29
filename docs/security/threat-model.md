@@ -135,6 +135,11 @@ an allowlisted environment, explicit account and database identity, validated re
 and bounded output. Ambiguous remote mutations stop with resources preserved for inspection; they
 are not assumed successful or automatically repeated.
 
+Public pull-request code runs only on disposable, read-only runners after external-contributor
+approval. Privileged workflows never execute pull-request artifacts or restore their caches. A
+future npm release separates package construction from stage-only publishing and requires
+independent npm 2FA approval.
+
 AI Gateway management may use a process-scoped `CREWHELM_CLOUDFLARE_API_TOKEN` limited to AI
 Gateway Edit. Bootstrap skips Gateway management unless the operator chooses a daily USD limit.
 Routine upgrades preserve only the non-secret Gateway route; an explicit limit change is applied
