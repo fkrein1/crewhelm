@@ -142,6 +142,12 @@ an allowlisted environment, explicit account and database identity, validated re
 and bounded output. Ambiguous remote mutations stop with resources preserved for inspection; they
 are not assumed successful or automatically repeated.
 
+When local installation metadata is missing, bootstrap adopts an existing Worker only from one
+fully active version. It verifies the Worker shape, exact public origin, D1 binding, bounded D1
+inventory and Crewhelm schema provenance, plus the optional Gateway binding. It persists those
+non-secret coordinates before migrations, Gateway updates, or deployment; split traffic,
+conflicting flags, duplicate bindings, unknown databases, and malformed inventory fail closed.
+
 Public pull-request code runs only on disposable, read-only runners after external-contributor
 approval. Privileged workflows never execute pull-request artifacts or restore their caches. A
 future npm release separates package construction from stage-only publishing and requires

@@ -48,6 +48,9 @@ protection, asks for the daily USD limit when enabled, and also lets you skip it
 packaged migrations, deploys, and diagnoses the public origin. It saves only non-secret
 coordinates in `crewhelm.installation.json`; repeat upgrades preserve deployed secrets and an
 existing Gateway route, and skip an identical Worker upload while still reconciling triggers.
+If that local file is missing but the named Worker already exists, `up` verifies its single active
+version, origin, D1 binding and provenance, and optional Gateway route before recreating the file
+and starting any deployment mutation. Conflicting or ambiguous remote state stops the upgrade.
 
 Pass `--ai-budget-usd <dollars>` to enable or change the optional Gateway hard limit. Without a
 Gateway, Crewhelm keeps run and tool-loop safeguards but has no hard dollar ceiling. Use
