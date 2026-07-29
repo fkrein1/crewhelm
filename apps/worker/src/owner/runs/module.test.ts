@@ -170,6 +170,75 @@ describe("OwnerControlPlane runs", () => {
     });
   });
 
+  it("ages a redeemed run without a terminal projection into a failed summary", async () => {
+    const authority = await authorityFor("run-stale-projection", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("run-stale-projection-agent"));
+
+    if (!created.ok) {
+      throw new Error("Expected stale-run Agent.");
+    }
+
+    const prompt = "Exercise a run whose detailed state becomes unavailable.";
+    const admission = await stub.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "run-stale-projection",
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
+    });
+
+    if (!admission.ok || admission.state !== "issued") {
+      throw new Error("Expected stale-run admission.");
+    }
+
+    await expect(stub.confirmRunAdmission(admission.permit)).resolves.toMatchObject({
+      confirmed: true,
+      ok: true,
+    });
+    const deadlineAt = Date.now() - 1_000;
+    const redeemedAt = deadlineAt - admission.permit.budgetReservation.maxDurationSeconds * 1_000;
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE run_admissions SET created_at = ?, redeemed_at = ? WHERE run_id = ?",
+        redeemedAt - 1,
+        redeemedAt,
+        admission.permit.runId,
+      );
+    });
+    await expect(
+      stub.listAgentRuns(authority, {
+        agentId: created.agent.id,
+        status: "failed",
+      }),
+    ).resolves.toMatchObject({
+      nextCursor: null,
+      ok: true,
+      runs: [
+        {
+          completedAt: new Date(deadlineAt).toISOString(),
+          runId: admission.permit.runId,
+          status: "failed",
+        },
+      ],
+    });
+    await expect(stub.status(authority)).resolves.toMatchObject({
+      ok: true,
+      status: {
+        usage: {
+          runs: { active: 0 },
+        },
+      },
+    });
+  });
+
   it("issues, rotates, verifies, redeems, and audits an opaque run admission durably", async () => {
     const authority = await authorityFor("230", [
       OWNER_WRITE_SCOPE,

@@ -1091,6 +1091,12 @@ export class CrewAgent extends Think {
     const output =
       submission.status === "completed" ? this.#readRunOutput(capability.runId) : undefined;
     const outputPending = output?.state === "pending";
+    const frameworkStatus = outputPending ? "running" : publicRunStatus(submission.status);
+    const status =
+      frameworkStatus === "completed" &&
+      trace.some((event) => event.event === "tool.authorization_blocked")
+        ? "failed"
+        : frameworkStatus;
 
     return inspectAdmittedRunResultSchema.parse({
       ok: true,
@@ -1107,7 +1113,7 @@ export class CrewAgent extends Think {
             }),
         runId: capability.runId,
         startedAt: isoTimestamp(submission.startedAt),
-        status: outputPending ? "running" : publicRunStatus(submission.status),
+        status,
       },
       trace,
     });
@@ -1587,7 +1593,13 @@ export class CrewAgent extends Think {
       prefix: toolApprovalPrefix(runId),
     });
     const approvalCount = approvalRecords.size;
-    const status = result.status === "aborted" ? "cancelled" : result.status;
+    const trace = await this.#readRunTrace(runId);
+    const frameworkStatus = result.status === "aborted" ? "cancelled" : result.status;
+    const status =
+      frameworkStatus === "completed" &&
+      trace.some((event) => event.event === "tool.authorization_blocked")
+        ? "failed"
+        : frameworkStatus;
     const kind =
       approvalCount > 0
         ? "action_required"

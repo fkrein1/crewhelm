@@ -130,6 +130,7 @@ async function startWriteRun(
   idempotencyKey: string,
   authorization: ComposioToolCapabilityGrant["authorization"],
   prompt = TOOL_TEST_PROMPT,
+  seedLegacyUnknown = false,
 ) {
   const authority = await authorityFor(subject);
   const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
@@ -210,6 +211,50 @@ async function startWriteRun(
       created.agent.revision,
     );
   });
+
+  if (seedLegacyUnknown) {
+    const legacyPrompt = "Preserve one legacy unknown effect for recovery.";
+    const legacyAdmission = await controlPlane.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: `${idempotencyKey}-legacy`,
+      promptCharacters: legacyPrompt.length,
+      promptDigest: await digestRunPrompt(legacyPrompt),
+    });
+
+    if (!legacyAdmission.ok || legacyAdmission.state !== "issued") {
+      throw new Error("Expected legacy unknown-effect admission.");
+    }
+
+    const confirmed = await controlPlane.confirmRunAdmission(legacyAdmission.permit);
+
+    if (!confirmed.ok || !confirmed.confirmed) {
+      throw new Error("Expected confirmed legacy unknown-effect admission.");
+    }
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      const startedAt = Date.now() - 2;
+      const completedAt = startedAt + 1;
+
+      state.storage.sql.exec(
+        `INSERT INTO tool_executions
+           (tool_call_id, run_id, grant_id, action_digest, effect_digest, input_digest,
+            nonce_digest, status, cost_microusd, output_bytes, expires_at, started_at,
+            dispatched_at, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'unknown', 0, 0, ?, ?, ?, ?)`,
+        `tool_call_${crypto.randomUUID()}`,
+        legacyAdmission.permit.runId,
+        grantId,
+        "a".repeat(64),
+        "0".repeat(64),
+        "0".repeat(64),
+        "b".repeat(43),
+        completedAt + 1,
+        startedAt,
+        startedAt,
+        completedAt,
+      );
+    });
+  }
 
   const started = await controlPlane.startRun(authority, {
     agentId: created.agent.id,
@@ -1339,6 +1384,230 @@ describe("CrewAgent admitted execution", () => {
         runId: fixture.runId,
       }),
     ).resolves.toEqual({ approvals: [], ok: true });
+  });
+
+  it("projects a blocked standing action as a failed run and inbox exception", async () => {
+    const fixture = await startWriteRun(
+      "crew-agent-standing-blocked",
+      "crew-agent-standing-blocked",
+      "standing",
+      TOOL_TEST_PROMPT,
+      true,
+    );
+    const failed = await runWithTimeline(fixture.controlPlane, fixture.authority, fixture.runId, [
+      "run.admitted",
+      "run.started",
+      "tool.authorization_blocked",
+      "run.failed",
+    ]);
+
+    expect(failed.run).toMatchObject({
+      runId: fixture.runId,
+      status: "failed",
+    });
+    await vi.waitFor(
+      async () => {
+        const inbox = await fixture.controlPlane.agentInbox(fixture.authority, {
+          action: "list",
+          kinds: ["exception"],
+          limit: 10,
+        });
+
+        expect(inbox).toMatchObject({
+          action: "list",
+          items: [{ runId: fixture.runId }],
+          ok: true,
+        });
+      },
+      { interval: 25, timeout: 5_000 },
+    );
+    await runInDurableObject(fixture.controlPlane, (_instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE agent_inbox_items
+         SET kind = 'outcome',
+             result_preview = 'The model claimed the provider action succeeded.',
+             run_status = 'completed'
+         WHERE run_id = ?`,
+        fixture.runId,
+      );
+    });
+    await expect(
+      fixture.controlPlane.inspectRun(fixture.authority, { runId: fixture.runId }),
+    ).resolves.toMatchObject({
+      ok: true,
+      run: { runId: fixture.runId, status: "failed" },
+    });
+    await expect(
+      fixture.controlPlane.agentInbox(fixture.authority, {
+        action: "list",
+        kinds: ["exception"],
+        limit: 10,
+      }),
+    ).resolves.toMatchObject({
+      action: "list",
+      items: [
+        {
+          kind: "exception",
+          resultPreview: null,
+          runId: fixture.runId,
+          runStatus: "failed",
+        },
+      ],
+      ok: true,
+    });
+  });
+
+  it("reconciles an expired dispatched effect before the first exact run projection", async () => {
+    const fixture = await startWriteRun(
+      "crew-agent-expired-dispatch-inspect",
+      "crew-agent-expired-dispatch-inspect",
+      "standing",
+    );
+    const completed = await runWithTimeline(
+      fixture.controlPlane,
+      fixture.authority,
+      fixture.runId,
+      [
+        "run.admitted",
+        "run.started",
+        "tool.authorization_allowed",
+        "tool.execution_reserved",
+        "tool.execution_dispatched",
+        "tool.execution_completed",
+        "run.completed",
+      ],
+    );
+    const toolCallId = completed.timeline.find(
+      (event) => event.event === "tool.execution_completed",
+    )?.toolCallId;
+
+    if (toolCallId === undefined) {
+      throw new Error("Expected completed tool execution evidence.");
+    }
+
+    await vi.waitFor(
+      async () => {
+        await expect(
+          fixture.controlPlane.agentInbox(fixture.authority, {
+            action: "list",
+            kinds: ["outcome"],
+            limit: 10,
+          }),
+        ).resolves.toMatchObject({
+          action: "list",
+          items: [{ runId: fixture.runId, runStatus: "completed" }],
+          ok: true,
+        });
+      },
+      { interval: 25, timeout: 5_000 },
+    );
+    await runInDurableObject(fixture.controlPlane, (_instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE tool_executions
+         SET completed_at = NULL,
+             output_bytes = NULL,
+             status = 'reserved',
+             expires_at = ?
+         WHERE tool_call_id = ?`,
+        Date.now() - 1,
+        toolCallId,
+      );
+    });
+
+    const inspected = await fixture.controlPlane.inspectRun(fixture.authority, {
+      runId: fixture.runId,
+    });
+
+    expect(inspected).toMatchObject({
+      ok: true,
+      run: { runId: fixture.runId, status: "failed" },
+      timeline: expect.arrayContaining([
+        expect.objectContaining({ event: "tool.execution_unknown", toolCallId }),
+        expect.objectContaining({ event: "run.failed" }),
+      ]),
+    });
+    await expect(
+      fixture.controlPlane.agentInbox(fixture.authority, {
+        action: "list",
+        kinds: ["exception"],
+        limit: 10,
+      }),
+    ).resolves.toMatchObject({
+      action: "list",
+      items: [{ kind: "exception", runId: fixture.runId, runStatus: "failed" }],
+      ok: true,
+    });
+  });
+
+  it("repairs a completed inbox projection when the alarm finds an expired dispatch", async () => {
+    const fixture = await startWriteRun(
+      "crew-agent-expired-dispatch-alarm",
+      "crew-agent-expired-dispatch-alarm",
+      "standing",
+    );
+    const completed = await runWithTimeline(
+      fixture.controlPlane,
+      fixture.authority,
+      fixture.runId,
+      [
+        "run.admitted",
+        "run.started",
+        "tool.authorization_allowed",
+        "tool.execution_reserved",
+        "tool.execution_dispatched",
+        "tool.execution_completed",
+        "run.completed",
+      ],
+    );
+    const toolCallId = completed.timeline.find(
+      (event) => event.event === "tool.execution_completed",
+    )?.toolCallId;
+
+    if (toolCallId === undefined) {
+      throw new Error("Expected completed tool execution evidence.");
+    }
+
+    await vi.waitFor(
+      async () => {
+        await expect(
+          fixture.controlPlane.agentInbox(fixture.authority, {
+            action: "list",
+            kinds: ["outcome"],
+            limit: 10,
+          }),
+        ).resolves.toMatchObject({
+          action: "list",
+          items: [{ runId: fixture.runId, runStatus: "completed" }],
+          ok: true,
+        });
+      },
+      { interval: 25, timeout: 5_000 },
+    );
+    await runInDurableObject(fixture.controlPlane, async (instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE tool_executions
+         SET completed_at = NULL,
+             output_bytes = NULL,
+             status = 'reserved',
+             expires_at = ?
+         WHERE tool_call_id = ?`,
+        Date.now() - 1,
+        toolCallId,
+      );
+      await instance.alarm();
+    });
+
+    await expect(
+      fixture.controlPlane.agentInbox(fixture.authority, {
+        action: "list",
+        kinds: ["exception"],
+        limit: 10,
+      }),
+    ).resolves.toMatchObject({
+      action: "list",
+      items: [{ kind: "exception", runId: fixture.runId, runStatus: "failed" }],
+      ok: true,
+    });
   });
 
   it("returns the terminal tool outcome when the model emits no post-approval text", async () => {

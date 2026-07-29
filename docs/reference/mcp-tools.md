@@ -1184,7 +1184,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 **List integration connections**
 
-List bounded owner-scoped Crewhelm connection summaries without provider account IDs or credentials.
+List bounded owner-scoped connection summaries with integration and provider account IDs, but never credentials.
 
 Attributes: read-only, non-destructive, idempotent, closed-world.
 
@@ -1217,10 +1217,10 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
       "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$"
     },
     "limit": {
-      "default": 25,
+      "default": 20,
       "type": "integer",
       "minimum": 1,
-      "maximum": 25
+      "maximum": 20
     },
     "status": {
       "description": "Return connections in this lifecycle state.",
@@ -1304,6 +1304,39 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
   "required": [
     "runId"
   ],
+  "additionalProperties": false
+}
+```
+
+</details>
+
+## `crewhelm_list_unresolved_tool_effects`
+
+**List unresolved provider effects**
+
+List bounded owner-local summaries of provider effects that require independent verification before explicit reconciliation.
+
+Attributes: read-only, non-destructive, idempotent, closed-world.
+
+<details>
+<summary>Input schema</summary>
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "cursor": {
+      "type": "string",
+      "pattern": "^tool_call_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "limit": {
+      "default": 10,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25
+    }
+  },
   "additionalProperties": false
 }
 ```
@@ -1532,7 +1565,7 @@ Attributes: write, non-destructive, idempotent, closed-world.
 
 **Crewhelm status**
 
-Return a cheap owner-local fleet dashboard with active usage, inbox counts, and configured capacity.
+Return a cheap owner-local fleet dashboard with active usage, inbox and unresolved-effect counts, and configured capacity.
 
 Attributes: read-only, non-destructive, idempotent, closed-world.
 

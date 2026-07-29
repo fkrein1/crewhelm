@@ -4,6 +4,7 @@ import {
   agentInboxResultSchema,
   batchDisableAgentsResultSchema,
   changeAuthorityResultSchema,
+  connectionSummarySchema,
   configureAgentConnectionResultSchema,
   controlPlaneStatusResultSchema,
   createAgentResultSchema,
@@ -11,8 +12,10 @@ import {
   inspectIntegrationToolResultSchema,
   inspectRunResultSchema,
   listConnectionsResultSchema,
+  listUnresolvedToolEffectsResultSchema,
   startRunResultSchema,
   type Agent,
+  type ConnectionSummary,
   type InspectRunResult,
   type Run,
 } from "@crewhelm/contracts";
@@ -48,9 +51,11 @@ const GMAIL_DRAFT_REQUIRED_SCOPES = [
 ] as const;
 const SAFE_DRAFT_RECIPIENT = "crewhelm-smoke@example.invalid";
 const TOOL_CALLING_MODEL = "@cf/zai-org/glm-4.7-flash";
-const MAXIMUM_CONNECTION_PAGES = 40;
+const MAXIMUM_CONNECTION_PAGES = 50;
 const MAXIMUM_MCP_SCHEMA_BYTES = 64 * 1_024;
 const POLL_INTERVAL_MS = 1_000;
+const UNRECONCILED_EFFECT_MESSAGE =
+  "The provider action was blocked before dispatch because an earlier unknown external effect requires reconciliation.";
 const TERMINAL_RUN_STATUSES = ["cancelled", "completed", "failed"] as const;
 type TerminalRunStatus = (typeof TERMINAL_RUN_STATUSES)[number];
 const AGENT_LIMITS = {
@@ -110,6 +115,12 @@ const REQUIRED_TOOLS = {
     readOnlyHint: true,
   },
   crewhelm_list_connections: {
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+    readOnlyHint: true,
+  },
+  crewhelm_list_unresolved_tool_effects: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
@@ -182,6 +193,7 @@ const standingIntegrationSmokeCheckSchema = z.strictObject({
     "oauth-full-control",
     "mcp-initialize",
     "mcp-tool-catalog",
+    "fleet-recovery",
     "connection-target",
     "integration-tool",
     "agent-create",
@@ -200,6 +212,7 @@ export const standingIntegrationSmokeReportSchema = z.strictObject({
   ok: z.boolean(),
   public: doctorReportSchema,
   connectionId: z.string().optional(),
+  connection: connectionSummarySchema.optional(),
   agentId: z.string().optional(),
   grantId: z.string().optional(),
   runId: z.string().optional(),
@@ -210,6 +223,7 @@ export const standingIntegrationSmokeReportSchema = z.strictObject({
   activeAgentsBefore: z.number().int().nonnegative().safe().optional(),
   activeAgentsAfter: z.number().int().nonnegative().safe().optional(),
   checks: z.tuple([
+    standingIntegrationSmokeCheckSchema,
     standingIntegrationSmokeCheckSchema,
     standingIntegrationSmokeCheckSchema,
     standingIntegrationSmokeCheckSchema,
@@ -252,6 +266,10 @@ const checkDefinitions = {
   connectionTarget: {
     name: "connection-target",
     validMessage: "The exact active Gmail connection was found without exposing provider identity.",
+  },
+  fleetRecovery: {
+    name: "fleet-recovery",
+    validMessage: "The fleet has no unresolved provider effects blocking safe mutation.",
   },
   grantRevoke: {
     name: "grant-revoke",
@@ -401,7 +419,7 @@ async function validateConnectionTarget(
   session: TemporaryOwnerMcpSession,
   connectionId: string,
   maximumConnections: number,
-): Promise<void> {
+): Promise<ConnectionSummary> {
   let cursor: string | undefined;
   const maximumPages = Math.min(
     MAXIMUM_CONNECTION_PAGES,
@@ -415,8 +433,7 @@ async function validateConnectionTarget(
       {
         authorizationOutcome: "returned",
         integration: GMAIL_INTEGRATION_SLUG,
-        limit: 25,
-        status: "active",
+        limit: 20,
         ...(cursor === undefined ? {} : { cursor }),
       },
       listConnectionsResultSchema,
@@ -430,15 +447,16 @@ async function validateConnectionTarget(
       );
     }
 
-    if (
-      result.connections.some(
-        (connection) =>
-          connection.connectionId === connectionId &&
-          connection.authorizationOutcome === "returned" &&
-          connection.status === "active",
-      )
-    ) {
-      return;
+    const connection = result.connections.find(
+      (candidate) =>
+        candidate.connectionId === connectionId &&
+        candidate.authorizationOutcome === "returned" &&
+        candidate.integrationSlug === GMAIL_INTEGRATION_SLUG &&
+        (candidate.status === "initiated" || candidate.status === "active"),
+    );
+
+    if (connection !== undefined) {
+      return connection;
     }
 
     if (result.nextCursor === null) {
@@ -450,7 +468,7 @@ async function validateConnectionTarget(
 
   throw new TemporaryOwnerSessionError(
     "invalid_payload",
-    "The requested connection is not an active Gmail connection.",
+    "The requested connection is not the exact authorized Gmail account.",
   );
 }
 
@@ -553,6 +571,15 @@ function validateStartedRun(
 }
 
 function validateSingleDispatch(inspected: Extract<InspectRunResult, { ok: true }>): string {
+  const unreconciledEffect = inspected.timeline.find(
+    (event) =>
+      event.event === "tool.authorization_blocked" && event.reason === "unreconciled_effect",
+  );
+
+  if (unreconciledEffect) {
+    throw new TemporaryOwnerSessionError("invalid_payload", UNRECONCILED_EFFECT_MESSAGE);
+  }
+
   const deniedEvents = new Set([
     "tool.approval_required",
     "tool.authorization_approval_required",
@@ -606,6 +633,7 @@ export async function runStandingIntegrationSmoke(
     skippedCheck(checkDefinitions.oauthFullControl.name, authorizeEndpoint),
     skippedCheck(checkDefinitions.mcpInitialize.name, mcpEndpoint),
     skippedCheck(checkDefinitions.mcpToolCatalog.name, mcpEndpoint),
+    skippedCheck(checkDefinitions.fleetRecovery.name, mcpEndpoint),
     skippedCheck(checkDefinitions.connectionTarget.name, mcpEndpoint),
     skippedCheck(checkDefinitions.integrationTool.name, mcpEndpoint),
     skippedCheck(checkDefinitions.agentCreate.name, mcpEndpoint),
@@ -646,6 +674,7 @@ export async function runStandingIntegrationSmoke(
   };
   let activeCheckIndex = 1;
   let agent: Agent | undefined;
+  let connection: ConnectionSummary | undefined;
   let agentId: string | undefined;
   let grantId: string | undefined;
   let runId: string | undefined;
@@ -657,7 +686,7 @@ export async function runStandingIntegrationSmoke(
   let activeAgentsAfter: number | undefined;
 
   const cleanupGrant = async (session: TemporaryOwnerMcpSession): Promise<void> => {
-    activeCheckIndex = 9;
+    activeCheckIndex = 10;
 
     if (!grantId) {
       return;
@@ -684,19 +713,19 @@ export async function runStandingIntegrationSmoke(
         );
       }
 
-      checks[9] = createCheck(
+      checks[10] = createCheck(
         checkDefinitions.grantRevoke.name,
         mcpEndpoint,
         "valid",
         checkDefinitions.grantRevoke.validMessage,
       );
     } catch (error) {
-      checks[9] = failedCheck(checkDefinitions.grantRevoke.name, mcpEndpoint, error);
+      checks[10] = failedCheck(checkDefinitions.grantRevoke.name, mcpEndpoint, error);
     }
   };
 
   const cleanupAgent = async (session: TemporaryOwnerMcpSession): Promise<void> => {
-    activeCheckIndex = 10;
+    activeCheckIndex = 11;
 
     if (!agent) {
       return;
@@ -750,14 +779,14 @@ export async function runStandingIntegrationSmoke(
         );
       }
 
-      checks[10] = createCheck(
+      checks[11] = createCheck(
         checkDefinitions.agentDisable.name,
         mcpEndpoint,
         "valid",
         checkDefinitions.agentDisable.validMessage,
       );
     } catch (error) {
-      checks[10] = failedCheck(checkDefinitions.agentDisable.name, mcpEndpoint, error);
+      checks[11] = failedCheck(checkDefinitions.agentDisable.name, mcpEndpoint, error);
     }
   };
 
@@ -802,28 +831,58 @@ export async function runStandingIntegrationSmoke(
       activeCheckIndex = 3;
       const baseline = await readStatus(session);
       activeAgentsBefore = baseline.usage.agents.active;
-      await validateConnectionTarget(
+      const recovery = await callTool(
+        session,
+        "crewhelm_list_unresolved_tool_effects",
+        { limit: 1 },
+        listUnresolvedToolEffectsResultSchema,
+        "Fleet recovery read returned an invalid payload.",
+      );
+
+      if (!recovery.ok) {
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          "Fleet recovery state could not be verified.",
+        );
+      }
+
+      if (recovery.total > 0) {
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          `Fleet has ${recovery.total} unresolved provider effect${recovery.total === 1 ? "" : "s"}; inspect and explicitly reconcile before rehearsal.`,
+        );
+      }
+
+      checks[3] = createCheck(
+        checkDefinitions.fleetRecovery.name,
+        mcpEndpoint,
+        "valid",
+        checkDefinitions.fleetRecovery.validMessage,
+      );
+
+      activeCheckIndex = 4;
+      connection = await validateConnectionTarget(
         session,
         options.connectionId,
         baseline.capacity.maxConnections,
       );
-      checks[3] = createCheck(
+      checks[4] = createCheck(
         checkDefinitions.connectionTarget.name,
         mcpEndpoint,
         "valid",
         checkDefinitions.connectionTarget.validMessage,
       );
 
-      activeCheckIndex = 4;
+      activeCheckIndex = 5;
       await validateIntegrationTool(session);
-      checks[4] = createCheck(
+      checks[5] = createCheck(
         checkDefinitions.integrationTool.name,
         mcpEndpoint,
         "valid",
         checkDefinitions.integrationTool.validMessage,
       );
 
-      activeCheckIndex = 5;
+      activeCheckIndex = 6;
       let createdAgent: Agent | undefined;
       let created: z.infer<typeof createAgentResultSchema> | undefined;
 
@@ -870,14 +929,14 @@ export async function runStandingIntegrationSmoke(
           );
         }
 
-        checks[5] = createCheck(
+        checks[6] = createCheck(
           checkDefinitions.agentCreate.name,
           mcpEndpoint,
           "valid",
           checkDefinitions.agentCreate.validMessage,
         );
 
-        activeCheckIndex = 6;
+        activeCheckIndex = 7;
         const configureInput = {
           agentId: createdAgent.id,
           connectionId: options.connectionId,
@@ -941,14 +1000,14 @@ export async function runStandingIntegrationSmoke(
 
         agent = configuredAgent;
         grantId = configuredAgent.capabilityGrants[0];
-        checks[6] = createCheck(
+        checks[7] = createCheck(
           checkDefinitions.standingGrant.name,
           mcpEndpoint,
           "valid",
           checkDefinitions.standingGrant.validMessage,
         );
 
-        activeCheckIndex = 7;
+        activeCheckIndex = 8;
         const startInput = {
           agentId: configuredAgent.id,
           expectedRevision: configuredAgent.revision,
@@ -1028,6 +1087,11 @@ export async function runStandingIntegrationSmoke(
           const unknown = inspected.timeline.find(
             (event) => event.event === "tool.execution_unknown",
           );
+          const unreconciledEffect = inspected.timeline.some(
+            (event) =>
+              event.event === "tool.authorization_blocked" &&
+              event.reason === "unreconciled_effect",
+          );
 
           if (unknown) {
             unknownProviderEffect = true;
@@ -1043,15 +1107,17 @@ export async function runStandingIntegrationSmoke(
             if (inspected.run.status !== "completed") {
               throw new TemporaryOwnerSessionError(
                 "invalid_payload",
-                unknownProviderEffect
-                  ? "Provider effect is unknown; verify the draft account before reconciliation."
-                  : "Standing integration run did not complete successfully.",
+                unreconciledEffect
+                  ? UNRECONCILED_EFFECT_MESSAGE
+                  : unknownProviderEffect
+                    ? "Provider effect is unknown; verify the draft account before reconciliation."
+                    : "Standing integration run did not complete successfully.",
               );
             }
 
             toolCallId = validateSingleDispatch(inspected);
             retainedDraft = true;
-            checks[7] = createCheck(
+            checks[8] = createCheck(
               checkDefinitions.runSingleDispatch.name,
               mcpEndpoint,
               "valid",
@@ -1072,7 +1138,7 @@ export async function runStandingIntegrationSmoke(
           await wait(Math.min(POLL_INTERVAL_MS, Math.max(1, deadline - now())));
         }
 
-        activeCheckIndex = 8;
+        activeCheckIndex = 9;
 
         for (;;) {
           const inbox = await callTool(
@@ -1083,7 +1149,7 @@ export async function runStandingIntegrationSmoke(
               agentId: configuredAgent.id,
               includeAcknowledged: true,
               kinds: ["outcome"],
-              limit: 25,
+              limit: 20,
               occurredAfter: new Date(startedAt).toISOString(),
             },
             agentInboxResultSchema,
@@ -1112,7 +1178,7 @@ export async function runStandingIntegrationSmoke(
               );
             }
 
-            checks[8] = createCheck(
+            checks[9] = createCheck(
               checkDefinitions.inboxOutcome.name,
               mcpEndpoint,
               "valid",
@@ -1161,14 +1227,14 @@ export async function runStandingIntegrationSmoke(
   }
 
   if (sessionResult.revocation.status === "revoked") {
-    checks[11] = createCheck(
+    checks[12] = createCheck(
       checkDefinitions.oauthTokenRevocation.name,
       revokeEndpoint,
       "valid",
       checkDefinitions.oauthTokenRevocation.validMessage,
     );
   } else if (sessionResult.revocation.status === "failed") {
-    checks[11] = failedCheck(
+    checks[12] = failedCheck(
       checkDefinitions.oauthTokenRevocation.name,
       revokeEndpoint,
       sessionResult.revocation.error,
@@ -1180,6 +1246,7 @@ export async function runStandingIntegrationSmoke(
     ok: publicReport.ok && checks.every((check) => check.status === "pass"),
     public: publicReport,
     connectionId: options.connectionId,
+    ...(connection === undefined ? {} : { connection }),
     fixtureSubject,
     ...(agentId === undefined ? {} : { agentId }),
     ...(grantId === undefined ? {} : { grantId }),

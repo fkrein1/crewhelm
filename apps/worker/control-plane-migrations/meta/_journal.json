@@ -99,6 +99,13 @@
       "when": 1785344972757,
       "tag": "0013_scale_fleet_configuration",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1785365735533,
+      "tag": "0014_closed_patriot",
+      "breakpoints": true
     }
   ]
 }

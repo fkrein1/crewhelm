@@ -167,7 +167,7 @@ export function registerConnectionTools(
         readOnlyHint: true,
       },
       description:
-        "List bounded owner-scoped Crewhelm connection summaries without provider account IDs or credentials.",
+        "List bounded owner-scoped connection summaries with integration and provider account IDs, but never credentials.",
       inputSchema: listConnectionsInputSchema,
       title: "List integration connections",
     },

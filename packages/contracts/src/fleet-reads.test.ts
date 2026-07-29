@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import { MAXIMUM_FLEET_LIST_ITEMS, MAXIMUM_FLEET_LIST_RESPONSE_BYTES } from "./fleet-capacity.js";
 import { listAgentRevisionsResultSchema, listAgentsResultSchema } from "./control-plane.js";
-import { listConnectionsResultSchema } from "./connections.js";
+import { MAXIMUM_CONNECTION_LIST_ITEMS, listConnectionsResultSchema } from "./connections.js";
+import {
+  MAXIMUM_UNRESOLVED_TOOL_EFFECTS_RESPONSE_BYTES,
+  listUnresolvedToolEffectsResultSchema,
+} from "./recovery.js";
 import { listAgentRunsInputSchema, listAgentRunsResultSchema } from "./run-admission.js";
 
 const timestamp = "9999-12-31T23:59:59.999Z";
@@ -63,11 +67,14 @@ describe("fleet read response budgets", () => {
   });
 
   it("bounds worst-case compact connection and run pages", () => {
-    const connections = Array.from({ length: MAXIMUM_FLEET_LIST_ITEMS }, (_, index) => ({
+    const connections = Array.from({ length: MAXIMUM_CONNECTION_LIST_ITEMS }, (_, index) => ({
+      accountLabel: "L".repeat(160),
       authorizationOutcome: "untracked" as const,
       authConfigId: `ac_${"a".repeat(124)}`,
       connectionId: `connection_${uuid(index)}`,
       createdAt: timestamp,
+      integrationSlug: `i${"n".repeat(127)}`,
+      providerConnectionId: `ca_${"p".repeat(124)}`,
       status: "unavailable" as const,
     }));
     const runs = Array.from({ length: MAXIMUM_FLEET_LIST_ITEMS }, (_, index) => ({
@@ -99,5 +106,34 @@ describe("fleet read response budgets", () => {
         }),
       ),
     ).toBeLessThanOrEqual(MAXIMUM_FLEET_LIST_RESPONSE_BYTES);
+  });
+
+  it("bounds worst-case unresolved provider-effect pages", () => {
+    const effects = Array.from({ length: MAXIMUM_FLEET_LIST_ITEMS }, (_, index) => ({
+      agentId: `agent_${uuid(index)}`,
+      agentRevision: Number.MAX_SAFE_INTEGER,
+      authorization: "standing" as const,
+      connectionId: `connection_${uuid(index)}`,
+      dispatchedAt: timestamp,
+      effect: "destructive" as const,
+      integrationSlug: `i${"n".repeat(127)}`,
+      legacyWildcard: true,
+      recordedAt: timestamp,
+      runId: `run_${uuid(index)}`,
+      toolCallId: `tool_call_${uuid(index)}`,
+      toolkitVersion: "99991231_99",
+      toolSlug: `T${"O".repeat(255)}`,
+    }));
+
+    expect(
+      serializedBytes(
+        listUnresolvedToolEffectsResultSchema.parse({
+          effects,
+          nextCursor: effects.at(-1)?.toolCallId ?? null,
+          ok: true,
+          total: effects.length,
+        }),
+      ),
+    ).toBeLessThanOrEqual(MAXIMUM_UNRESOLVED_TOOL_EFFECTS_RESPONSE_BYTES);
   });
 });

@@ -1,4 +1,5 @@
 import {
+  AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
   AUTONOMY_WRITE_SCOPE,
   COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
@@ -18,7 +19,12 @@ import { describe, expect, it } from "vitest";
 
 import { deriveOwnerKey } from "../identity.js";
 import { controlPlaneMigrations } from "../../../control-plane-migrations/index.js";
+import repairFailedInboxOutcomesMigration from "../../../control-plane-migrations/0014_closed_patriot.sql";
 import { digestRunPrompt } from "../../agent/admitted-runs/index.js";
+import {
+  applyControlPlaneMigrationSql,
+  runControlPlaneMigrationTransaction,
+} from "../migrations.js";
 import { digestExternalEffect } from "./tool-execution.js";
 
 const connectionId = "connection_22222222-2222-4222-8222-222222222222";
@@ -32,6 +38,7 @@ async function authorityFor(subject: string): Promise<OwnerAuthority> {
     scopes: [
       OWNER_READ_SCOPE,
       OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
       AGENTS_WRITE_SCOPE,
       RUNS_WRITE_SCOPE,
       AUTONOMY_WRITE_SCOPE,
@@ -314,7 +321,7 @@ describe("admitted tool execution", () => {
   it("backfills legacy grants to approval-required before they can execute", async () => {
     const fixture = await toolExecutionFixture("legacy-grant-authorization", "write");
 
-    await runInDurableObject(fixture.controlPlane, (_instance, state) => {
+    await runInDurableObject(fixture.controlPlane, async (_instance, state) => {
       state.storage.sql.exec(
         `UPDATE capability_grants
          SET grant = json_remove(grant, '$.authorization')
@@ -882,12 +889,160 @@ describe("admitted tool execution", () => {
       ok: false,
     });
 
+    const newerUnknownToolCallId = `tool_call_${crypto.randomUUID()}`;
+
     await runInDurableObject(fixture.controlPlane, (_instance, state) => {
       state.storage.sql.exec(
         "UPDATE tool_executions SET effect_digest = ? WHERE tool_call_id = ?",
         "0".repeat(64),
         fixture.action.toolCallId,
       );
+      const original = state.storage.sql
+        .exec<{ started_at: number }>(
+          "SELECT started_at FROM tool_executions WHERE tool_call_id = ?",
+          fixture.action.toolCallId,
+        )
+        .one();
+      const startedAt = original.started_at + 1;
+
+      state.storage.sql.exec(
+        `INSERT INTO tool_executions
+           (tool_call_id, run_id, grant_id, action_digest, effect_digest, input_digest,
+            nonce_digest, status, cost_microusd, output_bytes, expires_at, started_at,
+            dispatched_at, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'unknown', 0, 0, ?, ?, ?, ?)`,
+        newerUnknownToolCallId,
+        fixture.reference.runId,
+        fixture.grantId,
+        "2".repeat(64),
+        "3".repeat(64),
+        "4".repeat(64),
+        "c".repeat(43),
+        startedAt + 2,
+        startedAt,
+        startedAt,
+        startedAt + 1,
+      );
+    });
+    await expect(fixture.controlPlane.status(fixture.authority)).resolves.toMatchObject({
+      ok: true,
+      status: {
+        usage: {
+          recovery: { unresolvedEffects: 2 },
+        },
+      },
+    });
+    await expect(
+      fixture.controlPlane.listUnresolvedToolEffects(fixture.authority, { limit: 1 }),
+    ).resolves.toMatchObject({
+      effects: [
+        {
+          agentId: fixture.agentId,
+          authorization: "approval_required",
+          connectionId: fixture.connectionId,
+          dispatchedAt: expect.any(String),
+          effect: "write",
+          integrationSlug: "recovery_toolkit",
+          legacyWildcard: false,
+          recordedAt: expect.any(String),
+          runId: fixture.reference.runId,
+          toolCallId: newerUnknownToolCallId,
+          toolkitVersion: "20260728_00",
+          toolSlug: "RECOVERY_UPDATE_ITEM",
+        },
+      ],
+      nextCursor: newerUnknownToolCallId,
+      ok: true,
+      total: 2,
+    });
+    await expect(
+      fixture.controlPlane.reconcileToolExecution(fixture.authority, {
+        resolution: "not_applied",
+        toolCallId: newerUnknownToolCallId,
+      }),
+    ).resolves.toMatchObject({ ok: true, reconciled: true });
+    await expect(
+      fixture.controlPlane.listUnresolvedToolEffects(fixture.authority, {
+        cursor: newerUnknownToolCallId,
+        limit: 1,
+      }),
+    ).resolves.toMatchObject({
+      effects: [
+        {
+          legacyWildcard: true,
+          toolCallId: fixture.action.toolCallId,
+        },
+      ],
+      nextCursor: null,
+      ok: true,
+      total: 1,
+    });
+    await expect(
+      fixture.controlPlane.recordAgentInboxRun({
+        event: {
+          approvalCount: 0,
+          kind: "outcome",
+          occurredAt: new Date().toISOString(),
+          resultPreview: "The model claimed the provider action succeeded.",
+          runStatus: "completed",
+        },
+        reference: {
+          agentId: fixture.reference.agentId,
+          agentRevision: fixture.reference.agentRevision,
+          idempotencyKey: fixture.reference.idempotencyKey,
+          ownerKey: fixture.reference.ownerKey,
+          promptDigest: fixture.reference.promptDigest,
+          runId: fixture.reference.runId,
+        },
+      }),
+    ).resolves.toEqual({ ok: true, recorded: true });
+    await runInDurableObject(fixture.controlPlane, async (_instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE agent_inbox_items
+         SET kind = 'outcome',
+             result_preview = 'The model claimed the provider action succeeded.',
+             run_status = 'completed'
+         WHERE run_id = ?`,
+        fixture.reference.runId,
+      );
+      await state.storage.sync();
+      await runControlPlaneMigrationTransaction(
+        state.storage,
+        [repairFailedInboxOutcomesMigration],
+        () => {
+          expect(state.storage.sql.exec("PRAGMA foreign_keys").one()).toEqual({ foreign_keys: 0 });
+          applyControlPlaneMigrationSql(state.storage, repairFailedInboxOutcomesMigration);
+        },
+      );
+    });
+    await expect(
+      fixture.controlPlane.agentInbox(fixture.authority, {
+        action: "list",
+        kinds: ["exception"],
+        limit: 1,
+      }),
+    ).resolves.toMatchObject({
+      action: "list",
+      items: [
+        {
+          kind: "exception",
+          resultPreview: null,
+          runId: fixture.reference.runId,
+          runStatus: "failed",
+        },
+      ],
+      ok: true,
+    });
+    await expect(
+      fixture.controlPlane.listUnresolvedToolEffects(fixture.authority, {
+        cursor: `tool_call_${crypto.randomUUID()}`,
+      }),
+    ).resolves.toEqual({
+      error: {
+        code: "invalid_request",
+        message: "Unresolved tool effect request denied.",
+      },
+      ok: false,
     });
     await expect(
       fixture.controlPlane.evaluateToolExecution({
@@ -928,6 +1083,14 @@ describe("admitted tool execution", () => {
       resolution: "not_applied",
       runId: fixture.reference.runId,
       toolCallId: fixture.action.toolCallId,
+    });
+    await expect(fixture.controlPlane.status(fixture.authority)).resolves.toMatchObject({
+      ok: true,
+      status: {
+        usage: {
+          recovery: { unresolvedEffects: 0 },
+        },
+      },
     });
     await expect(
       fixture.controlPlane.reconcileToolExecution(fixture.authority, {

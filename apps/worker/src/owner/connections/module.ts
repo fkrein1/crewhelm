@@ -59,10 +59,13 @@ type StoredConnectionLinkRow = {
   redirectUrl: string | null;
 };
 type StoredConnectionSummaryRow = {
+  accountLabel: string | null;
   authConfigId: string;
   authorizationOutcome: ConnectionSummary["authorizationOutcome"];
   connectionId: string;
   createdAt: number;
+  integrationSlug: string | null;
+  providerConnectionId: string;
   status: ConnectionSummary["status"];
 };
 
@@ -842,12 +845,24 @@ export class Connections {
       ),
       'untracked'
     )`;
+    const integrationSlug = sql<string | null>`(
+      SELECT ${integrationEnablementRequests.integrationSlug}
+      FROM ${integrationEnablementRequests}
+      WHERE ${integrationEnablementRequests.authConfigId} = ${connections.authConfigId}
+        AND ${integrationEnablementRequests.status} = 'completed'
+      ORDER BY ${integrationEnablementRequests.completedAt} DESC,
+        ${integrationEnablementRequests.reservationId} DESC
+      LIMIT 1
+    )`;
     const rows = this.#database
       .select({
+        accountLabel: connections.accountLabel,
         authConfigId: connections.authConfigId,
         authorizationOutcome: latestAuthorizationOutcome,
         connectionId: connections.connectionId,
         createdAt: connections.createdAt,
+        integrationSlug,
+        providerConnectionId: connections.providerConnectionId,
         status: connections.status,
       })
       .from(connections)
@@ -958,10 +973,13 @@ export class Connections {
 
   #summaryFromRow(row: StoredConnectionSummaryRow): ConnectionSummary {
     return connectionSummarySchema.parse({
+      accountLabel: row.accountLabel,
       authorizationOutcome: row.authorizationOutcome,
       authConfigId: row.authConfigId,
       connectionId: row.connectionId,
       createdAt: new Date(row.createdAt).toISOString(),
+      integrationSlug: row.integrationSlug,
+      providerConnectionId: row.providerConnectionId,
       status: row.status,
     });
   }

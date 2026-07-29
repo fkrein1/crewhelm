@@ -5,6 +5,8 @@ import {
   composioToolCapabilityGrantSchema,
   evaluateToolExecutionInputSchema,
   evaluateToolExecutionResultSchema,
+  listUnresolvedToolEffectsInputSchema,
+  listUnresolvedToolEffectsResultSchema,
   reserveToolExecutionInputSchema,
   reserveToolExecutionResultSchema,
   reconcileToolExecutionInputSchema,
@@ -20,10 +22,11 @@ import {
   type ResolveToolExecutionConnectionResult,
   type ToolExecutionPermit,
   type FleetConfiguration,
+  type ListUnresolvedToolEffectsResult,
   type OwnerAuthority,
   type ToolExecutionEvaluationFailureReason,
 } from "@crewhelm/contracts";
-import { and, count, eq, gt, isNotNull, isNull, lte, min, or } from "drizzle-orm";
+import { and, count, desc, eq, gt, isNotNull, isNull, lt, lte, min, or } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import { recordExecutionEvent } from "../../observability/execution.js";
@@ -42,6 +45,7 @@ import {
 import { evaluateApprovedComposioToolAction, evaluateComposioToolAction } from "./policy.js";
 
 const INTEGRATION_USAGE_WINDOW_MS = 30 * 24 * 60 * 60 * 1_000;
+const LEGACY_UNKNOWN_EFFECT_DIGEST = "0".repeat(64);
 const INVALID_TOOL_EXECUTION = {
   error: {
     code: "invalid_execution",
@@ -109,6 +113,7 @@ export async function digestExternalEffect(
 }
 
 type ReconciliationFailure = Extract<ReconcileToolExecutionResult, { ok: false }>;
+type UnresolvedToolEffectsFailure = Extract<ListUnresolvedToolEffectsResult, { ok: false }>;
 
 export function deniedToolExecutionReconciliation(
   code: ReconciliationFailure["error"]["code"],
@@ -117,6 +122,18 @@ export function deniedToolExecutionReconciliation(
     error: {
       code,
       message: "Tool execution reconciliation denied.",
+    },
+    ok: false,
+  };
+}
+
+export function deniedUnresolvedToolEffects(
+  code: UnresolvedToolEffectsFailure["error"]["code"],
+): UnresolvedToolEffectsFailure {
+  return {
+    error: {
+      code,
+      message: "Unresolved tool effect request denied.",
     },
     ok: false,
   };
@@ -363,7 +380,7 @@ export class ToolExecutions {
     return result;
   }
 
-  reconcileExpired(currentTime: number): void {
+  reconcileExpired(currentTime: number): string[] {
     const reconciled = this.#database.transaction((transaction) => {
       const expired = transaction
         .select({
@@ -430,6 +447,8 @@ export class ToolExecutions {
         toolCallId: execution.toolCallId,
       });
     }
+
+    return [...new Set(reconciled.map((execution) => execution.runId))];
   }
 
   nextReconciliationAt(): number | null {
@@ -545,6 +564,101 @@ export class ToolExecutions {
     }
 
     return result;
+  }
+
+  unresolvedCount(): number {
+    return (
+      this.#database
+        .select({ value: count() })
+        .from(toolExecutions)
+        .where(and(eq(toolExecutions.status, "unknown"), isNull(toolExecutions.reconciliation)))
+        .get()?.value ?? 0
+    );
+  }
+
+  listUnresolved(input: unknown): ListUnresolvedToolEffectsResult {
+    const request = listUnresolvedToolEffectsInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return deniedUnresolvedToolEffects("invalid_request");
+    }
+
+    const unresolved = and(
+      eq(toolExecutions.status, "unknown"),
+      isNull(toolExecutions.reconciliation),
+    );
+    const cursorRow =
+      request.data.cursor === undefined
+        ? undefined
+        : this.#database
+            .select({
+              startedAt: toolExecutions.startedAt,
+              toolCallId: toolExecutions.toolCallId,
+            })
+            .from(toolExecutions)
+            .where(eq(toolExecutions.toolCallId, request.data.cursor))
+            .get();
+
+    if (request.data.cursor !== undefined && cursorRow === undefined) {
+      return deniedUnresolvedToolEffects("invalid_request");
+    }
+
+    const rows = this.#database
+      .select({
+        completedAt: toolExecutions.completedAt,
+        dispatchedAt: toolExecutions.dispatchedAt,
+        effectDigest: toolExecutions.effectDigest,
+        grant: capabilityGrants.grant,
+        runId: toolExecutions.runId,
+        startedAt: toolExecutions.startedAt,
+        toolCallId: toolExecutions.toolCallId,
+      })
+      .from(toolExecutions)
+      .innerJoin(capabilityGrants, eq(capabilityGrants.grantId, toolExecutions.grantId))
+      .where(
+        and(
+          unresolved,
+          cursorRow === undefined
+            ? undefined
+            : or(
+                lt(toolExecutions.startedAt, cursorRow.startedAt),
+                and(
+                  eq(toolExecutions.startedAt, cursorRow.startedAt),
+                  lt(toolExecutions.toolCallId, cursorRow.toolCallId),
+                ),
+              ),
+        ),
+      )
+      .orderBy(desc(toolExecutions.startedAt), desc(toolExecutions.toolCallId))
+      .limit(request.data.limit + 1)
+      .all();
+    const hasMore = rows.length > request.data.limit;
+    const effects = rows.slice(0, request.data.limit).map((row) => {
+      const grant = composioToolCapabilityGrantSchema.parse(row.grant);
+
+      return {
+        agentId: grant.agentId,
+        agentRevision: grant.agentRevision,
+        authorization: grant.authorization,
+        connectionId: grant.connectionId,
+        dispatchedAt: row.dispatchedAt === null ? null : new Date(row.dispatchedAt).toISOString(),
+        effect: grant.effect,
+        integrationSlug: grant.integrationSlug,
+        legacyWildcard: row.effectDigest === LEGACY_UNKNOWN_EFFECT_DIGEST,
+        recordedAt: new Date(row.completedAt ?? row.startedAt).toISOString(),
+        runId: row.runId,
+        toolCallId: row.toolCallId,
+        toolkitVersion: grant.toolkitVersion,
+        toolSlug: grant.toolSlug,
+      };
+    });
+
+    return listUnresolvedToolEffectsResultSchema.parse({
+      effects,
+      nextCursor: hasMore ? (effects.at(-1)?.toolCallId ?? null) : null,
+      ok: true,
+      total: this.unresolvedCount(),
+    });
   }
 
   reconcile(authority: OwnerAuthority, input: unknown): ReconcileToolExecutionResult {

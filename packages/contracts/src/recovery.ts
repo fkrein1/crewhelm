@@ -6,10 +6,17 @@ import {
   capabilityGrantIdSchema,
 } from "./control-plane.js";
 import { connectionIdSchema } from "./connections.js";
-import { runIdSchema, toolCallIdSchema } from "./capabilities.js";
+import { MAXIMUM_FLEET_LIST_ITEMS } from "./fleet-capacity.js";
+import {
+  capabilityEffectSchema,
+  composioToolCapabilityGrantSchema,
+  runIdSchema,
+  toolCallIdSchema,
+} from "./capabilities.js";
 
 export const MAXIMUM_BATCH_AGENT_DISABLE_ITEMS = 25;
 export const MAXIMUM_BATCH_AGENT_DISABLE_RESPONSE_BYTES = 8 * 1_024;
+export const MAXIMUM_UNRESOLVED_TOOL_EFFECTS_RESPONSE_BYTES = 32 * 1_024;
 
 export const changeAuthorityInputSchema = z.discriminatedUnion("target", [
   z.strictObject({
@@ -142,9 +149,53 @@ export const reconcileToolExecutionResultSchema = z.discriminatedUnion("ok", [
   }),
 ]);
 
+export const listUnresolvedToolEffectsInputSchema = z.strictObject({
+  cursor: toolCallIdSchema.optional(),
+  limit: z.number().int().min(1).max(MAXIMUM_FLEET_LIST_ITEMS).default(10),
+});
+
+export const unresolvedToolEffectSummarySchema = z.strictObject({
+  agentId: agentIdSchema,
+  agentRevision: agentRevisionNumberSchema,
+  connectionId: connectionIdSchema,
+  effect: capabilityEffectSchema,
+  authorization: composioToolCapabilityGrantSchema.shape.authorization,
+  dispatchedAt: z.iso.datetime().nullable(),
+  integrationSlug: composioToolCapabilityGrantSchema.shape.integrationSlug,
+  legacyWildcard: z.boolean(),
+  recordedAt: z.iso.datetime(),
+  runId: runIdSchema,
+  toolCallId: toolCallIdSchema,
+  toolkitVersion: composioToolCapabilityGrantSchema.shape.toolkitVersion,
+  toolSlug: composioToolCapabilityGrantSchema.shape.toolSlug,
+});
+
+export const listUnresolvedToolEffectsResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    effects: z.array(unresolvedToolEffectSummarySchema).max(MAXIMUM_FLEET_LIST_ITEMS),
+    nextCursor: toolCallIdSchema.nullable(),
+    ok: z.literal(true),
+    total: z.number().int().nonnegative().safe(),
+  }),
+  z.strictObject({
+    error: z.strictObject({
+      code: z.enum([
+        "incompatible_schema",
+        "insufficient_scope",
+        "invalid_authority",
+        "invalid_request",
+        "owner_mismatch",
+      ]),
+      message: z.literal("Unresolved tool effect request denied."),
+    }),
+    ok: z.literal(false),
+  }),
+]);
+
 export type BatchDisableAgentReceipt = z.infer<typeof batchDisableAgentReceiptSchema>;
 export type BatchDisableAgentsInput = z.infer<typeof batchDisableAgentsInputSchema>;
 export type BatchDisableAgentsResult = z.infer<typeof batchDisableAgentsResultSchema>;
 export type ChangeAuthorityInput = z.infer<typeof changeAuthorityInputSchema>;
 export type ChangeAuthorityResult = z.infer<typeof changeAuthorityResultSchema>;
+export type ListUnresolvedToolEffectsResult = z.infer<typeof listUnresolvedToolEffectsResultSchema>;
 export type ReconcileToolExecutionResult = z.infer<typeof reconcileToolExecutionResultSchema>;

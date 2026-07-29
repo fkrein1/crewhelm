@@ -101,6 +101,9 @@ function formatStandingIntegrationSmokeReport(
     report.agentId && report.runId
       ? `Agent ${report.agentId}; run ${report.runId}; terminal status ${report.runStatus ?? "unknown"}.\n`
       : "";
+  const connection = report.connection
+    ? `Connection ${report.connection.accountLabel ?? report.connection.providerConnectionId} (${report.connection.integrationSlug ?? "unknown integration"}).\n`
+    : "";
   const draft =
     report.retainedDraft && report.fixtureSubject
       ? `Retained non-deliverable Gmail draft: ${report.fixtureSubject}\n`
@@ -110,7 +113,7 @@ function formatStandingIntegrationSmokeReport(
       ? `Active Agents ${report.activeAgentsBefore} -> ${report.activeAgentsAfter} after cleanup.\n`
       : "";
 
-  return `${formatDoctorReport(report.public, presentation)}${smokeChecks}${fixture}${draft}${cleanup}`;
+  return `${formatDoctorReport(report.public, presentation)}${smokeChecks}${connection}${fixture}${draft}${cleanup}`;
 }
 
 function formatBootstrapReport(report: BootstrapReport, presentation: CliPresentation): string {

@@ -393,6 +393,7 @@ describe("OwnerControlPlane agents", () => {
           version: "20260727_00",
         },
       ],
+      verifiedAccountLabel: "Project account",
       verifiedToolkitSlug: "project_toolkit",
     });
 
@@ -450,7 +451,7 @@ describe("OwnerControlPlane agents", () => {
     expect(JSON.stringify(rows)).not.toContain("items:read");
     expect(JSON.stringify(rows)).toContain("PROJECT_TOOLKIT_READ_ITEM");
     await expect(stub.listConnections(authority, {})).resolves.toMatchObject({
-      connections: [{ connectionId, status: "active" }],
+      connections: [{ accountLabel: "Project account", connectionId, status: "active" }],
       ok: true,
     });
 
@@ -469,6 +470,7 @@ describe("OwnerControlPlane agents", () => {
       },
       providerConnectionId: null,
       tools: [],
+      verifiedAccountLabel: null,
       verifiedToolkitSlug: null,
     });
 

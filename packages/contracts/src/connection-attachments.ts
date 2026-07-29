@@ -1,7 +1,11 @@
 import * as z from "zod";
 
 import { composioToolLimitsSchema, toolAuthorizationModeSchema } from "./capabilities.js";
-import { connectionIdSchema, composioConnectedAccountIdSchema } from "./connections.js";
+import {
+  connectionIdSchema,
+  connectionSummarySchema,
+  composioConnectedAccountIdSchema,
+} from "./connections.js";
 import {
   agentIdSchema,
   agentMutationIdempotencyKeySchema,
@@ -84,6 +88,7 @@ export const completeAgentConnectionConfigurationInputSchema =
         }),
       )
       .max(MAXIMUM_CONNECTION_TOOLS_PER_AGENT),
+    verifiedAccountLabel: connectionSummarySchema.shape.accountLabel,
     verifiedToolkitSlug: integrationSlugSchema.nullable(),
   });
 

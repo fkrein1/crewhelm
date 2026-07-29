@@ -91,6 +91,11 @@ approval, and budget before issuing a single-use adapter permit. Disabling an Ag
 connection or capability is owner-local, idempotent, audited, and blocks later admission,
 approval, or dispatch. An ambiguous provider outcome remains `unknown` and blocks an equivalent
 mutating effect until the owner records `applied` or `not_applied` from independent evidence.
+Fleet status reports the unresolved count, and a bounded owner-local recovery read exposes only
+the opaque run, Agent, connection, tool, and time metadata needed to find that evidence. It never
+returns provider payloads, account identity, credentials, or action input. A blocked authorization
+or unresolved execution projects as a failed run and inbox exception even if untrusted model prose
+claims success.
 Cancellation and revocation cannot claim to undo an effect that already crossed the provider
 boundary.
 

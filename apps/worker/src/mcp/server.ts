@@ -67,6 +67,7 @@ export {
 } from "./schedule-tools.js";
 export {
   MCP_BATCH_DISABLE_AGENTS_TOOL_NAME,
+  MCP_LIST_UNRESOLVED_TOOL_EFFECTS_TOOL_NAME,
   MCP_RECONCILE_TOOL_EXECUTION_TOOL_NAME,
   MCP_REVOKE_AUTHORITY_TOOL_NAME,
 } from "./recovery-tools.js";
@@ -201,7 +202,7 @@ function createMcpServer(
         readOnlyHint: true,
       },
       description:
-        "Return a cheap owner-local fleet dashboard with active usage, inbox counts, and configured capacity.",
+        "Return a cheap owner-local fleet dashboard with active usage, inbox and unresolved-effect counts, and configured capacity.",
       inputSchema: z.strictObject({}),
       title: "Crewhelm status",
     },

@@ -66,6 +66,12 @@ const toolAnnotations = {
     openWorldHint: false,
     readOnlyHint: true,
   },
+  crewhelm_list_unresolved_tool_effects: {
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+    readOnlyHint: true,
+  },
   crewhelm_revoke_authority: {
     destructiveHint: true,
     idempotentHint: true,
@@ -136,7 +142,7 @@ function publicPayload(path: string): unknown {
   };
 }
 
-function fleetStatus(active: number) {
+function fleetStatus(active: number, unresolvedEffects = 0) {
   return {
     ok: true,
     status: {
@@ -147,7 +153,7 @@ function fleetStatus(active: number) {
         retention: { inboxSeconds: 2_592_000, runSeconds: 86_400 },
       },
       configurationRevision: 1,
-      schemaVersion: 14,
+      schemaVersion: 15,
       status: "ready",
       usage: {
         agents: { active, total: 9 },
@@ -160,13 +166,17 @@ function fleetStatus(active: number) {
           total: 1,
         },
         runs: { active: 0 },
+        recovery: { unresolvedEffects },
       },
     },
   };
 }
 
 interface HarnessOptions {
+  authorizationBlockedReason?: "unreconciled_effect";
   connectionMissing?: boolean;
+  connectionIntegration?: "github";
+  connectionStatus?: "active" | "initiated";
   failInspectAfterUnknown?: boolean;
   lostConfigureResponses?: number;
   loseFirstStartResponse?: boolean;
@@ -176,6 +186,7 @@ interface HarnessOptions {
   unknownEffectRunning?: boolean;
   unknownWithoutToolCallId?: boolean;
   unsafeToolContract?: "input" | "scopes";
+  unresolvedEffects?: number;
 }
 
 interface Harness {
@@ -348,20 +359,56 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
     let payload: unknown;
 
     if (params.name === "crewhelm_status") {
-      payload = fleetStatus(activeAgents);
-    } else if (params.name === "crewhelm_list_connections") {
+      payload = fleetStatus(activeAgents, options.unresolvedEffects);
+    } else if (params.name === "crewhelm_list_unresolved_tool_effects") {
       payload = {
-        connections: options.connectionMissing
-          ? []
-          : [
-              {
-                authorizationOutcome: "returned",
-                authConfigId: "ac_gmail",
-                connectionId,
-                createdAt: timestamp,
-                status: "active",
-              },
-            ],
+        effects:
+          (options.unresolvedEffects ?? 0) > 0
+            ? [
+                {
+                  agentId,
+                  agentRevision: 2,
+                  authorization: "standing",
+                  connectionId,
+                  dispatchedAt: timestamp,
+                  effect: "write",
+                  integrationSlug: "gmail",
+                  legacyWildcard: false,
+                  recordedAt: timestamp,
+                  runId,
+                  toolCallId,
+                  toolkitVersion: "20260721_00",
+                  toolSlug: "GMAIL_CREATE_EMAIL_DRAFT",
+                },
+              ]
+            : [],
+        nextCursor: null,
+        ok: true,
+        total: options.unresolvedEffects ?? 0,
+      };
+    } else if (params.name === "crewhelm_list_connections") {
+      z.strictObject({
+        authorizationOutcome: z.literal("returned"),
+        cursor: z.string().optional(),
+        integration: z.literal("gmail"),
+        limit: z.literal(20),
+      }).parse(params.arguments);
+      payload = {
+        connections:
+          options.connectionMissing || options.connectionIntegration === "github"
+            ? []
+            : [
+                {
+                  accountLabel: "esteiraliving@gmail.com",
+                  authorizationOutcome: "returned",
+                  authConfigId: "ac_gmail",
+                  connectionId,
+                  createdAt: timestamp,
+                  integrationSlug: options.connectionIntegration === "github" ? "github" : "gmail",
+                  providerConnectionId: "ca_gmail",
+                  status: options.connectionStatus ?? "initiated",
+                },
+              ],
         nextCursor: null,
         ok: true,
       };
@@ -466,21 +513,38 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
               run: run("failed"),
               timeline: [{ event: "run.failed", occurredAt: timestamp }],
             }
-          : options.unknownEffect || options.unknownEffectRunning
+          : options.authorizationBlockedReason
             ? {
                 ok: true,
                 request: { prompt: "provider-prompt-secret" },
-                run: run(options.unknownEffectRunning ? "running" : "failed"),
-                timeline: options.unknownEffectRunning
-                  ? unknownTimeline.slice(0, -1)
-                  : unknownTimeline,
+                run: run("failed"),
+                timeline: [
+                  { event: "run.admitted", occurredAt: timestamp },
+                  { event: "run.started", occurredAt: timestamp },
+                  {
+                    event: "tool.authorization_blocked",
+                    occurredAt: timestamp,
+                    reason: options.authorizationBlockedReason,
+                    toolCallId,
+                  },
+                  { event: "run.completed", occurredAt: timestamp },
+                ],
               }
-            : {
-                ok: true,
-                request: { prompt: "provider-prompt-secret" },
-                run: run("completed"),
-                timeline: successfulTimeline,
-              };
+            : options.unknownEffect || options.unknownEffectRunning
+              ? {
+                  ok: true,
+                  request: { prompt: "provider-prompt-secret" },
+                  run: run(options.unknownEffectRunning ? "running" : "failed"),
+                  timeline: options.unknownEffectRunning
+                    ? unknownTimeline.slice(0, -1)
+                    : unknownTimeline,
+                }
+              : {
+                  ok: true,
+                  request: { prompt: "provider-prompt-secret" },
+                  run: run("completed"),
+                  timeline: successfulTimeline,
+                };
     } else if (params.name === "crewhelm_agent_inbox") {
       payload = {
         action: "list",
@@ -584,6 +648,11 @@ describe("standing integration action smoke", () => {
       activeAgentsAfter: 3,
       activeAgentsBefore: 3,
       agentId,
+      connection: {
+        accountLabel: "esteiraliving@gmail.com",
+        integrationSlug: "gmail",
+        providerConnectionId: "ca_gmail",
+      },
       connectionId,
       grantId,
       retainedDraft: true,
@@ -632,9 +701,35 @@ describe("standing integration action smoke", () => {
     const report = await runSmoke(harness);
 
     expect(report.ok).toBe(false);
-    expect(report.checks[3]).toMatchObject({ code: "invalid_payload", status: "fail" });
+    expect(report.checks[4]).toMatchObject({ code: "invalid_payload", status: "fail" });
     expect(harness.toolCalls.some((call) => call.name === "crewhelm_create_agent")).toBe(false);
-    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+  });
+
+  it("fails before mutation when the exact connection belongs to another integration", async () => {
+    const harness = smokeHarness({ connectionIntegration: "github" });
+    const report = await runSmoke(harness);
+
+    expect(report.ok).toBe(false);
+    expect(report.checks[4]).toMatchObject({ code: "invalid_payload", status: "fail" });
+    expect(harness.toolCalls.some((call) => call.name === "crewhelm_create_agent")).toBe(false);
+    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+  });
+
+  it("fails before mutation when the fleet has an unresolved provider effect", async () => {
+    const harness = smokeHarness({ unresolvedEffects: 1 });
+    const report = await runSmoke(harness);
+
+    expect(report.ok).toBe(false);
+    expect(report.checks[3]).toMatchObject({
+      code: "invalid_payload",
+      message:
+        "Fleet has 1 unresolved provider effect; inspect and explicitly reconcile before rehearsal.",
+      status: "fail",
+    });
+    expect(harness.toolCalls.some((call) => call.name === "crewhelm_list_connections")).toBe(false);
+    expect(harness.toolCalls.some((call) => call.name === "crewhelm_create_agent")).toBe(false);
+    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it.each(["input", "scopes"] as const)(
@@ -644,9 +739,9 @@ describe("standing integration action smoke", () => {
       const report = await runSmoke(harness);
 
       expect(report.ok).toBe(false);
-      expect(report.checks[4]).toMatchObject({ code: "invalid_payload", status: "fail" });
+      expect(report.checks[5]).toMatchObject({ code: "invalid_payload", status: "fail" });
       expect(harness.toolCalls.some((call) => call.name === "crewhelm_create_agent")).toBe(false);
-      expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
+      expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
     },
   );
 
@@ -686,8 +781,8 @@ describe("standing integration action smoke", () => {
       grantId,
       runStatus: "completed",
     });
-    expect(report.checks[9]).toMatchObject({ code: "valid", status: "pass" });
     expect(report.checks[10]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it("replays and captures cleanup state after a committed inconsistent configuration response", async () => {
@@ -704,8 +799,8 @@ describe("standing integration action smoke", () => {
       grantId,
       runStatus: "completed",
     });
-    expect(report.checks[9]).toMatchObject({ code: "valid", status: "pass" });
     expect(report.checks[10]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it("surfaces an unknown provider effect without reconciling it and still revokes authority", async () => {
@@ -716,16 +811,35 @@ describe("standing integration action smoke", () => {
     expect(report.runStatus).toBe("failed");
     expect(report.toolCallId).toBe(toolCallId);
     expect(report.retainedDraft).toBeUndefined();
-    expect(report.checks[7]).toMatchObject({
+    expect(report.checks[8]).toMatchObject({
       code: "invalid_payload",
       message: "Provider effect is unknown; verify the draft account before reconciliation.",
       status: "fail",
     });
-    expect(report.checks[9]).toMatchObject({ code: "valid", status: "pass" });
     expect(report.checks[10]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
     expect(
       harness.toolCalls.some((call) => call.name === "crewhelm_reconcile_tool_execution"),
     ).toBe(false);
+  });
+
+  it("reports an unreconciled effect as a pre-dispatch block and still revokes authority", async () => {
+    const harness = smokeHarness({ authorizationBlockedReason: "unreconciled_effect" });
+    const report = await runSmoke(harness);
+
+    expect(report.ok).toBe(false);
+    expect(report.runStatus).toBe("failed");
+    expect(report.toolCallId).toBeUndefined();
+    expect(report.retainedDraft).toBeUndefined();
+    expect(report.checks[8]).toMatchObject({
+      code: "invalid_payload",
+      message:
+        "The provider action was blocked before dispatch because an earlier unknown external effect requires reconciliation.",
+      status: "fail",
+    });
+    expect(report.checks[9]).toMatchObject({ code: "not_run", status: "skip" });
+    expect(report.checks[10]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it("preserves the manual verification warning when an unknown effect later times out", async () => {
@@ -740,13 +854,13 @@ describe("standing integration action smoke", () => {
 
     expect(report.ok).toBe(false);
     expect(report.toolCallId).toBe(toolCallId);
-    expect(report.checks[7]).toMatchObject({
+    expect(report.checks[8]).toMatchObject({
       code: "invalid_payload",
       message: "Provider effect is unknown; verify the draft account before reconciliation.",
       status: "fail",
     });
-    expect(report.checks[9]).toMatchObject({ code: "valid", status: "pass" });
     expect(report.checks[10]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it("preserves the manual verification warning when inspection fails after an unknown effect", async () => {
@@ -758,13 +872,13 @@ describe("standing integration action smoke", () => {
 
     expect(report.ok).toBe(false);
     expect(report.toolCallId).toBe(toolCallId);
-    expect(report.checks[7]).toMatchObject({
+    expect(report.checks[8]).toMatchObject({
       code: "invalid_payload",
       message: "Provider effect is unknown; verify the draft account before reconciliation.",
       status: "fail",
     });
-    expect(report.checks[9]).toMatchObject({ code: "valid", status: "pass" });
     expect(report.checks[10]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it("preserves the warning for a contract-valid unknown event without a tool-call ID", async () => {
@@ -782,13 +896,13 @@ describe("standing integration action smoke", () => {
 
     expect(report.ok).toBe(false);
     expect(report.toolCallId).toBeUndefined();
-    expect(report.checks[7]).toMatchObject({
+    expect(report.checks[8]).toMatchObject({
       code: "invalid_payload",
       message: "Provider effect is unknown; verify the draft account before reconciliation.",
       status: "fail",
     });
-    expect(report.checks[9]).toMatchObject({ code: "valid", status: "pass" });
     expect(report.checks[10]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it("preserves a prior unknown effect when a later terminal read omits the event", async () => {
@@ -800,12 +914,12 @@ describe("standing integration action smoke", () => {
 
     expect(report.ok).toBe(false);
     expect(report.toolCallId).toBe(toolCallId);
-    expect(report.checks[7]).toMatchObject({
+    expect(report.checks[8]).toMatchObject({
       code: "invalid_payload",
       message: "Provider effect is unknown; verify the draft account before reconciliation.",
       status: "fail",
     });
-    expect(report.checks[9]).toMatchObject({ code: "valid", status: "pass" });
     expect(report.checks[10]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
   });
 });

@@ -111,7 +111,7 @@ function fleetStatus(active: number) {
         retention: { inboxSeconds: 2_592_000, runSeconds: 86_400 },
       },
       configurationRevision: 1,
-      schemaVersion: 14,
+      schemaVersion: 15,
       status: "ready",
       usage: {
         agents: { active, total: 9 },

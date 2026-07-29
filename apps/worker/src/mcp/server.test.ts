@@ -33,6 +33,7 @@ import {
   listAgentRevisionsResultSchema,
   listAgentsResultSchema,
   listConnectionsResultSchema,
+  listUnresolvedToolEffectsResultSchema,
   ownerAuthoritySchema,
   startRunResultSchema,
   updateAgentResultSchema,
@@ -62,6 +63,7 @@ import {
   MCP_LIST_AGENT_RUNS_TOOL_NAME,
   MCP_LIST_AGENTS_TOOL_NAME,
   MCP_LIST_CONNECTIONS_TOOL_NAME,
+  MCP_LIST_UNRESOLVED_TOOL_EFFECTS_TOOL_NAME,
   MCP_LIST_RUN_TOOL_APPROVALS_TOOL_NAME,
   MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES,
   MCP_DECIDE_RUN_TOOL_APPROVAL_TOOL_NAME,
@@ -237,6 +239,9 @@ describe("authenticated MCP handler", () => {
     const connectionListTool = payload.result.tools.find(
       (tool) => tool.name === MCP_LIST_CONNECTIONS_TOOL_NAME,
     );
+    const unresolvedEffectsTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_LIST_UNRESOLVED_TOOL_EFFECTS_TOOL_NAME,
+    );
     const startRunTool = payload.result.tools.find((tool) => tool.name === MCP_START_RUN_TOOL_NAME);
     const inboxTool = payload.result.tools.find((tool) => tool.name === MCP_AGENT_INBOX_TOOL_NAME);
     const configureScheduleTool = payload.result.tools.find(
@@ -316,6 +321,12 @@ describe("authenticated MCP handler", () => {
       readOnlyHint: false,
     });
     expect(connectionListTool?.annotations).toMatchObject({
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+      readOnlyHint: true,
+    });
+    expect(unresolvedEffectsTool?.annotations).toMatchObject({
       destructiveHint: false,
       idempotentHint: true,
       openWorldHint: false,
@@ -423,9 +434,41 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toMatchObject({
       ok: true,
       status: {
-        schemaVersion: 14,
+        schemaVersion: 15,
         status: "ready",
+        usage: {
+          recovery: { unresolvedEffects: 0 },
+        },
       },
+    });
+  });
+
+  it("lists bounded unresolved provider effects through a read-only MCP tool", async () => {
+    const authority = await ownerAuthority("mcp-unresolved-effects-owner");
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 2,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { limit: 1 },
+            name: MCP_LIST_UNRESOLVED_TOOL_EFFECTS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const result = jsonRpcToolResultSchema.parse(await response.json()).result;
+
+    expect(
+      listUnresolvedToolEffectsResultSchema.parse(JSON.parse(result.content[0]?.text ?? "")),
+    ).toEqual({
+      effects: [],
+      nextCursor: null,
+      ok: true,
+      total: 0,
     });
   });
 
@@ -764,6 +807,9 @@ describe("authenticated MCP handler", () => {
             throw new Error("do-not-reflect-this");
           },
           listConnections: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          listUnresolvedToolEffects: async () => {
             throw new Error("do-not-reflect-this");
           },
           listRunToolApprovals: async () => {
@@ -1841,17 +1887,19 @@ describe("authenticated MCP handler", () => {
     expect(listConnectionsResultSchema.parse(JSON.parse(text))).toEqual({
       connections: [
         {
+          accountLabel: null,
           authorizationOutcome: "untracked",
           authConfigId: "ac_linear_managed",
           connectionId: "connection_00000000-0000-4000-8000-000000000003",
           createdAt: "1970-01-01T00:00:00.003Z",
+          integrationSlug: null,
+          providerConnectionId: "ca_private_mcp",
           status: "initiated",
         },
       ],
       nextCursor: null,
       ok: true,
     });
-    expect(text).not.toContain("ca_private_mcp");
     expect(fetchMock).not.toHaveBeenCalled();
 
     const deniedResponse = await handleAuthenticatedMcpRequest(toolRequest(requestBody), env, {
@@ -2032,6 +2080,7 @@ describe("authenticated MCP handler", () => {
           listAgentRuns: unavailableControlPlane,
           listAgents: unavailableControlPlane,
           listConnections: unavailableControlPlane,
+          listUnresolvedToolEffects: unavailableControlPlane,
           listRunToolApprovals: unavailableControlPlane,
           lookupAgentConnectionConfiguration: unavailableControlPlane,
           reserveConnectionLink: async () => ({
@@ -2144,6 +2193,7 @@ describe("authenticated MCP handler", () => {
           listAgentRuns: unavailableControlPlane,
           listAgents: unavailableControlPlane,
           listConnections: unavailableControlPlane,
+          listUnresolvedToolEffects: unavailableControlPlane,
           listRunToolApprovals: unavailableControlPlane,
           lookupAgentConnectionConfiguration: unavailableControlPlane,
           reserveConnectionLink: (authorityInput: unknown, input: unknown) =>

@@ -79,7 +79,7 @@ function fleetStatus() {
         },
       },
       configurationRevision: 1,
-      schemaVersion: 14,
+      schemaVersion: 15,
       status: "ready",
       usage: {
         agents: { active: 2, total: 3 },

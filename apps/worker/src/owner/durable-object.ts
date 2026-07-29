@@ -30,6 +30,7 @@ import {
   type ListAgentRevisionsResult,
   type ListAgentsResult,
   type ListConnectionsResult,
+  type ListUnresolvedToolEffectsResult,
   type LookupAgentConnectionConfigurationResult,
   type InspectRunResult,
   type ListRunToolApprovalsResult,
@@ -95,6 +96,7 @@ import {
   ToolExecutions,
   deniedToolExecutionEvaluation,
   deniedToolExecutionReconciliation,
+  deniedUnresolvedToolEffects,
 } from "./runs/index.js";
 import { recordScheduleEvent } from "../observability/schedules.js";
 import { AgentSchedules, deniedAgentSchedule, type DueAgentSchedule } from "./schedules/index.js";
@@ -221,6 +223,9 @@ export class OwnerControlPlane extends DurableObject {
         usage: {
           agents: this.#agents.usage(),
           connections: this.#connections.usage(),
+          recovery: {
+            unresolvedEffects: this.#toolExecutions.unresolvedCount(),
+          },
           ...this.#agentChannel.usage(),
         },
       },
@@ -378,6 +383,17 @@ export class OwnerControlPlane extends DurableObject {
     return authorization.ok
       ? this.#toolExecutions.reconcile(authorization.authority, input)
       : deniedToolExecutionReconciliation(authorization.code);
+  }
+
+  listUnresolvedToolEffects(
+    authorityInput: unknown,
+    input: unknown,
+  ): ListUnresolvedToolEffectsResult {
+    const authorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
+
+    return authorization.ok
+      ? this.#toolExecutions.listUnresolved(input)
+      : deniedUnresolvedToolEffects(authorization.code);
   }
 
   redeemRunReceiverCapability(input: unknown): RedeemRunReceiverCapabilityResult {
@@ -552,7 +568,11 @@ export class OwnerControlPlane extends DurableObject {
 
     const currentTime = Date.now();
     await this.#aiGatewayUsage.reconcilePending(currentTime);
-    this.#toolExecutions.reconcileExpired(currentTime);
+    const expiredExecutionRuns = this.#toolExecutions.reconcileExpired(currentTime);
+
+    for (const runId of expiredExecutionRuns) {
+      this.#agentChannel.repairFailedRun(runId);
+    }
     this.#runAdmissions.cleanup(currentTime);
     const dueSchedules = this.#agentSchedules.claimDue(currentTime);
     const dispatches = await Promise.allSettled(

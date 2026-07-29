@@ -23,6 +23,7 @@ import {
   agentRevisions,
   auditEvents,
   runAdmissions,
+  toolExecutions,
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
 
@@ -505,7 +506,36 @@ export class AgentInbox {
       return this.#deniedProjection();
     }
 
-    const occurredAt = Date.parse(request.data.event.occurredAt);
+    const executionStates =
+      request.data.event.kind === "outcome" && request.data.event.runStatus === "completed"
+        ? this.#database
+            .select({
+              reconciliation: toolExecutions.reconciliation,
+              status: toolExecutions.status,
+            })
+            .from(toolExecutions)
+            .where(eq(toolExecutions.runId, admission.runId))
+            .all()
+        : [];
+    const hasCompletedExecution = executionStates.some(
+      (execution) => execution.status === "completed",
+    );
+    const hasUnresolvedExecution = executionStates.some(
+      (execution) => execution.status === "unknown" && execution.reconciliation === null,
+    );
+    const hasOnlyFailedExecutions =
+      !hasCompletedExecution && executionStates.some((execution) => execution.status === "failed");
+    const event =
+      hasUnresolvedExecution || hasOnlyFailedExecutions
+        ? {
+            approvalCount: 0,
+            kind: "exception" as const,
+            occurredAt: request.data.event.occurredAt,
+            resultPreview: null,
+            runStatus: "failed" as const,
+          }
+        : request.data.event;
+    const occurredAt = Date.parse(event.occurredAt);
 
     if (occurredAt < admission.createdAt || occurredAt > Date.now() + MAXIMUM_EVENT_CLOCK_SKEW_MS) {
       return this.#deniedProjection();
@@ -525,23 +555,23 @@ export class AgentInbox {
     const values = {
       agentId: admission.agentId,
       agentRevision: admission.agentRevision,
-      approvalCount: request.data.event.approvalCount,
+      approvalCount: event.approvalCount,
       cleanupAt:
         occurredAt + this.#retentionMilliseconds(admission.budgetReservation.retentionSeconds),
       fleetRevision: admission.budgetReservation.fleetConfigurationRevision,
       itemId,
-      kind: request.data.event.kind,
+      kind: event.kind,
       occurredAt,
       reason: null,
       requestPreview: preview(admission.prompt ?? ""),
-      resultPreview: request.data.event.resultPreview,
+      resultPreview: event.resultPreview,
       retryAt: null,
       runId: admission.runId,
-      runStatus: request.data.event.runStatus,
+      runStatus: event.runStatus,
       scheduleRevision: null,
       scheduledAt: null,
       trigger: admission.trigger,
-      version: request.data.event.occurredAt,
+      version: event.occurredAt,
     } as const;
 
     if (existing === undefined) {
@@ -563,6 +593,45 @@ export class AgentInbox {
     this.#cleanup(Date.now());
     this.#pruneCapacity();
     return recordAgentInboxRunResultSchema.parse({ ok: true, recorded: true });
+  }
+
+  repairFailedRun(runId: string): boolean {
+    const item = this.#database
+      .select({
+        itemId: agentInboxItems.itemId,
+      })
+      .from(agentInboxItems)
+      .where(
+        and(
+          eq(agentInboxItems.runId, runId),
+          eq(agentInboxItems.kind, "outcome"),
+          eq(agentInboxItems.runStatus, "completed"),
+        ),
+      )
+      .get();
+
+    if (item === undefined) {
+      return false;
+    }
+
+    this.#database.transaction((transaction) => {
+      transaction
+        .delete(agentInboxAcknowledgements)
+        .where(eq(agentInboxAcknowledgements.itemId, item.itemId))
+        .run();
+      transaction
+        .update(agentInboxItems)
+        .set({
+          approvalCount: 0,
+          kind: "exception",
+          resultPreview: null,
+          runStatus: "failed",
+        })
+        .where(eq(agentInboxItems.itemId, item.itemId))
+        .run();
+    });
+
+    return true;
   }
 
   recordDeferral(input: {
