@@ -37,11 +37,7 @@ Use semantic commit and pull-request titles such as `feat: add connection valida
 `fix: reject expired approvals`. Keep commits green and independently reviewable. Sign off every
 commit; the pull request's `DCO` check enforces this.
 
-GitHub requires `Verify`, `Dependency review`, `Analyze JavaScript and TypeScript`, and `DCO` on
-each pull request. `Verify` and CodeQL run again on the resulting `main` commit for monitoring;
-dependency review runs only on pull requests because it compares the proposed dependency graph
-with the base branch. Merge only after the required checks pass and blocking conversations are
-resolved.
+Merge only after GitHub's required checks pass and blocking conversations are resolved.
 
 Sensitive changes should include relevant negative tests and update the threat model when they
 alter a trust boundary. Report vulnerabilities according to [SECURITY.md](SECURITY.md).
