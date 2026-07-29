@@ -18,9 +18,9 @@ and partly by the versioned workflows in `.github/workflows/`. The importable
 
 - Target the default branch and keep enforcement active.
 - Require every change to arrive through a pull request.
-- While `fkrein1` is the only write-capable maintainer, require zero approvals so the author is not
-  deadlocked. CODEOWNERS still requests the relevant review. Raise this to one approval and require
-  code-owner review when a second maintainer is available.
+- Require zero approvals while there is only one write-capable maintainer so the author is not
+  deadlocked. CODEOWNERS still requests review. Raise this to one approval and require code-owner
+  review when a second maintainer is available.
 - Require all review conversations to be resolved.
 - Require strict, up-to-date `Verify`, `Dependency review`,
   `Analyze JavaScript and TypeScript`, and `DCO` status checks.
@@ -48,11 +48,7 @@ it is enabled later, add and validate `merge_group` triggers before making queue
 - Merge only after required checks pass. Codex may perform the merge only when the user has granted
   repository merge authority.
 
-## Ruleset rollout and recovery
-
-For initial rollout, install DCO for this repository, open a signed-off pull request, and wait for
-all four required contexts to report. Then import `.github/rulesets/main.json`, verify the active
-ruleset through GitHub's API, and only then merge the pull request.
+## Ruleset recovery
 
 If a required provider is unavailable or a check configuration prevents its own repair, use
 explicit, audited maintainer authority to remove only the failing required context. Land the repair

@@ -33,7 +33,7 @@ The command runs Drizzle Kit and rebuilds the Worker migration manifest. Commit 
 generated SQL, snapshot, journal, and manifest together. Never edit generated migration SQL or a
 previously committed migration; fix the schema or add a new migration instead.
 
-Use semantic commit and pull-request titles such as `feat: add recipe validation` or
+Use semantic commit and pull-request titles such as `feat: add connection validation` or
 `fix: reject expired approvals`. Keep commits green and independently reviewable. Sign off every
 commit; the pull request's `DCO` check enforces this.
 

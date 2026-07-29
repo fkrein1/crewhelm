@@ -19,7 +19,8 @@ Ship one observable pull-request objective as a complete, green slice.
    - Authority or execution: `docs/security/invariants.md`.
    - State, trust, dependency, or contract boundary: `docs/architecture/system.md`.
    - Module interface or refactor: `docs/engineering/design.md`.
-3. State:
+3. State the objective, category, acceptance evidence, and proposed commit. Pause for an unsettled
+   architecture decision, a new trust boundary, or missing authority. Split unrelated outcomes.
 
 ```text
 Objective:
@@ -27,9 +28,6 @@ Category:
 Acceptance:
 Proposed commit:
 ```
-
-Pause for an unsettled architecture decision, a new trust boundary, or missing authority. Split
-unrelated outcomes.
 
 ## Implement
 
@@ -65,15 +63,14 @@ For sensitive changes, cover relevant abuse and failure paths:
 ## Finish
 
 1. Run focused checks.
-2. For nontrivial code, simplify changed code and immediate callers without changing behavior,
-   contracts, security, recovery, observability, or ownership; then repeat affected checks.
+2. For nontrivial code, apply the simplification pass in `docs/engineering/design.md`, then repeat
+   affected checks.
 3. Run risk-specific integration, migration, recovery, packaging, or staging checks.
 4. Once a code or sensitive diff settles, run `pnpm verify`. For docs, run formatting, relevant
    document or foundation tests, and diff checks unless executable configuration or automation
    changed.
-5. Inspect `git diff --check`, the complete diff, and the staged diff.
-6. Self-review every change.
-7. Before pull-request creation, use one independent reviewer for the settled diff. Provide the
+5. Inspect `git diff --check`, the complete diff, and the staged diff. Self-review every change.
+6. Before pull-request creation, use one independent reviewer for the settled diff. Provide the
    objective, category, and validation already completed. Ask for a holistic review covering
    simplicity, correctness, security risks introduced or affected by the change, and unintended
    compatibility breaks. The reviewer must not delegate or repeat successful checks unless
@@ -83,12 +80,4 @@ For sensitive changes, cover relevant abuse and failure paths:
 Do not commit with a failing or flaky required check, unresolved high-impact finding, unreviewed
 dependency, unproven migration recovery, or undemonstrated objective.
 
-## Deliver
-
-- Branch from protected `main`; use a short-lived `codex/*` branch for Codex-authored work. Never
-  commit or push directly to `main`.
-- Use semantic commit and pull-request titles: `<type>: <summary>`.
-- Keep commits green, scoped, independently revertible, and signed off with `git commit -s`.
-- Merge only after required checks pass and blocking conversations are resolved.
-- Do not push, merge, deploy, publish, create external resources, or perform destructive actions
-  without explicit user authorization.
+Follow the branch, commit, pull-request, and authority rules in `AGENTS.md`.

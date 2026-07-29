@@ -1,4 +1,5 @@
 {
+  "ignorePatterns": ["docs/reference/mcp-tools.md"],
   "printWidth": 100,
   "semi": true,
   "singleQuote": false,

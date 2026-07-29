@@ -225,6 +225,8 @@ describe("repository foundation", () => {
     ]);
     expect(scripts).toMatchObject({
       build: "node ./scripts/build.mjs",
+      "docs:mcp": "vitest run apps/worker/src/mcp/documentation.test.ts --update --maxWorkers=50%",
+      "docs:mcp:check": "vitest run apps/worker/src/mcp/documentation.test.ts --maxWorkers=50%",
       "format:check": "oxfmt --check .",
       lint: "oxlint --type-aware --type-check --deny-warnings --report-unused-disable-directives .",
       test: "vitest run --maxWorkers=50%",
@@ -691,6 +693,7 @@ describe("repository foundation", () => {
     });
     expect(continuousIntegrationCommands).toEqual([
       "pnpm install --frozen-lockfile",
+      "pnpm docs:mcp:check",
       "pnpm verify",
     ]);
   });

@@ -34,5 +34,7 @@ jobs:
           node-version-file: .nvmrc
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Check MCP tool reference
+        run: pnpm docs:mcp:check
       - name: Verify repository
         run: pnpm verify

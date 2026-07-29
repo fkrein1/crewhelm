@@ -48,15 +48,11 @@ and preserves an existing verified rule unless the operator explicitly supplies
 `--ai-budget-usd`, deploys the matching Worker configuration, then applies and reads back the
 Gateway rule.
 
-Cloudflare Workers Logs provide diagnostic execution telemetry. Persisted custom events correlate
-allowlisted owner-local Agent, connection, grant, run, tool-call, and connection-link identifiers
-with bounded operation, outcome, duration, provider status, error identifier, integration, and tool
-metadata. Execution events use the run ID as a trace ID and the tool-call ID as a child span ID;
-the durable run timeline retains the corresponding authorization outcome and safe denial reason.
-They exclude provider account identifiers, user content, credentials, and bodies; they do not
-authorize work or replace the owner-local audit record. Invocation logs and automatic traces
-remain disabled because this Worker also handles secret-bearing OAuth and connection callback
-URLs.
+Cloudflare Workers Logs provide bounded diagnostic telemetry but do not authorize work or replace
+the owner-local audit record. Invocation logs and automatic traces remain disabled because the
+Worker handles secret-bearing OAuth and connection callback URLs. The
+[threat model](../security/threat-model.md#observability-and-deployment) defines permitted event
+data.
 
 AI Gateway logs retain provider/model, token, cost, latency, status, and bounded Crewhelm run and
 Agent correlation metadata. Request and response payload logging is disabled. Pending calls retain
