@@ -128,7 +128,28 @@ describe("OwnerControlPlane connections", () => {
         reservationId: reservation.reservationId,
       }),
     ).resolves.toMatchObject({ created: true, ok: true });
+    const slackReservation = await stub.reserveIntegrationEnablement(authority, {
+      idempotencyKey: "enable-slack-connection-filters",
+      integrationSlug: "slack",
+    });
+
+    if (!slackReservation.ok || slackReservation.state !== "dispatch") {
+      throw new Error("Expected Slack integration enablement reservation.");
+    }
+
+    await expect(
+      stub.completeIntegrationEnablement(authority, {
+        authConfigId: "ac_slack_filters",
+        authScheme: "oauth2",
+        created: true,
+        integrationSlug: "slack",
+        managed: true,
+        reservationId: slackReservation.reservationId,
+      }),
+    ).resolves.toMatchObject({ created: true, ok: true });
     await runInDurableObject(stub, (_instance, state) => {
+      const requestDigest = "r".repeat(43);
+
       state.storage.sql.exec(`
         INSERT INTO connections
           (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
@@ -138,11 +159,44 @@ describe("OwnerControlPlane connections", () => {
           ('connection_00000000-0000-4000-8000-000000000012',
            'composio', 'ca_filters_slack', 'ac_slack_filters', 'unavailable', 12)
       `);
+      state.storage.sql.exec(
+        `INSERT INTO connection_link_requests
+          (client_id, idempotency_key, request_digest, auth_config_id, reservation_id, status,
+           recover_after, connection_id, redirect_url, expires_at, created_at, completed_at)
+         VALUES
+          ('client_filters', 'github-old', ?, 'ac_github_filters', 'link_github_old',
+           'completed', 100, 'connection_00000000-0000-4000-8000-000000000011',
+           'https://connect.composio.dev/link/github-old', 100, 13, 14),
+          ('client_filters', 'slack', ?, 'ac_slack_filters', 'link_slack',
+           'completed', 100, 'connection_00000000-0000-4000-8000-000000000012',
+           'https://connect.composio.dev/link/slack', 100, 15, 16),
+          ('client_filters', 'github-new', ?, 'ac_github_filters', 'link_github_new',
+           'completed', 100, 'connection_00000000-0000-4000-8000-000000000011',
+           'https://connect.composio.dev/link/github-new', 100, 17, 18)`,
+        requestDigest,
+        requestDigest,
+        requestDigest,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO connection_authorization_returns
+          (reservation_id, token_digest, status, connection_id, expires_at, created_at,
+           completed_at)
+         VALUES
+          ('link_github_old', ?, 'failed',
+           'connection_00000000-0000-4000-8000-000000000011', 100, 19, 20),
+          ('link_slack', ?, 'failed',
+           'connection_00000000-0000-4000-8000-000000000012', 100, 21, 22),
+          ('link_github_new', ?, 'returned',
+           'connection_00000000-0000-4000-8000-000000000011', 100, 23, 24)`,
+        "g".repeat(43),
+        "s".repeat(43),
+        "n".repeat(43),
+      );
     });
 
     await expect(
       stub.listConnections(authority, {
-        authorizationOutcome: "untracked",
+        authorizationOutcome: "returned",
         integration: "github",
         status: "active",
       }),
@@ -150,7 +204,7 @@ describe("OwnerControlPlane connections", () => {
       connections: [
         {
           accountLabel: null,
-          authorizationOutcome: "untracked",
+          authorizationOutcome: "returned",
           authConfigId: "ac_github_filters",
           connectionId: "connection_00000000-0000-4000-8000-000000000011",
           createdAt: "1970-01-01T00:00:00.011Z",
@@ -162,8 +216,25 @@ describe("OwnerControlPlane connections", () => {
       nextCursor: null,
       ok: true,
     });
-    await expect(stub.listConnections(authority, { integration: "slack" })).resolves.toEqual({
-      connections: [],
+    await expect(
+      stub.listConnections(authority, {
+        authorizationOutcome: "failed",
+        integration: "slack",
+        status: "unavailable",
+      }),
+    ).resolves.toEqual({
+      connections: [
+        {
+          accountLabel: null,
+          authorizationOutcome: "failed",
+          authConfigId: "ac_slack_filters",
+          connectionId: "connection_00000000-0000-4000-8000-000000000012",
+          createdAt: "1970-01-01T00:00:00.012Z",
+          integrationSlug: "slack",
+          providerConnectionId: "ca_filters_slack",
+          status: "unavailable",
+        },
+      ],
       nextCursor: null,
       ok: true,
     });
