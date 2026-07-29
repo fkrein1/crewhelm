@@ -30,6 +30,7 @@ interface TestModelCall {
 
 export class TestCrewAgent extends CrewAgent {
   readonly #completedBeforeCancellation = new Map<string, string>();
+  #inspectionCount = 0;
   readonly #modelCalls: TestModelCall[] = [];
   readonly #toolExecutions: unknown[] = [];
   #completeBeforeNextCancellation = false;
@@ -144,6 +145,10 @@ export class TestCrewAgent extends CrewAgent {
     return structuredClone(this.#modelCalls);
   }
 
+  inspectionCountForTest(): number {
+    return this.#inspectionCount;
+  }
+
   failNextCancellationForTest(): void {
     this.#rejectNextCancellation = true;
   }
@@ -177,6 +182,7 @@ export class TestCrewAgent extends CrewAgent {
   }
 
   override async inspectAdmittedRun(input: unknown) {
+    this.#inspectionCount += 1;
     const result = await super.inspectAdmittedRun(input);
 
     if (!result.ok) {

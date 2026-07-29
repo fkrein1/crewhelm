@@ -9,6 +9,7 @@ import {
   type AgentInboxInput,
   type AgentInboxItem,
   type AgentInboxResult,
+  type FleetConfigurationData,
   type OwnerAuthority,
   type RecordAgentInboxRunResult,
 } from "@crewhelm/contracts";
@@ -29,7 +30,6 @@ type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type AgentInboxFailure = Extract<AgentInboxResult, { ok: false }>;
 type StoredInboxItem = typeof agentInboxItems.$inferSelect;
 
-const AGENT_INBOX_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const AGENT_INBOX_CLEANUP_BATCH_SIZE = 100;
 const MAXIMUM_STORED_AGENT_INBOX_ITEMS = 10_000;
 const MAXIMUM_EVENT_CLOCK_SKEW_MS = 60_000;
@@ -163,10 +163,16 @@ export function deniedAgentInbox(code: AgentInboxFailure["error"]["code"]): Agen
 }
 
 export class AgentInbox {
+  readonly #currentFleetConfiguration: () => FleetConfigurationData;
   readonly #database: Database;
   readonly #objectName: string | undefined;
 
-  constructor(objectName: string | undefined, database: Database) {
+  constructor(
+    objectName: string | undefined,
+    database: Database,
+    currentFleetConfiguration: () => FleetConfigurationData,
+  ) {
+    this.#currentFleetConfiguration = currentFleetConfiguration;
     this.#database = database;
     this.#objectName = objectName;
   }
@@ -192,6 +198,18 @@ export class AgentInbox {
     }
 
     return unreachable(request.data.action);
+  }
+
+  usage(): {
+    actionRequired: number;
+    deferred: number;
+    exceptions: number;
+    outcomes: number;
+    total: number;
+  } {
+    const currentTime = Date.now();
+
+    return this.#counts({ action: "overview" }, currentTime);
   }
 
   #acknowledge(
@@ -244,7 +262,7 @@ export class AgentInbox {
         .insert(agentInboxAcknowledgements)
         .values({
           acknowledgedAt,
-          cleanupAt: Math.max(item.cleanupAt, acknowledgedAt + AGENT_INBOX_RETENTION_MS),
+          cleanupAt: Math.max(item.cleanupAt, acknowledgedAt + this.#retentionMilliseconds()),
           clientId: authority.clientId,
           itemId: item.itemId,
           version: item.version,
@@ -362,6 +380,26 @@ export class AgentInbox {
       return deniedAgentInbox("invalid_request");
     }
 
+    const counts = this.#counts(request, currentTime);
+
+    return agentInboxResultSchema.parse({
+      action: "overview",
+      counts,
+      generatedAt: new Date().toISOString(),
+      ok: true,
+    });
+  }
+
+  #counts(
+    request: AgentInboxInput,
+    currentTime: number,
+  ): {
+    actionRequired: number;
+    deferred: number;
+    exceptions: number;
+    outcomes: number;
+    total: number;
+  } {
     const rows = this.#database
       .select({
         kind: agentInboxItems.kind,
@@ -386,15 +424,10 @@ export class AgentInbox {
       outcomes: byKind.get("outcome") ?? 0,
     };
 
-    return agentInboxResultSchema.parse({
-      action: "overview",
-      counts: {
-        ...counts,
-        total: counts.actionRequired + counts.deferred + counts.exceptions + counts.outcomes,
-      },
-      generatedAt: new Date().toISOString(),
-      ok: true,
-    });
+    return {
+      ...counts,
+      total: counts.actionRequired + counts.deferred + counts.exceptions + counts.outcomes,
+    };
   }
 
   #filterConditions(request: AgentInboxInput, currentTime: number): Array<SQL | undefined> {
@@ -493,7 +526,8 @@ export class AgentInbox {
       agentId: admission.agentId,
       agentRevision: admission.agentRevision,
       approvalCount: request.data.event.approvalCount,
-      cleanupAt: occurredAt + AGENT_INBOX_RETENTION_MS,
+      cleanupAt:
+        occurredAt + this.#retentionMilliseconds(admission.budgetReservation.retentionSeconds),
       fleetRevision: admission.budgetReservation.fleetConfigurationRevision,
       itemId,
       kind: request.data.event.kind,
@@ -553,7 +587,7 @@ export class AgentInbox {
       agentId: input.agentId,
       agentRevision: input.agentRevision,
       approvalCount: 0,
-      cleanupAt: input.occurredAt + AGENT_INBOX_RETENTION_MS,
+      cleanupAt: input.occurredAt + this.#retentionMilliseconds(),
       fleetRevision: input.fleetRevision,
       itemId,
       kind: "deferred",
@@ -664,5 +698,11 @@ export class AgentInbox {
         .run();
       transaction.delete(agentInboxItems).where(inArray(agentInboxItems.itemId, itemIds)).run();
     });
+  }
+
+  #retentionMilliseconds(minimumSeconds = 0): number {
+    return (
+      Math.max(this.#currentFleetConfiguration().retention.inboxSeconds, minimumSeconds) * 1_000
+    );
   }
 }

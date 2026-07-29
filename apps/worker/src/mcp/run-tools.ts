@@ -100,7 +100,7 @@ export function registerRunTools(server: McpServer, context: McpToolContext): vo
         readOnlyHint: true,
       },
       description:
-        "List recent manual and scheduled runs for one authenticated-owner Crewhelm Agent.",
+        "List compact owner-local run summaries across the fleet or for one Agent, with status, trigger, and creation-time filters.",
       inputSchema: listAgentRunsInputSchema,
       title: "List Crewhelm Agent runs",
     },

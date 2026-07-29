@@ -61,12 +61,14 @@ import {
   MCP_LIST_AGENTS_TOOL_NAME,
   MCP_LIST_CONNECTIONS_TOOL_NAME,
   MCP_LIST_RUN_TOOL_APPROVALS_TOOL_NAME,
+  MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES,
   MCP_DECIDE_RUN_TOOL_APPROVAL_TOOL_NAME,
   MCP_RECONCILE_TOOL_EXECUTION_TOOL_NAME,
   MCP_REVOKE_AUTHORITY_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME,
   MCP_STATUS_TOOL_NAME,
+  MCP_TOOL_COUNT_BUDGET,
   MCP_START_RUN_TOOL_NAME,
   MCP_UPDATE_AGENT_TOOL_NAME,
   handleAuthenticatedMcpRequest,
@@ -144,6 +146,29 @@ async function unavailableControlPlane(): Promise<never> {
 }
 
 describe("authenticated MCP handler", () => {
+  it("keeps the advertised MCP surface within explicit tool-count and schema budgets", async () => {
+    const authority = await ownerAuthority();
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 1,
+          jsonrpc: "2.0",
+          method: "tools/list",
+          params: {},
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const tools = jsonRpcToolListSchema.parse(await response.json()).result.tools;
+    const serializedSchemas = new TextEncoder().encode(
+      JSON.stringify(tools.map((tool) => tool.inputSchema)),
+    ).byteLength;
+
+    expect(tools.length).toBeLessThanOrEqual(MCP_TOOL_COUNT_BUDGET);
+    expect(serializedSchemas).toBeLessThanOrEqual(MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES);
+  });
+
   it("marks Agent replacement as destructive while keeping creation additive", async () => {
     const authority = await ownerAuthority();
     const response = await handleAuthenticatedMcpRequest(
@@ -356,10 +381,10 @@ describe("authenticated MCP handler", () => {
     const text = result.content[0]?.text;
 
     expect(typeof text).toBe("string");
-    expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toEqual({
+    expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toMatchObject({
       ok: true,
       status: {
-        schemaVersion: 13,
+        schemaVersion: 14,
         status: "ready",
       },
     });

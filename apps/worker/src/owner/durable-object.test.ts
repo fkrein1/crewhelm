@@ -2,6 +2,13 @@ import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
   AUTONOMY_WRITE_SCOPE,
+  DEFAULT_FLEET_INBOX_RETENTION_SECONDS,
+  DEFAULT_FLEET_MAX_AGENTS,
+  DEFAULT_FLEET_MAX_CONCURRENT_RUNS,
+  DEFAULT_FLEET_MAX_CONNECTIONS,
+  DEFAULT_FLEET_RUN_RETENTION_SECONDS,
+  MAXIMUM_FLEET_CONCURRENT_RUNS,
+  MAXIMUM_FLEET_CONNECTIONS,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   RUNS_WRITE_SCOPE,
@@ -72,8 +79,30 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toEqual({
       ok: true,
       status: {
-        schemaVersion: 13,
+        capacity: {
+          maxAgents: DEFAULT_FLEET_MAX_AGENTS,
+          maxConcurrentRuns: DEFAULT_FLEET_MAX_CONCURRENT_RUNS,
+          maxConnections: DEFAULT_FLEET_MAX_CONNECTIONS,
+          retention: {
+            inboxSeconds: DEFAULT_FLEET_INBOX_RETENTION_SECONDS,
+            runSeconds: DEFAULT_FLEET_RUN_RETENTION_SECONDS,
+          },
+        },
+        configurationRevision: 1,
+        schemaVersion: 14,
         status: "ready",
+        usage: {
+          agents: { active: 0, total: 0 },
+          connections: { active: 0, pending: 0, total: 0 },
+          inbox: {
+            actionRequired: 0,
+            deferred: 0,
+            exceptions: 0,
+            outcomes: 0,
+            total: 0,
+          },
+          runs: { active: 0 },
+        },
       },
     });
     await expect(
@@ -149,6 +178,11 @@ describe("OwnerControlPlane", () => {
           checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
           name: "0012_acoustic_killraven",
           version: 13,
+        },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0013_scale_fleet_configuration",
+          version: 14,
         },
       ],
       owner: { owner_key: authority.ownerKey },
@@ -339,6 +373,133 @@ describe("OwnerControlPlane", () => {
     });
   });
 
+  it("applies revisioned inbox retention to new owner-local projections", async () => {
+    const authority = await authorityFor("inbox-retention", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const current = await stub.getFleetConfiguration(authority, { target: { kind: "fleet" } });
+
+    if (!current.ok) {
+      throw new Error("Expected fleet configuration.");
+    }
+
+    const inboxSeconds = 60 * 60;
+
+    await expect(
+      stub.configureFleetConfiguration(authority, {
+        expectedRevision: current.configuration.revision,
+        idempotencyKey: "inbox-retention-configure",
+        mode: "apply",
+        patch: { retention: { inboxSeconds, runSeconds: inboxSeconds } },
+        target: { kind: "fleet" },
+      }),
+    ).resolves.toMatchObject({ applied: true, ok: true });
+    const created = await stub.createAgent(authority, agentInput("inbox-retention-agent"));
+
+    if (!created.ok) {
+      throw new Error("Expected inbox-retention Agent.");
+    }
+
+    const prompt = "Project this run with the configured inbox retention.";
+    const admission = await stub.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "inbox-retention-run",
+      prompt,
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
+    });
+
+    if (!admission.ok || admission.state !== "issued") {
+      throw new Error("Expected inbox-retention admission.");
+    }
+
+    await expect(stub.confirmRunAdmission(admission.permit)).resolves.toMatchObject({
+      confirmed: true,
+      ok: true,
+    });
+    const occurredAt = new Date().toISOString();
+    await expect(
+      stub.recordAgentInboxRun({
+        event: {
+          approvalCount: 0,
+          kind: "outcome",
+          occurredAt,
+          resultPreview: "Retention configured.",
+          runStatus: "completed",
+        },
+        reference: {
+          agentId: admission.permit.agentId,
+          agentRevision: admission.permit.agentRevision,
+          idempotencyKey: admission.permit.idempotencyKey,
+          ownerKey: admission.permit.ownerKey,
+          promptDigest: admission.permit.promptDigest,
+          runId: admission.permit.runId,
+        },
+      }),
+    ).resolves.toEqual({ ok: true, recorded: true });
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec<{ retention_ms: number }>(
+            `SELECT cleanup_at - occurred_at AS retention_ms
+             FROM agent_inbox_items
+             WHERE run_id = ?`,
+            admission.permit.runId,
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({ retention_ms: inboxSeconds * 1_000 });
+
+    const queuedPrompt = "Keep one unit of owner-local work queued for fleet status.";
+    await expect(
+      stub.createRunAdmission(authority, {
+        agentId: created.agent.id,
+        expectedRevision: created.agent.revision,
+        idempotencyKey: "inbox-retention-queued-run",
+        promptCharacters: queuedPrompt.length,
+        promptDigest: await digestRunPrompt(queuedPrompt),
+      }),
+    ).resolves.toMatchObject({ ok: true, state: "issued" });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO connections
+           (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
+         VALUES (
+           'connection_00000000-0000-4000-8000-000000000099',
+           'composio',
+           'ca_status_dashboard',
+           'ac_status_dashboard',
+           'active',
+           ?
+         )`,
+        Date.now(),
+      );
+    });
+    await expect(stub.status(authority)).resolves.toMatchObject({
+      ok: true,
+      status: {
+        usage: {
+          agents: { active: 1, total: 1 },
+          connections: { active: 1, pending: 0, total: 1 },
+          inbox: {
+            actionRequired: 0,
+            deferred: 0,
+            exceptions: 0,
+            outcomes: 1,
+            total: 1,
+          },
+          runs: { active: 1 },
+        },
+      },
+    });
+  });
+
   it("removes the retired local AI budget from existing fleet configuration revisions", async () => {
     const authority = await authorityFor("1010-ai-budget-removal", [OWNER_READ_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
@@ -374,6 +535,84 @@ describe("OwnerControlPlane", () => {
           .toArray(),
       ),
     ).resolves.toEqual([{ value: null }]);
+  });
+
+  it("backfills revisioned fleet capacity, retention, and admitted-run retention", async () => {
+    const authority = await authorityFor("fleet-capacity-migration", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("fleet-capacity-migration-agent"));
+
+    if (!created.ok) {
+      throw new Error("Expected migration fixture Agent.");
+    }
+
+    const prompt = "Preserve this admitted run while capacity policy is migrated.";
+    const admission = await stub.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "fleet-capacity-migration-run",
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
+    });
+
+    if (!admission.ok || admission.state !== "issued") {
+      throw new Error("Expected migration fixture admission.");
+    }
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE fleet_configuration_revisions
+         SET configuration = json_remove(configuration, '$.capacity', '$.retention')`,
+      );
+      state.storage.sql.exec(
+        `UPDATE run_admissions
+         SET budget_reservation = json_remove(budget_reservation, '$.retentionSeconds')
+         WHERE run_id = ?`,
+        admission.permit.runId,
+      );
+      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version = 14");
+    });
+    await evictDurableObject(stub);
+
+    await expect(
+      stub.getFleetConfiguration(authority, { target: { kind: "fleet" } }),
+    ).resolves.toMatchObject({
+      configuration: {
+        data: {
+          capacity: {
+            maxAgents: DEFAULT_FLEET_MAX_AGENTS,
+            maxConcurrentRuns: MAXIMUM_FLEET_CONCURRENT_RUNS,
+            maxConnections: MAXIMUM_FLEET_CONNECTIONS,
+          },
+          retention: {
+            inboxSeconds: DEFAULT_FLEET_INBOX_RETENTION_SECONDS,
+            runSeconds: DEFAULT_FLEET_RUN_RETENTION_SECONDS,
+          },
+        },
+      },
+      ok: true,
+    });
+    const storedReservation = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ budget_reservation: string }>(
+          `SELECT budget_reservation
+           FROM run_admissions
+           WHERE run_id = ?`,
+          admission.permit.runId,
+        )
+        .one(),
+    );
+
+    expect(
+      runBudgetReservationSchema.parse(JSON.parse(storedReservation.budget_reservation)),
+    ).toMatchObject({
+      retentionSeconds: DEFAULT_FLEET_RUN_RETENTION_SECONDS,
+    });
   });
 
   it("backfills the pending Gateway reservation from a populated v10 database", async () => {
@@ -454,7 +693,7 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 13, status: "ready" },
+      status: { schemaVersion: 14, status: "ready" },
     });
     await expect(
       runInDurableObject(stub, (_instance, state) =>
@@ -515,12 +754,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 13, status: "ready" },
+      status: { schemaVersion: 14, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 13, status: "ready" },
+      status: { schemaVersion: 14, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -740,7 +979,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 13, status: "ready" },
+      status: { schemaVersion: 14, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       const rows = [
@@ -812,6 +1051,7 @@ describe("OwnerControlPlane", () => {
         { version: 11 },
         { version: 12 },
         { version: 13 },
+        { version: 14 },
       ]);
     });
   });
@@ -946,7 +1186,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 13, status: "ready" },
+      status: { schemaVersion: 14, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       expect(
@@ -1042,7 +1282,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec(
         `INSERT INTO control_plane_migrations (version, name, checksum, applied_at)
          VALUES (?, ?, ?, ?)`,
-        14,
+        15,
         "future_migration",
         "f".repeat(64),
         Date.now(),

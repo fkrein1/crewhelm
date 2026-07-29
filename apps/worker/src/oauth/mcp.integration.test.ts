@@ -766,10 +766,12 @@ describe("public OAuth to MCP integration", () => {
 
     expect(mcpResponse.status).toBe(200);
     expect(toolResult.isError).toBe(false);
-    expect(controlPlaneStatusResultSchema.parse(JSON.parse(toolResult.content[0].text))).toEqual({
+    expect(
+      controlPlaneStatusResultSchema.parse(JSON.parse(toolResult.content[0].text)),
+    ).toMatchObject({
       ok: true,
       status: {
-        schemaVersion: 13,
+        schemaVersion: 14,
         status: "ready",
       },
     });

@@ -1,6 +1,11 @@
 import {
   AUTONOMY_WRITE_SCOPE,
+  DEFAULT_FLEET_INBOX_RETENTION_SECONDS,
   DEFAULT_FLEET_INTEGRATION_CALLS_PER_DAY,
+  DEFAULT_FLEET_MAX_AGENTS,
+  DEFAULT_FLEET_MAX_CONCURRENT_RUNS,
+  DEFAULT_FLEET_MAX_CONNECTIONS,
+  DEFAULT_FLEET_RUN_RETENTION_SECONDS,
   OWNER_READ_SCOPE,
 } from "@crewhelm/contracts";
 import { runInDurableObject } from "cloudflare:test";
@@ -23,7 +28,16 @@ describe("OwnerControlPlane fleet configuration", () => {
     expect(current).toMatchObject({
       configuration: {
         data: {
+          capacity: {
+            maxAgents: DEFAULT_FLEET_MAX_AGENTS,
+            maxConcurrentRuns: DEFAULT_FLEET_MAX_CONCURRENT_RUNS,
+            maxConnections: DEFAULT_FLEET_MAX_CONNECTIONS,
+          },
           integrations: { callsPerDay: DEFAULT_FLEET_INTEGRATION_CALLS_PER_DAY },
+          retention: {
+            inboxSeconds: DEFAULT_FLEET_INBOX_RETENTION_SECONDS,
+            runSeconds: DEFAULT_FLEET_RUN_RETENTION_SECONDS,
+          },
         },
         revision: 1,
       },

@@ -1,9 +1,9 @@
 import {
+  DEFAULT_FLEET_RUN_RETENTION_SECONDS,
   MAXIMUM_RUN_ADMISSIONS_PER_OWNER,
   MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
   composioToolCapabilityGrantSchema,
   RUN_ADMISSION_LIFETIME_MS,
-  RUN_ADMISSION_RETENTION_MS,
   confirmRunAdmissionResultSchema,
   createRunAdmissionInputSchema,
   createRunAdmissionResultSchema,
@@ -14,6 +14,7 @@ import {
   runAdmissionNonceSchema,
   runAdmissionPermitSchema,
   runReceiverCapabilitySchema,
+  runSummarySchema,
   verifyActiveRunAdmissionInputSchema,
   verifyActiveRunAdmissionResultSchema,
   verifyRunAdmissionResultSchema,
@@ -21,21 +22,38 @@ import {
   type CreateRunAdmissionResult,
   type CrewAgentRuntimeConfig,
   type FleetConfiguration,
+  type ListAgentRunsInput,
   type OwnerAuthority,
   type RunAdmissionPermit,
   type RedeemRunReceiverCapabilityResult,
   type RunBudgetReservation,
+  type RunSummary,
   type ComposioToolCapabilityGrant,
   type VerifyActiveRunAdmissionResult,
   type VerifyRunAdmissionResult,
 } from "@crewhelm/contracts";
-import { and, count, desc, eq, inArray, isNotNull, isNull, lt, lte, min, or } from "drizzle-orm";
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  min,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import { recordExecutionEvent } from "../../observability/execution.js";
 import {
   agentRevisions,
   agents,
+  agentInboxItems,
   auditEvents,
   capabilityGrants as storedCapabilityGrants,
   connections,
@@ -61,6 +79,21 @@ type ControlPlaneDatabase = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type ControlPlaneTransaction = Parameters<Parameters<ControlPlaneDatabase["transaction"]>[0]>[0];
 type RunAdmissionDatabase = ControlPlaneDatabase | ControlPlaneTransaction;
 type StoredRunAdmission = typeof runAdmissions.$inferSelect;
+
+const PROJECTED_RUN_STATUS = sql<RunSummary["status"]>`CASE
+  WHEN ${runAdmissions.cancelledAt} IS NOT NULL THEN 'cancelled'
+  WHEN ${runAdmissions.cancellationRequestedAt} IS NOT NULL THEN 'cancelling'
+  WHEN ${runAdmissions.status} = 'issued' THEN 'queued'
+  WHEN ${runAdmissions.status} = 'expired' THEN 'failed'
+  WHEN ${agentInboxItems.runStatus} IS NOT NULL THEN ${agentInboxItems.runStatus}
+  ELSE 'running'
+END`;
+const PROJECTED_RUN_COMPLETED_AT = sql<number | null>`CASE
+  WHEN ${runAdmissions.cancelledAt} IS NOT NULL THEN ${runAdmissions.cancelledAt}
+  WHEN ${agentInboxItems.runStatus} IN ('cancelled', 'completed', 'failed')
+    THEN ${agentInboxItems.occurredAt}
+  ELSE NULL
+END`;
 
 function encodeBase64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -135,6 +168,7 @@ function createBudgetReservation(input: {
     maxToolCalls,
     maxTurns,
     reservationId: `budget_${crypto.randomUUID()}`,
+    retentionSeconds: input.configuration.data.retention.runSeconds,
     toolGrants: input.toolGrants,
   });
 }
@@ -184,7 +218,7 @@ export class RunAdmissions {
     const fleetConfiguration = this.#currentFleetConfiguration();
     const currentTime = Date.now();
     const expiresAt = currentTime + RUN_ADMISSION_LIFETIME_MS;
-    const cleanupAt = currentTime + RUN_ADMISSION_RETENTION_MS;
+    const cleanupAt = currentTime + fleetConfiguration.data.retention.runSeconds * 1_000;
     const nonce = createNonce();
     const nonceDigest = await digestBase64Url(nonce);
 
@@ -312,7 +346,10 @@ export class RunAdmissions {
       const admissionCount =
         transaction.select({ value: count() }).from(runAdmissions).get()?.value ?? 0;
 
-      if (admissionCount >= MAXIMUM_RUN_ADMISSIONS_PER_OWNER) {
+      if (
+        admissionCount >= MAXIMUM_RUN_ADMISSIONS_PER_OWNER ||
+        this.#activeCount(transaction) >= fleetConfiguration.data.capacity.maxConcurrentRuns
+      ) {
         return this.#deniedRequest("admission_limit_exceeded");
       }
 
@@ -765,34 +802,51 @@ export class RunAdmissions {
     return this.#database.select().from(runAdmissions).where(eq(runAdmissions.runId, runId)).get();
   }
 
-  listForAgent(
-    agentId: string,
-    cursor: string | undefined,
-    limit: number,
-  ): { nextCursor: string | null; rows: StoredRunAdmission[] } | undefined {
+  list(input: ListAgentRunsInput): { nextCursor: string | null; runs: RunSummary[] } | undefined {
+    const filters = and(
+      input.agentId === undefined ? undefined : eq(runAdmissions.agentId, input.agentId),
+      input.createdAfter === undefined
+        ? undefined
+        : gte(runAdmissions.createdAt, Date.parse(input.createdAfter)),
+      input.createdBefore === undefined
+        ? undefined
+        : lte(runAdmissions.createdAt, Date.parse(input.createdBefore)),
+      input.status === undefined ? undefined : eq(PROJECTED_RUN_STATUS, input.status),
+      input.trigger === undefined ? undefined : eq(runAdmissions.trigger, input.trigger),
+    );
     const cursorRow =
-      cursor === undefined
+      input.cursor === undefined
         ? undefined
         : this.#database
             .select({
-              agentId: runAdmissions.agentId,
               createdAt: runAdmissions.createdAt,
               runId: runAdmissions.runId,
             })
             .from(runAdmissions)
-            .where(eq(runAdmissions.runId, cursor))
+            .leftJoin(agentInboxItems, eq(agentInboxItems.runId, runAdmissions.runId))
+            .where(and(eq(runAdmissions.runId, input.cursor), filters))
             .get();
 
-    if (cursor !== undefined && (cursorRow === undefined || cursorRow.agentId !== agentId)) {
+    if (input.cursor !== undefined && cursorRow === undefined) {
       return undefined;
     }
 
     const rows = this.#database
-      .select()
+      .select({
+        agentId: runAdmissions.agentId,
+        agentRevision: runAdmissions.agentRevision,
+        completedAt: PROJECTED_RUN_COMPLETED_AT,
+        createdAt: runAdmissions.createdAt,
+        runId: runAdmissions.runId,
+        startedAt: runAdmissions.redeemedAt,
+        status: PROJECTED_RUN_STATUS,
+        trigger: runAdmissions.trigger,
+      })
       .from(runAdmissions)
+      .leftJoin(agentInboxItems, eq(agentInboxItems.runId, runAdmissions.runId))
       .where(
         and(
-          eq(runAdmissions.agentId, agentId),
+          filters,
           cursorRow === undefined
             ? undefined
             : or(
@@ -805,15 +859,32 @@ export class RunAdmissions {
         ),
       )
       .orderBy(desc(runAdmissions.createdAt), desc(runAdmissions.runId))
-      .limit(limit + 1)
+      .limit(input.limit + 1)
       .all();
-    const hasMore = rows.length > limit;
-    const page = rows.slice(0, limit);
+    const hasMore = rows.length > input.limit;
+    const runs = rows.slice(0, input.limit).map((row) =>
+      runSummarySchema.parse({
+        agentId: row.agentId,
+        agentRevision: row.agentRevision,
+        ...(row.completedAt === null
+          ? {}
+          : { completedAt: new Date(row.completedAt).toISOString() }),
+        createdAt: new Date(row.createdAt).toISOString(),
+        runId: row.runId,
+        ...(row.startedAt === null ? {} : { startedAt: new Date(row.startedAt).toISOString() }),
+        status: row.status,
+        trigger: row.trigger,
+      }),
+    );
 
     return {
-      nextCursor: hasMore ? (page.at(-1)?.runId ?? null) : null,
-      rows: page,
+      nextCursor: hasMore ? (runs.at(-1)?.runId ?? null) : null,
+      runs,
     };
+  }
+
+  activeCount(): number {
+    return this.#activeCount(this.#database);
   }
 
   cleanup(currentTime: number): void {
@@ -879,7 +950,12 @@ export class RunAdmissions {
     if (retainedRunIds.length > 0) {
       database
         .update(runAdmissions)
-        .set({ cleanupAt: currentTime + RUN_ADMISSION_RETENTION_MS })
+        .set({
+          cleanupAt: sql`${currentTime} + coalesce(
+            json_extract(${runAdmissions.budgetReservation}, '$.retentionSeconds'),
+            ${DEFAULT_FLEET_RUN_RETENTION_SECONDS}
+          ) * 1000`,
+        })
         .where(inArray(runAdmissions.runId, retainedRunIds))
         .run();
     }
@@ -892,6 +968,17 @@ export class RunAdmissions {
         .run();
       database.delete(runAdmissions).where(inArray(runAdmissions.runId, safeToDeleteRunIds)).run();
     }
+  }
+
+  #activeCount(database: RunAdmissionDatabase): number {
+    return (
+      database
+        .select({ value: count() })
+        .from(runAdmissions)
+        .leftJoin(agentInboxItems, eq(agentInboxItems.runId, runAdmissions.runId))
+        .where(inArray(PROJECTED_RUN_STATUS, ["queued", "running", "cancelling"]))
+        .get()?.value ?? 0
+    );
   }
 
   #runtimeConfiguration(

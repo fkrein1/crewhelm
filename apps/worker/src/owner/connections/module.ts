@@ -3,7 +3,6 @@ import {
   INTEGRATION_ENABLEMENT_UNKNOWN_RECOVERY_MS,
   MAXIMUM_INTEGRATION_ENABLEMENT_REQUESTS_PER_OWNER,
   MAXIMUM_CONNECTION_LINK_REQUESTS_PER_OWNER,
-  MAXIMUM_CONNECTIONS_PER_OWNER,
   completeConnectionLinkInputSchema,
   completeIntegrationEnablementInputSchema,
   connectionAuthorizationTokenSchema,
@@ -23,13 +22,14 @@ import {
   type CreateConnectionLinkResult,
   type EnableIntegrationInput,
   type EnableIntegrationResult,
+  type FleetConfigurationData,
   type ListConnectionsResult,
   type OwnerAuthority,
   type RecordConnectionAuthorizationReturnResult,
   type ReserveIntegrationEnablementResult,
   type ReserveConnectionLinkResult,
 } from "@crewhelm/contracts";
-import { and, asc, count, desc, eq, gt, inArray, lte, min } from "drizzle-orm";
+import { and, asc, count, eq, gt, lte, min, sql } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import { recordConnectionLinkCompletion } from "../../observability/integrations.js";
@@ -40,7 +40,6 @@ import {
   connections,
   integrationEnablementRequests,
   type ControlPlaneDatabaseSchema,
-  type StoredConnectionAuthorizationOutcome,
 } from "../schema.js";
 
 const COMPOSIO_CONNECT_ORIGIN = "https://connect.composio.dev";
@@ -143,10 +142,16 @@ export function deniedIntegrationEnablement(
 }
 
 export class Connections {
+  readonly #currentFleetConfiguration: () => FleetConfigurationData;
   readonly #database: Database;
   readonly #storage: DurableObjectStorage;
 
-  constructor(database: Database, storage: DurableObjectStorage) {
+  constructor(
+    database: Database,
+    storage: DurableObjectStorage,
+    currentFleetConfiguration: () => FleetConfigurationData,
+  ) {
+    this.#currentFleetConfiguration = currentFleetConfiguration;
     this.#database = database;
     this.#storage = storage;
   }
@@ -459,7 +464,10 @@ export class Connections {
           )
           .get()?.value ?? 0;
 
-      if (connectionCount + pendingCount >= MAXIMUM_CONNECTIONS_PER_OWNER) {
+      if (
+        connectionCount + pendingCount >=
+        this.#currentFleetConfiguration().capacity.maxConnections
+      ) {
         return deniedConnectionLink("connection_limit_exceeded");
       }
 
@@ -823,62 +831,86 @@ export class Connections {
       return deniedConnectionRead("invalid_request");
     }
 
+    const latestAuthorizationOutcome = sql<ConnectionSummary["authorizationOutcome"]>`coalesce(
+      (
+        SELECT ${connectionAuthorizationReturns.status}
+        FROM ${connectionAuthorizationReturns}
+        WHERE ${connectionAuthorizationReturns.connectionId} = ${connections.connectionId}
+        ORDER BY ${connectionAuthorizationReturns.createdAt} DESC,
+          ${connectionAuthorizationReturns.reservationId} DESC
+        LIMIT 1
+      ),
+      'untracked'
+    )`;
     const rows = this.#database
       .select({
         authConfigId: connections.authConfigId,
+        authorizationOutcome: latestAuthorizationOutcome,
         connectionId: connections.connectionId,
         createdAt: connections.createdAt,
         status: connections.status,
       })
       .from(connections)
       .where(
-        request.data.cursor === undefined
-          ? undefined
-          : gt(connections.connectionId, request.data.cursor),
+        and(
+          request.data.authorizationOutcome === undefined
+            ? undefined
+            : eq(latestAuthorizationOutcome, request.data.authorizationOutcome),
+          request.data.cursor === undefined
+            ? undefined
+            : gt(connections.connectionId, request.data.cursor),
+          request.data.integration === undefined
+            ? undefined
+            : sql`EXISTS (
+                SELECT 1
+                FROM ${integrationEnablementRequests}
+                WHERE ${integrationEnablementRequests.integrationSlug} = ${request.data.integration}
+                  AND ${integrationEnablementRequests.status} = 'completed'
+                  AND ${integrationEnablementRequests.authConfigId} = ${connections.authConfigId}
+              )`,
+          request.data.status === undefined
+            ? undefined
+            : eq(connections.status, request.data.status),
+        ),
       )
       .orderBy(asc(connections.connectionId))
       .limit(request.data.limit + 1)
       .all();
-    const connectionIds = rows.map((row) => row.connectionId);
-    const authorizationRows =
-      connectionIds.length === 0
-        ? []
-        : this.#database
-            .select({
-              connectionId: connectionAuthorizationReturns.connectionId,
-              reservationId: connectionAuthorizationReturns.reservationId,
-              status: connectionAuthorizationReturns.status,
-            })
-            .from(connectionAuthorizationReturns)
-            .where(inArray(connectionAuthorizationReturns.connectionId, connectionIds))
-            .orderBy(
-              desc(connectionAuthorizationReturns.createdAt),
-              desc(connectionAuthorizationReturns.reservationId),
-            )
-            .all();
-    const authorizationByConnection = new Map<string, StoredConnectionAuthorizationOutcome>();
-
-    for (const authorizationRow of authorizationRows) {
-      if (
-        authorizationRow.connectionId !== null &&
-        !authorizationByConnection.has(authorizationRow.connectionId)
-      ) {
-        authorizationByConnection.set(authorizationRow.connectionId, authorizationRow.status);
-      }
-    }
-
-    const summaries = rows.map((row) =>
-      this.#summaryFromRow({
-        ...row,
-        authorizationOutcome:
-          authorizationByConnection.get(row.connectionId) ?? ("untracked" as const),
-      }),
-    );
+    const summaries = rows.map((row) => this.#summaryFromRow(row));
     const hasMore = summaries.length > request.data.limit;
     const page = summaries.slice(0, request.data.limit);
     const nextCursor = hasMore ? (page.at(-1)?.connectionId ?? null) : null;
 
     return listConnectionsResultSchema.parse({ connections: page, nextCursor, ok: true });
+  }
+
+  usage(): { active: number; pending: number; total: number } {
+    const rows = this.#database
+      .select({
+        status: connections.status,
+        value: count(),
+      })
+      .from(connections)
+      .groupBy(connections.status)
+      .all();
+    const active = rows.find((row) => row.status === "active")?.value ?? 0;
+    const pending =
+      this.#database
+        .select({ value: count() })
+        .from(connectionLinkRequests)
+        .where(
+          and(
+            eq(connectionLinkRequests.status, "pending"),
+            gt(connectionLinkRequests.recoverAfter, Date.now()),
+          ),
+        )
+        .get()?.value ?? 0;
+
+    return {
+      active,
+      pending,
+      total: rows.reduce((total, row) => total + row.value, pending),
+    };
   }
 
   cleanup(currentTime: number): number | null {

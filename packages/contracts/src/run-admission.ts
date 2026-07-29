@@ -1,5 +1,12 @@
 import * as z from "zod";
 
+import {
+  DEFAULT_FLEET_RUN_RETENTION_SECONDS,
+  MAXIMUM_FLEET_LIST_ITEMS,
+  MAXIMUM_FLEET_RETENTION_SECONDS,
+  MINIMUM_FLEET_RETENTION_SECONDS,
+} from "./fleet-capacity.js";
+
 import { crewAgentRuntimeConfigSchema } from "./agent-runtime.js";
 import {
   composioToolCapabilityGrantSchema,
@@ -18,7 +25,7 @@ import {
 } from "./control-plane.js";
 
 export const RUN_ADMISSION_LIFETIME_MS = 30_000;
-export const RUN_ADMISSION_RETENTION_MS = 24 * 60 * 60 * 1_000;
+export const RUN_ADMISSION_RETENTION_MS = DEFAULT_FLEET_RUN_RETENTION_SECONDS * 1_000;
 export const RUN_RECEIVER_CAPABILITY_LIFETIME_MS = 5_000;
 export const RUN_BUDGET_WINDOW_MS = 24 * 60 * 60 * 1_000;
 export const MAXIMUM_RUN_ADMISSIONS_PER_OWNER = 1_000;
@@ -99,6 +106,12 @@ export const runBudgetReservationSchema = z.strictObject({
   maxToolCalls: agentExecutionLimitsSchema.shape.maxToolCalls,
   maxTurns: agentExecutionLimitsSchema.shape.maxTurns,
   reservationId: runBudgetReservationIdSchema,
+  retentionSeconds: z
+    .number()
+    .int()
+    .min(MINIMUM_FLEET_RETENTION_SECONDS)
+    .max(MAXIMUM_FLEET_RETENTION_SECONDS)
+    .default(DEFAULT_FLEET_RUN_RETENTION_SECONDS),
   toolGrants: z
     .array(composioToolCapabilityGrantSchema)
     .max(100)
@@ -345,11 +358,34 @@ export const runSchema = z.strictObject({
   trigger: runTriggerSchema.default("manual"),
 });
 
-export const listAgentRunsInputSchema = z.strictObject({
-  agentId: agentIdSchema,
-  cursor: runIdSchema.optional(),
-  limit: z.number().int().min(1).max(25).default(10),
+export const runSummarySchema = runSchema.omit({
+  output: true,
+  outputTruncated: true,
 });
+
+export const listAgentRunsInputSchema = z
+  .strictObject({
+    agentId: agentIdSchema.optional().describe("Return runs for one exact Agent."),
+    createdAfter: z.iso
+      .datetime()
+      .optional()
+      .describe("Return runs created at or after this time."),
+    createdBefore: z.iso
+      .datetime()
+      .optional()
+      .describe("Return runs created at or before this time."),
+    cursor: runIdSchema.optional(),
+    limit: z.number().int().min(1).max(MAXIMUM_FLEET_LIST_ITEMS).default(10),
+    status: runStatusSchema.optional().describe("Return runs in this owner-local projected state."),
+    trigger: runTriggerSchema.optional().describe("Return manual or scheduled runs."),
+  })
+  .refine(
+    (input) =>
+      input.createdAfter === undefined ||
+      input.createdBefore === undefined ||
+      Date.parse(input.createdAfter) <= Date.parse(input.createdBefore),
+    "createdAfter must not be later than createdBefore.",
+  );
 
 const runStateTimelineEventSchema = z.strictObject({
   event: z.enum([
@@ -473,7 +509,7 @@ export const listAgentRunsResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     nextCursor: runIdSchema.nullable(),
     ok: z.literal(true),
-    runs: z.array(runSchema).max(25),
+    runs: z.array(runSummarySchema).max(MAXIMUM_FLEET_LIST_ITEMS),
   }),
   z.strictObject({
     error: runReadErrorSchema,
@@ -536,12 +572,14 @@ export type InspectAdmittedRunResult = z.infer<typeof inspectAdmittedRunResultSc
 export type InspectRunCapability = z.infer<typeof inspectRunCapabilitySchema>;
 export type ListRunApprovalsCapability = z.infer<typeof listRunApprovalsCapabilitySchema>;
 export type InspectRunResult = z.infer<typeof inspectRunResultSchema>;
+export type ListAgentRunsInput = z.infer<typeof listAgentRunsInputSchema>;
 export type ListAgentRunsResult = z.infer<typeof listAgentRunsResultSchema>;
 export type RedeemRunReceiverCapabilityResult = z.infer<
   typeof redeemRunReceiverCapabilityResultSchema
 >;
 export type RecordAiGatewayCallInput = z.infer<typeof recordAiGatewayCallInputSchema>;
 export type Run = z.infer<typeof runSchema>;
+export type RunSummary = z.infer<typeof runSummarySchema>;
 export type RunAdmissionPermit = z.infer<typeof runAdmissionPermitSchema>;
 export type RunAdmissionSummary = z.infer<typeof runAdmissionSummarySchema>;
 export type RunBudgetReservation = z.infer<typeof runBudgetReservationSchema>;
