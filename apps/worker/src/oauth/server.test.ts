@@ -237,7 +237,8 @@ describe("OAuth server boundary", () => {
         candidate.name === "0007_connection_read_scope.sql" ||
         candidate.name === "0008_connection_config_read_scope.sql" ||
         candidate.name === "0009_connection_config_write_scope.sql" ||
-        candidate.name === "0010_oauth_offline_access.sql",
+        candidate.name === "0010_oauth_offline_access.sql" ||
+        candidate.name === "0011_autonomy_write_scope.sql",
     );
 
     expect(migrations.map((migration) => migration.name)).toEqual([
@@ -250,6 +251,7 @@ describe("OAuth server boundary", () => {
       "0008_connection_config_read_scope.sql",
       "0009_connection_config_write_scope.sql",
       "0010_oauth_offline_access.sql",
+      "0011_autonomy_write_scope.sql",
     ]);
     for (const migration of migrations) {
       for (const query of migration.queries) {

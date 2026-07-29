@@ -1,6 +1,7 @@
 import type {
   Agent,
   AgentExecutionLimits,
+  AgentScheduleConfiguration,
   ComposioToolCapabilityGrant,
   ConnectionAuthorizationOutcome,
   RunBudgetReservation,
@@ -194,6 +195,95 @@ export const agentUpdates = sqliteTable(
   ],
 );
 
+export const agentScheduleRevisions = sqliteTable(
+  "agent_schedule_revisions",
+  {
+    agentId: text("agent_id").notNull(),
+    revision: integer("revision").notNull(),
+    agentRevision: integer("agent_revision").notNull(),
+    configuration: text("configuration", {
+      mode: "json",
+    }).$type<AgentScheduleConfiguration | null>(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.agentId, table.revision] }),
+    foreignKey({
+      columns: [table.agentId, table.agentRevision],
+      foreignColumns: [agentRevisions.agentId, agentRevisions.revision],
+    }).onDelete("restrict"),
+    check("agent_schedule_revisions_revision_positive", sql`${table.revision} > 0`),
+    check("agent_schedule_revisions_agent_revision_positive", sql`${table.agentRevision} > 0`),
+    check(
+      "agent_schedule_revisions_configuration_json",
+      sql`${table.configuration} IS NULL OR json_valid(${table.configuration})`,
+    ),
+    check("agent_schedule_revisions_created_at_positive", sql`${table.createdAt} > 0`),
+  ],
+);
+
+export const agentSchedules = sqliteTable(
+  "agent_schedules",
+  {
+    agentId: text("agent_id").primaryKey(),
+    currentRevision: integer("current_revision").notNull(),
+    status: text("status", { enum: ["active", "paused"] }).notNull(),
+    nextRunAt: integer("next_run_at"),
+    lastRunId: text("last_run_id"),
+    lastDispatchedAt: integer("last_dispatched_at"),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.agentId],
+      foreignColumns: [agents.agentId],
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.agentId, table.currentRevision],
+      foreignColumns: [agentScheduleRevisions.agentId, agentScheduleRevisions.revision],
+    }).onDelete("restrict"),
+    index("agent_schedules_due")
+      .on(table.nextRunAt)
+      .where(sql`${table.status} = 'active'`),
+    check("agent_schedules_current_revision_positive", sql`${table.currentRevision} > 0`),
+    check("agent_schedules_status", sql`${table.status} IN ('active', 'paused')`),
+    check("agent_schedules_created_at_positive", sql`${table.createdAt} > 0`),
+    check(
+      "agent_schedules_dispatch_state",
+      sql`((${table.lastRunId} IS NULL AND ${table.lastDispatchedAt} IS NULL)
+        OR (${table.lastRunId} IS NOT NULL
+          AND ${table.lastDispatchedAt} IS NOT NULL
+          AND ${table.lastDispatchedAt} >= ${table.createdAt}))`,
+    ),
+    check(
+      "agent_schedules_state",
+      sql`((${table.status} = 'active' AND ${table.nextRunAt} IS NOT NULL)
+        OR (${table.status} = 'paused' AND ${table.nextRunAt} IS NULL))`,
+    ),
+  ],
+);
+
+export const agentScheduleUpdates = sqliteTable(
+  "agent_schedule_updates",
+  {
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    agentId: text("agent_id").notNull(),
+    revision: integer("revision").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.clientId, table.idempotencyKey] }),
+    uniqueIndex("agent_schedule_updates_agent_revision").on(table.agentId, table.revision),
+    foreignKey({
+      columns: [table.agentId, table.revision],
+      foreignColumns: [agentScheduleRevisions.agentId, agentScheduleRevisions.revision],
+    }).onDelete("restrict"),
+    check("agent_schedule_updates_request_digest_length", sql`length(${table.requestDigest}) = 43`),
+    check("agent_schedule_updates_revision_positive", sql`${table.revision} > 0`),
+  ],
+);
+
 export const runAdmissions = sqliteTable(
   "run_admissions",
   {
@@ -204,6 +294,9 @@ export const runAdmissions = sqliteTable(
     agentId: text("agent_id").notNull(),
     agentRevision: integer("agent_revision").notNull(),
     promptDigest: text("prompt_digest").notNull(),
+    trigger: text("trigger", { enum: ["manual", "schedule"] })
+      .notNull()
+      .default("manual"),
     budgetReservation: text("budget_reservation", { mode: "json" })
       .$type<RunBudgetReservation>()
       .notNull(),
@@ -233,6 +326,7 @@ export const runAdmissions = sqliteTable(
     check("run_admissions_request_digest_length", sql`length(${table.requestDigest}) = 43`),
     check("run_admissions_agent_revision_positive", sql`${table.agentRevision} > 0`),
     check("run_admissions_prompt_digest_length", sql`length(${table.promptDigest}) = 64`),
+    check("run_admissions_trigger", sql`${table.trigger} IN ('manual', 'schedule')`),
     check("run_admissions_nonce_digest_length", sql`length(${table.nonceDigest}) = 43`),
     check("run_admissions_status", sql`${table.status} IN ('issued', 'redeemed', 'expired')`),
     check("run_admissions_expires_at_positive", sql`${table.expiresAt} > 0`),
@@ -620,6 +714,9 @@ export const controlPlaneMigrations = sqliteTable(
 export const controlPlaneSchema = {
   agentCreations,
   agentRevisions,
+  agentScheduleRevisions,
+  agentSchedules,
+  agentScheduleUpdates,
   agentUpdates,
   agents,
   auditEvents,

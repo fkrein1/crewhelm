@@ -5,6 +5,8 @@ import {
   decideRunToolApprovalResultSchema,
   inspectRunInputSchema,
   inspectRunResultSchema,
+  listAgentRunsInputSchema,
+  listAgentRunsResultSchema,
   listRunToolApprovalsInputSchema,
   listRunToolApprovalsResultSchema,
   startRunInputSchema,
@@ -18,6 +20,7 @@ import { controlPlaneToolResult } from "./tool-result.js";
 export const MCP_DECIDE_RUN_TOOL_APPROVAL_TOOL_NAME = "crewhelm_decide_run_tool_approval";
 export const MCP_CANCEL_RUN_TOOL_NAME = "crewhelm_cancel_run";
 export const MCP_INSPECT_RUN_TOOL_NAME = "crewhelm_inspect_run";
+export const MCP_LIST_AGENT_RUNS_TOOL_NAME = "crewhelm_list_agent_runs";
 export const MCP_LIST_RUN_TOOL_APPROVALS_TOOL_NAME = "crewhelm_list_run_tool_approvals";
 export const MCP_START_RUN_TOOL_NAME = "crewhelm_start_run";
 
@@ -60,6 +63,27 @@ export function registerRunTools(server: McpServer, context: McpToolContext): vo
       controlPlaneToolResult(
         () => controlPlane.inspectRun(authority, input),
         inspectRunResultSchema,
+      ),
+  );
+
+  server.registerTool(
+    MCP_LIST_AGENT_RUNS_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: true,
+      },
+      description:
+        "List recent manual and scheduled runs for one authenticated-owner Crewhelm Agent.",
+      inputSchema: listAgentRunsInputSchema,
+      title: "List Crewhelm Agent runs",
+    },
+    async (input) =>
+      controlPlaneToolResult(
+        () => controlPlane.listAgentRuns(authority, input),
+        listAgentRunsResultSchema,
       ),
   );
 

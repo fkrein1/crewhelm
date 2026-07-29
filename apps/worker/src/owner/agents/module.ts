@@ -1,4 +1,5 @@
 import {
+  AUTONOMY_WRITE_SCOPE,
   MAXIMUM_AGENTS_PER_OWNER,
   MAXIMUM_REVISIONS_PER_AGENT,
   agentRevisionSchema,
@@ -135,7 +136,11 @@ async function digestConnectionConfiguration(
       expectedRevision: input.expectedRevision,
       expiresAt: input.expiresAt,
       limits: input.limits,
-      tools: input.tools.map((tool) => ({ slug: tool.slug, version: tool.version })),
+      tools: input.tools.map((tool) => ({
+        authorization: tool.authorization,
+        slug: tool.slug,
+        version: tool.version,
+      })),
     }),
   );
 }
@@ -292,7 +297,11 @@ export class AgentRegistry {
 
     const requestDigest = await digestConnectionConfiguration({
       ...request.data,
-      tools: request.data.tools.map((tool) => ({ slug: tool.slug, version: tool.version })),
+      tools: request.data.tools.map((tool) => ({
+        authorization: tool.authorization,
+        slug: tool.slug,
+        version: tool.version,
+      })),
     });
     const targetDigest = Array.from(
       new Uint8Array(
@@ -445,6 +454,7 @@ export class AgentRegistry {
         ...configuredTools.map((tool) => ({
           agentId: currentRow.agentId,
           agentRevision: revision,
+          authorization: tool.authorization,
           capabilityId: "composio.tool.execute" as const,
           connectionId: request.data.connectionId,
           effect: classifyComposioToolEffect(tool.tags, tool.slug),
@@ -860,7 +870,7 @@ export class AgentRegistry {
 
       const updatedAt = Date.now();
       const revision = currentAgent.revision + 1;
-      const grants = transaction
+      const parsedGrants = transaction
         .select({ grant: capabilityGrants.grant })
         .from(capabilityGrants)
         .where(
@@ -871,11 +881,26 @@ export class AgentRegistry {
           ),
         )
         .all()
-        .map(({ grant }) => ({
-          ...grant,
-          agentRevision: revision,
-          grantId: `grant_${crypto.randomUUID()}`,
-        }));
+        .map(({ grant }) => composioToolCapabilityGrantSchema.safeParse(grant));
+
+      if (parsedGrants.some((grant) => !grant.success)) {
+        return deniedAgent("incompatible_schema");
+      }
+
+      const currentGrants = parsedGrants.flatMap((grant) => (grant.success ? [grant.data] : []));
+
+      if (
+        currentGrants.some(({ authorization }) => authorization === "standing") &&
+        !authority.scopes.includes(AUTONOMY_WRITE_SCOPE)
+      ) {
+        return deniedAgent("insufficient_scope");
+      }
+
+      const grants = currentGrants.map((grant) => ({
+        ...grant,
+        agentRevision: revision,
+        grantId: `grant_${crypto.randomUUID()}`,
+      }));
       const grantIds = grants.map((grant) => grant.grantId).toSorted();
 
       transaction

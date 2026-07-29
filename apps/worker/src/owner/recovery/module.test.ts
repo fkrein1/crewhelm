@@ -122,6 +122,7 @@ describe("owner recovery controls", () => {
     const grant = (grantId: string, toolSlug: string): ComposioToolCapabilityGrant => ({
       agentId: created.agent.id,
       agentRevision: created.agent.revision,
+      authorization: "approval_required",
       capabilityId: COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
       connectionId,
       effect: "read",

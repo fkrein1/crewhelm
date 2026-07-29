@@ -193,6 +193,7 @@ export class TestCrewAgent extends CrewAgent {
             outputTruncated: false,
             status: "completed",
           },
+          trace: result.trace,
         });
   }
 

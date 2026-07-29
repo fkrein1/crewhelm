@@ -6,6 +6,8 @@ import {
   runIdSchema,
   sha256DigestSchema,
   toolCallIdSchema,
+  toolExecutionEvaluationFailureReasonSchema,
+  toolGateDenialReasonSchema,
 } from "./capabilities.js";
 import {
   agentExecutionLimitsSchema,
@@ -26,7 +28,7 @@ export const MAXIMUM_RUN_OUTPUT_CHARACTERS = 64 * 1_024;
 export const MAXIMUM_RUN_PROMPT_CHARACTERS = 16 * 1_024;
 export const MAXIMUM_RUN_TIMELINE_EVENTS = 512;
 export const MAXIMUM_OWNER_RUN_INPUT_CHARACTERS_PER_WINDOW = 1_000_000;
-export const MAXIMUM_OWNER_RUN_MODEL_CALLS_PER_WINDOW = 100;
+export const MAXIMUM_OWNER_RUN_MODEL_CALLS_PER_WINDOW = 500;
 export const MAXIMUM_OWNER_RUN_OUTPUT_TOKENS_PER_WINDOW = 1_000_000;
 export const RUNNABLE_AGENT_MODELS = [
   "@cf/meta/llama-4-scout-17b-16e-instruct",
@@ -64,6 +66,7 @@ export const runStatusSchema = z.enum([
   "cancelled",
   "failed",
 ]);
+export const runTriggerSchema = z.enum(["manual", "schedule"]);
 
 export const createRunAdmissionInputSchema = z.strictObject({
   agentId: agentIdSchema,
@@ -71,6 +74,7 @@ export const createRunAdmissionInputSchema = z.strictObject({
   idempotencyKey: runAdmissionIdempotencyKeySchema,
   promptCharacters: z.number().int().min(1).max(MAXIMUM_RUN_PROMPT_CHARACTERS),
   promptDigest: sha256DigestSchema,
+  trigger: runTriggerSchema.default("manual"),
 });
 
 export const runBudgetReservationSchema = z.strictObject({
@@ -315,9 +319,16 @@ export const runSchema = z.strictObject({
   runId: runIdSchema,
   startedAt: z.iso.datetime().optional(),
   status: runStatusSchema,
+  trigger: runTriggerSchema.default("manual"),
 });
 
-export const runTimelineEventSchema = z.strictObject({
+export const listAgentRunsInputSchema = z.strictObject({
+  agentId: agentIdSchema,
+  cursor: runIdSchema.optional(),
+  limit: z.number().int().min(1).max(25).default(10),
+});
+
+const runStateTimelineEventSchema = z.strictObject({
   event: z.enum([
     "run.admitted",
     "run.started",
@@ -339,6 +350,41 @@ export const runTimelineEventSchema = z.strictObject({
   occurredAt: z.iso.datetime(),
   toolCallId: toolCallIdSchema.optional(),
 });
+const localToolAuthorizationFailureReasonSchema = z.enum([
+  "action_invalid",
+  "action_unavailable",
+  "policy_decision_mismatch",
+  "policy_response_invalid",
+  "policy_unavailable",
+  "run_unavailable",
+]);
+export const toolAuthorizationFailureReasonSchema = z.union([
+  toolGateDenialReasonSchema,
+  toolExecutionEvaluationFailureReasonSchema,
+  localToolAuthorizationFailureReasonSchema,
+]);
+export const toolAuthorizationTimelineEventSchema = z.discriminatedUnion("event", [
+  z.strictObject({
+    event: z.literal("tool.authorization_allowed"),
+    occurredAt: z.iso.datetime(),
+    toolCallId: toolCallIdSchema,
+  }),
+  z.strictObject({
+    event: z.literal("tool.authorization_approval_required"),
+    occurredAt: z.iso.datetime(),
+    toolCallId: toolCallIdSchema,
+  }),
+  z.strictObject({
+    event: z.literal("tool.authorization_blocked"),
+    occurredAt: z.iso.datetime(),
+    reason: toolAuthorizationFailureReasonSchema,
+    toolCallId: toolCallIdSchema,
+  }),
+]);
+export const runTimelineEventSchema = z.union([
+  runStateTimelineEventSchema,
+  toolAuthorizationTimelineEventSchema,
+]);
 
 const runRequestErrorSchema = z.strictObject({
   code: z.enum([
@@ -397,6 +443,18 @@ export const inspectRunResultSchema = z.discriminatedUnion("ok", [
   }),
 ]);
 
+export const listAgentRunsResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    nextCursor: runIdSchema.nullable(),
+    ok: z.literal(true),
+    runs: z.array(runSchema).max(25),
+  }),
+  z.strictObject({
+    error: runReadErrorSchema,
+    ok: z.literal(false),
+  }),
+]);
+
 export const cancelRunResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     cancelled: z.literal(true),
@@ -433,6 +491,10 @@ export const inspectAdmittedRunResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     ok: z.literal(true),
     run: runSchema,
+    trace: z
+      .array(toolAuthorizationTimelineEventSchema)
+      .max(MAXIMUM_RUN_TIMELINE_EVENTS)
+      .default([]),
   }),
   invalidRunAdmissionSchema,
 ]);
@@ -448,6 +510,7 @@ export type InspectAdmittedRunResult = z.infer<typeof inspectAdmittedRunResultSc
 export type InspectRunCapability = z.infer<typeof inspectRunCapabilitySchema>;
 export type ListRunApprovalsCapability = z.infer<typeof listRunApprovalsCapabilitySchema>;
 export type InspectRunResult = z.infer<typeof inspectRunResultSchema>;
+export type ListAgentRunsResult = z.infer<typeof listAgentRunsResultSchema>;
 export type RedeemRunReceiverCapabilityResult = z.infer<
   typeof redeemRunReceiverCapabilityResultSchema
 >;
@@ -456,9 +519,11 @@ export type RunAdmissionPermit = z.infer<typeof runAdmissionPermitSchema>;
 export type RunAdmissionSummary = z.infer<typeof runAdmissionSummarySchema>;
 export type RunBudgetReservation = z.infer<typeof runBudgetReservationSchema>;
 export type RunReceiverCapability = z.infer<typeof runReceiverCapabilitySchema>;
+export type RunTrigger = z.infer<typeof runTriggerSchema>;
 export type RunTimelineEvent = z.infer<typeof runTimelineEventSchema>;
 export type ResumeRunAdmissionInput = z.infer<typeof resumeRunAdmissionInputSchema>;
 export type ResumeRunCapability = z.infer<typeof resumeRunCapabilitySchema>;
 export type StartRunResult = z.infer<typeof startRunResultSchema>;
+export type ToolAuthorizationTimelineEvent = z.infer<typeof toolAuthorizationTimelineEventSchema>;
 export type VerifyActiveRunAdmissionResult = z.infer<typeof verifyActiveRunAdmissionResultSchema>;
 export type VerifyRunAdmissionResult = z.infer<typeof verifyRunAdmissionResultSchema>;

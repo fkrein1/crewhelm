@@ -1,6 +1,7 @@
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  AUTONOMY_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   MAXIMUM_AGENTS_PER_OWNER,
   MAXIMUM_REVISIONS_PER_AGENT,
@@ -302,6 +303,7 @@ describe("OwnerControlPlane agents", () => {
       OWNER_WRITE_SCOPE,
       AGENTS_READ_SCOPE,
       AGENTS_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
       CONNECTIONS_READ_SCOPE,
     ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
@@ -349,6 +351,7 @@ describe("OwnerControlPlane agents", () => {
       providerConnectionId,
       tools: [
         {
+          authorization: "standing",
           description: "Read one exact project item.",
           inputParameters: {
             itemId: { required: true, type: "string" },
@@ -375,6 +378,16 @@ describe("OwnerControlPlane agents", () => {
     if (!configured.ok) {
       throw new Error("Expected connection configuration to succeed.");
     }
+
+    await expect(
+      stub.updateAgent(
+        {
+          ...authority,
+          scopes: authority.scopes.filter((scope) => scope !== AUTONOMY_WRITE_SCOPE),
+        },
+        agentUpdate(configured.agent, "update-standing-without-autonomy", "Project reader"),
+      ),
+    ).resolves.toEqual(fixedAgentFailure("insufficient_scope"));
 
     const updated = await stub.updateAgent(
       authority,

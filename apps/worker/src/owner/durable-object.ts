@@ -1,10 +1,13 @@
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  AUTONOMY_WRITE_SCOPE,
   CONNECTION_CONFIGS_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   changeAuthorityInputSchema,
+  completeAgentConnectionConfigurationInputSchema,
+  configureAgentScheduleInputSchema,
   controlPlaneStatusResultSchema,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
@@ -24,6 +27,7 @@ import {
   type LookupAgentConnectionConfigurationResult,
   type InspectRunResult,
   type ListRunToolApprovalsResult,
+  type ListAgentRunsResult,
   type DecideRunToolApprovalResult,
   type OwnerAuthority,
   type OwnerScope,
@@ -43,6 +47,8 @@ import {
   type ResolveToolExecutionConnectionResult,
   type ChangeAuthorityResult,
   type ReconcileToolExecutionResult,
+  type ConfigureAgentScheduleResult,
+  type GetAgentScheduleResult,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
@@ -53,6 +59,7 @@ import {
   deniedCancelRun,
   deniedDecideRunToolApproval,
   deniedInspectRun,
+  deniedListAgentRuns,
   deniedListRunToolApprovals,
   deniedStartRun,
 } from "./agent-channel/index.js";
@@ -68,7 +75,14 @@ import { CONTROL_PLANE_SCHEMA_VERSION, migrateControlPlane } from "./migrations.
 import { controlPlane, controlPlaneSchema, type ControlPlaneDatabaseSchema } from "./schema.js";
 
 import { AuthorityControls, deniedAuthorityControl } from "./recovery/index.js";
-import { RunAdmissions, ToolExecutions, deniedToolExecutionReconciliation } from "./runs/index.js";
+import {
+  RunAdmissions,
+  ToolExecutions,
+  deniedToolExecutionEvaluation,
+  deniedToolExecutionReconciliation,
+} from "./runs/index.js";
+import { recordScheduleEvent } from "../observability/schedules.js";
+import { AgentSchedules, deniedAgentSchedule, type DueAgentSchedule } from "./schedules/index.js";
 
 const INVALID_RUN_ADMISSION = {
   error: {
@@ -97,6 +111,7 @@ export class OwnerControlPlane extends DurableObject {
   readonly #connections: Connections;
   readonly #agentChannel: AgentChannel;
   readonly #authorityControls: AuthorityControls;
+  readonly #agentSchedules: AgentSchedules;
 
   constructor(state: DurableObjectState, environment: Cloudflare.Env) {
     super(state, environment);
@@ -111,6 +126,7 @@ export class OwnerControlPlane extends DurableObject {
     this.#agents = new AgentRegistry(this.#database);
     this.#connections = new Connections(this.#database, this.#storage);
     this.#authorityControls = new AuthorityControls(this.#database);
+    this.#agentSchedules = new AgentSchedules(this.#database, this.#storage);
     this.#agentChannel = new AgentChannel(
       this.#objectName,
       this.#database,
@@ -189,10 +205,7 @@ export class OwnerControlPlane extends DurableObject {
 
   evaluateToolExecution(input: unknown): Promise<EvaluateToolExecutionResult> {
     if (!this.#migrationReady) {
-      return Promise.resolve({
-        error: { code: "invalid_execution", message: "Tool execution denied." },
-        ok: false,
-      });
+      return Promise.resolve(deniedToolExecutionEvaluation("admission_unavailable"));
     }
 
     return this.#toolExecutions.evaluate(input);
@@ -283,6 +296,48 @@ export class OwnerControlPlane extends DurableObject {
       : deniedInspectRun(authorization.code);
   }
 
+  async listAgentRuns(authorityInput: unknown, input: unknown): Promise<ListAgentRunsResult> {
+    const authorization = this.#authorize(authorityInput, AGENTS_READ_SCOPE);
+
+    return authorization.ok
+      ? this.#agentChannel.listRuns(authorization.authority, input)
+      : deniedListAgentRuns(authorization.code);
+  }
+
+  async configureAgentSchedule(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<ConfigureAgentScheduleResult> {
+    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+
+    if (!authorization.ok) {
+      return deniedAgentSchedule(authorization.code);
+    }
+
+    const request = configureAgentScheduleInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return deniedAgentSchedule("invalid_request");
+    }
+
+    if (
+      request.data.schedule !== null &&
+      !authorization.authority.scopes.includes(AUTONOMY_WRITE_SCOPE)
+    ) {
+      return deniedAgentSchedule("insufficient_scope");
+    }
+
+    return this.#agentSchedules.configure(authorization.authority, request.data);
+  }
+
+  getAgentSchedule(authorityInput: unknown, input: unknown): GetAgentScheduleResult {
+    const authorization = this.#authorize(authorityInput, AGENTS_READ_SCOPE);
+
+    return authorization.ok
+      ? this.#agentSchedules.get(input)
+      : deniedAgentSchedule(authorization.code);
+  }
+
   async listRunToolApprovals(
     authorityInput: unknown,
     input: unknown,
@@ -365,11 +420,30 @@ export class OwnerControlPlane extends DurableObject {
     const currentTime = Date.now();
     this.#toolExecutions.reconcileExpired(currentTime);
     this.#runAdmissions.cleanup(currentTime);
+    const dueSchedules = this.#agentSchedules.claimDue(currentTime);
+    const dispatches = await Promise.allSettled(
+      dueSchedules.map((schedule) => this.#dispatchScheduledRun(schedule, currentTime)),
+    );
+
+    for (const [index, dispatch] of dispatches.entries()) {
+      const schedule = dueSchedules[index];
+
+      if (dispatch.status === "rejected" && schedule !== undefined) {
+        this.#agentSchedules.recordSkipped(schedule.agentId, currentTime, "unavailable");
+        recordScheduleEvent({
+          agentId: schedule.agentId,
+          outcome: "failed",
+          reason: "dispatch_exception",
+        });
+      }
+    }
+
     const nextConnectionCleanup = this.#connections.cleanup(currentTime);
     const nextRunCleanup = this.#runAdmissions.nextCleanupAt();
+    const nextScheduledRun = this.#agentSchedules.nextAlarmAt();
     const nextToolReconciliation = this.#toolExecutions.nextReconciliationAt();
     const nextAlarm =
-      [nextConnectionCleanup, nextRunCleanup, nextToolReconciliation]
+      [nextConnectionCleanup, nextRunCleanup, nextScheduledRun, nextToolReconciliation]
         .filter((candidate): candidate is number => candidate !== null)
         .toSorted((left, right) => left - right)[0] ?? null;
 
@@ -464,7 +538,20 @@ export class OwnerControlPlane extends DurableObject {
       return deniedConnectionAttachment("insufficient_scope");
     }
 
-    return this.#agents.configureConnection(authorization.authority, input);
+    const request = completeAgentConnectionConfigurationInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return deniedConnectionAttachment("invalid_request");
+    }
+
+    if (
+      request.data.tools.some(({ authorization: mode }) => mode === "standing") &&
+      !authorization.authority.scopes.includes(AUTONOMY_WRITE_SCOPE)
+    ) {
+      return deniedConnectionAttachment("insufficient_scope");
+    }
+
+    return this.#agents.configureConnection(authorization.authority, request.data);
   }
 
   listAgents(authorityInput: unknown, input: unknown): ListAgentsResult {
@@ -479,6 +566,88 @@ export class OwnerControlPlane extends DurableObject {
     return authorization.ok
       ? this.#connections.list(input)
       : deniedConnectionRead(authorization.code);
+  }
+
+  async #dispatchScheduledRun(schedule: DueAgentSchedule, currentTime: number): Promise<void> {
+    if (this.#objectName === undefined) {
+      return;
+    }
+
+    const authority: OwnerAuthority = {
+      clientId: "crewhelm:scheduler",
+      ownerKey: this.#objectName,
+      scopes: [AGENTS_READ_SCOPE, AGENTS_WRITE_SCOPE],
+    };
+
+    if (schedule.lastRunId !== null) {
+      const previous = await this.#agentChannel.inspect(authority, {
+        runId: schedule.lastRunId,
+      });
+
+      if (!previous.ok) {
+        if (previous.error.code === "run_not_found") {
+          // Completed run admissions eventually age out of the control plane.
+        } else {
+          this.#agentSchedules.recordSkipped(schedule.agentId, currentTime, "unavailable");
+          recordScheduleEvent({
+            agentId: schedule.agentId,
+            outcome: "skipped_unavailable",
+          });
+          return;
+        }
+      } else if (!["cancelled", "completed", "failed"].includes(previous.run.status)) {
+        this.#agentSchedules.recordSkipped(schedule.agentId, currentTime, "active_run");
+        recordScheduleEvent({
+          agentId: schedule.agentId,
+          outcome: "skipped_active",
+        });
+        return;
+      }
+    }
+
+    const started = await this.#agentChannel.start(
+      authority,
+      {
+        agentId: schedule.agentId,
+        expectedRevision: schedule.agentRevision,
+        idempotencyKey: `schedule.${schedule.agentId}.${schedule.scheduleRevision}.${schedule.scheduledAt}`,
+        prompt: schedule.prompt,
+      },
+      "schedule",
+    );
+
+    if (!started.ok) {
+      this.#agentSchedules.recordSkipped(schedule.agentId, currentTime, "unavailable");
+      recordScheduleEvent({
+        agentId: schedule.agentId,
+        outcome: "failed",
+        reason: started.error.code,
+      });
+      return;
+    }
+
+    const recorded = this.#agentSchedules.recordDispatch({
+      agentId: schedule.agentId,
+      dispatchedAt: Date.now(),
+      runId: started.run.runId,
+      scheduleRevision: schedule.scheduleRevision,
+    });
+
+    if (!recorded) {
+      await this.#agentChannel.cancel(authority, { runId: started.run.runId });
+      recordScheduleEvent({
+        agentId: schedule.agentId,
+        outcome: "failed",
+        reason: "record_dispatch_conflict",
+      });
+      return;
+    }
+
+    recordScheduleEvent({
+      agentId: schedule.agentId,
+      outcome: "dispatched",
+      runId: started.run.runId,
+    });
   }
 
   #authorize(authorityInput: unknown, requiredScope: OwnerScope): AuthorityResult {

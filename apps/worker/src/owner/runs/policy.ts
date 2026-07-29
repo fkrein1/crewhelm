@@ -139,7 +139,10 @@ async function evaluateComposioToolActionWithApproval(
     return deny("budget_exhausted");
   }
 
-  if (action.effect !== "read") {
+  if (
+    action.effect === "destructive" ||
+    (action.effect === "write" && grant.authorization !== "standing")
+  ) {
     const actionDigest = await digestAction(action);
 
     if (approvedActionDigest !== actionDigest) {

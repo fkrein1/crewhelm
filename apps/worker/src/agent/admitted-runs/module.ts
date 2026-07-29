@@ -22,7 +22,9 @@ import {
   listAdmittedRunToolApprovalsInputSchema,
   listAdmittedRunToolApprovalsResultSchema,
   pendingToolApprovalSchema,
+  MAXIMUM_RUN_TIMELINE_EVENTS,
   TOOL_APPROVAL_LIFETIME_MS,
+  toolAuthorizationTimelineEventSchema,
   verifyActiveRunAdmissionResultSchema,
   verifyRunAdmissionResultSchema,
   type AcceptRunAdmissionResult,
@@ -36,6 +38,7 @@ import {
   type ComposioToolCapabilityGrant,
   type ToolExecutionPermit,
   type PendingToolApproval,
+  type ToolAuthorizationTimelineEvent,
 } from "@crewhelm/contracts";
 import { createComposioRuntime } from "@crewhelm/composio";
 import {
@@ -71,7 +74,7 @@ import {
 } from "@cloudflare/think";
 import type { ToolSet, UIMessage } from "ai";
 import type { RetryOptions, Schedule } from "agents";
-import type * as z from "zod";
+import * as z from "zod";
 
 import {
   recordExecutionEvent,
@@ -89,6 +92,7 @@ import {
 
 const RUNTIME_ADMISSION_UNAVAILABLE = "CrewAgent runtime admission is not available.";
 const RUN_RECORD_PREFIX = "crewhelm:run:";
+const RUN_TRACE_PREFIX = "crewhelm:run-trace:";
 const TOOL_APPROVAL_PREFIX = "crewhelm:tool-approval:";
 const MAXIMUM_RUN_OUTPUT_PARTS = 256;
 const EXECUTION_OUTCOME_PREFIX = "[execute tool]";
@@ -164,6 +168,18 @@ export interface CrewAgentToolAdapter {
   ): Promise<unknown>;
 }
 
+function requiresToolApproval(grant: ComposioToolCapabilityGrant): boolean {
+  return (
+    grant.effect === "destructive" ||
+    (grant.effect === "write" && grant.authorization !== "standing")
+  );
+}
+
+type ToolAuthorizationFailureReason = Extract<
+  ToolAuthorizationTimelineEvent,
+  { event: "tool.authorization_blocked" }
+>["reason"];
+
 function runtimeAdmissionError(): Error {
   return new Error(RUNTIME_ADMISSION_UNAVAILABLE);
 }
@@ -179,6 +195,10 @@ export function isToolExecutionPermitFresh(
 
 function runRecordKey(runId: string): string {
   return `${RUN_RECORD_PREFIX}${runId}`;
+}
+
+function runTraceKey(runId: string): string {
+  return `${RUN_TRACE_PREFIX}${runId}`;
 }
 
 function toolApprovalPrefix(runId: string): string {
@@ -996,7 +1016,10 @@ export class CrewAgent extends Think {
       return INVALID_RUN_ADMISSION;
     }
 
-    const submission = await super.inspectSubmission(capability.runId);
+    const [submission, trace] = await Promise.all([
+      super.inspectSubmission(capability.runId),
+      this.#readRunTrace(capability.runId),
+    ]);
 
     if (submission === null) {
       return inspectAdmittedRunResultSchema.parse({
@@ -1008,6 +1031,7 @@ export class CrewAgent extends Think {
           runId: capability.runId,
           status: Date.now() >= record.deadlineAt ? "failed" : "queued",
         },
+        trace,
       });
     }
 
@@ -1032,6 +1056,7 @@ export class CrewAgent extends Think {
         startedAt: isoTimestamp(submission.startedAt),
         status: outputPending ? "running" : publicRunStatus(submission.status),
       },
+      trace,
     });
   }
 
@@ -1239,6 +1264,7 @@ export class CrewAgent extends Think {
       prefix: toolApprovalPrefix(request.data.runId),
     });
     await Promise.all([...approvalRecords.keys()].map((key) => this.ctx.storage.delete(key)));
+    await this.ctx.storage.delete(runTraceKey(request.data.runId));
     await this.ctx.storage.delete(runRecordKey(request.data.runId));
   }
 
@@ -1287,13 +1313,13 @@ export class CrewAgent extends Think {
       adapters.map((adapter) => [
         adapter.name,
         defineAction({
-          approval: adapter.grant.effect !== "read",
+          approval: requiresToolApproval(adapter.grant),
           approvalRisk: adapter.grant.effect === "destructive" ? "high" : "medium",
           approvalSummary: adapter.approvalSummary,
           description: adapter.description,
           execute: (input, context) => this.#executeTool(adapter, input, context),
           inputSchema: adapter.inputSchema,
-          kind: adapter.grant.effect === "read" ? "server" : "durable-pause",
+          kind: requiresToolApproval(adapter.grant) ? "durable-pause" : "server",
           name: adapter.name,
           permissions: [adapter.grant.grantId],
           timeoutMs: adapter.grant.limits.maxDurationMs,
@@ -1395,26 +1421,61 @@ export class CrewAgent extends Think {
   async #authorizeToolAction(
     context: ActionAuthorizationContext,
   ): Promise<ActionAuthorizationDecision> {
+    const startedAt = performance.now();
     const adapter = this.#activeToolAdapters().find(
       (candidate) => candidate.name === context.action,
     );
+    const reference = await this.#activeRunReference();
+    const toolCallId =
+      reference === undefined
+        ? undefined
+        : await canonicalToolCallId(reference.runId, context.toolCallId);
 
     if (
+      reference === undefined ||
+      toolCallId === undefined ||
       adapter === undefined ||
       context.requiredPermissions.length !== 1 ||
       context.requiredPermissions[0] !== adapter.grant.grantId
     ) {
+      if (reference !== undefined && toolCallId !== undefined) {
+        await this.#recordToolAuthorization({
+          ...(adapter === undefined ? {} : { adapter }),
+          checkpoint: "action_authorization",
+          outcome: "blocked",
+          reason: adapter === undefined ? "action_unavailable" : "action_invalid",
+          runId: reference.runId,
+          startedAt,
+          toolCallId,
+        });
+      }
       return false;
     }
 
     if (adapter.grant.effect === "read") {
+      await this.#recordToolAuthorization({
+        adapter,
+        checkpoint: "action_authorization",
+        outcome: "allowed",
+        runId: reference.runId,
+        startedAt,
+        toolCallId,
+      });
       return true;
     }
 
     const action = await this.#classifyTool(adapter, context.toolCallId, context.input);
-    const reference = await this.#activeRunReference();
 
-    if (action === undefined || reference === undefined) {
+    if (action === undefined) {
+      await this.#recordToolAuthorization({
+        adapter,
+        checkpoint: "action_authorization",
+        outcome: "blocked",
+        reason: "action_invalid",
+        runId: reference.runId,
+        startedAt,
+        toolCallId,
+      });
       return false;
     }
 
@@ -1425,20 +1486,68 @@ export class CrewAgent extends Think {
         reference.ownerKey,
       ).evaluateToolExecution({ ...reference, action });
     } catch {
+      await this.#recordToolAuthorization({
+        adapter,
+        checkpoint: "action_authorization",
+        outcome: "blocked",
+        reason: "policy_unavailable",
+        runId: reference.runId,
+        startedAt,
+        toolCallId: action.toolCallId,
+      });
       return false;
     }
 
     const evaluation = evaluateToolExecutionResultSchema.safeParse(result);
 
-    if (
-      !evaluation.success ||
-      !evaluation.data.ok ||
-      evaluation.data.decision.decision === "deny"
-    ) {
+    if (!evaluation.success) {
+      await this.#recordToolAuthorization({
+        adapter,
+        checkpoint: "action_authorization",
+        outcome: "blocked",
+        reason: "policy_response_invalid",
+        runId: reference.runId,
+        startedAt,
+        toolCallId: action.toolCallId,
+      });
+      return false;
+    }
+
+    if (!evaluation.data.ok) {
+      await this.#recordToolAuthorization({
+        adapter,
+        checkpoint: "action_authorization",
+        outcome: "blocked",
+        reason: evaluation.data.error.reason,
+        runId: reference.runId,
+        startedAt,
+        toolCallId: action.toolCallId,
+      });
+      return false;
+    }
+
+    if (evaluation.data.decision.decision === "deny") {
+      await this.#recordToolAuthorization({
+        adapter,
+        checkpoint: "action_authorization",
+        outcome: "blocked",
+        reason: evaluation.data.decision.reason,
+        runId: reference.runId,
+        startedAt,
+        toolCallId: action.toolCallId,
+      });
       return false;
     }
 
     if (evaluation.data.decision.decision === "requires_approval") {
+      await this.#recordToolAuthorization({
+        adapter,
+        checkpoint: "action_authorization",
+        outcome: "approval_required",
+        runId: reference.runId,
+        startedAt,
+        toolCallId: action.toolCallId,
+      });
       const requestedAt = Date.now();
       const approvalKey = toolApprovalKey(reference.runId, action.toolCallId);
       const existing = pendingToolApprovalRecordSchema.safeParse(
@@ -1471,20 +1580,58 @@ export class CrewAgent extends Think {
       );
     }
 
+    if (evaluation.data.decision.decision === "allow") {
+      await this.#recordToolAuthorization({
+        adapter,
+        checkpoint: "action_authorization",
+        outcome: "allowed",
+        runId: reference.runId,
+        startedAt,
+        toolCallId: action.toolCallId,
+      });
+    }
+
     return true;
   }
 
   override async beforeToolCall(context: ToolCallContext): Promise<ToolCallDecision> {
+    const startedAt = performance.now();
     const adapter = this.#activeToolAdapters().find(
       (candidate) => candidate.name === context.toolName,
     );
-    const action =
-      adapter === undefined
-        ? undefined
-        : await this.#classifyTool(adapter, context.toolCallId, context.input);
     const reference = await this.#activeRunReference();
+    const toolCallId =
+      reference === undefined
+        ? undefined
+        : await canonicalToolCallId(reference.runId, context.toolCallId);
 
-    if (adapter === undefined || action === undefined || reference === undefined) {
+    if (adapter === undefined || reference === undefined || toolCallId === undefined) {
+      if (reference !== undefined && toolCallId !== undefined) {
+        await this.#recordToolAuthorization({
+          ...(adapter === undefined ? {} : { adapter }),
+          checkpoint: "pre_execution",
+          outcome: "blocked",
+          reason: adapter === undefined ? "action_unavailable" : "run_unavailable",
+          runId: reference.runId,
+          startedAt,
+          toolCallId,
+        });
+      }
+      return { action: "block", reason: "Tool execution denied." };
+    }
+
+    const action = await this.#classifyTool(adapter, context.toolCallId, context.input);
+
+    if (action === undefined) {
+      await this.#recordToolAuthorization({
+        adapter,
+        checkpoint: "pre_execution",
+        outcome: "blocked",
+        reason: "action_invalid",
+        runId: reference.runId,
+        startedAt,
+        toolCallId,
+      });
       return { action: "block", reason: "Tool execution denied." };
     }
 
@@ -1495,19 +1642,81 @@ export class CrewAgent extends Think {
         reference.ownerKey,
       ).evaluateToolExecution({ ...reference, action });
     } catch {
+      await this.#recordToolAuthorization({
+        adapter,
+        checkpoint: "pre_execution",
+        outcome: "blocked",
+        reason: "policy_unavailable",
+        runId: reference.runId,
+        startedAt,
+        toolCallId: action.toolCallId,
+      });
       return { action: "block", reason: "Tool execution denied." };
     }
 
     const evaluation = evaluateToolExecutionResultSchema.safeParse(evaluationResult);
-    const expectedDecision = adapter.grant.effect === "read" ? "allow" : "requires_approval";
+    const expectedDecision = requiresToolApproval(adapter.grant) ? "requires_approval" : "allow";
 
-    if (
-      !evaluation.success ||
-      !evaluation.data.ok ||
-      evaluation.data.decision.decision !== expectedDecision
-    ) {
+    if (!evaluation.success) {
+      await this.#recordToolAuthorization({
+        adapter,
+        checkpoint: "pre_execution",
+        outcome: "blocked",
+        reason: "policy_response_invalid",
+        runId: reference.runId,
+        startedAt,
+        toolCallId: action.toolCallId,
+      });
       return { action: "block", reason: "Tool execution denied." };
     }
+
+    if (!evaluation.data.ok) {
+      await this.#recordToolAuthorization({
+        adapter,
+        checkpoint: "pre_execution",
+        outcome: "blocked",
+        reason: evaluation.data.error.reason,
+        runId: reference.runId,
+        startedAt,
+        toolCallId: action.toolCallId,
+      });
+      return { action: "block", reason: "Tool execution denied." };
+    }
+
+    if (evaluation.data.decision.decision === "deny") {
+      await this.#recordToolAuthorization({
+        adapter,
+        checkpoint: "pre_execution",
+        outcome: "blocked",
+        reason: evaluation.data.decision.reason,
+        runId: reference.runId,
+        startedAt,
+        toolCallId: action.toolCallId,
+      });
+      return { action: "block", reason: "Tool execution denied." };
+    }
+
+    if (evaluation.data.decision.decision !== expectedDecision) {
+      await this.#recordToolAuthorization({
+        adapter,
+        checkpoint: "pre_execution",
+        outcome: "blocked",
+        reason: "policy_decision_mismatch",
+        runId: reference.runId,
+        startedAt,
+        toolCallId: action.toolCallId,
+      });
+      return { action: "block", reason: "Tool execution denied." };
+    }
+
+    await this.#recordToolAuthorization({
+      adapter,
+      checkpoint: "pre_execution",
+      outcome: evaluation.data.decision.decision === "allow" ? "allowed" : "approval_required",
+      runId: reference.runId,
+      startedAt,
+      toolCallId: action.toolCallId,
+    });
 
     return { action: "allow" };
   }
@@ -1886,6 +2095,100 @@ export class CrewAgent extends Think {
     }
 
     return admittedRunRecordSchema.parse(stored);
+  }
+
+  async #readRunTrace(runId: string): Promise<ToolAuthorizationTimelineEvent[]> {
+    const stored = await this.ctx.storage.get(runTraceKey(runId));
+
+    if (stored === undefined) {
+      return [];
+    }
+
+    const trace = z.array(toolAuthorizationTimelineEventSchema).safeParse(stored);
+    return trace.success ? trace.data : [];
+  }
+
+  async #recordToolAuthorization(input: {
+    adapter?: CrewAgentToolAdapter;
+    checkpoint: "action_authorization" | "pre_execution";
+    outcome: "allowed" | "approval_required" | "blocked";
+    reason?: ToolAuthorizationFailureReason;
+    runId: string;
+    startedAt: number;
+    toolCallId: string;
+  }): Promise<void> {
+    const occurredAt = new Date().toISOString();
+
+    recordExecutionEvent({
+      ...(input.adapter === undefined
+        ? {}
+        : {
+            agentId: input.adapter.grant.agentId,
+            agentRevision: input.adapter.grant.agentRevision,
+            authorization: input.adapter.grant.authorization,
+            connectionId: input.adapter.grant.connectionId,
+            effect: input.adapter.grant.effect,
+            grantId: input.adapter.grant.grantId,
+            integrationSlug: input.adapter.grant.integrationSlug,
+            toolSlug: input.adapter.grant.toolSlug,
+          }),
+      checkpoint: input.checkpoint,
+      durationMs: Math.max(0, Math.round(performance.now() - input.startedAt)),
+      outcome: input.outcome,
+      phase: "tool.authorization",
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
+      runId: input.runId,
+      toolCallId: input.toolCallId,
+    });
+
+    if (input.checkpoint !== "pre_execution") {
+      return;
+    }
+
+    const event = toolAuthorizationTimelineEventSchema.parse({
+      event:
+        input.outcome === "allowed"
+          ? "tool.authorization_allowed"
+          : input.outcome === "approval_required"
+            ? "tool.authorization_approval_required"
+            : "tool.authorization_blocked",
+      occurredAt,
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
+      toolCallId: input.toolCallId,
+    });
+
+    try {
+      await this.ctx.storage.transaction(async (transaction) => {
+        const stored = await transaction.get(runTraceKey(input.runId));
+        const parsed =
+          stored === undefined
+            ? { data: [] as ToolAuthorizationTimelineEvent[], success: true as const }
+            : z.array(toolAuthorizationTimelineEventSchema).safeParse(stored);
+
+        if (!parsed.success) {
+          return;
+        }
+
+        const duplicate = parsed.data.some(
+          (candidate) =>
+            candidate.event === event.event &&
+            candidate.toolCallId === event.toolCallId &&
+            ("reason" in candidate ? candidate.reason : undefined) ===
+              ("reason" in event ? event.reason : undefined),
+        );
+
+        if (duplicate) {
+          return;
+        }
+
+        await transaction.put(runTraceKey(input.runId), [
+          ...parsed.data.slice(-(MAXIMUM_RUN_TIMELINE_EVENTS - 1)),
+          event,
+        ]);
+      });
+    } catch {
+      // Diagnostic trace persistence must not alter execution.
+    }
   }
 
   async #redeemReceiverCapability(capability: RunReceiverCapability): Promise<boolean> {

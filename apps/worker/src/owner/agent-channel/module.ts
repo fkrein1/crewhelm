@@ -9,6 +9,8 @@ import {
   inspectAdmittedRunResultSchema,
   inspectRunInputSchema,
   inspectRunResultSchema,
+  listAgentRunsInputSchema,
+  listAgentRunsResultSchema,
   MAXIMUM_RUN_TIMELINE_EVENTS,
   listAdmittedRunToolApprovalsResultSchema,
   listRunToolApprovalsInputSchema,
@@ -19,6 +21,7 @@ import {
   type CancelRunResult,
   type DecideRunToolApprovalResult,
   type InspectRunResult,
+  type ListAgentRunsResult,
   type ListRunToolApprovalsResult,
   type OwnerAuthority,
   type PendingToolApproval,
@@ -47,6 +50,7 @@ import { RunReceiverCapabilities } from "./protocol.js";
 type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type StartRunFailure = Extract<StartRunResult, { ok: false }>;
 type InspectRunFailure = Extract<InspectRunResult, { ok: false }>;
+type ListAgentRunsFailure = Extract<ListAgentRunsResult, { ok: false }>;
 type CancelRunFailure = Extract<CancelRunResult, { ok: false }>;
 type ListApprovalsFailure = Extract<ListRunToolApprovalsResult, { ok: false }>;
 type DecideApprovalFailure = Extract<DecideRunToolApprovalResult, { ok: false }>;
@@ -56,6 +60,9 @@ type CrewAgentStub = ReturnType<DurableObjectNamespace<CrewAgent>["getByName"]>;
 const TIMELINE_EVENT_ORDER = [
   "run.admitted",
   "run.started",
+  "tool.authorization_allowed",
+  "tool.authorization_approval_required",
+  "tool.authorization_blocked",
   "tool.approval_required",
   "tool.approval_approved",
   "tool.approval_rejected",
@@ -95,6 +102,15 @@ export function deniedStartRun(code: StartRunFailure["error"]["code"]): StartRun
 }
 
 export function deniedInspectRun(code: InspectRunFailure["error"]["code"]): InspectRunFailure {
+  return {
+    error: { code, message: "Run request denied." },
+    ok: false,
+  };
+}
+
+export function deniedListAgentRuns(
+  code: ListAgentRunsFailure["error"]["code"],
+): ListAgentRunsFailure {
   return {
     error: { code, message: "Run request denied." },
     ok: false,
@@ -262,6 +278,7 @@ export class AgentChannel {
     admission: StoredRunAdmission,
     run: Run,
     pendingApprovals: PendingToolApproval[] = [],
+    authorizationTrace: RunTimelineEvent[] = [],
   ): RunTimelineEvent[] {
     this.#toolExecutions.reconcileExpired(Date.now());
     const events = new Map<string, RunTimelineEvent>();
@@ -291,6 +308,11 @@ export class AgentChannel {
 
     if (run.startedAt !== undefined) {
       add("run.started", run.startedAt);
+    }
+
+    for (const traceEvent of authorizationTrace) {
+      const event = runTimelineEventSchema.parse(traceEvent);
+      events.set(`trace:${event.event}:${event.toolCallId ?? ""}:${event.occurredAt}`, event);
     }
 
     for (const approval of this.#database
@@ -388,7 +410,11 @@ export class AgentChannel {
       .slice(0, MAXIMUM_RUN_TIMELINE_EVENTS);
   }
 
-  async start(authority: OwnerAuthority, input: unknown): Promise<StartRunResult> {
+  async start(
+    authority: OwnerAuthority,
+    input: unknown,
+    trigger: "manual" | "schedule" = "manual",
+  ): Promise<StartRunResult> {
     const request = startRunInputSchema.safeParse(input);
 
     if (!request.success) {
@@ -401,6 +427,7 @@ export class AgentChannel {
       idempotencyKey: request.data.idempotencyKey,
       promptCharacters: request.data.prompt.length,
       promptDigest: await digestRunPrompt(request.data.prompt),
+      trigger,
     });
 
     if (!admission.ok) {
@@ -430,6 +457,7 @@ export class AgentChannel {
             : { completedAt: new Date(storedAdmission.cancelledAt).toISOString() }),
           runId,
           status: storedAdmission.cancelledAt === null ? "cancelling" : "cancelled",
+          trigger: storedAdmission.trigger,
         },
       });
     }
@@ -444,6 +472,7 @@ export class AgentChannel {
           createdAt: new Date(storedAdmission.createdAt).toISOString(),
           runId,
           status: "failed",
+          trigger: storedAdmission.trigger,
         },
       });
     }
@@ -493,12 +522,13 @@ export class AgentChannel {
     const run: Run = {
       ...inspected.run,
       createdAt: new Date(storedAdmission.createdAt).toISOString(),
+      trigger: storedAdmission.trigger,
     };
 
     return startRunResultSchema.parse({
       created: admission.state === "issued" && admission.created,
       ok: true,
-      run: alignRunCompletion(run, this.#timeline(storedAdmission, run)),
+      run: alignRunCompletion(run, this.#timeline(storedAdmission, run, [], inspected.trace)),
     });
   }
 
@@ -530,12 +560,13 @@ export class AgentChannel {
         runId: admission.runId,
         ...(inspected?.run.startedAt === undefined ? {} : { startedAt: inspected.run.startedAt }),
         status: admission.cancelledAt === null ? "cancelling" : "cancelled",
+        trigger: admission.trigger,
       };
 
       return inspectRunResultSchema.parse({
         ok: true,
         run,
-        timeline: this.#timeline(admission, run),
+        timeline: this.#timeline(admission, run, [], inspected?.trace ?? []),
       });
     }
 
@@ -546,6 +577,7 @@ export class AgentChannel {
         createdAt: new Date(admission.createdAt).toISOString(),
         runId: admission.runId,
         status: admission.status === "expired" ? ("failed" as const) : ("queued" as const),
+        trigger: admission.trigger,
       };
 
       return inspectRunResultSchema.parse({
@@ -565,6 +597,7 @@ export class AgentChannel {
     const inspectedRun: Run = {
       ...inspected.run,
       createdAt: new Date(admission.createdAt).toISOString(),
+      trigger: admission.trigger,
     };
     const pending = await this.#pendingApprovals(authority, admission, agent);
     const waitingForApproval = pending.state === "available" && pending.approvals.length > 0;
@@ -576,6 +609,7 @@ export class AgentChannel {
           runId: inspectedRun.runId,
           ...(inspectedRun.startedAt === undefined ? {} : { startedAt: inspectedRun.startedAt }),
           status: "running",
+          trigger: admission.trigger,
         }
       : inspectedRun;
 
@@ -583,12 +617,81 @@ export class AgentChannel {
       admission,
       run,
       pending.state === "available" ? pending.approvals : [],
+      inspected.trace,
     );
 
     return inspectRunResultSchema.parse({
       ok: true,
       run: alignRunCompletion(run, timeline),
       timeline,
+    });
+  }
+
+  async listRuns(authority: OwnerAuthority, input: unknown): Promise<ListAgentRunsResult> {
+    const request = listAgentRunsInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return deniedListAgentRuns("invalid_request");
+    }
+
+    const agentExists =
+      this.#database
+        .select({ agentId: agents.agentId })
+        .from(agents)
+        .where(eq(agents.agentId, request.data.agentId))
+        .get() !== undefined;
+
+    if (!agentExists) {
+      return deniedListAgentRuns("run_not_found");
+    }
+
+    const page = this.#admissions.listForAgent(
+      request.data.agentId,
+      request.data.cursor,
+      request.data.limit,
+    );
+
+    if (page === undefined) {
+      return deniedListAgentRuns("invalid_request");
+    }
+
+    const runs = await Promise.all(
+      page.rows.map(async (admission) => {
+        const inspected = await this.inspect(authority, { runId: admission.runId });
+
+        if (inspected.ok) {
+          return inspected.run;
+        }
+
+        const cancelled = admission.cancelledAt !== null;
+        const status: Run["status"] = cancelled
+          ? "cancelled"
+          : admission.cancellationRequestedAt !== null
+            ? "cancelling"
+            : admission.status === "issued"
+              ? "queued"
+              : admission.status === "expired"
+                ? "failed"
+                : "running";
+
+        return {
+          agentId: admission.agentId,
+          agentRevision: admission.agentRevision,
+          ...(cancelled
+            ? { completedAt: new Date(admission.cancelledAt ?? admission.createdAt).toISOString() }
+            : {}),
+          createdAt: new Date(admission.createdAt).toISOString(),
+          runId: admission.runId,
+          status,
+          trigger: admission.trigger,
+        };
+      }),
+    );
+
+    return listAgentRunsResultSchema.parse({
+      nextCursor: page.nextCursor,
+      ok: true,
+      runs,
     });
   }
 

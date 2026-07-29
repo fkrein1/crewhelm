@@ -1,6 +1,6 @@
 import * as z from "zod";
 
-import { composioToolLimitsSchema } from "./capabilities.js";
+import { composioToolLimitsSchema, toolAuthorizationModeSchema } from "./capabilities.js";
 import { connectionIdSchema, composioConnectedAccountIdSchema } from "./connections.js";
 import {
   agentIdSchema,
@@ -18,6 +18,7 @@ import {
 export const MAXIMUM_CONNECTION_TOOLS_PER_AGENT = 20;
 
 export const configuredConnectionToolSchema = z.strictObject({
+  authorization: toolAuthorizationModeSchema,
   slug: integrationToolSlugSchema,
   version: integrationToolkitVersionSchema,
 });
@@ -76,7 +77,13 @@ export const resolvedConnectionForAttachmentSchema = z.discriminatedUnion("ok", 
 export const completeAgentConnectionConfigurationInputSchema =
   configureAgentConnectionInputSchema.extend({
     providerConnectionId: composioConnectedAccountIdSchema.nullable(),
-    tools: z.array(integrationToolInspectionSchema).max(MAXIMUM_CONNECTION_TOOLS_PER_AGENT),
+    tools: z
+      .array(
+        integrationToolInspectionSchema.extend({
+          authorization: toolAuthorizationModeSchema,
+        }),
+      )
+      .max(MAXIMUM_CONNECTION_TOOLS_PER_AGENT),
     verifiedToolkitSlug: integrationSlugSchema.nullable(),
   });
 
