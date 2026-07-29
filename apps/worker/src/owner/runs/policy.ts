@@ -124,13 +124,28 @@ async function evaluateComposioToolActionWithApproval(
     return deny("unknown_cost");
   }
 
-  if (policy.activeGrantCalls >= grant.limits.maxConcurrency) {
+  if (
+    policy.activeGrantCalls >=
+    Math.min(grant.limits.maxConcurrency, policy.limits.maxConcurrencyPerGrant)
+  ) {
     return deny("concurrency_exhausted");
+  }
+
+  if (policy.sameToolInputCallsUsed >= policy.limits.duplicateToolCallLimit) {
+    return deny("loop_detected");
+  }
+
+  if (
+    policy.fleetCallsPerDayUsed >= policy.limits.callsPerDay ||
+    policy.fleetCallsPerThirtyDaysUsed >= policy.limits.callsPerThirtyDays
+  ) {
+    return deny("rate_exhausted");
   }
 
   if (
     policy.remainingToolCalls === 0 ||
-    policy.grantCallsUsed >= grant.limits.maxCallsPerRun ||
+    policy.grantCallsUsed >=
+      Math.min(grant.limits.maxCallsPerRun, policy.limits.maxCallsPerToolPerRun) ||
     policy.remainingDurationMs === 0 ||
     policy.remainingOutputBytes === 0 ||
     action.estimatedCostMicrousd > policy.remainingCostMicrousd ||

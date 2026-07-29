@@ -253,6 +253,7 @@ function publicRunStatus(status: ThinkSubmissionInspection["status"]): Run["stat
 
 export class CrewAgent extends Think {
   #approvalTurnMetadata: AdmittedTurnMetadata | undefined;
+  #gatewayAiBinding: Ai | undefined;
   #permittedApprovalContinuationRunId: string | undefined;
   #permittedAbortRequestId: string | undefined;
   override chatRecovery = false;
@@ -1280,7 +1281,86 @@ export class CrewAgent extends Think {
 
   override getAIBinding(): ReturnType<Think["getAIBinding"]> {
     this.#activeRuntimeConfig();
-    return super.getAIBinding();
+
+    if (this.#gatewayAiBinding !== undefined) {
+      return this.#gatewayAiBinding;
+    }
+
+    const binding = super.getAIBinding();
+    const run = binding.run.bind(binding) as (
+      model: string,
+      input: Record<string, unknown>,
+      options?: {
+        extraHeaders?: Record<string, unknown>;
+        gateway?: {
+          collectLog?: boolean;
+          id: string;
+          metadata?: Record<string, string | number | boolean | null>;
+        };
+      },
+    ) => Promise<unknown>;
+
+    this.#gatewayAiBinding = new Proxy(binding, {
+      get: (target, property) => {
+        if (property !== "run") {
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+
+        return async (
+          model: string,
+          input: Record<string, unknown>,
+          options: {
+            extraHeaders?: Record<string, unknown>;
+            gateway?: {
+              collectLog?: boolean;
+              id: string;
+              metadata?: Record<string, string | number | boolean | null>;
+            };
+          } = {},
+        ) => {
+          const reference = await this.#activeRunReference();
+
+          if (reference === undefined) {
+            throw runtimeAdmissionError();
+          }
+
+          const previousGatewayLogId = binding.aiGatewayLogId;
+
+          try {
+            return await run(model, input, {
+              ...options,
+              extraHeaders: {
+                ...options.extraHeaders,
+                "cf-aig-collect-log-payload": "false",
+              },
+              gateway: {
+                collectLog: true,
+                id: this.env.AI_GATEWAY_ID,
+                metadata: {
+                  ...options.gateway?.metadata,
+                  crewhelm_agent: reference.agentId,
+                  crewhelm_run: reference.runId,
+                },
+              },
+            });
+          } finally {
+            const gatewayLogId = binding.aiGatewayLogId;
+
+            if (gatewayLogId !== null && gatewayLogId !== previousGatewayLogId) {
+              this.ctx.waitUntil(
+                this.env.OWNER_CONTROL_PLANE.getByName(reference.ownerKey).recordAiGatewayCall({
+                  gatewayLogId,
+                  reference,
+                }),
+              );
+            }
+          }
+        };
+      },
+    });
+
+    return this.#gatewayAiBinding;
   }
 
   override resolveModel(model?: ThinkModel): ReturnType<Think["resolveModel"]> {

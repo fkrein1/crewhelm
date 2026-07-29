@@ -8,6 +8,7 @@ import {
   getAgentScheduleResultSchema,
   type AgentSchedule,
   type ConfigureAgentScheduleResult,
+  type FleetConfigurationData,
   type GetAgentScheduleResult,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
@@ -70,10 +71,16 @@ export function deniedAgentSchedule(code: ScheduleFailure["error"]["code"]): Sch
 }
 
 export class AgentSchedules {
+  readonly #currentFleetConfiguration: () => FleetConfigurationData;
   readonly #database: Database;
   readonly #storage: DurableObjectStorage;
 
-  constructor(database: Database, storage: DurableObjectStorage) {
+  constructor(
+    database: Database,
+    storage: DurableObjectStorage,
+    currentFleetConfiguration: () => FleetConfigurationData,
+  ) {
+    this.#currentFleetConfiguration = currentFleetConfiguration;
     this.#database = database;
     this.#storage = storage;
   }
@@ -85,6 +92,14 @@ export class AgentSchedules {
     const request = configureAgentScheduleInputSchema.safeParse(input);
 
     if (!request.success) {
+      return deniedAgentSchedule("invalid_request");
+    }
+
+    if (
+      request.data.schedule !== null &&
+      request.data.schedule.intervalSeconds <
+        this.#currentFleetConfiguration().schedules.minimumIntervalSeconds
+    ) {
       return deniedAgentSchedule("invalid_request");
     }
 

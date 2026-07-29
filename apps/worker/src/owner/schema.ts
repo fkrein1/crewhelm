@@ -4,6 +4,7 @@ import type {
   AgentScheduleConfiguration,
   ComposioToolCapabilityGrant,
   ConnectionAuthorizationOutcome,
+  FleetConfigurationData,
   RunBudgetReservation,
 } from "@crewhelm/contracts";
 import {
@@ -25,6 +26,60 @@ export const controlPlane = sqliteTable(
     ownerKey: text("owner_key").notNull().unique(),
   },
   (table) => [check("control_plane_singleton", sql`${table.singleton} = 1`)],
+);
+
+export const fleetConfigurations = sqliteTable(
+  "fleet_configurations",
+  {
+    singleton: integer("singleton").primaryKey(),
+    currentRevision: integer("current_revision").notNull(),
+  },
+  (table) => [
+    check("fleet_configurations_singleton", sql`${table.singleton} = 1`),
+    check("fleet_configurations_current_revision_positive", sql`${table.currentRevision} > 0`),
+  ],
+);
+
+export const fleetConfigurationRevisions = sqliteTable(
+  "fleet_configuration_revisions",
+  {
+    revision: integer("revision").primaryKey(),
+    configuration: text("configuration", { mode: "json" })
+      .$type<FleetConfigurationData>()
+      .notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    check("fleet_configuration_revisions_revision_positive", sql`${table.revision} > 0`),
+    check(
+      "fleet_configuration_revisions_configuration_json",
+      sql`json_valid(${table.configuration})`,
+    ),
+    check("fleet_configuration_revisions_created_at_positive", sql`${table.createdAt} > 0`),
+  ],
+);
+
+export const fleetConfigurationUpdates = sqliteTable(
+  "fleet_configuration_updates",
+  {
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    revision: integer("revision").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.clientId, table.idempotencyKey] }),
+    uniqueIndex("fleet_configuration_updates_revision").on(table.revision),
+    foreignKey({
+      columns: [table.revision],
+      foreignColumns: [fleetConfigurationRevisions.revision],
+    }).onDelete("restrict"),
+    check(
+      "fleet_configuration_updates_request_digest_length",
+      sql`length(${table.requestDigest}) = 43`,
+    ),
+    check("fleet_configuration_updates_revision_positive", sql`${table.revision} > 0`),
+  ],
 );
 
 export const agents = sqliteTable(
@@ -381,6 +436,72 @@ export const runAdmissions = sqliteTable(
   ],
 );
 
+export const aiGatewayCalls = sqliteTable(
+  "ai_gateway_calls",
+  {
+    gatewayLogId: text("gateway_log_id").primaryKey(),
+    runId: text("run_id").notNull(),
+    agentId: text("agent_id").notNull(),
+    status: text("status", { enum: ["pending", "settled"] }).notNull(),
+    reservationMicrousd: integer("reservation_microusd").notNull(),
+    costMicrousd: integer("cost_microusd"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    recordedAt: integer("recorded_at").notNull(),
+    settledAt: integer("settled_at"),
+    nextReconciliationAt: integer("next_reconciliation_at").notNull(),
+    reconciliationAttempts: integer("reconciliation_attempts").notNull().default(0),
+  },
+  (table) => [
+    index("ai_gateway_calls_run").on(table.runId, table.recordedAt),
+    index("ai_gateway_calls_reconciliation")
+      .on(table.nextReconciliationAt)
+      .where(sql`${table.status} = 'pending'`),
+    check("ai_gateway_calls_status", sql`${table.status} IN ('pending', 'settled')`),
+    check(
+      "ai_gateway_calls_cost_nonnegative",
+      sql`${table.costMicrousd} IS NULL OR ${table.costMicrousd} >= 0`,
+    ),
+    check("ai_gateway_calls_reservation_positive", sql`${table.reservationMicrousd} > 0`),
+    check(
+      "ai_gateway_calls_tokens_nonnegative",
+      sql`(${table.inputTokens} IS NULL OR ${table.inputTokens} >= 0)
+        AND (${table.outputTokens} IS NULL OR ${table.outputTokens} >= 0)`,
+    ),
+    check("ai_gateway_calls_recorded_at_positive", sql`${table.recordedAt} > 0`),
+    check(
+      "ai_gateway_calls_settlement_state",
+      sql`((${table.status} = 'pending'
+          AND ${table.costMicrousd} IS NULL
+          AND ${table.settledAt} IS NULL)
+        OR (${table.status} = 'settled'
+          AND ${table.costMicrousd} IS NOT NULL
+          AND ${table.settledAt} IS NOT NULL
+          AND ${table.settledAt} >= ${table.recordedAt}))`,
+    ),
+    check(
+      "ai_gateway_calls_reconciliation_positive",
+      sql`${table.nextReconciliationAt} > 0 AND ${table.reconciliationAttempts} >= 0`,
+    ),
+  ],
+);
+
+export const integrationUsageEvents = sqliteTable(
+  "integration_usage_events",
+  {
+    toolCallId: text("tool_call_id").primaryKey(),
+    runId: text("run_id").notNull(),
+    agentId: text("agent_id").notNull(),
+    grantId: text("grant_id").notNull(),
+    recordedAt: integer("recorded_at").notNull(),
+  },
+  (table) => [
+    index("integration_usage_events_recorded_at").on(table.recordedAt),
+    index("integration_usage_events_agent").on(table.agentId, table.recordedAt),
+    check("integration_usage_events_recorded_at_positive", sql`${table.recordedAt} > 0`),
+  ],
+);
+
 export const toolApprovals = sqliteTable(
   "tool_approvals",
   {
@@ -431,6 +552,7 @@ export const toolExecutions = sqliteTable(
     grantId: text("grant_id").notNull(),
     actionDigest: text("action_digest").notNull(),
     effectDigest: text("effect_digest").notNull(),
+    inputDigest: text("input_digest").notNull(),
     nonceDigest: text("nonce_digest").notNull(),
     status: text("status", {
       enum: ["reserved", "completed", "failed", "unknown"],
@@ -456,8 +578,11 @@ export const toolExecutions = sqliteTable(
     index("tool_executions_run").on(table.runId, table.startedAt),
     index("tool_executions_grant_status").on(table.grantId, table.status),
     index("tool_executions_effect_status").on(table.effectDigest, table.status),
+    index("tool_executions_started_at").on(table.startedAt),
+    index("tool_executions_run_input").on(table.runId, table.grantId, table.inputDigest),
     check("tool_executions_action_digest_length", sql`length(${table.actionDigest}) = 64`),
     check("tool_executions_effect_digest_length", sql`length(${table.effectDigest}) = 64`),
+    check("tool_executions_input_digest_length", sql`length(${table.inputDigest}) = 64`),
     check("tool_executions_nonce_digest_length", sql`length(${table.nonceDigest}) = 43`),
     check(
       "tool_executions_status",
@@ -712,6 +837,7 @@ export const controlPlaneMigrations = sqliteTable(
 );
 
 export const controlPlaneSchema = {
+  aiGatewayCalls,
   agentCreations,
   agentRevisions,
   agentScheduleRevisions,
@@ -726,6 +852,10 @@ export const controlPlaneSchema = {
   connections,
   controlPlane,
   controlPlaneMigrations,
+  fleetConfigurationRevisions,
+  fleetConfigurations,
+  fleetConfigurationUpdates,
+  integrationUsageEvents,
   integrationEnablementRequests,
   runAdmissions,
   toolApprovals,

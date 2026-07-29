@@ -19,6 +19,11 @@ import { recordIntegrationProviderResponse } from "../observability/integrations
 import { registerAgentTools } from "./agent-tools.js";
 import { registerConnectionTools } from "./connection-tools.js";
 import { registerConnectionAttachmentTools } from "./connection-attachment-tools.js";
+import {
+  MCP_CONFIGURE_TOOL_NAME,
+  MCP_GET_CONFIGURATION_TOOL_NAME,
+  registerConfigurationTools,
+} from "./configuration-tools.js";
 import type { McpEnvironment } from "./context.js";
 import { registerIntegrationTools } from "./integration-tools.js";
 import { registerRunTools } from "./run-tools.js";
@@ -27,6 +32,7 @@ import { registerRecoveryTools } from "./recovery-tools.js";
 import { controlPlaneToolResult } from "./tool-result.js";
 
 export { MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME } from "./connection-attachment-tools.js";
+export { MCP_CONFIGURE_TOOL_NAME, MCP_GET_CONFIGURATION_TOOL_NAME };
 export {
   MCP_CREATE_AGENT_TOOL_NAME,
   MCP_GET_AGENT_REVISION_TOOL_NAME,
@@ -145,6 +151,7 @@ function createMcpServer(
   const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
   const context = { authority, controlPlane };
 
+  registerConfigurationTools(server, context);
   registerAgentTools(server, context);
   registerRunTools(server, context);
   registerScheduleTools(server, context);

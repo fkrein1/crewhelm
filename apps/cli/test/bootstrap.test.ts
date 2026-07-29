@@ -111,12 +111,36 @@ function secretList(names: readonly string[]): WranglerResult {
   return success(JSON.stringify(names.map((name) => ({ name, type: "secret_text" }))));
 }
 
+function gatewayPayload(limit: number): unknown {
+  return {
+    result: {
+      id: OPTIONS.workerName,
+      spend_limits: {
+        enabled: true,
+        rules: [
+          {
+            enabled: true,
+            id: "crewhelm-daily",
+            limit,
+            limitType: "cost",
+            technique: "sliding",
+            window: 86_400,
+          },
+        ],
+      },
+    },
+    success: true,
+  };
+}
+
 function healthyDeploymentFetch(): typeof globalThis.fetch {
   return vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
     const url = new URL(input instanceof Request ? input.url : input);
     let payload: unknown;
 
-    if (url.pathname === "/health") {
+    if (url.hostname === "api.cloudflare.com") {
+      payload = gatewayPayload(1);
+    } else if (url.pathname === "/health") {
       payload = { service: "crewhelm", status: "ok" };
     } else if (url.pathname === "/.well-known/oauth-protected-resource") {
       payload = {
@@ -134,14 +158,14 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "connection-configs:read",
           "connection-configs:write",
           "integrations:read",
+          "offline_access",
         ],
       };
     } else {
       payload = {
         authorization_endpoint: "https://crewhelm.example/api/auth/oauth2/authorize",
-        authorization_response_iss_parameter_supported: true,
         code_challenge_methods_supported: ["S256"],
-        grant_types_supported: ["authorization_code"],
+        grant_types_supported: ["authorization_code", "refresh_token"],
         issuer: "https://crewhelm.example/api/auth",
         jwks_uri: "https://crewhelm.example/api/auth/jwks",
         registration_endpoint: "https://crewhelm.example/api/auth/oauth2/register",
@@ -159,6 +183,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
           "connection-configs:read",
           "connection-configs:write",
           "integrations:read",
+          "offline_access",
         ],
         token_endpoint: "https://crewhelm.example/api/auth/oauth2/token",
         token_endpoint_auth_methods_supported: ["none"],
@@ -274,7 +299,48 @@ function createDependencies(
     deploymentAssetsDirectory: assets,
     fetch: healthyDeploymentFetch(),
     readEnvironment: (name) => environment[name],
-    runWrangler,
+    runWrangler: (arguments_, options) =>
+      arguments_[0] === "auth"
+        ? Promise.resolve(success(JSON.stringify({ token: "test-token", type: "oauth" })))
+        : runWrangler(arguments_, options),
+  };
+}
+
+function successfulReuseWrangler(events: string[] = []): RunWrangler {
+  return async (arguments_) => {
+    events.push(`wrangler:${arguments_[0] ?? "unknown"}`);
+
+    if (arguments_[0] === "whoami") {
+      return whoami();
+    }
+    if (arguments_[0] === "deployments") {
+      return success("[]");
+    }
+    if (arguments_[0] === "secret") {
+      return secretList(WORKER_SECRET_NAMES);
+    }
+    if (arguments_[0] === "d1" && arguments_[1] === "list") {
+      return success(JSON.stringify([{ name: OPTIONS.databaseName, uuid: DATABASE_ID }]));
+    }
+    if (arguments_[0] === "d1" && arguments_[1] === "execute") {
+      return arguments_.includes("SELECT name FROM d1_migrations ORDER BY id")
+        ? queryResult([
+            "0001_better_auth.sql",
+            "0002_control_write_scope.sql",
+            "0003_integration_catalog_scope.sql",
+            "0004_agent_definition_read_scope.sql",
+            "0005_agent_update_scope.sql",
+            "0006_connection_write_scope.sql",
+            "0007_connection_read_scope.sql",
+            "0008_connection_config_read_scope.sql",
+            "0009_connection_config_write_scope.sql",
+            "0010_oauth_offline_access.sql",
+            "0011_autonomy_write_scope.sql",
+          ])
+        : queryResult(AUTH_TABLES);
+    }
+
+    return success();
   };
 }
 
@@ -294,6 +360,116 @@ describe("Cloudflare bootstrap", () => {
         stage: "assets",
       });
       expect(runWrangler).not.toHaveBeenCalled();
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects an invalid scoped Gateway token before inventory or D1 mutation", async () => {
+    const fixture = await createDeploymentAssets();
+    const runWrangler = vi.fn<RunWrangler>(async (arguments_) => {
+      if (arguments_[0] === "whoami") {
+        return whoami();
+      }
+
+      throw new Error("Inventory and D1 mutation must not run with an invalid Gateway token.");
+    });
+
+    try {
+      await expect(
+        bootstrapDeployment(
+          REUSE_OPTIONS,
+          createDependencies(fixture.assets, runWrangler, {
+            CREWHELM_CLOUDFLARE_API_TOKEN: "short",
+          }),
+        ),
+      ).rejects.toMatchObject({
+        message:
+          "Set CREWHELM_CLOUDFLARE_API_TOKEN to a valid account API token with AI Gateway Read and Edit.",
+        name: "BootstrapError",
+        stage: "gateway",
+      });
+      expect(runWrangler).toHaveBeenCalledTimes(1);
+      expect(runWrangler.mock.calls[0]?.[0][0]).toBe("whoami");
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("updates the explicit Gateway limit only after deployment and verifies read-back", async () => {
+    const fixture = await createDeploymentAssets();
+    const events: string[] = [];
+    const dependencies = createDependencies(fixture.assets, successfulReuseWrangler(events));
+    const deploymentFetch = healthyDeploymentFetch();
+    let gatewayLimit = 1;
+
+    dependencies.fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+
+      if (url.hostname !== "api.cloudflare.com") {
+        return deploymentFetch(input, init);
+      }
+
+      const method = init?.method ?? "GET";
+      events.push(`gateway:${method}`);
+
+      if (method === "PUT") {
+        if (typeof init?.body !== "string") {
+          throw new Error("Expected serialized Gateway update body.");
+        }
+        const body = z
+          .looseObject({
+            spend_limits: z.looseObject({
+              rules: z.array(z.looseObject({ limit: z.number() })).min(1),
+            }),
+          })
+          .parse(JSON.parse(init.body));
+        gatewayLimit = body.spend_limits?.rules?.[0]?.limit ?? gatewayLimit;
+      }
+
+      return Response.json(gatewayPayload(gatewayLimit));
+    });
+
+    try {
+      const report = await bootstrapDeployment(
+        { ...REUSE_OPTIONS, aiDailySpendUsd: 5 },
+        dependencies,
+      );
+
+      expect(report.aiGateway).toEqual({ dailySpendUsd: 5, id: OPTIONS.workerName });
+      expect(events.filter((event) => event.startsWith("gateway:"))).toEqual([
+        "gateway:GET",
+        "gateway:PUT",
+        "gateway:GET",
+      ]);
+      expect(events.indexOf("gateway:PUT")).toBeGreaterThan(events.indexOf("wrangler:deploy"));
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("requires an explicit repair when an existing Gateway limit cannot be verified", async () => {
+    const fixture = await createDeploymentAssets();
+    const events: string[] = [];
+    const dependencies = createDependencies(fixture.assets, successfulReuseWrangler(events));
+    const deploymentFetch = healthyDeploymentFetch();
+
+    dependencies.fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+
+      return url.hostname === "api.cloudflare.com"
+        ? Response.json({ result: { id: OPTIONS.workerName }, success: true })
+        : deploymentFetch(input, init);
+    });
+
+    try {
+      await expect(bootstrapDeployment(REUSE_OPTIONS, dependencies)).rejects.toMatchObject({
+        message:
+          "The existing AI Gateway spend limit could not be verified. Pass --ai-budget-usd to repair it explicitly.",
+        name: "BootstrapError",
+        stage: "gateway",
+      });
+      expect(events.some((event) => event === "wrangler:d1")).toBe(false);
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
     }
@@ -556,13 +732,19 @@ describe("Cloudflare bootstrap", () => {
     });
 
     try {
-      const report = await bootstrapDeployment(
-        REUSE_OPTIONS,
-        createDependencies(fixture.assets, runWrangler),
-      );
+      const cloudflareApiToken = "cloudflare-api-token-value-0123456789";
+      const dependencies = createDependencies(fixture.assets, runWrangler, {
+        CREWHELM_CLOUDFLARE_API_TOKEN: cloudflareApiToken,
+      });
+      const allWranglerCalls = vi.fn<RunWrangler>(dependencies.runWrangler);
+      dependencies.runWrangler = allWranglerCalls;
+      const report = await bootstrapDeployment(REUSE_OPTIONS, dependencies);
 
       expect(report.ok).toBe(true);
+      expect(report.aiGateway).toEqual({ dailySpendUsd: 1, id: OPTIONS.workerName });
       expect(JSON.stringify(report)).not.toContain(HOSTILE_ACCOUNT_NAME);
+      expect(JSON.stringify(report)).not.toContain("test-token");
+      expect(JSON.stringify(report)).not.toContain(cloudflareApiToken);
       expect(report.database.action).toBe("reused");
       expect(report.deployment.action).toBe("updated");
       expect(stagedConfig?.account_id).toBe(ACCOUNT_ID);
@@ -586,8 +768,26 @@ describe("Cloudflare bootstrap", () => {
         "OWNER_GITHUB_USER_ID",
       ]);
       expect(stagedConfig?.vars.PUBLIC_ORIGIN).toBe(OPTIONS.origin.origin);
+      expect(stagedConfig?.vars.AI_GATEWAY_DAILY_LIMIT_MICROUSD).toBe("1000000");
+      expect(stagedConfig?.vars.AI_GATEWAY_ID).toBe(OPTIONS.workerName);
       expect(deployArguments).not.toContain("--secrets-file");
       expect(deployArguments).toContain("--strict");
+      expect(allWranglerCalls.mock.calls.some(([arguments_]) => arguments_[0] === "auth")).toBe(
+        false,
+      );
+      const gatewayRequests = vi.mocked(dependencies.fetch).mock.calls.filter(([input]) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        return url.hostname === "api.cloudflare.com";
+      });
+
+      expect(gatewayRequests).toHaveLength(2);
+      expect(
+        gatewayRequests.every(([, init]) => {
+          const headers = new Headers(init?.headers);
+          return headers.get("authorization") === `Bearer ${cloudflareApiToken}`;
+        }),
+      ).toBe(true);
+      expect(gatewayRequests.every(([, init]) => init?.method === "GET")).toBe(true);
       expect(
         runWrangler.mock.calls.every(([, runOptions]) => runOptions?.cwd === stagedDirectory),
       ).toBe(true);

@@ -74,6 +74,8 @@
     },
   ],
   "vars": {
+    "AI_GATEWAY_DAILY_LIMIT_MICROUSD": "5000000",
+    "AI_GATEWAY_ID": "crewhelm",
     "PUBLIC_ORIGIN": "https://crewhelm.fkrein.workers.dev",
   },
   "triggers": {

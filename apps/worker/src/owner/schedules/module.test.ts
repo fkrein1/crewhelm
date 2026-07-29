@@ -2,6 +2,7 @@ import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
   AUTONOMY_WRITE_SCOPE,
+  OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
 } from "@crewhelm/contracts";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
@@ -11,6 +12,61 @@ import { describe, expect, it, vi } from "vitest";
 import { agentInput, authorityFor } from "../testkit.js";
 
 describe("OwnerControlPlane Agent schedules", () => {
+  it("enforces the current fleet minimum when configuring a recurring schedule", async () => {
+    const authority = await authorityFor("schedule-minimum-owner", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+    ]);
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("schedule-minimum-agent", "Minimum Schedule Agent"),
+    );
+    const configuration = await controlPlane.getFleetConfiguration(authority, {
+      target: { kind: "fleet" },
+    });
+
+    if (!created.ok || !configuration.ok) {
+      throw new Error("Expected schedule configuration fixtures.");
+    }
+
+    await expect(
+      controlPlane.configureFleetConfiguration(authority, {
+        expectedRevision: configuration.configuration.revision,
+        idempotencyKey: "schedule-minimum-fleet",
+        mode: "apply",
+        patch: { schedules: { minimumIntervalSeconds: 120 } },
+        target: { kind: "fleet" },
+      }),
+    ).resolves.toMatchObject({ applied: true, ok: true });
+    await expect(
+      controlPlane.configureAgentSchedule(authority, {
+        agentId: created.agent.id,
+        expectedAgentRevision: created.agent.revision,
+        expectedScheduleRevision: null,
+        idempotencyKey: "schedule-minimum-denied",
+        schedule: {
+          intervalSeconds: 60,
+          prompt: "This schedule is too frequent for the fleet policy.",
+        },
+      }),
+    ).resolves.toMatchObject({ error: { code: "invalid_request" }, ok: false });
+    await expect(
+      controlPlane.configureAgentSchedule(authority, {
+        agentId: created.agent.id,
+        expectedAgentRevision: created.agent.revision,
+        expectedScheduleRevision: null,
+        idempotencyKey: "schedule-minimum-allowed",
+        schedule: {
+          intervalSeconds: 120,
+          prompt: "This schedule matches the fleet minimum.",
+        },
+      }),
+    ).resolves.toMatchObject({ configured: true, ok: true });
+  });
+
   it("dispatches multiple due Agents independently and exposes their scheduled run history", async () => {
     const authority = await authorityFor("schedule-owner-1", [
       OWNER_WRITE_SCOPE,

@@ -228,10 +228,19 @@ export const toolGatePolicySnapshotSchema = z.strictObject({
   connectionStatus: z.enum(["active", "revoked", "unavailable"]),
   currentAgentRevision: agentRevisionNumberSchema,
   evaluatedAt: z.iso.datetime(),
+  fleetCallsPerDayUsed: z.number().int().min(0).max(1_000_000),
+  fleetCallsPerThirtyDaysUsed: z.number().int().min(0).max(1_000_000),
   grantCallsUsed: z.number().int().min(0).max(100),
   grantId: capabilityGrantIdSchema,
   grantStatus: z.enum(["active", "revoked"]),
   killSwitchActive: z.boolean(),
+  limits: z.strictObject({
+    callsPerDay: z.number().int().min(1).max(1_000_000),
+    callsPerThirtyDays: z.number().int().min(1).max(1_000_000),
+    duplicateToolCallLimit: z.number().int().min(1).max(100),
+    maxCallsPerToolPerRun: z.number().int().min(1).max(100),
+    maxConcurrencyPerGrant: z.number().int().min(1).max(16),
+  }),
   ownerKey: ownerKeySchema,
   remainingCostMicrousd: z.number().int().min(0).max(MAXIMUM_COST_MICROUSD).safe(),
   remainingDurationMs: z
@@ -246,6 +255,7 @@ export const toolGatePolicySnapshotSchema = z.strictObject({
     .max(100 * 1_024 * 1_024),
   remainingToolCalls: z.number().int().min(0).max(100),
   runId: runIdSchema,
+  sameToolInputCallsUsed: z.number().int().min(0).max(100),
 });
 export const composioToolGateInputSchema = z.strictObject({
   action: classifiedComposioToolActionSchema,
@@ -259,9 +269,11 @@ export const toolGateDenialReasonSchema = z.enum([
   "grant_expired",
   "grant_mismatch",
   "invalid_request",
+  "loop_detected",
   "policy_inactive",
   "policy_mismatch",
   "policy_stale",
+  "rate_exhausted",
   "unknown_cost",
 ]);
 export const toolExecutionEvaluationFailureReasonSchema = z.enum([

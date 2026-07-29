@@ -99,6 +99,8 @@ function integrationEnv(
 ): WorkerEnv {
   return {
     AI: env.AI,
+    AI_GATEWAY_DAILY_LIMIT_MICROUSD: "1000000",
+    AI_GATEWAY_ID: "crewhelm-test",
     AUTH_DB: env.AUTH_DB,
     AUTH_RATE_LIMIT: rateLimit,
     BETTER_AUTH_SECRET: "test-better-auth-secret-that-is-at-least-32-bytes",
@@ -781,7 +783,7 @@ describe("public OAuth to MCP integration", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(toolResult.content[0].text))).toEqual({
       ok: true,
       status: {
-        schemaVersion: 9,
+        schemaVersion: 11,
         status: "ready",
       },
     });
@@ -798,7 +800,7 @@ describe("public OAuth to MCP integration", () => {
         },
         idempotencyKey: "oauth-integration-create-agent",
         instructions: "Maintain a concise authenticated work queue.",
-        model: "anthropic/claude-sonnet-4",
+        model: "@cf/meta/llama-4-scout-17b-16e-instruct",
         name: "Authenticated work queue",
       },
     );
@@ -1074,7 +1076,7 @@ describe("public OAuth to MCP integration", () => {
         },
         idempotencyKey: "agent-read-scope-seed",
         instructions: "Instruction text requires explicit Agent-definition read consent.",
-        model: "anthropic/claude-sonnet-4",
+        model: "@cf/meta/llama-4-scout-17b-16e-instruct",
         name: "Definition scope Agent",
       },
     );
@@ -1124,7 +1126,7 @@ describe("public OAuth to MCP integration", () => {
         },
         idempotencyKey: "agent-update-scope-seed",
         instructions: "Seed an Agent for an update-only OAuth grant.",
-        model: "anthropic/claude-sonnet-4",
+        model: "@cf/meta/llama-4-scout-17b-16e-instruct",
         name: "Update scope Agent",
       },
     );

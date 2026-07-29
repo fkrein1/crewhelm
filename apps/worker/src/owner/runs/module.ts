@@ -1,13 +1,9 @@
 import {
   MAXIMUM_RUN_ADMISSIONS_PER_OWNER,
-  MAXIMUM_OWNER_RUN_INPUT_CHARACTERS_PER_WINDOW,
-  MAXIMUM_OWNER_RUN_MODEL_CALLS_PER_WINDOW,
-  MAXIMUM_OWNER_RUN_OUTPUT_TOKENS_PER_WINDOW,
   MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
   composioToolCapabilityGrantSchema,
   RUN_ADMISSION_LIFETIME_MS,
   RUN_ADMISSION_RETENTION_MS,
-  RUN_BUDGET_WINDOW_MS,
   confirmRunAdmissionResultSchema,
   createRunAdmissionInputSchema,
   createRunAdmissionResultSchema,
@@ -24,6 +20,7 @@ import {
   type ConfirmRunAdmissionResult,
   type CreateRunAdmissionResult,
   type CrewAgentRuntimeConfig,
+  type FleetConfiguration,
   type OwnerAuthority,
   type RunAdmissionPermit,
   type RedeemRunReceiverCapabilityResult,
@@ -32,20 +29,7 @@ import {
   type VerifyActiveRunAdmissionResult,
   type VerifyRunAdmissionResult,
 } from "@crewhelm/contracts";
-import {
-  and,
-  count,
-  desc,
-  eq,
-  gt,
-  inArray,
-  isNotNull,
-  isNull,
-  lt,
-  lte,
-  min,
-  or,
-} from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, isNull, lt, lte, min, or } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import { recordExecutionEvent } from "../../observability/execution.js";
@@ -60,6 +44,7 @@ import {
   toolExecutions,
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
+import { currentFleetAiSpendMicrousd } from "../usage/index.js";
 
 const RUN_ADMISSION_ERROR = {
   error: {
@@ -101,27 +86,52 @@ function createNonce(): string {
 }
 
 function createBudgetReservation(input: {
+  configuration: FleetConfiguration;
   executionLimits: CrewAgentRuntimeConfig["executionLimits"];
   instructions: string;
   model: string;
   promptCharacters: number;
   toolGrants: ComposioToolCapabilityGrant[];
 }): RunBudgetReservation {
+  const effectiveExecutionLimits = {
+    maxDurationSeconds: Math.min(
+      input.executionLimits.maxDurationSeconds,
+      input.configuration.data.execution.maxDurationSeconds,
+    ),
+    maxModelTokens: Math.min(
+      input.executionLimits.maxModelTokens,
+      input.configuration.data.execution.maxModelTokens,
+    ),
+    maxToolCalls: Math.min(
+      input.executionLimits.maxToolCalls,
+      input.configuration.data.execution.maxToolCalls,
+      input.configuration.data.integrations.maxCallsPerRun,
+    ),
+    maxTurns: Math.min(input.executionLimits.maxTurns, input.configuration.data.execution.maxTurns),
+  };
   const grantedToolCalls = input.toolGrants.reduce(
-    (total, grant) => total + grant.limits.maxCallsPerRun,
+    (total, grant) =>
+      total +
+      Math.min(
+        grant.limits.maxCallsPerRun,
+        input.configuration.data.integrations.maxCallsPerToolPerRun,
+      ),
     0,
   );
-  const maxToolCalls = Math.min(input.executionLimits.maxToolCalls, grantedToolCalls);
-  const maxTurns = Math.min(input.executionLimits.maxTurns, maxToolCalls + 1);
-  const maxModelCalls = Math.min(input.executionLimits.maxTurns, maxTurns + maxToolCalls);
+  const maxToolCalls = Math.min(effectiveExecutionLimits.maxToolCalls, grantedToolCalls);
+  const maxTurns = Math.min(effectiveExecutionLimits.maxTurns, maxToolCalls + 1);
+  const maxModelCalls = Math.min(effectiveExecutionLimits.maxTurns, maxTurns + maxToolCalls);
 
   return runBudgetReservationSchema.parse({
-    maxDurationSeconds: input.executionLimits.maxDurationSeconds,
+    aiSpendReservationMicrousd: input.configuration.data.ai.runReservationMicrousd,
+    fleetConfigurationRevision: input.configuration.revision,
+    integrationLimits: input.configuration.data.integrations,
+    maxDurationSeconds: effectiveExecutionLimits.maxDurationSeconds,
     maxInputCharacters: input.instructions.length + input.promptCharacters,
     maxModelCalls,
     model: input.model,
     maxOutputTokens: Math.min(
-      input.executionLimits.maxModelTokens,
+      effectiveExecutionLimits.maxModelTokens,
       MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
     ),
     maxToolCalls,
@@ -148,6 +158,7 @@ function canonicalRequest(input: {
 }
 
 export class RunAdmissions {
+  readonly #currentFleetConfiguration: () => FleetConfiguration;
   readonly #database: ControlPlaneDatabase;
   readonly #objectName: string | undefined;
   readonly #storage: DurableObjectStorage;
@@ -156,7 +167,9 @@ export class RunAdmissions {
     objectName: string | undefined,
     database: ControlPlaneDatabase,
     storage: DurableObjectStorage,
+    currentFleetConfiguration: () => FleetConfiguration,
   ) {
+    this.#currentFleetConfiguration = currentFleetConfiguration;
     this.#database = database;
     this.#objectName = objectName;
     this.#storage = storage;
@@ -170,6 +183,7 @@ export class RunAdmissions {
     }
 
     const requestDigest = await digestBase64Url(canonicalRequest(request.data));
+    const fleetConfiguration = this.#currentFleetConfiguration();
     const currentTime = Date.now();
     const expiresAt = currentTime + RUN_ADMISSION_LIFETIME_MS;
     const cleanupAt = currentTime + RUN_ADMISSION_RETENTION_MS;
@@ -278,7 +292,10 @@ export class RunAdmissions {
         return this.#deniedRequest("agent_unavailable");
       }
 
-      if (!runnableAgentModelSchema.safeParse(agent.model).success) {
+      if (
+        !runnableAgentModelSchema.safeParse(agent.model).success ||
+        !fleetConfiguration.data.models.allowed.some((model) => model === agent.model)
+      ) {
         return this.#deniedRequest("model_unavailable");
       }
 
@@ -302,36 +319,17 @@ export class RunAdmissions {
       }
 
       const budgetReservation = createBudgetReservation({
+        configuration: fleetConfiguration,
         executionLimits: agent.executionLimits,
         instructions: agent.instructions,
         model: agent.model,
         promptCharacters: request.data.promptCharacters,
         toolGrants,
       });
-      const activeReservations = transaction
-        .select({ budgetReservation: runAdmissions.budgetReservation })
-        .from(runAdmissions)
-        .where(gt(runAdmissions.createdAt, currentTime - RUN_BUDGET_WINDOW_MS))
-        .all();
-      const reserved = activeReservations.reduce(
-        (total, row) => ({
-          inputCharacters: total.inputCharacters + row.budgetReservation.maxInputCharacters,
-          modelCalls: total.modelCalls + row.budgetReservation.maxModelCalls,
-          outputTokens:
-            total.outputTokens +
-            row.budgetReservation.maxOutputTokens * row.budgetReservation.maxModelCalls,
-        }),
-        { inputCharacters: 0, modelCalls: 0, outputTokens: 0 },
-      );
-
       if (
-        reserved.inputCharacters + budgetReservation.maxInputCharacters >
-          MAXIMUM_OWNER_RUN_INPUT_CHARACTERS_PER_WINDOW ||
-        reserved.modelCalls + budgetReservation.maxModelCalls >
-          MAXIMUM_OWNER_RUN_MODEL_CALLS_PER_WINDOW ||
-        reserved.outputTokens +
-          budgetReservation.maxOutputTokens * budgetReservation.maxModelCalls >
-          MAXIMUM_OWNER_RUN_OUTPUT_TOKENS_PER_WINDOW
+        currentFleetAiSpendMicrousd(transaction, currentTime) +
+          budgetReservation.aiSpendReservationMicrousd >
+        fleetConfiguration.data.ai.dailySpendMicrousd
       ) {
         return this.#deniedRequest("budget_exhausted");
       }
@@ -1067,6 +1065,13 @@ export class RunAdmissions {
     database: RunAdmissionDatabase,
     admission: StoredRunAdmission,
   ): boolean {
+    if (
+      this.#currentFleetConfiguration().revision !==
+      admission.budgetReservation.fleetConfigurationRevision
+    ) {
+      return false;
+    }
+
     const configuration = this.#runtimeConfiguration(
       database,
       admission.agentId,

@@ -33,6 +33,7 @@ function protectedResourceResponse(): Response {
       "connection-configs:read",
       "connection-configs:write",
       "integrations:read",
+      "offline_access",
     ],
   });
 }
@@ -40,9 +41,8 @@ function protectedResourceResponse(): Response {
 function authorizationServerResponse(overrides: Record<string, unknown> = {}): Response {
   return jsonResponse({
     authorization_endpoint: `${origin}/api/auth/oauth2/authorize`,
-    authorization_response_iss_parameter_supported: true,
     code_challenge_methods_supported: ["S256"],
-    grant_types_supported: ["authorization_code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
     issuer: `${origin}/api/auth`,
     jwks_uri: `${origin}/api/auth/jwks`,
     registration_endpoint: `${origin}/api/auth/oauth2/register`,
@@ -60,6 +60,7 @@ function authorizationServerResponse(overrides: Record<string, unknown> = {}): R
       "connection-configs:read",
       "connection-configs:write",
       "integrations:read",
+      "offline_access",
     ],
     token_endpoint: `${origin}/api/auth/oauth2/token`,
     token_endpoint_auth_methods_supported: ["none", "client_secret_basic"],

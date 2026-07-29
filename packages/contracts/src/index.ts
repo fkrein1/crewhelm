@@ -4,6 +4,7 @@ export * from "./capabilities.js";
 export * from "./connections.js";
 export * from "./connection-attachments.js";
 export * from "./control-plane.js";
+export * from "./fleet-configuration.js";
 export * from "./health.js";
 export * from "./integrations.js";
 export * from "./recovery.js";

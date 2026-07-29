@@ -1,7 +1,6 @@
 import {
   AGENTS_WRITE_SCOPE,
-  MAXIMUM_OWNER_RUN_MODEL_CALLS_PER_WINDOW,
-  MAXIMUM_OWNER_RUN_OUTPUT_TOKENS_PER_WINDOW,
+  AUTONOMY_WRITE_SCOPE,
   MAXIMUM_RUN_ADMISSIONS_PER_OWNER,
   MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
   OWNER_READ_SCOPE,
@@ -257,9 +256,13 @@ describe("OwnerControlPlane runs", () => {
     });
     const prompt = "Perform the exact admitted task.";
 
-    if (!supported.ok || !unlisted.ok) {
-      throw new Error("Expected model-policy fixture Agents.");
+    if (!supported.ok) {
+      throw new Error("Expected supported model-policy fixture Agent.");
     }
+    expect(unlisted).toEqual({
+      error: { code: "invalid_request", message: "Agent request denied." },
+      ok: false,
+    });
 
     await expect(
       stub.createRunAdmission(authority, {
@@ -278,15 +281,6 @@ describe("OwnerControlPlane runs", () => {
       },
       state: "issued",
     });
-    await expect(
-      stub.createRunAdmission(authority, {
-        agentId: unlisted.agent.id,
-        expectedRevision: unlisted.agent.revision,
-        idempotencyKey: "deny-unlisted-model-236",
-        promptCharacters: prompt.length,
-        promptDigest: await digestRunPrompt(prompt),
-      }),
-    ).resolves.toEqual(fixedRunAdmissionFailure("model_unavailable"));
   });
 
   it("denies malformed, unauthorized, conflicting, cross-owner, stale, and expired admissions", async () => {
@@ -476,8 +470,13 @@ describe("OwnerControlPlane runs", () => {
     ).resolves.toEqual(fixedRunAdmissionFailure("admission_limit_exceeded"));
   });
 
-  it("atomically reserves from a finite rolling owner model-call budget", async () => {
-    const authority = await authorityFor("234", [OWNER_WRITE_SCOPE, AGENTS_WRITE_SCOPE]);
+  it("atomically reserves from the configurable rolling AI spend budget", async () => {
+    const authority = await authorityFor("234", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+    ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const created = await stub.createAgent(authority, agentInput("create-run-agent-234"));
 
@@ -485,69 +484,37 @@ describe("OwnerControlPlane runs", () => {
       throw new Error("Expected run-budget fixture Agent.");
     }
 
-    await runInDurableObject(stub, (_instance, state) => {
-      state.storage.sql.exec(
-        `WITH RECURSIVE sequence(value) AS (
-           SELECT 1
-           UNION ALL
-           SELECT value + 1
-           FROM sequence
-           WHERE value < ?
-         )
-         INSERT INTO run_admissions (
-           client_id,
-           idempotency_key,
-           request_digest,
-           run_id,
-           agent_id,
-           agent_revision,
-           prompt_digest,
-           budget_reservation,
-           nonce_digest,
-           status,
-           expires_at,
-           cleanup_at,
-           created_at,
-           redeemed_at,
-           model_call_consumed_at,
-           model_calls_consumed
-         )
-         SELECT
-           'fixture-client',
-           'budget-key-' || value,
-           'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-           'run_budget_fixture_' || value,
-           ?,
-           1,
-           'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-           ?,
-           'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-           'redeemed',
-           1,
-           ?,
-           ?,
-           1,
-           1,
-           1
-         FROM sequence`,
-        MAXIMUM_OWNER_RUN_MODEL_CALLS_PER_WINDOW,
-        created.agent.id,
-        JSON.stringify({
-          maxDurationSeconds: created.agent.executionLimits.maxDurationSeconds,
-          maxInputCharacters: created.agent.instructions.length + 1,
-          maxModelCalls: 1,
-          model: created.agent.model,
-          maxOutputTokens: 1,
-          maxToolCalls: 0,
-          maxTurns: 1,
-          reservationId: "budget_22222222-2222-4222-8222-222222222222",
-        }),
-        Date.now() + 24 * 60 * 60 * 1_000,
-        Date.now(),
-      );
+    const current = await stub.getFleetConfiguration(authority, { target: { kind: "fleet" } });
+
+    if (!current.ok) {
+      throw new Error("Expected fleet configuration.");
+    }
+
+    await expect(
+      stub.configureFleetConfiguration(authority, {
+        expectedRevision: current.configuration.revision,
+        idempotencyKey: "configure-run-budget-234",
+        mode: "apply",
+        patch: {
+          ai: {
+            dailySpendMicrousd: 50_000,
+            runReservationMicrousd: 50_000,
+          },
+        },
+        target: { kind: "fleet" },
+      }),
+    ).resolves.toMatchObject({ applied: true, ok: true });
+
+    const prompt = "This run reserves the configured AI spend allowance.";
+    const first = await stub.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "within-run-budget-234",
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
     });
 
-    const prompt = "This run exceeds the rolling owner model-call budget.";
+    expect(first).toMatchObject({ ok: true, state: "issued" });
 
     await expect(
       stub.createRunAdmission(authority, {
@@ -560,87 +527,48 @@ describe("OwnerControlPlane runs", () => {
     ).resolves.toEqual(fixedRunAdmissionFailure("budget_exhausted"));
   });
 
-  it("reserves the aggregate output allowance for every admitted model step", async () => {
-    const authority = await authorityFor("235", [OWNER_WRITE_SCOPE, AGENTS_WRITE_SCOPE]);
+  it("invalidates issued run authority when the fleet configuration revision changes", async () => {
+    const authority = await authorityFor("235", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+    ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
-    const input = agentInput("create-run-agent-235");
-    const created = await stub.createAgent(authority, {
-      ...input,
-      executionLimits: {
-        ...input.executionLimits,
-        maxModelTokens: MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
-        maxTurns: 100,
-      },
-    });
+    const created = await stub.createAgent(authority, agentInput("create-run-agent-235"));
 
     if (!created.ok) {
-      throw new Error("Expected aggregate output-budget fixture Agent.");
+      throw new Error("Expected fleet-revision run fixture Agent.");
     }
 
-    const reservedModelCalls = Math.floor(
-      MAXIMUM_OWNER_RUN_OUTPUT_TOKENS_PER_WINDOW / MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
-    );
-
-    await runInDurableObject(stub, (_instance, state) => {
-      state.storage.sql.exec(
-        `INSERT INTO run_admissions (
-           client_id,
-           idempotency_key,
-           request_digest,
-           run_id,
-           agent_id,
-           agent_revision,
-           prompt_digest,
-           budget_reservation,
-           nonce_digest,
-           status,
-           expires_at,
-           cleanup_at,
-           created_at,
-           redeemed_at
-         ) VALUES (
-           'fixture-client',
-           'aggregate-output-budget',
-           'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-           'run_aggregate_output_budget',
-           ?,
-           1,
-           'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-           ?,
-           'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-           'redeemed',
-           1,
-           ?,
-           ?,
-           1
-         )`,
-        created.agent.id,
-        JSON.stringify({
-          maxDurationSeconds: created.agent.executionLimits.maxDurationSeconds,
-          maxInputCharacters: created.agent.instructions.length + 1,
-          maxModelCalls: reservedModelCalls,
-          model: created.agent.model,
-          maxOutputTokens: MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
-          maxToolCalls: 0,
-          maxTurns: reservedModelCalls,
-          reservationId: "budget_23522222-2222-4222-8222-222222222222",
-          toolGrants: [],
-        }),
-        Date.now() + 24 * 60 * 60 * 1_000,
-        Date.now(),
-      );
+    const prompt = "Run only under the exact admitted fleet policy.";
+    const admission = await stub.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "fleet-revision-run-235",
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
     });
+    const current = await stub.getFleetConfiguration(authority, { target: { kind: "fleet" } });
 
-    const prompt = "This additional step exceeds the aggregate owner output budget.";
+    if (!admission.ok || admission.state !== "issued" || !current.ok) {
+      throw new Error("Expected fleet-revision run admission.");
+    }
 
     await expect(
-      stub.createRunAdmission(authority, {
-        agentId: created.agent.id,
-        expectedRevision: created.agent.revision,
-        idempotencyKey: "over-output-budget-235",
-        promptCharacters: prompt.length,
-        promptDigest: await digestRunPrompt(prompt),
+      stub.configureFleetConfiguration(authority, {
+        expectedRevision: current.configuration.revision,
+        idempotencyKey: "advance-fleet-revision-235",
+        mode: "apply",
+        patch: { schedules: { minimumIntervalSeconds: 120 } },
+        target: { kind: "fleet" },
       }),
-    ).resolves.toEqual(fixedRunAdmissionFailure("budget_exhausted"));
+    ).resolves.toMatchObject({ applied: true, ok: true });
+    await expect(stub.verifyRunAdmission(admission.permit)).resolves.toEqual(
+      fixedRunAdmissionFailure("invalid_admission"),
+    );
+    await expect(stub.confirmRunAdmission(admission.permit)).resolves.toEqual(
+      fixedRunAdmissionFailure("invalid_admission"),
+    );
   });
 });

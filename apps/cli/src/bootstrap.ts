@@ -21,6 +21,7 @@ const REQUIRED_SECRET_NAMES = [
   "OWNER_GITHUB_USER_ID",
 ] as const;
 type RequiredSecretName = (typeof REQUIRED_SECRET_NAMES)[number];
+const CLOUDFLARE_API_TOKEN_ENVIRONMENT = "CREWHELM_CLOUDFLARE_API_TOKEN";
 const COMPOSIO_API_KEY_ENVIRONMENT = "CREWHELM_COMPOSIO_API_KEY";
 const GITHUB_SECRET_ENVIRONMENT = {
   clientId: "CREWHELM_GITHUB_CLIENT_ID",
@@ -57,6 +58,8 @@ const MAX_SOURCE_MAP_BYTES = 25 * 1_048_576;
 const MAX_TEMPLATE_BYTES = 1_048_576;
 const MAX_MIGRATION_BYTES = 1_048_576;
 const MAX_WORKER_TEXT_MODULES = 20;
+const DEFAULT_AI_DAILY_SPEND_USD = 1;
+const MICROUSD_PER_USD = 1_000_000;
 const WORKER_TEXT_MODULE_NAME = /^[0-9a-f]{40}-[0-9]{4}_[a-z0-9_]{1,128}\.sql$/u;
 const WORKER_TEXT_MODULE_IMPORT = /from "\.\/([^"]+\.sql)";/gu;
 const WORKER_NOT_FOUND_CODE = /\[code:\s*10007\]/u;
@@ -97,6 +100,7 @@ const githubSecretsSchema = z.strictObject({
   ownerUserId: z.string().regex(/^[1-9][0-9]{0,19}$/),
 });
 const composioApiKeySchema = z.string().min(16).max(4_096).regex(/^\S+$/);
+const cloudflareApiTokenSchema = z.string().min(16).max(4_096).regex(/^\S+$/);
 const whoamiSchema = z.looseObject({
   accounts: z
     .array(
@@ -107,6 +111,36 @@ const whoamiSchema = z.looseObject({
     .min(1)
     .max(100),
   loggedIn: z.literal(true),
+});
+const cloudflareCredentialsSchema = z.discriminatedUnion("type", [
+  z.strictObject({
+    token: z.string().min(1).max(4_096),
+    type: z.enum(["api_token", "oauth"]),
+  }),
+  z.strictObject({
+    email: z.email().max(320),
+    key: z.string().min(1).max(4_096),
+    type: z.literal("api_key"),
+  }),
+]);
+const cloudflareApiEnvelopeSchema = z.looseObject({
+  success: z.boolean(),
+  result: z.unknown().optional(),
+});
+const aiGatewaySpendRuleSchema = z.looseObject({
+  enabled: z.literal(true),
+  id: z.literal("crewhelm-daily"),
+  limit: z.number().finite().min(0.01).max(1_000),
+  limitType: z.literal("cost"),
+  technique: z.literal("sliding"),
+  window: z.literal(24 * 60 * 60),
+});
+const aiGatewaySchema = z.looseObject({
+  id: deploymentNameSchema,
+  spend_limits: z.looseObject({
+    enabled: z.literal(true),
+    rules: z.tuple([aiGatewaySpendRuleSchema]),
+  }),
 });
 const deploymentSchema = z.looseObject({
   annotations: z.record(z.string(), z.unknown()).optional(),
@@ -204,13 +238,14 @@ const deploymentTemplateSchema = z.strictObject({
   triggers: z.strictObject({
     crons: z.tuple([z.literal("17 * * * *")]),
   }),
-  vars: z.strictObject({
+  vars: z.looseObject({
     PUBLIC_ORIGIN: z.url(),
   }),
 });
 
 export const bootstrapOptionsSchema = z.strictObject({
   accountId: accountIdSchema.optional(),
+  aiDailySpendUsd: z.number().finite().min(0.01).max(1_000).optional(),
   databaseId: databaseIdSchema.optional(),
   databaseName: deploymentNameSchema,
   origin: z.instanceof(URL).refine((origin) => origin.protocol === "https:"),
@@ -221,6 +256,7 @@ export const bootstrapOptionsSchema = z.strictObject({
 const bootstrapFailureStageSchema = z.enum([
   "assets",
   "authentication",
+  "gateway",
   "worker",
   "configuration",
   "database",
@@ -246,6 +282,10 @@ export const bootstrapReportSchema = z.strictObject({
     id: databaseIdSchema,
     name: z.string(),
   }),
+  aiGateway: z.strictObject({
+    dailySpendUsd: z.number().positive(),
+    id: deploymentNameSchema,
+  }),
   deployment: z.strictObject({
     action: z.enum(["created", "updated"]),
     origin: z.url(),
@@ -260,6 +300,7 @@ export type BootstrapReport = z.infer<typeof bootstrapReportSchema>;
 type BootstrapFailureStage = z.infer<typeof bootstrapFailureStageSchema>;
 type DeploymentTemplate = z.infer<typeof deploymentTemplateSchema>;
 type GitHubSecrets = z.infer<typeof githubSecretsSchema>;
+type CloudflareCredentials = z.infer<typeof cloudflareCredentialsSchema>;
 
 interface DeploymentAssets {
   migrations: readonly string[];
@@ -491,6 +532,248 @@ async function authenticate(
   }
 
   return identity.accounts[0];
+}
+
+async function readCloudflareCredentials(
+  context: Pick<CloudflareContext, "cwd" | "dependencies">,
+): Promise<CloudflareCredentials> {
+  const environmentToken = context.dependencies.readEnvironment(CLOUDFLARE_API_TOKEN_ENVIRONMENT);
+
+  if (environmentToken !== undefined) {
+    const parsed = cloudflareApiTokenSchema.safeParse(environmentToken);
+
+    if (!parsed.success) {
+      throw commandFailed(
+        "gateway",
+        `Set ${CLOUDFLARE_API_TOKEN_ENVIRONMENT} to a valid account API token with AI Gateway Read and Edit.`,
+      );
+    }
+
+    return { token: parsed.data, type: "api_token" };
+  }
+
+  const result = await runCloudflare(context, ["auth", "token", "--json"], "authentication");
+  requireCompleted(
+    result,
+    "authentication",
+    "Cloudflare credential retrieval outcome could not be confirmed.",
+  );
+
+  if (result.exitCode !== 0) {
+    throw commandFailed("authentication", "Cloudflare credentials could not be retrieved.");
+  }
+
+  try {
+    return cloudflareCredentialsSchema.parse(JSON.parse(result.stdout));
+  } catch {
+    throw commandFailed("authentication", "Cloudflare credentials were invalid.");
+  }
+}
+
+function cloudflareHeaders(credentials: CloudflareCredentials): Record<string, string> {
+  if (credentials.type === "api_key") {
+    return {
+      "X-Auth-Email": credentials.email,
+      "X-Auth-Key": credentials.key,
+    };
+  }
+
+  return { Authorization: `Bearer ${credentials.token}` };
+}
+
+async function cloudflareApiRequest(
+  dependencies: BootstrapDependencies,
+  credentials: CloudflareCredentials,
+  url: string,
+  init: RequestInit,
+): Promise<{ result: unknown; status: number; success: boolean }> {
+  let response: Response;
+
+  try {
+    response = await dependencies.fetch(url, {
+      ...init,
+      headers: {
+        ...cloudflareHeaders(credentials),
+        accept: "application/json",
+        ...(init.body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch {
+    throw commandFailed("gateway", "Cloudflare AI Gateway request failed.");
+  }
+
+  if (response.status === 404) {
+    return { result: undefined, status: response.status, success: false };
+  }
+
+  let envelope: z.infer<typeof cloudflareApiEnvelopeSchema>;
+
+  try {
+    const body = await response.text();
+
+    if (body.length > MAX_TEMPLATE_BYTES) {
+      throw new Error("Response too large.");
+    }
+
+    envelope = cloudflareApiEnvelopeSchema.parse(JSON.parse(body));
+  } catch {
+    throw commandFailed("gateway", "Cloudflare AI Gateway returned an invalid response.");
+  }
+
+  return {
+    result: envelope.result,
+    status: response.status,
+    success: response.ok && envelope.success,
+  };
+}
+
+interface AiGatewayPlan {
+  dailySpendUsd: number;
+  exists: boolean;
+  id: string;
+  needsMutation: boolean;
+}
+
+function aiGatewayBody(plan: AiGatewayPlan): string {
+  return JSON.stringify({
+    cache_invalidate_on_update: true,
+    cache_ttl: 0,
+    collect_logs: true,
+    id: plan.id,
+    rate_limiting_interval: 0,
+    rate_limiting_limit: 0,
+    spend_limits: {
+      enabled: true,
+      rules: [
+        {
+          enabled: true,
+          id: "crewhelm-daily",
+          limit: plan.dailySpendUsd,
+          limitType: "cost",
+          technique: "sliding",
+          window: 24 * 60 * 60,
+        },
+      ],
+    },
+  });
+}
+
+function parseConfiguredAiGateway(
+  result: unknown,
+  gatewayId: string,
+  dailySpendUsd?: number,
+): z.infer<typeof aiGatewaySchema> | undefined {
+  const parsed = aiGatewaySchema.safeParse(result);
+
+  if (
+    !parsed.success ||
+    parsed.data.id !== gatewayId ||
+    (dailySpendUsd !== undefined && parsed.data.spend_limits.rules[0].limit !== dailySpendUsd)
+  ) {
+    return undefined;
+  }
+
+  return parsed.data;
+}
+
+async function planAiGateway(
+  options: BootstrapOptions,
+  accountId: string,
+  credentials: CloudflareCredentials,
+  dependencies: BootstrapDependencies,
+): Promise<AiGatewayPlan> {
+  const gatewayId = options.workerName;
+  const collectionUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-gateway/gateways`;
+  const gatewayUrl = `${collectionUrl}/${gatewayId}`;
+  const existing = await cloudflareApiRequest(dependencies, credentials, gatewayUrl, {
+    method: "GET",
+  });
+
+  if (existing.status === 401 || existing.status === 403) {
+    throw commandFailed(
+      "gateway",
+      `Cloudflare denied AI Gateway management. Set ${CLOUDFLARE_API_TOKEN_ENVIRONMENT} to an account API token with AI Gateway Read and Edit.`,
+    );
+  }
+
+  if (existing.status !== 404 && !existing.success) {
+    throw commandFailed("gateway", "Cloudflare AI Gateway inventory could not be read.");
+  }
+
+  if (existing.status === 404) {
+    return {
+      dailySpendUsd: options.aiDailySpendUsd ?? DEFAULT_AI_DAILY_SPEND_USD,
+      exists: false,
+      id: gatewayId,
+      needsMutation: true,
+    };
+  }
+
+  const configured = parseConfiguredAiGateway(existing.result, gatewayId);
+
+  if (configured === undefined && options.aiDailySpendUsd === undefined) {
+    throw commandFailed(
+      "gateway",
+      "The existing AI Gateway spend limit could not be verified. Pass --ai-budget-usd to repair it explicitly.",
+    );
+  }
+
+  const dailySpendUsd = options.aiDailySpendUsd ?? configured?.spend_limits.rules[0].limit;
+
+  if (dailySpendUsd === undefined) {
+    throw commandFailed("gateway", "Cloudflare AI Gateway spend limit could not be determined.");
+  }
+
+  return {
+    dailySpendUsd,
+    exists: true,
+    id: gatewayId,
+    needsMutation:
+      configured === undefined || configured.spend_limits.rules[0].limit !== dailySpendUsd,
+  };
+}
+
+async function applyAiGatewayPlan(
+  plan: AiGatewayPlan,
+  accountId: string,
+  credentials: CloudflareCredentials,
+  dependencies: BootstrapDependencies,
+): Promise<{ dailySpendUsd: number; id: string }> {
+  const collectionUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-gateway/gateways`;
+  const gatewayUrl = `${collectionUrl}/${plan.id}`;
+
+  if (plan.needsMutation) {
+    const response = await cloudflareApiRequest(
+      dependencies,
+      credentials,
+      plan.exists ? gatewayUrl : collectionUrl,
+      {
+        body: aiGatewayBody(plan),
+        method: plan.exists ? "PUT" : "POST",
+      },
+    );
+
+    if (!response.success) {
+      throw commandFailed("gateway", "Cloudflare AI Gateway could not be configured.");
+    }
+  }
+
+  const verified = await cloudflareApiRequest(dependencies, credentials, gatewayUrl, {
+    method: "GET",
+  });
+
+  if (
+    !verified.success ||
+    parseConfiguredAiGateway(verified.result, plan.id, plan.dailySpendUsd) === undefined
+  ) {
+    throw commandFailed(
+      "gateway",
+      "Cloudflare AI Gateway configuration could not be verified after deployment.",
+    );
+  }
+
+  return { dailySpendUsd: plan.dailySpendUsd, id: plan.id };
 }
 
 async function writeAccountConfig(cwd: string, accountId?: string): Promise<string> {
@@ -846,6 +1129,7 @@ async function stageDeployment(
   options: BootstrapOptions,
   accountId: string,
   database: { name: string; uuid: string },
+  aiGateway: { dailySpendUsd: number; id: string },
   assets: DeploymentAssets,
   context: CloudflareContext,
 ): Promise<string> {
@@ -891,6 +1175,10 @@ async function stageDeployment(
       },
       triggers: assets.template.triggers,
       vars: {
+        AI_GATEWAY_DAILY_LIMIT_MICROUSD: String(
+          Math.round(aiGateway.dailySpendUsd * MICROUSD_PER_USD),
+        ),
+        AI_GATEWAY_ID: aiGateway.id,
         PUBLIC_ORIGIN: options.origin.origin,
       },
     };
@@ -979,6 +1267,7 @@ export async function bootstrapDeployment(
   try {
     const neutralConfigPath = await writeAccountConfig(cwd);
     const account = await authenticate(options, cwd, neutralConfigPath, dependencies);
+    const credentials = await readCloudflareCredentials({ cwd, dependencies });
     const accountConfigPath = await writeAccountConfig(cwd, account.id);
     const context = { accountConfigPath, cwd, dependencies };
     const workerInventory = await readWorkerInventory(options.workerName, context);
@@ -990,12 +1279,20 @@ export async function bootstrapDeployment(
       requireCompleteSecretSet(existingSecretNames, githubSecrets, composioApiKey);
     }
 
+    const aiGatewayPlan = await planAiGateway(options, account.id, credentials, dependencies);
     const { action: databaseAction, database } = await ensureDatabase(
       options,
       assets.migrations,
       context,
     );
-    const configPath = await stageDeployment(options, account.id, database, assets, context);
+    const configPath = await stageDeployment(
+      options,
+      account.id,
+      database,
+      aiGatewayPlan,
+      assets,
+      context,
+    );
     const migration = await runCloudflare(
       context,
       ["d1", "migrations", "apply", "AUTH_DB", "--remote", "--config", configPath],
@@ -1058,6 +1355,12 @@ export async function bootstrapDeployment(
       }
     }
 
+    const aiGateway = await applyAiGatewayPlan(
+      aiGatewayPlan,
+      account.id,
+      credentials,
+      dependencies,
+    );
     const doctor: DoctorReport = await diagnoseDeployment(options, dependencies);
 
     return bootstrapReportSchema.parse({
@@ -1066,6 +1369,7 @@ export async function bootstrapDeployment(
       account: {
         id: account.id,
       },
+      aiGateway,
       database: {
         action: databaseAction,
         id: database.uuid,

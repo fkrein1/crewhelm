@@ -27,9 +27,6 @@ export const MAXIMUM_RUN_MODEL_OUTPUT_TOKENS = 16 * 1_024;
 export const MAXIMUM_RUN_OUTPUT_CHARACTERS = 64 * 1_024;
 export const MAXIMUM_RUN_PROMPT_CHARACTERS = 16 * 1_024;
 export const MAXIMUM_RUN_TIMELINE_EVENTS = 512;
-export const MAXIMUM_OWNER_RUN_INPUT_CHARACTERS_PER_WINDOW = 1_000_000;
-export const MAXIMUM_OWNER_RUN_MODEL_CALLS_PER_WINDOW = 500;
-export const MAXIMUM_OWNER_RUN_OUTPUT_TOKENS_PER_WINDOW = 1_000_000;
 export const RUNNABLE_AGENT_MODELS = [
   "@cf/meta/llama-4-scout-17b-16e-instruct",
   "@cf/zai-org/glm-4.7-flash",
@@ -57,6 +54,14 @@ export const runBudgetReservationIdSchema = z
 export const runPromptSchema = z.string().min(1).max(MAXIMUM_RUN_PROMPT_CHARACTERS);
 export const runOutputSchema = z.string().max(MAXIMUM_RUN_OUTPUT_CHARACTERS);
 export const runnableAgentModelSchema = z.enum(RUNNABLE_AGENT_MODELS);
+export const runIntegrationLimitsSchema = z.strictObject({
+  callsPerDay: z.number().int().min(1).max(1_000_000),
+  callsPerThirtyDays: z.number().int().min(1).max(1_000_000),
+  duplicateToolCallLimit: z.number().int().min(1).max(100),
+  maxCallsPerRun: z.number().int().min(1).max(100),
+  maxCallsPerToolPerRun: z.number().int().min(1).max(100),
+  maxConcurrencyPerGrant: z.number().int().min(1).max(16),
+});
 
 export const runStatusSchema = z.enum([
   "queued",
@@ -78,6 +83,9 @@ export const createRunAdmissionInputSchema = z.strictObject({
 });
 
 export const runBudgetReservationSchema = z.strictObject({
+  aiSpendReservationMicrousd: z.number().int().min(1).safe(),
+  fleetConfigurationRevision: z.number().int().positive().safe(),
+  integrationLimits: runIntegrationLimitsSchema,
   maxDurationSeconds: agentExecutionLimitsSchema.shape.maxDurationSeconds,
   maxInputCharacters: z.number().int().min(1).max(MAXIMUM_RUN_INPUT_CHARACTERS),
   maxModelCalls: z.number().int().min(1).max(100),
@@ -109,6 +117,16 @@ export const runAdmissionPermitSchema = z.strictObject({
   ownerKey: ownerKeySchema,
   promptDigest: sha256DigestSchema,
   runId: runIdSchema,
+});
+
+export const aiGatewayLogIdSchema = z.string().trim().min(1).max(255);
+export const runUsageReferenceSchema = runAdmissionPermitSchema.omit({
+  expiresAt: true,
+  nonce: true,
+});
+export const recordAiGatewayCallInputSchema = z.strictObject({
+  gatewayLogId: aiGatewayLogIdSchema,
+  reference: runUsageReferenceSchema,
 });
 
 export const runAdmissionSummarySchema = runAdmissionPermitSchema
@@ -514,6 +532,7 @@ export type ListAgentRunsResult = z.infer<typeof listAgentRunsResultSchema>;
 export type RedeemRunReceiverCapabilityResult = z.infer<
   typeof redeemRunReceiverCapabilityResultSchema
 >;
+export type RecordAiGatewayCallInput = z.infer<typeof recordAiGatewayCallInputSchema>;
 export type Run = z.infer<typeof runSchema>;
 export type RunAdmissionPermit = z.infer<typeof runAdmissionPermitSchema>;
 export type RunAdmissionSummary = z.infer<typeof runAdmissionSummarySchema>;

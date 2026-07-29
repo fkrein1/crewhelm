@@ -7,6 +7,8 @@ import migration5 from "./0005_young_norman_osborn.sql";
 import migration6 from "./0006_concerned_mesmero.sql";
 import migration7 from "./0007_pale_spencer_smythe.sql";
 import migration8 from "./0008_backfill_tool_authorization.sql";
+import migration9 from "./0009_colorful_skullbuster.sql";
+import migration10 from "./0010_famous_george_stacy.sql";
 
 export const controlPlaneMigrations = [
   {
@@ -53,6 +55,16 @@ export const controlPlaneMigrations = [
     name: "0008_backfill_tool_authorization",
     sql: migration8,
     version: 9,
+  },
+  {
+    name: "0009_colorful_skullbuster",
+    sql: migration9,
+    version: 10,
+  },
+  {
+    name: "0010_famous_george_stacy",
+    sql: migration10,
+    version: 11,
   },
 ] as const;
 
