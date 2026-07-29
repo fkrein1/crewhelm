@@ -1,1 +1,1 @@
-export { AiGatewayUsage, currentFleetAiSpendMicrousd } from "./module.js";
+export { AiGatewayUsage } from "./module.js";

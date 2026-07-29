@@ -27,19 +27,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
         authorization_servers: ["https://crewhelm.example/api/auth"],
         bearer_methods_supported: ["header"],
         resource: "https://crewhelm.example/mcp",
-        scopes_supported: [
-          "control:read",
-          "control:write",
-          "agents:read",
-          "agents:write",
-          "autonomy:write",
-          "connections:read",
-          "connections:write",
-          "connection-configs:read",
-          "connection-configs:write",
-          "integrations:read",
-          "offline_access",
-        ],
+        scopes_supported: ["crewhelm:view", "crewhelm:use", "crewhelm:full", "offline_access"],
       };
     } else {
       payload = {
@@ -52,19 +40,7 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
         response_modes_supported: ["query"],
         response_types_supported: ["code"],
         revocation_endpoint: "https://crewhelm.example/api/auth/oauth2/revoke",
-        scopes_supported: [
-          "control:read",
-          "control:write",
-          "agents:read",
-          "agents:write",
-          "autonomy:write",
-          "connections:read",
-          "connections:write",
-          "connection-configs:read",
-          "connection-configs:write",
-          "integrations:read",
-          "offline_access",
-        ],
+        scopes_supported: ["crewhelm:view", "crewhelm:use", "crewhelm:full", "offline_access"],
         token_endpoint: "https://crewhelm.example/api/auth/oauth2/token",
         token_endpoint_auth_methods_supported: ["none"],
       };
@@ -108,11 +84,52 @@ describe("Crewhelm CLI", () => {
 
   it("accepts a bounded installation AI budget in dollars", () => {
     expect(
-      parseCli(["bootstrap", "--endpoint", "https://crewhelm.example", "--ai-budget-usd", "2.50"]),
+      parseCli(["up", "--endpoint", "https://crewhelm.example", "--ai-budget-usd", "2.50"]),
     ).toMatchObject({
       aiDailySpendUsd: 2.5,
-      kind: "bootstrap",
+      kind: "up",
     });
+  });
+
+  it.each([
+    {
+      answers: ["yes", "7.50"],
+      expectedPrompts: [
+        "Enable a Cloudflare AI Gateway hard spend limit? Recommended [Y/n]: ",
+        "Daily hard spend limit in USD: ",
+      ],
+      label: "enables the recommended Gateway with an explicit amount",
+    },
+    {
+      answers: ["skip"],
+      expectedPrompts: ["Enable a Cloudflare AI Gateway hard spend limit? Recommended [Y/n]: "],
+      label: "skips the optional Gateway",
+    },
+  ])("$label during first-run guidance", async ({ answers, expectedPrompts }) => {
+    const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-cli-guidance-test-"));
+    const promptText = vi.fn<(message: string) => Promise<string>>(
+      async () => answers.shift() ?? "",
+    );
+    const harness = createHarness(undefined, { promptText });
+
+    try {
+      await expect(
+        runCli(
+          [
+            "up",
+            "--endpoint",
+            "https://crewhelm.example",
+            "--installation",
+            resolve(directory, "installation.json"),
+          ],
+          harness.dependencies,
+        ),
+      ).resolves.toBe(1);
+      expect(promptText.mock.calls.map(([message]) => message)).toEqual(expectedPrompts);
+      expect(harness.errors.join("")).toContain("FAIL up-assets");
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 
   it("reports a healthy Worker in human-readable form", async () => {
@@ -163,7 +180,7 @@ describe("Crewhelm CLI", () => {
     expect(harness.dependencies.fetch).not.toHaveBeenCalled();
   });
 
-  it("emits a stable bootstrap failure without reflecting Wrangler output", async () => {
+  it("emits a stable up failure without reflecting Wrangler output", async () => {
     const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-cli-test-"));
     await mkdir(resolve(directory, "migrations"));
     await writeFile(resolve(directory, "index.js"), "export default {};\n");
@@ -206,6 +223,7 @@ describe("Crewhelm CLI", () => {
       resolve(directory, "migrations", "0011_autonomy_write_scope.sql"),
       "SELECT 1;\n",
     );
+    await writeFile(resolve(directory, "migrations", "0012_access_levels.sql"), "SELECT 1;\n");
     await writeFile(
       resolve(directory, "wrangler-template.json"),
       JSON.stringify({
@@ -252,8 +270,6 @@ describe("Crewhelm CLI", () => {
         rules: [{ fallthrough: true, globs: ["**/*.sql"], type: "Text" }],
         triggers: { crons: ["17 * * * *"] },
         vars: {
-          AI_GATEWAY_DAILY_LIMIT_MICROUSD: "1000000",
-          AI_GATEWAY_ID: "crewhelm",
           PUBLIC_ORIGIN: "https://crewhelm.example",
         },
       }),
@@ -270,10 +286,7 @@ describe("Crewhelm CLI", () => {
 
     try {
       await expect(
-        runCli(
-          ["bootstrap", "--endpoint", "https://crewhelm.example", "--json"],
-          harness.dependencies,
-        ),
+        runCli(["up", "--endpoint", "https://crewhelm.example", "--json"], harness.dependencies),
       ).resolves.toBe(1);
       expect(JSON.parse(harness.errors.join(""))).toMatchObject({
         ok: false,
@@ -296,18 +309,12 @@ describe("Crewhelm CLI", () => {
     {
       arguments_: ["doctor", "--endpoint", "https://crewhelm.example", "--json", "--json"],
     },
-    { arguments_: ["bootstrap", "--endpoint", "http://localhost:8787"] },
+    { arguments_: ["up", "--endpoint", "http://localhost:8787"] },
     {
-      arguments_: [
-        "bootstrap",
-        "--endpoint",
-        "https://crewhelm.example",
-        "--worker-name",
-        "Invalid_Name",
-      ],
+      arguments_: ["up", "--endpoint", "https://crewhelm.example", "--worker-name", "Invalid_Name"],
     },
     {
-      arguments_: ["bootstrap", "--endpoint", "https://crewhelm.example", "--ai-budget-usd", "0"],
+      arguments_: ["up", "--endpoint", "https://crewhelm.example", "--ai-budget-usd", "0"],
     },
   ])("returns a usage error for $arguments_ without making a request", async ({ arguments_ }) => {
     const harness = createHarness();

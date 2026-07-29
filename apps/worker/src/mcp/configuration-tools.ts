@@ -37,7 +37,7 @@ export function registerConfigurationTools(server: McpServer, context: McpToolCo
         readOnlyHint: true,
       },
       description:
-        "Get the authenticated owner's current fleet configuration, revision, and installation ceilings. Requires control:read. To evaluate a change, pass this revision and a partial patch to crewhelm_configure with mode preview. Policy changes are not model-applicable and require a deterministic owner step-up path. To change the hard AI Gateway installation ceiling, rerun Crewhelm bootstrap with --ai-budget-usd <dollars>.",
+        "Get the authenticated owner's current fleet configuration and revision. Requires control:read. To evaluate a change, pass this revision and a partial patch to crewhelm_configure with mode preview. Policy changes are not model-applicable and require a deterministic owner step-up path. Cloudflare AI Gateway is the optional hard dollar limit; configure it by rerunning crewhelm up with --ai-budget-usd <dollars>.",
       inputSchema: getFleetConfigurationInputSchema,
       title: "Get Crewhelm configuration",
     },
@@ -58,7 +58,7 @@ export function registerConfigurationTools(server: McpServer, context: McpToolCo
         readOnlyHint: true,
       },
       description:
-        "Preview one revision-checked partial fleet configuration update. Requires autonomy:write. This tool never applies policy changes; application requires a deterministic owner step-up path outside model authority. Omitted fields do not change. Money is expressed as integer microUSD: 1 USD = 1,000,000 microUSD.",
+        "Preview one revision-checked partial fleet configuration update. Requires autonomy:write. This tool never applies policy changes; application requires a deterministic owner step-up path outside model authority. Omitted fields do not change.",
       inputSchema: previewFleetConfigurationInputSchema,
       title: "Preview Crewhelm configuration",
     },

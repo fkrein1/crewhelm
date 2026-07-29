@@ -8,8 +8,31 @@ import {
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
+const legacyAiSpendReservationSchema = z.number().int().positive().safe();
+
+const persistedRunBudgetReservationSchema = z.preprocess((value) => {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    !Object.hasOwn(value, "aiSpendReservationMicrousd")
+  ) {
+    return value;
+  }
+
+  const legacyReservation = Reflect.get(value, "aiSpendReservationMicrousd");
+
+  if (!legacyAiSpendReservationSchema.safeParse(legacyReservation).success) {
+    return value;
+  }
+
+  const normalized = { ...value };
+  Reflect.deleteProperty(normalized, "aiSpendReservationMicrousd");
+  return normalized;
+}, runBudgetReservationSchema);
+
 export const admittedRunRecordSchema = z.strictObject({
-  budgetReservation: runBudgetReservationSchema,
+  budgetReservation: persistedRunBudgetReservationSchema,
   cleanupAt: z.number().int().positive(),
   clientId: ownerClientIdSchema,
   configuration: crewAgentRuntimeConfigSchema,
@@ -22,7 +45,7 @@ export const admittedRunRecordSchema = z.strictObject({
 
 export const admittedTurnMetadataSchema = z.strictObject({
   crewhelmRun: z.strictObject({
-    budgetReservation: runBudgetReservationSchema,
+    budgetReservation: persistedRunBudgetReservationSchema,
     configuration: crewAgentRuntimeConfigSchema,
     promptCharacters: z.number().int().positive(),
     promptDigest: z.string().regex(/^[0-9a-f]{64}$/),

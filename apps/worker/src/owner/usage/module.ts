@@ -1,12 +1,10 @@
 import { RUN_BUDGET_WINDOW_MS, recordAiGatewayCallInputSchema } from "@crewhelm/contracts";
-import { and, eq, gt, lte, min } from "drizzle-orm";
+import { and, eq, lte, min } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import { aiGatewayCalls, runAdmissions, type ControlPlaneDatabaseSchema } from "../schema.js";
 
 type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
-type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
-type ReadDatabase = Database | Transaction;
 type GatewayLogReader = Pick<ReturnType<Ai["gateway"]>, "getLog">;
 
 interface AiGatewayUsageSource {
@@ -16,6 +14,7 @@ interface AiGatewayUsageSource {
 const INITIAL_RECONCILIATION_DELAY_MS = 1_000;
 const MAXIMUM_RECONCILIATION_DELAY_MS = 5 * 60 * 1_000;
 const MAXIMUM_RECONCILIATIONS_PER_ALARM = 25;
+const DEFAULT_AI_GATEWAY_COST_ESTIMATE_MICROUSD = 50_000;
 
 function reconciliationDelay(attempt: number): number {
   return Math.min(
@@ -29,71 +28,17 @@ function costMicrousd(costUsd: number): number | null {
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
-export function currentFleetAiSpendMicrousd(database: ReadDatabase, currentTime: number): number {
-  const admissions = database
-    .select({
-      budgetReservation: runAdmissions.budgetReservation,
-      createdAt: runAdmissions.createdAt,
-      runId: runAdmissions.runId,
-    })
-    .from(runAdmissions)
-    .where(gt(runAdmissions.createdAt, currentTime - RUN_BUDGET_WINDOW_MS))
-    .all();
-  const calls = database
-    .select({
-      costMicrousd: aiGatewayCalls.costMicrousd,
-      reservationMicrousd: aiGatewayCalls.reservationMicrousd,
-      runId: aiGatewayCalls.runId,
-      status: aiGatewayCalls.status,
-    })
-    .from(aiGatewayCalls)
-    .where(gt(aiGatewayCalls.recordedAt, currentTime - RUN_BUDGET_WINDOW_MS))
-    .all();
-  const usageByRun = new Map<string, { pendingReservation: number; settled: number }>();
-
-  for (const call of calls) {
-    const usage = usageByRun.get(call.runId) ?? { pendingReservation: 0, settled: 0 };
-    usage.pendingReservation =
-      call.status === "pending"
-        ? Math.max(usage.pendingReservation, call.reservationMicrousd)
-        : usage.pendingReservation;
-    usage.settled += call.costMicrousd ?? 0;
-    usageByRun.set(call.runId, usage);
-  }
-
-  const admissionRunIds = new Set(admissions.map((admission) => admission.runId));
-  const admittedSpend = admissions.reduce((total, admission) => {
-    const usage = usageByRun.get(admission.runId) ?? { pendingReservation: 0, settled: 0 };
-    const deadline = admission.createdAt + admission.budgetReservation.maxDurationSeconds * 1_000;
-    const activeReservation =
-      currentTime < deadline
-        ? admission.budgetReservation.aiSpendReservationMicrousd
-        : usage.pendingReservation;
-
-    return total + Math.max(activeReservation, usage.settled);
-  }, 0);
-  const orphanedSpend = [...usageByRun.entries()].reduce(
-    (total, [runId, usage]) =>
-      admissionRunIds.has(runId)
-        ? total
-        : total + Math.max(usage.pendingReservation, usage.settled),
-    0,
-  );
-
-  return admittedSpend + orphanedSpend;
-}
-
 export class AiGatewayUsage {
   readonly #ai: AiGatewayUsageSource;
   readonly #database: Database;
-  readonly #gatewayId: string;
+  readonly #gatewayId: string | undefined;
   readonly #storage: DurableObjectStorage;
 
   constructor(
     database: Database,
     storage: DurableObjectStorage,
     ai: AiGatewayUsageSource,
-    gatewayId: string,
+    gatewayId?: string,
   ) {
     this.#ai = ai;
     this.#database = database;
@@ -102,6 +47,10 @@ export class AiGatewayUsage {
   }
 
   async record(input: unknown): Promise<void> {
+    if (this.#gatewayId === undefined) {
+      return;
+    }
+
     const request = recordAiGatewayCallInputSchema.safeParse(input);
 
     if (!request.success) {
@@ -138,7 +87,7 @@ export class AiGatewayUsage {
             gatewayLogId,
             nextReconciliationAt: recordedAt,
             recordedAt,
-            reservationMicrousd: reference.budgetReservation.aiSpendReservationMicrousd,
+            reservationMicrousd: DEFAULT_AI_GATEWAY_COST_ESTIMATE_MICROUSD,
             runId: reference.runId,
             status: "pending",
           })
@@ -156,6 +105,10 @@ export class AiGatewayUsage {
   }
 
   async reconcilePending(currentTime: number): Promise<void> {
+    if (this.#gatewayId === undefined) {
+      return;
+    }
+
     this.#database
       .delete(aiGatewayCalls)
       .where(lte(aiGatewayCalls.recordedAt, currentTime - RUN_BUDGET_WINDOW_MS))
@@ -179,6 +132,10 @@ export class AiGatewayUsage {
   }
 
   nextReconciliationAt(): number | null {
+    if (this.#gatewayId === undefined) {
+      return null;
+    }
+
     return (
       this.#database
         .select({ value: min(aiGatewayCalls.nextReconciliationAt) })
@@ -189,6 +146,12 @@ export class AiGatewayUsage {
   }
 
   async #reconcile(gatewayLogId: string, currentTime: number): Promise<void> {
+    const gatewayId = this.#gatewayId;
+
+    if (gatewayId === undefined) {
+      return;
+    }
+
     const row = this.#database
       .select({
         agentId: aiGatewayCalls.agentId,
@@ -205,7 +168,7 @@ export class AiGatewayUsage {
     }
 
     try {
-      const log = await this.#ai.gateway(this.#gatewayId).getLog(gatewayLogId);
+      const log = await this.#ai.gateway(gatewayId).getLog(gatewayLogId);
       const cost =
         typeof log.cost === "number" && Number.isFinite(log.cost) ? costMicrousd(log.cost) : null;
 

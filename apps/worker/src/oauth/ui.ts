@@ -1,18 +1,12 @@
-import {
-  AGENTS_READ_SCOPE,
-  AGENTS_WRITE_SCOPE,
-  AUTONOMY_WRITE_SCOPE,
-  CONNECTION_CONFIGS_READ_SCOPE,
-  CONNECTION_CONFIGS_WRITE_SCOPE,
-  CONNECTIONS_READ_SCOPE,
-  CONNECTIONS_WRITE_SCOPE,
-  INTEGRATIONS_READ_SCOPE,
-  OWNER_READ_SCOPE,
-  OWNER_WRITE_SCOPE,
-} from "@crewhelm/contracts";
 import type { Context, Hono } from "hono";
 import * as z from "zod";
 
+import {
+  FULL_ACCESS_SCOPE,
+  USE_ACCESS_SCOPE,
+  VIEW_ACCESS_SCOPE,
+  accessLevelScopeSchema,
+} from "./access-levels.js";
 import type { CrewhelmAuth } from "./auth.js";
 import { OFFLINE_ACCESS_SCOPE, oauthScopeClaimSchema } from "./scopes.js";
 import type { WorkerEnv } from "../env.js";
@@ -501,37 +495,26 @@ function consentPage(
   scope: z.infer<typeof oauthScopeClaimSchema>,
 ): string {
   const requestedScopes = scope.split(" ");
+  const usesAccessLevels = requestedScopes.some(
+    (requestedScope) => accessLevelScopeSchema.safeParse(requestedScope).success,
+  );
+  const requestedAccessLevel = requestedScopes.includes(FULL_ACCESS_SCOPE)
+    ? FULL_ACCESS_SCOPE
+    : requestedScopes.includes(USE_ACCESS_SCOPE)
+      ? USE_ACCESS_SCOPE
+      : VIEW_ACCESS_SCOPE;
   const permissions = [
-    requestedScopes.includes(OWNER_READ_SCOPE)
-      ? "<li>View control-plane status and Agent summaries.</li>"
+    !usesAccessLevels
+      ? "<li><strong>Existing client access:</strong> keep the Crewhelm permissions granted to this client before the access-level upgrade.</li>"
       : "",
-    requestedScopes.includes(OWNER_WRITE_SCOPE)
-      ? "<li>Create Agent definitions with bounded configuration and no capability grants.</li>"
+    usesAccessLevels && requestedAccessLevel === VIEW_ACCESS_SCOPE
+      ? "<li><strong>View only:</strong> inspect Agent configuration, run history, connections, and integration metadata.</li>"
       : "",
-    requestedScopes.includes(AGENTS_READ_SCOPE)
-      ? "<li>View full Agent definitions, including instructions.</li>"
+    usesAccessLevels && requestedAccessLevel === USE_ACCESS_SCOPE
+      ? "<li><strong>Use agents:</strong> start and cancel runs, reconcile interrupted work, and decide tool approvals.</li>"
       : "",
-    requestedScopes.includes(AGENTS_WRITE_SCOPE)
-      ? "<li>Start runs, decide approvals, and replace Agent definitions or exposed connection tools through immutable revisions.</li>"
-      : "",
-    requestedScopes.includes(AUTONOMY_WRITE_SCOPE)
-      ? "<li>Grant exact tools standing authority and create recurring Agent schedules that continue after this session.</li>"
-      : "",
-    requestedScopes.includes(CONNECTIONS_READ_SCOPE)
-      ? "<li>View bounded Crewhelm connection summaries. Provider account identifiers and credentials are not returned.</li>"
-      : "",
-    requestedScopes.includes(CONNECTIONS_WRITE_SCOPE)
-      ? "<li>Create private, short-lived Composio Connect Links. The selected auth configuration and an opaque owner key are sent to Composio; provider credentials stay with Composio.</li>"
-      : "",
-    requestedScopes.includes(CONNECTION_CONFIGS_READ_SCOPE) &&
-    requestedScopes.includes(INTEGRATIONS_READ_SCOPE)
-      ? "<li>List enabled Composio auth configurations for a selected integration. The integration slug is sent to Composio; provider credentials are not returned.</li>"
-      : "",
-    requestedScopes.includes(CONNECTION_CONFIGS_WRITE_SCOPE)
-      ? "<li>Enable Composio-managed authentication for a selected integration. The integration slug is sent to Composio; provider credentials are not returned.</li>"
-      : "",
-    requestedScopes.includes(INTEGRATIONS_READ_SCOPE)
-      ? "<li>Search the Composio integration catalog and inspect exact tool schemas. Search terms and selected integration slugs are sent to Composio.</li>"
+    usesAccessLevels && requestedAccessLevel === FULL_ACCESS_SCOPE
+      ? "<li><strong>Full control:</strong> create and reconfigure Agents, integrations, schedules, standing authority, and fleet policy.</li>"
       : "",
     requestedScopes.includes(OFFLINE_ACCESS_SCOPE)
       ? "<li>Keep this MCP client signed in using a rotating, revocable refresh token.</li>"

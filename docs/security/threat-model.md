@@ -122,13 +122,13 @@ diagnosis without identifying a provider account. Events exclude credentials, pr
 identifiers, user content, and request or response bodies. Sampling and retention must follow an
 explicit cost and data-retention policy.
 
-The dedicated AI Gateway is a second, installation-wide rolling spend guard. Crewhelm reserves
-cost locally before a call and persists that reservation with pending Gateway log IDs until exact
-cost reconciliation, so a delayed log cannot become zero-valued at a window boundary. Gateway
-enforcement and log availability are eventually consistent, so small in-flight overshoot remains
-a residual risk; bounded local reservations, concurrency, run duration, and the Gateway rule limit
-the exposure. Gateway request and response payload logging is disabled, while model, token, cost,
-latency, status, and opaque Crewhelm correlation metadata remain available for diagnosis.
+The optional dedicated AI Gateway is the installation-wide hard dollar guard. Crewhelm does not
+duplicate that ceiling locally. When enabled, it persists a provisional cost estimate with pending
+Gateway log IDs until exact cost reconciliation. Gateway enforcement and log availability are
+eventually consistent, so small in-flight overshoot remains a residual risk; concurrency, run
+duration, model-token limits, tool-loop controls, and the Gateway rule limit the exposure. Gateway
+request and response payload logging is disabled, while model, token, cost, latency, status, and
+opaque Crewhelm correlation metadata remain available for diagnosis.
 
 The bootstrap CLI holds operator deployment authority. It uses pinned Wrangler without a shell,
 an allowlisted environment, explicit account and database identity, validated release artifacts,
@@ -136,9 +136,9 @@ and bounded output. Ambiguous remote mutations stop with resources preserved for
 are not assumed successful or automatically repeated.
 
 AI Gateway management may use a process-scoped `CREWHELM_CLOUDFLARE_API_TOKEN` limited to AI
-Gateway Read and Edit. Bootstrap validates the existing rule without changing it, preserves its
-limit when no explicit budget is supplied, deploys matching Worker configuration, then applies and
-reads back any requested Gateway change.
+Gateway Edit. Bootstrap skips Gateway management unless the operator chooses a daily USD limit.
+Routine upgrades preserve only the non-secret Gateway route; an explicit limit change is applied
+and read back through Cloudflare.
 
 ## Update triggers
 

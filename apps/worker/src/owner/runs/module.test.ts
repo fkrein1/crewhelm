@@ -6,6 +6,7 @@ import {
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   RUN_ADMISSION_LIFETIME_MS,
+  RUNS_WRITE_SCOPE,
 } from "@crewhelm/contracts";
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -16,7 +17,11 @@ import { agentInput, agentUpdate, authorityFor, fixedRunAdmissionFailure } from 
 
 describe("OwnerControlPlane runs", () => {
   it("issues, rotates, verifies, redeems, and audits an opaque run admission durably", async () => {
-    const authority = await authorityFor("230", [OWNER_WRITE_SCOPE, AGENTS_WRITE_SCOPE]);
+    const authority = await authorityFor("230", [
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const created = await stub.createAgent(authority, agentInput("create-run-agent-230"));
     const prompt = "Summarize the private inbox without exposing its contents.";
@@ -244,7 +249,11 @@ describe("OwnerControlPlane runs", () => {
   });
 
   it("admits explicitly supported models and rejects unlisted models", async () => {
-    const authority = await authorityFor("236", [OWNER_WRITE_SCOPE, AGENTS_WRITE_SCOPE]);
+    const authority = await authorityFor("236", [
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const supported = await stub.createAgent(authority, {
       ...agentInput("create-supported-model-agent-236"),
@@ -284,7 +293,11 @@ describe("OwnerControlPlane runs", () => {
   });
 
   it("denies malformed, unauthorized, conflicting, cross-owner, stale, and expired admissions", async () => {
-    const authority = await authorityFor("231", [OWNER_WRITE_SCOPE, AGENTS_WRITE_SCOPE]);
+    const authority = await authorityFor("231", [
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
     const readOnly = await authorityFor("231", [OWNER_READ_SCOPE]);
     const other = await authorityFor("232", [OWNER_WRITE_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
@@ -395,7 +408,11 @@ describe("OwnerControlPlane runs", () => {
   });
 
   it("bounds retained run admissions per owner", async () => {
-    const authority = await authorityFor("233", [OWNER_WRITE_SCOPE, AGENTS_WRITE_SCOPE]);
+    const authority = await authorityFor("233", [
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const created = await stub.createAgent(authority, agentInput("create-run-agent-233"));
 
@@ -470,11 +487,12 @@ describe("OwnerControlPlane runs", () => {
     ).resolves.toEqual(fixedRunAdmissionFailure("admission_limit_exceeded"));
   });
 
-  it("atomically reserves from the configurable rolling AI spend budget", async () => {
+  it("does not apply a second fleet dollar ceiling to admitted runs", async () => {
     const authority = await authorityFor("234", [
       OWNER_READ_SCOPE,
       OWNER_WRITE_SCOPE,
       AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
       AUTONOMY_WRITE_SCOPE,
     ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
@@ -484,28 +502,7 @@ describe("OwnerControlPlane runs", () => {
       throw new Error("Expected run-budget fixture Agent.");
     }
 
-    const current = await stub.getFleetConfiguration(authority, { target: { kind: "fleet" } });
-
-    if (!current.ok) {
-      throw new Error("Expected fleet configuration.");
-    }
-
-    await expect(
-      stub.configureFleetConfiguration(authority, {
-        expectedRevision: current.configuration.revision,
-        idempotencyKey: "configure-run-budget-234",
-        mode: "apply",
-        patch: {
-          ai: {
-            dailySpendMicrousd: 50_000,
-            runReservationMicrousd: 50_000,
-          },
-        },
-        target: { kind: "fleet" },
-      }),
-    ).resolves.toMatchObject({ applied: true, ok: true });
-
-    const prompt = "This run reserves the configured AI spend allowance.";
+    const prompt = "Each admitted run keeps a cost estimate for observability.";
     const first = await stub.createRunAdmission(authority, {
       agentId: created.agent.id,
       expectedRevision: created.agent.revision,
@@ -520,11 +517,11 @@ describe("OwnerControlPlane runs", () => {
       stub.createRunAdmission(authority, {
         agentId: created.agent.id,
         expectedRevision: created.agent.revision,
-        idempotencyKey: "over-run-budget-234",
+        idempotencyKey: "second-run-without-local-dollar-cap-234",
         promptCharacters: prompt.length,
         promptDigest: await digestRunPrompt(prompt),
       }),
-    ).resolves.toEqual(fixedRunAdmissionFailure("budget_exhausted"));
+    ).resolves.toMatchObject({ ok: true, state: "issued" });
   });
 
   it("invalidates issued run authority when the fleet configuration revision changes", async () => {
@@ -532,6 +529,7 @@ describe("OwnerControlPlane runs", () => {
       OWNER_READ_SCOPE,
       OWNER_WRITE_SCOPE,
       AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
       AUTONOMY_WRITE_SCOPE,
     ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);

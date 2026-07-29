@@ -2,6 +2,7 @@ import * as z from "zod";
 
 export const AGENTS_READ_SCOPE = "agents:read";
 export const AGENTS_WRITE_SCOPE = "agents:write";
+export const RUNS_WRITE_SCOPE = "runs:write";
 export const AUTONOMY_WRITE_SCOPE = "autonomy:write";
 export const CONNECTIONS_READ_SCOPE = "connections:read";
 export const CONNECTIONS_WRITE_SCOPE = "connections:write";
@@ -15,6 +16,7 @@ export const OWNER_SCOPES = [
   OWNER_WRITE_SCOPE,
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  RUNS_WRITE_SCOPE,
   AUTONOMY_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
@@ -23,7 +25,7 @@ export const OWNER_SCOPES = [
   INTEGRATIONS_READ_SCOPE,
 ] as const;
 export const OWNER_DEFAULT_SCOPE_CLAIM =
-  "control:read control:write agents:read agents:write autonomy:write connections:read connections:write connection-configs:read connection-configs:write integrations:read";
+  "control:read control:write agents:read agents:write runs:write autonomy:write connections:read connections:write connection-configs:read connection-configs:write integrations:read";
 
 export const ownerScopeSchema = z.enum(OWNER_SCOPES);
 export const ownerScopesSchema = z

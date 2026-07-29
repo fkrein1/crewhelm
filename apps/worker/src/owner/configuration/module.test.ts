@@ -1,6 +1,5 @@
 import {
   AUTONOMY_WRITE_SCOPE,
-  DEFAULT_FLEET_AI_DAILY_SPEND_MICROUSD,
   DEFAULT_FLEET_INTEGRATION_CALLS_PER_DAY,
   OWNER_READ_SCOPE,
 } from "@crewhelm/contracts";
@@ -24,13 +23,9 @@ describe("OwnerControlPlane fleet configuration", () => {
     expect(current).toMatchObject({
       configuration: {
         data: {
-          ai: { dailySpendMicrousd: DEFAULT_FLEET_AI_DAILY_SPEND_MICROUSD },
           integrations: { callsPerDay: DEFAULT_FLEET_INTEGRATION_CALLS_PER_DAY },
         },
         revision: 1,
-      },
-      installationLimits: {
-        aiDailySpendMicrousd: DEFAULT_FLEET_AI_DAILY_SPEND_MICROUSD,
       },
       ok: true,
     });
@@ -39,10 +34,6 @@ describe("OwnerControlPlane fleet configuration", () => {
     }
 
     const patch = {
-      ai: {
-        dailySpendMicrousd: 750_000,
-        runReservationMicrousd: 25_000,
-      },
       integrations: {
         duplicateToolCallLimit: 3,
         maxCallsPerRun: 10,
@@ -59,7 +50,6 @@ describe("OwnerControlPlane fleet configuration", () => {
       applied: false,
       configuration: {
         data: {
-          ai: patch.ai,
           integrations: patch.integrations,
         },
         revision: 2,
@@ -82,7 +72,6 @@ describe("OwnerControlPlane fleet configuration", () => {
       applied: true,
       configuration: {
         data: {
-          ai: patch.ai,
           integrations: patch.integrations,
         },
         revision: 2,
@@ -131,7 +120,7 @@ describe("OwnerControlPlane fleet configuration", () => {
     ]);
   });
 
-  it("enforces scopes, installation ceilings, and revision conflicts", async () => {
+  it("enforces scopes and revision conflicts", async () => {
     const readOnlyAuthority = await authorityFor("fleet-configuration-2", [OWNER_READ_SCOPE]);
     const authority = await authorityFor(
       "fleet-configuration-2",
@@ -156,22 +145,6 @@ describe("OwnerControlPlane fleet configuration", () => {
         target: { kind: "fleet" },
       }),
     ).resolves.toMatchObject({ error: { code: "insufficient_scope" }, ok: false });
-    await expect(
-      stub.configureFleetConfiguration(authority, {
-        expectedRevision: current.configuration.revision,
-        idempotencyKey: "fleet-configuration-above-installation",
-        mode: "apply",
-        patch: {
-          ai: {
-            dailySpendMicrousd: current.installationLimits.aiDailySpendMicrousd + 1,
-          },
-        },
-        target: { kind: "fleet" },
-      }),
-    ).resolves.toMatchObject({
-      error: { code: "budget_above_installation_limit" },
-      ok: false,
-    });
     await expect(
       stub.configureFleetConfiguration(authority, {
         expectedRevision: current.configuration.revision + 1,

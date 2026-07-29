@@ -1,4 +1,4 @@
-import { AGENTS_WRITE_SCOPE, OWNER_WRITE_SCOPE, RUN_BUDGET_WINDOW_MS } from "@crewhelm/contracts";
+import { AGENTS_WRITE_SCOPE, OWNER_WRITE_SCOPE, RUNS_WRITE_SCOPE } from "@crewhelm/contracts";
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { drizzle } from "drizzle-orm/durable-sqlite";
@@ -7,13 +7,14 @@ import { describe, expect, it, vi } from "vitest";
 import { digestRunPrompt } from "../../agent/admitted-runs/index.js";
 import { controlPlaneSchema } from "../schema.js";
 import { agentInput, authorityFor } from "../testkit.js";
-import { AiGatewayUsage, currentFleetAiSpendMicrousd } from "./module.js";
+import { AiGatewayUsage } from "./module.js";
 
 describe("OwnerControlPlane AI Gateway usage", () => {
-  it("settles exact Gateway logs idempotently and replaces expired run reservations", async () => {
+  it("settles exact Gateway logs idempotently for cost observability", async () => {
     const authority = await authorityFor("ai-usage-owner-1", [
       OWNER_WRITE_SCOPE,
       AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
     ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const created = await stub.createAgent(authority, agentInput("ai-usage-agent-1"));
@@ -86,8 +87,14 @@ describe("OwnerControlPlane AI Gateway usage", () => {
 
       await usage.record({ gatewayLogId: "gateway-log-1", reference });
       await usage.record({ gatewayLogId: "gateway-log-1", reference });
+      const noGatewayUsage = new AiGatewayUsage(database, state.storage, {
+        gateway: () => ({ getLog }),
+      });
+      await noGatewayUsage.record({ gatewayLogId: "gateway-log-skipped", reference });
+      await noGatewayUsage.reconcilePending(Date.now());
 
       expect(getLog).toHaveBeenCalledTimes(1);
+      expect(noGatewayUsage.nextReconciliationAt()).toBeNull();
       expect(
         state.storage.sql
           .exec(
@@ -106,41 +113,9 @@ describe("OwnerControlPlane AI Gateway usage", () => {
         gateway_log_id: "gateway-log-1",
         input_tokens: 123,
         output_tokens: 45,
-        reservation_microusd: admission.permit.budgetReservation.aiSpendReservationMicrousd,
+        reservation_microusd: 50_000,
         status: "settled",
       });
-      expect(currentFleetAiSpendMicrousd(database, Date.now())).toBe(
-        admission.permit.budgetReservation.aiSpendReservationMicrousd,
-      );
-
-      state.storage.sql.exec(
-        "UPDATE run_admissions SET created_at = ? WHERE run_id = ?",
-        Date.now() - admission.permit.budgetReservation.maxDurationSeconds * 1_000 - 1,
-        admission.permit.runId,
-      );
-      expect(currentFleetAiSpendMicrousd(database, Date.now())).toBe(12_345);
-
-      const boundaryTime = Date.now();
-      state.storage.sql.exec(
-        `UPDATE ai_gateway_calls
-         SET status = 'pending',
-             cost_microusd = NULL,
-             settled_at = NULL,
-             recorded_at = ?,
-             next_reconciliation_at = ?
-         WHERE gateway_log_id = ?`,
-        boundaryTime,
-        boundaryTime + 1_000,
-        "gateway-log-1",
-      );
-      state.storage.sql.exec(
-        "UPDATE run_admissions SET created_at = ? WHERE run_id = ?",
-        boundaryTime - RUN_BUDGET_WINDOW_MS - 1,
-        admission.permit.runId,
-      );
-      expect(currentFleetAiSpendMicrousd(database, boundaryTime)).toBe(
-        admission.permit.budgetReservation.aiSpendReservationMicrousd,
-      );
     });
   });
 });

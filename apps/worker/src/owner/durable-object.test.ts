@@ -4,6 +4,7 @@ import {
   AUTONOMY_WRITE_SCOPE,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
+  RUNS_WRITE_SCOPE,
   runBudgetReservationSchema,
 } from "@crewhelm/contracts";
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
@@ -71,7 +72,7 @@ describe("OwnerControlPlane", () => {
     await expect(stub.status(authority)).resolves.toEqual({
       ok: true,
       status: {
-        schemaVersion: 11,
+        schemaVersion: 12,
         status: "ready",
       },
     });
@@ -139,35 +140,60 @@ describe("OwnerControlPlane", () => {
           name: "0010_famous_george_stacy",
           version: 11,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0011_remove_fleet_ai_budget",
+          version: 12,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });
   });
 
-  it("backfills the exact pending Gateway reservation from a populated v10 database", async () => {
+  it("removes the retired local AI budget from existing fleet configuration revisions", async () => {
+    const authority = await authorityFor("1010-ai-budget-removal", [OWNER_READ_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+
+    await expect(stub.status(authority)).resolves.toMatchObject({ ok: true });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE fleet_configuration_revisions
+         SET configuration = json_set(
+           configuration,
+           '$.ai',
+           json('{"dailySpendMicrousd":5000000,"runReservationMicrousd":50000}')
+         )`,
+      );
+      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version = 12");
+    });
+    await evictDurableObject(stub);
+
+    const current = await stub.getFleetConfiguration(authority, { target: { kind: "fleet" } });
+
+    expect(current).toMatchObject({ ok: true });
+    expect(current.ok ? Reflect.has(current.configuration.data, "ai") : true).toBe(false);
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec<{ value: string | null }>(
+            `SELECT json_type(configuration, '$.ai') AS value
+             FROM fleet_configuration_revisions
+             ORDER BY revision`,
+          )
+          .toArray(),
+      ),
+    ).resolves.toEqual([{ value: null }]);
+  });
+
+  it("backfills the pending Gateway reservation from a populated v10 database", async () => {
     const authority = await authorityFor("1011", [
       OWNER_READ_SCOPE,
       OWNER_WRITE_SCOPE,
       AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
       AUTONOMY_WRITE_SCOPE,
     ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
-    const current = await stub.getFleetConfiguration(authority, { target: { kind: "fleet" } });
-
-    if (!current.ok) {
-      throw new Error("Expected migration fixture fleet configuration.");
-    }
-
-    await expect(
-      stub.configureFleetConfiguration(authority, {
-        expectedRevision: current.configuration.revision,
-        idempotencyKey: "configure-migration-reservation-1011",
-        mode: "apply",
-        patch: { ai: { runReservationMicrousd: 250_000 } },
-        target: { kind: "fleet" },
-      }),
-    ).resolves.toMatchObject({ applied: true, ok: true });
-
     const created = await stub.createAgent(authority, agentInput("migration-reservation-agent"));
 
     if (!created.ok) {
@@ -186,10 +212,18 @@ describe("OwnerControlPlane", () => {
     if (!admission.ok || admission.state !== "issued") {
       throw new Error("Expected migration reservation admission.");
     }
-    expect(admission.permit.budgetReservation.aiSpendReservationMicrousd).toBe(250_000);
-
     await runInDurableObject(stub, (_instance, state) => {
       const recordedAt = Date.now();
+      state.storage.sql.exec(
+        `UPDATE run_admissions
+         SET budget_reservation = json_set(
+           budget_reservation,
+           '$.aiSpendReservationMicrousd',
+           50000
+         )
+         WHERE run_id = ?`,
+        admission.permit.runId,
+      );
       state.storage.sql.exec("DROP TABLE ai_gateway_calls");
       state.storage.sql.exec(
         `CREATE TABLE ai_gateway_calls (
@@ -221,13 +255,13 @@ describe("OwnerControlPlane", () => {
         recordedAt,
         recordedAt,
       );
-      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version = 11");
+      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 11");
     });
     await evictDurableObject(stub);
 
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 11, status: "ready" },
+      status: { schemaVersion: 12, status: "ready" },
     });
     await expect(
       runInDurableObject(stub, (_instance, state) =>
@@ -240,7 +274,7 @@ describe("OwnerControlPlane", () => {
           )
           .one(),
       ),
-    ).resolves.toEqual({ reservation_microusd: 250_000 });
+    ).resolves.toEqual({ reservation_microusd: 50_000 });
   });
 
   it("fails closed for missing scopes and extra authority data", async () => {
@@ -288,12 +322,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 11, status: "ready" },
+      status: { schemaVersion: 12, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 11, status: "ready" },
+      status: { schemaVersion: 12, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -363,6 +397,7 @@ describe("OwnerControlPlane", () => {
       OWNER_READ_SCOPE,
       OWNER_WRITE_SCOPE,
       AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
     ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const created = await stub.createAgent(authority, agentInput("migration-v2-agent"));
@@ -510,7 +545,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 11, status: "ready" },
+      status: { schemaVersion: 12, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       const rows = [
@@ -580,6 +615,7 @@ describe("OwnerControlPlane", () => {
         { version: 9 },
         { version: 10 },
         { version: 11 },
+        { version: 12 },
       ]);
     });
   });
@@ -589,6 +625,7 @@ describe("OwnerControlPlane", () => {
       OWNER_READ_SCOPE,
       OWNER_WRITE_SCOPE,
       AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
     ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const created = await stub.createAgent(authority, agentInput("migration-v4-agent"));
@@ -711,7 +748,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 11, status: "ready" },
+      status: { schemaVersion: 12, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       expect(
@@ -807,7 +844,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec(
         `INSERT INTO control_plane_migrations (version, name, checksum, applied_at)
          VALUES (?, ?, ?, ?)`,
-        12,
+        13,
         "future_migration",
         "f".repeat(64),
         Date.now(),
@@ -855,6 +892,7 @@ describe("OwnerControlPlane", () => {
       OWNER_READ_SCOPE,
       OWNER_WRITE_SCOPE,
       AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
     ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const created = await stub.createAgent(authority, agentInput("invalid-journal-agent"));

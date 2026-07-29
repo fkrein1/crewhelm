@@ -4,6 +4,7 @@ import {
   COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
   MAXIMUM_RUN_OUTPUT_CHARACTERS,
   OWNER_WRITE_SCOPE,
+  RUNS_WRITE_SCOPE,
   crewAgentObjectName,
   ownerAuthoritySchema,
   type CreateAgentInput,
@@ -22,6 +23,7 @@ import {
 } from "./module.js";
 import { deriveOwnerKey } from "../../owner/identity.js";
 import { digestRunPrompt } from "./protocol.js";
+import { admittedTurnMetadataSchema } from "./schema.js";
 import {
   LARGE_TEST_PROMPT,
   SLOW_TEST_PROMPT,
@@ -33,7 +35,7 @@ import {
 
 async function authorityFor(
   subject: string,
-  scopes = [OWNER_WRITE_SCOPE, AGENTS_READ_SCOPE, AGENTS_WRITE_SCOPE],
+  scopes = [OWNER_WRITE_SCOPE, AGENTS_READ_SCOPE, AGENTS_WRITE_SCOPE, RUNS_WRITE_SCOPE],
 ): Promise<OwnerAuthority> {
   return ownerAuthoritySchema.parse({
     clientId: "https://client.example/mcp.json",
@@ -775,7 +777,7 @@ describe("CrewAgent admitted execution", () => {
     );
   });
 
-  it("resumes the same submission after admission redemption wins a cross-object crash", async () => {
+  it("normalizes retained run state while resuming after an upgrade", async () => {
     const authority = await authorityFor("crew-agent-604");
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const created = await controlPlane.createAgent(authority, agentInput("crew-agent-create-604"));
@@ -814,7 +816,10 @@ describe("CrewAgent admitted execution", () => {
 
     await runInDurableObject(stub, async (_agent, state) => {
       await state.storage.put(`crewhelm:run:${admission.permit.runId}`, {
-        budgetReservation: admission.permit.budgetReservation,
+        budgetReservation: {
+          ...admission.permit.budgetReservation,
+          aiSpendReservationMicrousd: 50_000,
+        },
         cleanupAt: acceptedAt + 24 * 60 * 60 * 1_000,
         clientId: admission.permit.clientId,
         configuration: verified.configuration,
@@ -825,6 +830,20 @@ describe("CrewAgent admitted execution", () => {
         promptDigest: admission.permit.promptDigest,
       });
     });
+    expect(
+      admittedTurnMetadataSchema.parse({
+        crewhelmRun: {
+          budgetReservation: {
+            ...admission.permit.budgetReservation,
+            aiSpendReservationMicrousd: 50_000,
+          },
+          configuration: verified.configuration,
+          promptCharacters: prompt.length,
+          promptDigest: admission.permit.promptDigest,
+          runId: admission.permit.runId,
+        },
+      }).crewhelmRun.budgetReservation,
+    ).toEqual(admission.permit.budgetReservation);
     await expect(controlPlane.confirmRunAdmission(admission.permit)).resolves.toMatchObject({
       confirmed: true,
       ok: true,
@@ -839,6 +858,13 @@ describe("CrewAgent admitted execution", () => {
       run: {
         runId: admission.permit.runId,
       },
+    });
+    await runInDurableObject(stub, async (_agent, state) => {
+      const record = await state.storage.get<Record<string, unknown>>(
+        `crewhelm:run:${admission.permit.runId}`,
+      );
+
+      expect(JSON.stringify(record)).not.toContain("aiSpendReservationMicrousd");
     });
     await completedRun(controlPlane, authority, admission.permit.runId);
   });

@@ -12,8 +12,6 @@ import {
   runnableAgentModelSchema,
 } from "./run-admission.js";
 
-export const DEFAULT_FLEET_AI_DAILY_SPEND_MICROUSD = 1_000_000;
-export const DEFAULT_FLEET_AI_RUN_RESERVATION_MICROUSD = 50_000;
 export const DEFAULT_FLEET_INTEGRATION_CALLS_PER_DAY = 300;
 export const DEFAULT_FLEET_INTEGRATION_CALLS_PER_THIRTY_DAYS = 8_000;
 export const DEFAULT_FLEET_DUPLICATE_TOOL_CALL_LIMIT = 2;
@@ -23,7 +21,6 @@ export const DEFAULT_FLEET_MAXIMUM_TOOL_CONCURRENCY_PER_GRANT = 1;
 export const DEFAULT_FLEET_MINIMUM_SCHEDULE_INTERVAL_SECONDS = 60;
 export const MAXIMUM_FLEET_CONFIGURATION_REVISIONS = 1_000;
 export const MAXIMUM_FLEET_INTEGRATION_CALLS_PER_WINDOW = 1_000_000;
-export const MAXIMUM_FLEET_SPEND_MICROUSD = 1_000_000_000_000;
 
 export const defaultFleetExecutionLimits = {
   maxDurationSeconds: 300,
@@ -32,13 +29,6 @@ export const defaultFleetExecutionLimits = {
   maxTurns: 8,
 } as const;
 
-const fleetSpendMicrousdSchema = z
-  .number()
-  .int()
-  .min(1)
-  .max(MAXIMUM_FLEET_SPEND_MICROUSD)
-  .safe()
-  .describe("Whole micro-US dollars; 1 USD equals 1,000,000 microUSD.");
 const fleetIntegrationCallLimitSchema = z
   .number()
   .int()
@@ -68,14 +58,6 @@ const allowedFleetModelsSchema = z
 
 export const fleetConfigurationDataSchema = z
   .strictObject({
-    ai: z.strictObject({
-      dailySpendMicrousd: fleetSpendMicrousdSchema.describe(
-        "Maximum estimated AI spend in one day, bounded by the installation AI Gateway ceiling.",
-      ),
-      runReservationMicrousd: fleetSpendMicrousdSchema.describe(
-        "Amount reserved before admitting one run and replaced by settled Gateway cost.",
-      ),
-    }),
     execution: fleetExecutionLimitsSchema.describe(
       "Fleet ceilings applied to every run; lower Agent limits continue to win.",
     ),
@@ -128,11 +110,6 @@ export const fleetConfigurationDataSchema = z
   })
   .refine(
     (configuration) =>
-      configuration.ai.runReservationMicrousd <= configuration.ai.dailySpendMicrousd,
-    "Run reservation must not exceed the daily AI spend limit.",
-  )
-  .refine(
-    (configuration) =>
       configuration.integrations.callsPerDay <= configuration.integrations.callsPerThirtyDays,
     "Daily integration calls must not exceed the thirty-day limit.",
   )
@@ -153,21 +130,6 @@ export const fleetConfigurationDataSchema = z
 
 export const fleetConfigurationPatchSchema = z
   .strictObject({
-    ai: z
-      .strictObject({
-        dailySpendMicrousd: fleetSpendMicrousdSchema
-          .describe(
-            "New rolling daily AI spend limit in microUSD; 1 USD is 1,000,000. Cannot exceed the installation AI Gateway ceiling.",
-          )
-          .optional(),
-        runReservationMicrousd: fleetSpendMicrousdSchema
-          .describe(
-            "New provisional microUSD reservation per admitted run; settled Gateway cost replaces it.",
-          )
-          .optional(),
-      })
-      .describe("AI spend controls.")
-      .optional(),
     execution: fleetExecutionLimitsSchema
       .partial()
       .describe("Fleet-wide per-run ceilings; lower Agent-specific limits still win.")
@@ -239,7 +201,6 @@ export const fleetConfigurationPatchSchema = z
   })
   .refine(
     (patch) =>
-      patch.ai !== undefined ||
       patch.execution !== undefined ||
       patch.integrations !== undefined ||
       patch.models !== undefined ||
@@ -300,7 +261,6 @@ export const configureFleetConfigurationInputSchema = z
 
 const fleetConfigurationErrorSchema = z.strictObject({
   code: z.enum([
-    "budget_above_installation_limit",
     "idempotency_conflict",
     "incompatible_schema",
     "insufficient_scope",
@@ -313,16 +273,9 @@ const fleetConfigurationErrorSchema = z.strictObject({
   ]),
   message: z.literal("Fleet configuration request denied."),
 });
-const installationAiDailySpendLimitSchema = fleetSpendMicrousdSchema.describe(
-  "Hard daily AI Gateway ceiling for this Crewhelm installation. Fleet configuration may lower it. To raise or replace it, rerun Crewhelm bootstrap with --ai-budget-usd <dollars>.",
-);
-
 export const getFleetConfigurationResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     configuration: fleetConfigurationSchema,
-    installationLimits: z.strictObject({
-      aiDailySpendMicrousd: installationAiDailySpendLimitSchema,
-    }),
     ok: z.literal(true),
   }),
   z.strictObject({
@@ -335,9 +288,6 @@ export const configureFleetConfigurationResultSchema = z.discriminatedUnion("ok"
   z.strictObject({
     applied: z.boolean(),
     configuration: fleetConfigurationSchema,
-    installationLimits: z.strictObject({
-      aiDailySpendMicrousd: installationAiDailySpendLimitSchema,
-    }),
     ok: z.literal(true),
   }),
   z.strictObject({

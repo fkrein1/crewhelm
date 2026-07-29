@@ -44,7 +44,6 @@ import {
   toolExecutions,
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
-import { currentFleetAiSpendMicrousd } from "../usage/index.js";
 
 const RUN_ADMISSION_ERROR = {
   error: {
@@ -123,7 +122,6 @@ function createBudgetReservation(input: {
   const maxModelCalls = Math.min(effectiveExecutionLimits.maxTurns, maxTurns + maxToolCalls);
 
   return runBudgetReservationSchema.parse({
-    aiSpendReservationMicrousd: input.configuration.data.ai.runReservationMicrousd,
     fleetConfigurationRevision: input.configuration.revision,
     integrationLimits: input.configuration.data.integrations,
     maxDurationSeconds: effectiveExecutionLimits.maxDurationSeconds,
@@ -326,14 +324,6 @@ export class RunAdmissions {
         promptCharacters: request.data.promptCharacters,
         toolGrants,
       });
-      if (
-        currentFleetAiSpendMicrousd(transaction, currentTime) +
-          budgetReservation.aiSpendReservationMicrousd >
-        fleetConfiguration.data.ai.dailySpendMicrousd
-      ) {
-        return this.#deniedRequest("budget_exhausted");
-      }
-
       const runId = `run_${crypto.randomUUID()}`;
 
       transaction

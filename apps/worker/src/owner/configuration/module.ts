@@ -1,6 +1,4 @@
 import {
-  DEFAULT_FLEET_AI_DAILY_SPEND_MICROUSD,
-  DEFAULT_FLEET_AI_RUN_RESERVATION_MICROUSD,
   DEFAULT_FLEET_DUPLICATE_TOOL_CALL_LIMIT,
   DEFAULT_FLEET_INTEGRATION_CALLS_PER_DAY,
   DEFAULT_FLEET_INTEGRATION_CALLS_PER_THIRTY_DAYS,
@@ -71,7 +69,6 @@ function mergeConfiguration(
   patch: FleetConfigurationPatch,
 ): FleetConfigurationData | null {
   const candidate = fleetConfigurationDataSchema.safeParse({
-    ai: { ...current.ai, ...patch.ai },
     execution: { ...current.execution, ...patch.execution },
     integrations: { ...current.integrations, ...patch.integrations },
     models: { ...current.models, ...patch.models },
@@ -93,11 +90,9 @@ export function deniedFleetConfiguration(code: Failure["error"]["code"]): Failur
 
 export class FleetConfigurations {
   readonly #database: Database;
-  readonly #installationAiDailyLimitMicrousd: number;
 
-  constructor(database: Database, installationAiDailyLimitMicrousd: number) {
+  constructor(database: Database) {
     this.#database = database;
-    this.#installationAiDailyLimitMicrousd = installationAiDailyLimitMicrousd;
   }
 
   currentData(): FleetConfigurationData {
@@ -115,9 +110,6 @@ export class FleetConfigurations {
 
     return getFleetConfigurationResultSchema.parse({
       configuration: this.#current(),
-      installationLimits: {
-        aiDailySpendMicrousd: this.#installationAiDailyLimitMicrousd,
-      },
       ok: true,
     });
   }
@@ -174,9 +166,6 @@ export class FleetConfigurations {
           return configureFleetConfigurationResultSchema.parse({
             applied: false,
             configuration: this.#fromRow(replay),
-            installationLimits: {
-              aiDailySpendMicrousd: this.#installationAiDailyLimitMicrousd,
-            },
             ok: true,
           });
         }
@@ -210,10 +199,6 @@ export class FleetConfigurations {
         return deniedFleetConfiguration("invalid_request");
       }
 
-      if (nextData.ai.dailySpendMicrousd > this.#installationAiDailyLimitMicrousd) {
-        return deniedFleetConfiguration("budget_above_installation_limit");
-      }
-
       if (JSON.stringify(nextData) === JSON.stringify(current.configuration)) {
         return deniedFleetConfiguration("no_changes");
       }
@@ -225,9 +210,6 @@ export class FleetConfigurations {
             configuredAt: new Date(configuredAt).toISOString(),
             data: nextData,
             revision: current.revision + 1,
-          },
-          installationLimits: {
-            aiDailySpendMicrousd: this.#installationAiDailyLimitMicrousd,
           },
           ok: true,
         });
@@ -280,9 +262,6 @@ export class FleetConfigurations {
           data: nextData,
           revision,
         },
-        installationLimits: {
-          aiDailySpendMicrousd: this.#installationAiDailyLimitMicrousd,
-        },
         ok: true,
       });
     });
@@ -316,19 +295,7 @@ export class FleetConfigurations {
   }
 
   #defaultData(): FleetConfigurationData {
-    const dailySpendMicrousd = Math.min(
-      DEFAULT_FLEET_AI_DAILY_SPEND_MICROUSD,
-      this.#installationAiDailyLimitMicrousd,
-    );
-
     return fleetConfigurationDataSchema.parse({
-      ai: {
-        dailySpendMicrousd,
-        runReservationMicrousd: Math.min(
-          DEFAULT_FLEET_AI_RUN_RESERVATION_MICROUSD,
-          dailySpendMicrousd,
-        ),
-      },
       execution: defaultFleetExecutionLimits,
       integrations: {
         callsPerDay: DEFAULT_FLEET_INTEGRATION_CALLS_PER_DAY,

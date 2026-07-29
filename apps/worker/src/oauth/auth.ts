@@ -11,7 +11,13 @@ import { drizzle } from "drizzle-orm/d1";
 import * as z from "zod";
 
 import { authSchema, mcpTokenRevocation } from "./schema.js";
-import { OAUTH_SCOPES, oauthScopesSchema, ownerScopeClaimFromOAuthClaim } from "./scopes.js";
+import {
+  OAUTH_ACCEPTED_SCOPES,
+  OAUTH_DEFAULT_SCOPES,
+  OAUTH_SCOPES,
+  acceptedOAuthScopesSchema,
+  ownerScopeClaimFromOAuthClaim,
+} from "./scopes.js";
 import type { WorkerEnv } from "../env.js";
 import { deriveOwnerKey } from "../owner/identity.js";
 
@@ -443,7 +449,7 @@ export function createCrewhelmAuth(env: WorkerEnv, origin: string) {
           allowPublicClientPrelogin: true,
           allowUnauthenticatedClientRegistration: true,
           clientRegistrationAllowedScopes: [...OAUTH_SCOPES],
-          clientRegistrationDefaultScopes: [...OAUTH_SCOPES],
+          clientRegistrationDefaultScopes: [...OAUTH_DEFAULT_SCOPES],
           codeExpiresIn: 10 * 60,
           consentPage: "/oauth/consent",
           customAccessTokenClaims: async ({ resources, scopes, user }) => {
@@ -456,7 +462,7 @@ export function createCrewhelmAuth(env: WorkerEnv, origin: string) {
               user?.id !== expectedOwnerKey ||
               resources?.length !== 1 ||
               resources[0] !== mcpResourceUrl(origin) ||
-              !oauthScopesSchema.safeParse(scopes).success
+              !acceptedOAuthScopesSchema.safeParse(scopes).success
             ) {
               throw new Error("Access token authority denied.");
             }
@@ -470,14 +476,14 @@ export function createCrewhelmAuth(env: WorkerEnv, origin: string) {
           resources: [
             {
               accessTokenTtl: 15 * 60,
-              allowedScopes: [...OAUTH_SCOPES],
+              allowedScopes: [...OAUTH_ACCEPTED_SCOPES],
               identifier: mcpResourceUrl(origin),
               name: "Crewhelm MCP",
               refreshTokenTtl: REFRESH_TOKEN_TTL_SECONDS,
             },
           ],
           resourceSeedMode: "insertOnly",
-          scopes: [...OAUTH_SCOPES],
+          scopes: [...OAUTH_ACCEPTED_SCOPES],
           silenceWarnings: {
             oauthAuthServerConfig: true,
           },
