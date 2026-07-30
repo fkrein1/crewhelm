@@ -323,6 +323,7 @@ function createDependencies(
     deploymentAssetsDirectory: assets,
     fetch: healthyDeploymentFetch(deploymentFingerprints.get(assets)),
     readEnvironment: (name) => environment[name],
+    wait: async () => {},
     runWrangler: (arguments_, options) => {
       if (arguments_[0] === "auth") {
         return Promise.resolve(success(JSON.stringify({ token: "test-token", type: "oauth" })));
@@ -583,6 +584,13 @@ describe("Cloudflare bootstrap", () => {
         "storage",
         "configuration",
         "migrations",
+        "deployment",
+        "deployment",
+        "deployment",
+        "deployment",
+        "deployment",
+        "deployment",
+        "deployment",
         "deployment",
         "deployment",
       ]);
@@ -1529,7 +1537,7 @@ describe("Cloudflare bootstrap", () => {
       .mockImplementation(async (input, init) => {
         const url = new URL(input instanceof Request ? input.url : input);
 
-        if (url.pathname === "/health" && ++healthReads >= 2 && healthReads <= 8) {
+        if (url.pathname === "/health" && ++healthReads >= 2 && healthReads <= 7) {
           return Response.json({
             deployment: { fingerprint: "b".repeat(64), protocolVersion: 1 },
             service: "crewhelm",
@@ -1545,23 +1553,61 @@ describe("Cloudflare bootstrap", () => {
         deployment: { action: "updated" },
         ok: true,
       });
-      expect(healthReads).toBe(9);
+      expect(healthReads).toBe(10);
       expect(wait.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([
-        250, 500, 1_000, 2_000, 4_000, 8_000, 16_000,
+        1_000, 1_000, 1_000, 1_000, 1_000, 2_000, 4_000, 8_000,
       ]);
       expect(
         progress
           .filter(({ message }) => message.startsWith("Checking the deployed control plane"))
           .map(({ message }) => message),
       ).toEqual([
-        "Checking the deployed control plane (attempt 1 of 8)",
-        "Checking the deployed control plane (attempt 2 of 8)",
-        "Checking the deployed control plane (attempt 3 of 8)",
-        "Checking the deployed control plane (attempt 4 of 8)",
-        "Checking the deployed control plane (attempt 5 of 8)",
-        "Checking the deployed control plane (attempt 6 of 8)",
-        "Checking the deployed control plane (attempt 7 of 8)",
-        "Checking the deployed control plane (attempt 8 of 8)",
+        "Checking the deployed control plane (attempt 1 of 10)",
+        "Checking the deployed control plane (attempt 2 of 10)",
+        "Checking the deployed control plane (attempt 3 of 10)",
+        "Checking the deployed control plane (attempt 4 of 10)",
+        "Checking the deployed control plane (attempt 5 of 10)",
+        "Checking the deployed control plane (attempt 6 of 10)",
+        "Checking the deployed control plane (attempt 7 of 10)",
+        "Checking the deployed control plane (attempt 8 of 10)",
+        "Checking the deployed control plane (attempt 9 of 10)",
+      ]);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("requires a stable Worker fingerprint after mixed edge responses", async () => {
+    const fixture = await createDeploymentAssets();
+    const dependencies = createDependencies(fixture.assets, successfulReuseWrangler());
+    const normalFetch = dependencies.fetch;
+    const wait = vi.fn<(milliseconds: number) => Promise<void>>(async () => {});
+    let healthReads = 0;
+    dependencies.wait = wait;
+    dependencies.fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+
+        if (url.pathname === "/health" && ++healthReads === 4) {
+          return Response.json({
+            deployment: { fingerprint: "b".repeat(64), protocolVersion: 1 },
+            service: "crewhelm",
+            status: "ok",
+          });
+        }
+
+        return normalFetch(input, init);
+      });
+
+    try {
+      await expect(bootstrapDeployment(REUSE_OPTIONS, dependencies)).resolves.toMatchObject({
+        deployment: { action: "updated" },
+        ok: true,
+      });
+      expect(healthReads).toBe(10);
+      expect(wait.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([
+        1_000, 1_000, 1_000, 1_000, 1_000, 2_000, 4_000, 8_000,
       ]);
     } finally {
       await rm(fixture.root, { force: true, recursive: true });

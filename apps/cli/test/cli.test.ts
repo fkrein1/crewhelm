@@ -124,6 +124,7 @@ function createHarness(
     fetch,
     readEnvironment: () => undefined,
     runWrangler: vi.fn<CliDependencies["runWrangler"]>(),
+    wait: async () => {},
     writeError: (text) => errors.push(text),
     writeOutput: (text) => output.push(text),
     ...overrides,

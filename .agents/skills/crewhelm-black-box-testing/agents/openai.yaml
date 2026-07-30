@@ -1,0 +1,4 @@
+interface:
+  display_name: "Crewhelm black-box testing"
+  short_description: "Run opt-in remote Crewhelm rehearsals."
+  default_prompt: "Run an on-demand black-box rehearsal of the requested Crewhelm feature against the dedicated test installation, verify recovery and end state, and report bounded evidence."
