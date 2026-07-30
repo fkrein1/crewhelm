@@ -42,6 +42,7 @@ export const admittedRunRecordSchema = z.strictObject({
   idempotencyKey: runAdmissionIdempotencyKeySchema,
   promptCharacters: z.number().int().positive(),
   promptDigest: z.string().regex(/^[0-9a-f]{64}$/),
+  scheduleRevision: z.number().int().positive().nullable().default(null),
 });
 
 export const admittedTurnMetadataSchema = z.strictObject({

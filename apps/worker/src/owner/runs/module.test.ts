@@ -106,6 +106,7 @@ describe("OwnerControlPlane runs", () => {
           idempotencyKey: `run-list-filter-${trigger}`,
           promptCharacters: prompt.length,
           promptDigest: await digestRunPrompt(prompt),
+          scheduleRevision: trigger === "schedule" ? 1 : null,
           trigger,
         });
       }),
@@ -437,6 +438,7 @@ describe("OwnerControlPlane runs", () => {
         agentRevision: created.agent.revision,
         expiresAt: replay.permit.expiresAt,
         runId: first.permit.runId,
+        scheduleRevision: null,
         status: "redeemed",
       },
       created: false,
@@ -560,6 +562,24 @@ describe("OwnerControlPlane runs", () => {
       stub.createRunAdmission(authority, {
         ...input,
         promptDigest: await digestRunPrompt("Conflicting task."),
+      }),
+    ).resolves.toEqual(fixedRunAdmissionFailure("idempotency_conflict"));
+
+    const scheduledInput = {
+      ...input,
+      idempotencyKey: "admit-scheduled-run-231",
+      scheduleRevision: 1,
+      trigger: "schedule" as const,
+    };
+    await expect(stub.createRunAdmission(authority, scheduledInput)).resolves.toMatchObject({
+      created: true,
+      ok: true,
+      state: "issued",
+    });
+    await expect(
+      stub.createRunAdmission(authority, {
+        ...scheduledInput,
+        scheduleRevision: 2,
       }),
     ).resolves.toEqual(fixedRunAdmissionFailure("idempotency_conflict"));
 

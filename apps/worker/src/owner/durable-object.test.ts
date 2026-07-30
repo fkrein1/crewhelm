@@ -89,7 +89,7 @@ describe("OwnerControlPlane", () => {
           },
         },
         configurationRevision: 1,
-        schemaVersion: 15,
+        schemaVersion: 17,
         status: "ready",
         usage: {
           agents: { active: 0, total: 0 },
@@ -197,6 +197,16 @@ describe("OwnerControlPlane", () => {
           name: "0014_closed_patriot",
           version: 15,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0015_simple_thaddeus_ross",
+          version: 16,
+        },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0016_skinny_rattler",
+          version: 17,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });
@@ -258,6 +268,7 @@ describe("OwnerControlPlane", () => {
       ownerKey: admission.permit.ownerKey,
       promptDigest: admission.permit.promptDigest,
       runId: admission.permit.runId,
+      scheduleRevision: admission.permit.scheduleRevision,
     };
     const occurredAt = Date.now() + 10;
     const completed = {
@@ -349,6 +360,15 @@ describe("OwnerControlPlane", () => {
       stub.recordAgentInboxRun({
         ...completed,
         reference: { ...reference, promptDigest: "0".repeat(64) },
+      }),
+    ).resolves.toMatchObject({
+      error: { code: "invalid_admission" },
+      ok: false,
+    });
+    await expect(
+      stub.recordAgentInboxRun({
+        ...completed,
+        reference: { ...reference, scheduleRevision: 1 },
       }),
     ).resolves.toMatchObject({
       error: { code: "invalid_admission" },
@@ -726,7 +746,7 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 15, status: "ready" },
+      status: { schemaVersion: 17, status: "ready" },
     });
     await expect(
       runInDurableObject(stub, (_instance, state) =>
@@ -787,12 +807,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 15, status: "ready" },
+      status: { schemaVersion: 17, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 15, status: "ready" },
+      status: { schemaVersion: 17, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -1012,7 +1032,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 15, status: "ready" },
+      status: { schemaVersion: 17, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       const rows = [
@@ -1086,6 +1106,8 @@ describe("OwnerControlPlane", () => {
         { version: 13 },
         { version: 14 },
         { version: 15 },
+        { version: 16 },
+        { version: 17 },
       ]);
     });
   });
@@ -1220,7 +1242,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 15, status: "ready" },
+      status: { schemaVersion: 17, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       expect(
@@ -1316,7 +1338,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec(
         `INSERT INTO control_plane_migrations (version, name, checksum, applied_at)
          VALUES (?, ?, ?, ?)`,
-        16,
+        18,
         "future_migration",
         "f".repeat(64),
         Date.now(),

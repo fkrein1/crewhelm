@@ -957,6 +957,7 @@ export class CrewAgent extends Think {
         idempotencyKey: permit.idempotencyKey,
         promptCharacters: prompt.length,
         promptDigest: permit.promptDigest,
+        scheduleRevision: permit.scheduleRevision,
       });
 
       await this.ctx.storage.put(runRecordKey(permit.runId), record);
@@ -1634,6 +1635,7 @@ export class CrewAgent extends Think {
           ownerKey: record.configuration.ownerKey,
           promptDigest: record.promptDigest,
           runId,
+          scheduleRevision: record.scheduleRevision,
         },
       }),
     );
@@ -1830,6 +1832,7 @@ export class CrewAgent extends Think {
                 ownerKey: reference.ownerKey,
                 promptDigest: reference.promptDigest,
                 runId: reference.runId,
+                scheduleRevision: record.scheduleRevision,
               },
             }),
           ),
@@ -2367,6 +2370,7 @@ export class CrewAgent extends Think {
       ownerKey: record.configuration.ownerKey,
       promptDigest: record.promptDigest,
       runId: metadata.runId,
+      scheduleRevision: record.scheduleRevision,
     };
   }
 
@@ -2877,6 +2881,7 @@ export class CrewAgent extends Think {
       record.promptDigest === permit.promptDigest &&
       record.clientId === permit.clientId &&
       record.idempotencyKey === permit.idempotencyKey &&
+      record.scheduleRevision === permit.scheduleRevision &&
       JSON.stringify(record.budgetReservation) === JSON.stringify(permit.budgetReservation) &&
       this.#reservationMatchesPrompt(
         record.budgetReservation,
@@ -2900,6 +2905,7 @@ export class CrewAgent extends Think {
       record.idempotencyKey === capability.idempotencyKey &&
       record.promptCharacters === promptCharacters &&
       record.promptDigest === capability.promptDigest &&
+      record.scheduleRevision === capability.scheduleRevision &&
       JSON.stringify(record.budgetReservation) === JSON.stringify(capability.budgetReservation) &&
       this.#reservationMatchesPrompt(
         record.budgetReservation,

@@ -23,6 +23,7 @@ import {
   ownerClientIdSchema,
   ownerKeySchema,
 } from "./control-plane.js";
+import { agentScheduleRevisionNumberSchema } from "./schedule-revision.js";
 import {
   compactDiagnosticSchema,
   diagnosticCertaintySchema,
@@ -99,11 +100,28 @@ export const createRunAdmissionInputSchema = z
     prompt: runPromptSchema.optional(),
     promptCharacters: z.number().int().min(1).max(MAXIMUM_RUN_PROMPT_CHARACTERS),
     promptDigest: sha256DigestSchema,
+    scheduleRevision: agentScheduleRevisionNumberSchema.nullable().default(null),
     trigger: runTriggerSchema.default("manual"),
   })
-  .refine((input) => input.prompt === undefined || input.prompt.length === input.promptCharacters, {
-    message: "Prompt character count must match the admitted prompt.",
-    path: ["promptCharacters"],
+  .superRefine((input, context) => {
+    if (input.prompt !== undefined && input.prompt.length !== input.promptCharacters) {
+      context.addIssue({
+        code: "custom",
+        message: "Prompt character count must match the admitted prompt.",
+        path: ["promptCharacters"],
+      });
+    }
+
+    if (
+      (input.trigger === "manual" && input.scheduleRevision !== null) ||
+      (input.trigger === "schedule" && input.scheduleRevision === null)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Schedule revision must match the run trigger.",
+        path: ["scheduleRevision"],
+      });
+    }
   });
 
 export const runBudgetReservationSchema = z.strictObject({
@@ -146,6 +164,7 @@ export const runAdmissionPermitSchema = z.strictObject({
   ownerKey: ownerKeySchema,
   promptDigest: sha256DigestSchema,
   runId: runIdSchema,
+  scheduleRevision: agentScheduleRevisionNumberSchema.nullable().default(null),
 });
 
 export const aiGatewayLogIdSchema = z.string().trim().min(1).max(255);
@@ -240,6 +259,7 @@ const runReceiverCapabilityBaseSchema = z.strictObject({
   ownerKey: ownerKeySchema,
   promptDigest: sha256DigestSchema,
   runId: runIdSchema,
+  scheduleRevision: agentScheduleRevisionNumberSchema.nullable().default(null),
   target: z.literal("none"),
 });
 
@@ -360,6 +380,7 @@ export const verifyActiveRunAdmissionInputSchema = z.strictObject({
   ownerKey: ownerKeySchema,
   promptDigest: sha256DigestSchema,
   runId: runIdSchema,
+  scheduleRevision: agentScheduleRevisionNumberSchema.nullable().default(null),
 });
 
 export const verifyActiveRunAdmissionResultSchema = redeemRunReceiverCapabilityResultSchema;

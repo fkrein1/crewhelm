@@ -500,6 +500,7 @@ export class AgentInbox {
       admission.agentRevision !== request.data.reference.agentRevision ||
       admission.idempotencyKey !== request.data.reference.idempotencyKey ||
       admission.promptDigest !== request.data.reference.promptDigest ||
+      admission.scheduleRevision !== request.data.reference.scheduleRevision ||
       (admission.status !== "redeemed" &&
         !(request.data.event.runStatus === "cancelled" && admission.cancelledAt !== null))
     ) {
@@ -568,7 +569,7 @@ export class AgentInbox {
       retryAt: null,
       runId: admission.runId,
       runStatus: event.runStatus,
-      scheduleRevision: null,
+      scheduleRevision: admission.scheduleRevision,
       scheduledAt: null,
       trigger: admission.trigger,
       version: event.occurredAt,

@@ -180,6 +180,39 @@ describe("OwnerControlPlane Agent schedules", () => {
         ],
       }),
     ]);
+
+    const outcomes = await vi.waitFor(
+      async () =>
+        Promise.all(
+          [first, second].map(async (created) => {
+            const inbox = await controlPlane.agentInbox(authority, {
+              action: "list",
+              agentId: created.agent.id,
+              includeAcknowledged: true,
+              kinds: ["outcome"],
+              limit: 1,
+            });
+
+            if (!inbox.ok || inbox.action !== "list" || inbox.items[0] === undefined) {
+              throw new Error("Expected scheduled Agent inbox outcome.");
+            }
+
+            return inbox.items[0];
+          }),
+        ),
+      { interval: 25, timeout: 5_000 },
+    );
+
+    expect(outcomes).toEqual([
+      expect.objectContaining({
+        configuration: expect.objectContaining({ scheduleRevision: 1 }),
+        runId: schedules[0].schedule.lastRunId,
+      }),
+      expect.objectContaining({
+        configuration: expect.objectContaining({ scheduleRevision: 1 }),
+        runId: schedules[1].schedule.lastRunId,
+      }),
+    ]);
   });
 
   it("surfaces deferred scheduled work with the limiting policy and retry time", async () => {

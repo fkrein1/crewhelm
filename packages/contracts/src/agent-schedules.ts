@@ -8,12 +8,12 @@ import {
 import { runIdSchema } from "./capabilities.js";
 import { agentInboxDeferredReasonSchema } from "./diagnostics.js";
 import { runPromptSchema } from "./run-admission.js";
+import { agentScheduleRevisionNumberSchema } from "./schedule-revision.js";
 
 export const MINIMUM_AGENT_SCHEDULE_INTERVAL_SECONDS = 60;
 export const MAXIMUM_AGENT_SCHEDULE_INTERVAL_SECONDS = 7 * 24 * 60 * 60;
 export const MAXIMUM_DUE_AGENT_SCHEDULES_PER_ALARM = 25;
 
-export const agentScheduleRevisionNumberSchema = z.number().int().positive().safe();
 export const agentScheduleConfigurationSchema = z.strictObject({
   intervalSeconds: z
     .number()

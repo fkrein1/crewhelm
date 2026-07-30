@@ -4,6 +4,7 @@ import { runIdSchema, sha256DigestSchema } from "./capabilities.js";
 import { agentIdSchema, agentRevisionNumberSchema, ownerKeySchema } from "./control-plane.js";
 import { fleetConfigurationRevisionNumberSchema } from "./fleet-configuration.js";
 import { runAdmissionIdempotencyKeySchema } from "./run-admission.js";
+import { agentScheduleRevisionNumberSchema } from "./schedule-revision.js";
 import { agentInboxDeferredReasonSchema } from "./diagnostics.js";
 
 export const MAXIMUM_AGENT_INBOX_ITEMS = 25;
@@ -167,6 +168,7 @@ export const recordAgentInboxRunInputSchema = z
       ownerKey: ownerKeySchema,
       promptDigest: sha256DigestSchema,
       runId: runIdSchema,
+      scheduleRevision: agentScheduleRevisionNumberSchema.nullable().default(null),
     }),
   })
   .superRefine((input, context) => {

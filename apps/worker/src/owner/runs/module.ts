@@ -194,6 +194,7 @@ function canonicalRequest(input: {
   expectedRevision: number;
   promptCharacters: number;
   promptDigest: string;
+  scheduleRevision: number | null;
   trigger: "manual" | "schedule";
 }): string {
   return JSON.stringify({
@@ -201,6 +202,7 @@ function canonicalRequest(input: {
     expectedRevision: input.expectedRevision,
     promptCharacters: input.promptCharacters,
     promptDigest: input.promptDigest,
+    ...(input.scheduleRevision === null ? {} : { scheduleRevision: input.scheduleRevision }),
     trigger: input.trigger,
   });
 }
@@ -303,6 +305,7 @@ export class RunAdmissions {
             ownerKey: authority.ownerKey,
             promptDigest: existing.promptDigest,
             runId: existing.runId,
+            scheduleRevision: existing.scheduleRevision,
           }),
           state: "issued",
         });
@@ -395,6 +398,7 @@ export class RunAdmissions {
           promptDigest: request.data.promptDigest,
           requestDigest,
           runId,
+          scheduleRevision: request.data.scheduleRevision,
           status: "issued",
           trigger: request.data.trigger,
         })
@@ -423,6 +427,7 @@ export class RunAdmissions {
           ownerKey: authority.ownerKey,
           promptDigest: request.data.promptDigest,
           runId,
+          scheduleRevision: request.data.scheduleRevision,
         }),
         state: "issued",
       });
@@ -742,6 +747,7 @@ export class RunAdmissions {
         row.clientId !== request.data.clientId ||
         row.idempotencyKey !== request.data.idempotencyKey ||
         row.promptDigest !== request.data.promptDigest ||
+        row.scheduleRevision !== request.data.scheduleRevision ||
         JSON.stringify(row.budgetReservation) !== JSON.stringify(request.data.budgetReservation) ||
         !this.#admissionConfigurationIsActive(transaction, row)
       ) {
@@ -798,6 +804,7 @@ export class RunAdmissions {
       row.agentRevision !== capability.data.agentRevision ||
       row.idempotencyKey !== capability.data.idempotencyKey ||
       row.promptDigest !== capability.data.promptDigest ||
+      row.scheduleRevision !== capability.data.scheduleRevision ||
       JSON.stringify(row.budgetReservation) !== JSON.stringify(capability.data.budgetReservation) ||
       (capability.data.action === "resume" &&
         (row.clientId !== capability.data.clientId ||
@@ -1106,6 +1113,7 @@ export class RunAdmissions {
       row.agentId === permit.agentId &&
       row.agentRevision === permit.agentRevision &&
       row.promptDigest === permit.promptDigest &&
+      row.scheduleRevision === permit.scheduleRevision &&
       JSON.stringify(row.budgetReservation) === JSON.stringify(permit.budgetReservation) &&
       row.expiresAt === Date.parse(permit.expiresAt)
     );
@@ -1122,6 +1130,7 @@ export class RunAdmissions {
     ownerKey: string;
     promptDigest: string;
     runId: string;
+    scheduleRevision: number | null;
   }): RunAdmissionPermit {
     return runAdmissionPermitSchema.parse({
       agentId: input.agentId,
@@ -1137,6 +1146,7 @@ export class RunAdmissions {
       ownerKey: input.ownerKey,
       promptDigest: input.promptDigest,
       runId: input.runId,
+      scheduleRevision: input.scheduleRevision,
     });
   }
 
