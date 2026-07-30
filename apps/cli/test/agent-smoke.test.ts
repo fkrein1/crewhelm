@@ -442,6 +442,35 @@ async function runSmoke(
 }
 
 describe("disposable Agent lifecycle smoke", () => {
+  it("waits for browser-edge propagation before opening authorization", async () => {
+    const harness = smokeHarness();
+    const events: string[] = [];
+    const approve = approveAuthorization(harness.openedUrls);
+
+    const report = await runAgentSmoke(
+      {
+        authorizationDelayMs: 15_000,
+        origin: parseDeploymentOrigin(origin),
+        runTimeoutMs: 3_000,
+        timeoutMs: 1_000,
+      },
+      {
+        expectedDeploymentFingerprint: deploymentFingerprint,
+        fetch: harness.fetch,
+        openUrl: async (url) => {
+          events.push("open");
+          await approve(url);
+        },
+        wait: async (milliseconds) => {
+          events.push(`wait:${milliseconds}`);
+        },
+      },
+    );
+
+    expect(report.ok).toBe(true);
+    expect(events.slice(0, 2)).toEqual(["wait:15000", "open"]);
+  });
+
   it("uses Full control for one zero-grant bounded run, cleans up, and revokes access", async () => {
     const harness = smokeHarness();
     const report = await runSmoke(harness, { wait: async () => {} });

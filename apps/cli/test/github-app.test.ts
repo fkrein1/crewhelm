@@ -68,8 +68,21 @@ describe("GitHub App setup", () => {
           expect(wrongHostStatus).toBe(404);
           const setupResponse = await globalThis.fetch(setupUrl);
           const body = await setupResponse.text();
+          const stylesheet = await globalThis.fetch(new URL("/assets/crewhelm.css", setupUrl));
           const manifestAttribute = body.match(/name="manifest" value="([^"]+)"/)?.[1];
           const action = body.match(/action="([^"]+)"/)?.[1];
+
+          expect(setupResponse.headers.get("content-security-policy")).toContain(
+            "style-src 'self'",
+          );
+          expect(setupResponse.headers.get("content-security-policy")).not.toContain(
+            "unsafe-inline",
+          );
+          expect(body).toContain('href="/assets/crewhelm.css"');
+          expect(body).not.toContain("<body style=");
+          expect(stylesheet.headers.get("cache-control")).toBe("private, max-age=600");
+          expect(stylesheet.headers.get("content-type")).toBe("text/css; charset=utf-8");
+          expect(await stylesheet.text()).toContain("place-items: center");
 
           if (!manifestAttribute || !action) {
             throw new Error("Expected GitHub App setup form.");
@@ -84,6 +97,8 @@ describe("GitHub App setup", () => {
           const callback = await globalThis.fetch(redirectUrl);
 
           expect(callback.status).toBe(200);
+          expect(callback.headers.get("content-type")).toBe("text/html; charset=utf-8");
+          expect(await callback.text()).toContain("GitHub App connected");
         },
         writeOutput: (text) => output.push(text),
       },

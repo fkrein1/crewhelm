@@ -28,6 +28,12 @@ import {
   writeInstallation,
   type Installation,
 } from "./installation.js";
+import {
+  createInstallationSmokeFailure,
+  installationSmokeReportSchema,
+  runInstallationSmoke,
+  type InstallationSmokeReport,
+} from "./installation-smoke.js";
 import { createCliPresentation, type CliPresentation } from "./presentation.js";
 import {
   runStandingIntegrationSmoke,
@@ -136,6 +142,35 @@ function formatStandingIntegrationSmokeReport(
       : "";
 
   return `${formatDoctorReport(report.public, presentation)}${smokeChecks}${connection}${fixture}${schedule}${draft}${cleanup}`;
+}
+
+function formatInstallationSmokeReport(
+  report: InstallationSmokeReport,
+  presentation: CliPresentation,
+): string {
+  const deployment =
+    report.deployment === undefined
+      ? ""
+      : !("stage" in report.deployment)
+        ? `Created isolated Worker ${report.deployment.deployment.workerName} and D1 ${report.deployment.database.name}.\n`
+        : `${presentation.status("fail")} installation-${report.deployment.stage}\n${report.deployment.message}\n`;
+  const agent =
+    report.agent === undefined
+      ? ""
+      : report.agent.ok
+        ? "Disposable Agent lifecycle completed.\n"
+        : "Disposable Agent lifecycle did not complete.\n";
+  const cleanup = report.cleanup.resources
+    .map((resource) => {
+      const name = resource.kind === "gateway" ? resource.id : resource.name;
+      return `${presentation.status(resource.status === "unresolved" ? "fail" : "pass")} cleanup-${resource.kind} ${name}: ${resource.status}\n`;
+    })
+    .join("");
+  const outcome = report.ok
+    ? presentation.accent("Fresh-install rehearsal passed.")
+    : `${presentation.status("fail")} Fresh-install rehearsal needs attention.`;
+
+  return `${outcome}\n${deployment}${agent}${cleanup}Recovery receipt: ${report.receiptPath}\n`;
 }
 
 function formatBootstrapReport(report: BootstrapReport, presentation: CliPresentation): string {
@@ -363,7 +398,7 @@ export async function runCli(
 
     if (command.json) {
       delete executionDependencies.createGitHubApp;
-      delete executionDependencies.openCloudflareApiTokens;
+      delete executionDependencies.requestCloudflareGatewayAuthorization;
       delete executionDependencies.promptSecret;
       delete executionDependencies.promptText;
       delete executionDependencies.reportProgress;
@@ -465,6 +500,51 @@ export async function runCli(
       command.json ? `${JSON.stringify(report)}\n` : formatAgentSmokeReport(report, presentation),
     );
     return report.ok ? 0 : 1;
+  }
+
+  if (command.kind === "installation-smoke") {
+    try {
+      const report = installationSmokeReportSchema.parse(
+        await runInstallationSmoke(
+          {
+            ...(command.accountId === undefined ? {} : { accountId: command.accountId }),
+            ...(command.aiDailySpendUsd === undefined
+              ? {}
+              : { aiDailySpendUsd: command.aiDailySpendUsd }),
+            cleanupOnly: command.cleanupOnly,
+            databaseName: command.databaseName,
+            origin: command.origin,
+            receiptPath: command.receiptPath,
+            runTimeoutMs: command.runTimeoutMs,
+            timeoutMs: command.timeoutMs,
+            workerName: command.workerName,
+          },
+          {
+            ...dependencies,
+            openUrl:
+              dependencies.openUrl ??
+              (async () => {
+                throw new Error("Browser unavailable.");
+              }),
+          },
+        ),
+      );
+      dependencies.writeOutput(
+        command.json
+          ? `${JSON.stringify(report)}\n`
+          : formatInstallationSmokeReport(report, presentation),
+      );
+      return report.ok ? 0 : 1;
+    } catch (error) {
+      dependencies.writeError(
+        command.json
+          ? `${JSON.stringify(
+              createInstallationSmokeFailure(command.receiptPath, command.cleanupOnly),
+            )}\n`
+          : `Error: ${error instanceof Error ? error.message : "Installation rehearsal failed."}\n`,
+      );
+      return 1;
+    }
   }
 
   if (command.kind === "standing-integration-smoke") {

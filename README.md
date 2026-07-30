@@ -46,8 +46,9 @@ On a fresh installation, `crewhelm up` creates a private GitHub App in your brow
 prompts for the Composio project key. Interactive setup recommends Cloudflare AI Gateway spend
 protection, asks for the daily USD limit when enabled, and also lets you skip it. The CLI applies
 packaged migrations, deploys, and diagnoses the public origin. It saves only non-secret
-coordinates in `crewhelm.installation.json`; repeat upgrades preserve deployed secrets and an
-existing Gateway route, and skip an identical Worker upload while still reconciling triggers.
+coordinates in `crewhelm.installation.json`; `crewhelm.installation.example.json` shows the shape.
+Repeat upgrades preserve deployed secrets and an existing Gateway route, and skip an identical
+Worker upload while still reconciling triggers.
 If that local file is missing but the named Worker already exists, `up` verifies its single active
 version, origin, D1 binding and provenance, and optional Gateway route before recreating the file
 and starting any deployment mutation. Conflicting or ambiguous remote state stops the upgrade.
@@ -56,12 +57,17 @@ version. `doctor` reports whether the installed Worker matches the CLI, producti
 stop before authorization when it does not, and an interactive smoke offers to run the explicit
 matching `up`. A newer Worker protocol is never replaced by an older CLI.
 
+One Cloudflare account may host multiple installations when each uses explicit, distinct Worker,
+D1, metadata, and callback coordinates. Rate-limit counters and Durable Objects remain
+Worker-specific; shared Gateways and GitHub Apps must be explicit, with every callback allowlisted.
+
 Pass `--ai-budget-usd <dollars>` to enable or change the optional Gateway hard limit. Without a
 Gateway, Crewhelm keeps run and tool-loop safeguards but has no hard dollar ceiling. Use
 `--account-id` when Wrangler can access multiple Cloudflare accounts. If Wrangler's OAuth
-credential cannot manage AI Gateways, the CLI opens Cloudflare's API token page and securely
-prompts for a scoped token with AI Gateway Edit. Environment variables remain available for
-unattended setup; see `crewhelm --help`.
+credential cannot manage AI Gateways, interactive setup prints the exact account-scoped AI Gateway
+Edit recipe, opens Cloudflare's token page, or lets the operator skip or stop. The token is hidden
+and process-only. Environment variables remain available for unattended setup; see
+`crewhelm --help`.
 
 Diagnose without deploying:
 

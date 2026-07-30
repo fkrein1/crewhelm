@@ -117,6 +117,7 @@ type AgentSmokeCheck = AgentSmokeReport["checks"][number];
 type AgentSmokeCheckName = AgentSmokeCheck["name"];
 
 export interface AgentSmokeOptions extends DoctorOptions {
+  authorizationDelayMs?: number;
   authorizationTimeoutMs?: number;
   runTimeoutMs: number;
 }
@@ -342,6 +343,9 @@ export async function runAgentSmoke(
   const wait =
     dependencies.wait ??
     ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+  if (options.authorizationDelayMs !== undefined) {
+    await wait(options.authorizationDelayMs);
+  }
   const suffix = randomFixtureSuffix();
   const fixture = {
     instructions: "Return one short plain-text acknowledgment. Do not request or call any tools.",

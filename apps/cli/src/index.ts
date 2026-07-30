@@ -3,6 +3,7 @@
 import { fileURLToPath } from "node:url";
 
 import { runCli } from "./cli.js";
+import { requestCloudflareGatewayAuthorization } from "./cloudflare-gateway-authorization.js";
 import { createGitHubApp } from "./github-app.js";
 import { openInDefaultBrowser, promptSecret, promptText } from "./interactive.js";
 import { createWranglerRunner } from "./wrangler.js";
@@ -31,8 +32,17 @@ process.exitCode = await runCli(process.argv.slice(2), {
             openUrl: dependencies.openUrl,
             writeOutput: dependencies.writeOutput,
           }),
-        openCloudflareApiTokens: () =>
-          openInDefaultBrowser(new URL("https://dash.cloudflare.com/profile/api-tokens")),
+        requestCloudflareGatewayAuthorization: (request: {
+          accountId: string;
+          canSkip: boolean;
+          workerName: string;
+        }) =>
+          requestCloudflareGatewayAuthorization(request, {
+            openUrl: openInDefaultBrowser,
+            promptSecret,
+            promptText,
+            writeOutput: dependencies.writeOutput,
+          }),
       }
     : {}),
 });
