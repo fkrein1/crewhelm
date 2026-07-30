@@ -225,16 +225,38 @@ describe("OwnerControlPlane Agent schedules", () => {
       AUTONOMY_WRITE_SCOPE,
     ]);
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
-    const created = await controlPlane.createAgent(
-      authority,
-      agentInput("schedule-inbox-agent", "Deferred Schedule Agent"),
-    );
+    const created = await controlPlane.createAgent(authority, {
+      ...agentInput("schedule-inbox-agent", "Deferred Schedule Agent"),
+      capabilities: [
+        {
+          configuration: { model: "@cf/zai-org/glm-4.7-flash" },
+          id: "inference.workers-ai",
+          schemaVersion: 1,
+        },
+      ],
+    });
     const configuration = await controlPlane.getFleetConfiguration(authority, {
       target: { kind: "fleet" },
     });
 
     if (!created.ok || !configuration.ok) {
       throw new Error("Expected deferred schedule fixtures.");
+    }
+    const restrictedConfiguration = await controlPlane.configureFleetConfiguration(authority, {
+      expectedRevision: configuration.configuration.revision,
+      idempotencyKey: "restrict-deferred-schedule-models",
+      mode: "apply",
+      patch: {
+        models: {
+          allowed: ["@cf/meta/llama-4-scout-17b-16e-instruct"],
+          default: "@cf/meta/llama-4-scout-17b-16e-instruct",
+        },
+      },
+      target: { kind: "fleet" },
+    });
+
+    if (!restrictedConfiguration.ok) {
+      throw new Error("Expected restricted model policy.");
     }
 
     await expect(
@@ -250,12 +272,6 @@ describe("OwnerControlPlane Agent schedules", () => {
       }),
     ).resolves.toMatchObject({ configured: true, ok: true });
     await runInDurableObject(controlPlane, (_instance, state) => {
-      state.storage.sql.exec(
-        "UPDATE agent_revisions SET model = ? WHERE agent_id = ? AND revision = ?",
-        "unavailable/test-model",
-        created.agent.id,
-        created.agent.revision,
-      );
       state.storage.sql.exec(
         "UPDATE agent_schedules SET next_run_at = ? WHERE agent_id = ?",
         Date.now() - 1,
@@ -285,7 +301,7 @@ describe("OwnerControlPlane Agent schedules", () => {
           agentName: "Deferred Schedule Agent",
           configuration: {
             agentRevision: created.agent.revision,
-            fleetRevision: configuration.configuration.revision,
+            fleetRevision: restrictedConfiguration.configuration.revision,
             scheduleRevision: 1,
           },
           kind: "deferred",

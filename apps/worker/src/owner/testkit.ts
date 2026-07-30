@@ -10,6 +10,7 @@ import {
 import { expect } from "vitest";
 
 import { deriveOwnerKey } from "./identity.js";
+import { workersAiCapabilityConfiguration } from "../agent-capabilities/workers-ai.js";
 
 export async function authorityFor(
   subject: string,
@@ -36,13 +37,13 @@ export function agentInput(idempotencyKey: string, name = "Inbox triage"): Creat
     },
     idempotencyKey,
     instructions: "Sort new work into a concise priority list.",
-    model: "@cf/meta/llama-4-scout-17b-16e-instruct",
+    capabilities: [workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct")],
     name,
   };
 }
 
 export function agentUpdate(
-  agent: { id: string; revision: number },
+  agent: { capabilities?: UpdateAgentInput["capabilities"]; id: string; revision: number },
   idempotencyKey: string,
   name = "Inbox coordinator",
 ): UpdateAgentInput {
@@ -57,7 +58,9 @@ export function agentUpdate(
     id: agent.id,
     idempotencyKey,
     instructions: "Coordinate the inbox with the owner's approved tools.",
-    model: "@cf/meta/llama-4-scout-17b-16e-instruct",
+    capabilities: agent.capabilities ?? [
+      workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct"),
+    ],
     name,
   };
 }

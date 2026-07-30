@@ -8,9 +8,11 @@ import {
   crewAgentObjectName,
   ownerAuthoritySchema,
   type CreateAgentInput,
+  type CrewAgentRuntimeConfig,
   type InspectRunResult,
   type OwnerAuthority,
   type ComposioToolCapabilityGrant,
+  type RunBudgetReservation,
 } from "@crewhelm/contracts";
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -22,6 +24,7 @@ import {
   isToolExecutionPermitFresh,
 } from "./module.js";
 import { deriveOwnerKey } from "../../owner/identity.js";
+import { workersAiCapabilityConfiguration } from "../../agent-capabilities/workers-ai.js";
 import { digestRunPrompt } from "./protocol.js";
 import { admittedRunRecordSchema, admittedTurnMetadataSchema } from "./schema.js";
 import {
@@ -58,7 +61,7 @@ function agentInput(idempotencyKey: string): CreateAgentInput {
     },
     idempotencyKey,
     instructions: "Return one concise, plain-text answer.",
-    model: "@cf/meta/llama-4-scout-17b-16e-instruct",
+    capabilities: [workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct")],
     name: "CrewAgent run fixture",
   };
 }
@@ -71,6 +74,29 @@ function invalidRunAdmission() {
     },
     ok: false,
   };
+}
+
+function legacyBudgetReservation(
+  reservation: RunBudgetReservation,
+  model = reservation.runtimePlan.inference.model,
+): Record<string, unknown> {
+  const legacy = structuredClone(reservation) as Record<string, unknown>;
+
+  Reflect.set(legacy, "model", model);
+  Reflect.deleteProperty(legacy, "runtimePlan");
+  return legacy;
+}
+
+function legacyRuntimeConfiguration(
+  configuration: CrewAgentRuntimeConfig,
+  model = configuration.runtimePlan.inference.model,
+): Record<string, unknown> {
+  const legacy = structuredClone(configuration) as Record<string, unknown>;
+
+  Reflect.set(legacy, "model", model);
+  Reflect.deleteProperty(legacy, "capabilities");
+  Reflect.deleteProperty(legacy, "runtimePlan");
+  return legacy;
 }
 
 async function completedRun(
@@ -922,16 +948,18 @@ describe("CrewAgent admitted execution", () => {
 
     const stub = crewAgentNamespace().getByName(crewAgentObjectName(admission.permit));
     const acceptedAt = Date.now();
+    const legacyReservation = {
+      ...legacyBudgetReservation(admission.permit.budgetReservation),
+      aiSpendReservationMicrousd: 50_000,
+    };
+    const legacyConfiguration = legacyRuntimeConfiguration(verified.configuration);
 
     await runInDurableObject(stub, async (_agent, state) => {
       await state.storage.put(`crewhelm:run:${admission.permit.runId}`, {
-        budgetReservation: {
-          ...admission.permit.budgetReservation,
-          aiSpendReservationMicrousd: 50_000,
-        },
+        budgetReservation: legacyReservation,
         cleanupAt: acceptedAt + 24 * 60 * 60 * 1_000,
         clientId: admission.permit.clientId,
-        configuration: verified.configuration,
+        configuration: legacyConfiguration,
         createdAt: acceptedAt,
         deadlineAt: acceptedAt + admission.permit.budgetReservation.maxDurationSeconds * 1_000,
         idempotencyKey: admission.permit.idempotencyKey,
@@ -964,17 +992,32 @@ describe("CrewAgent admitted execution", () => {
     expect(
       admittedTurnMetadataSchema.parse({
         crewhelmRun: {
-          budgetReservation: {
-            ...admission.permit.budgetReservation,
-            aiSpendReservationMicrousd: 50_000,
-          },
-          configuration: verified.configuration,
+          budgetReservation: legacyReservation,
+          configuration: legacyConfiguration,
           promptCharacters: prompt.length,
           promptDigest: admission.permit.promptDigest,
           runId: admission.permit.runId,
         },
-      }).crewhelmRun.budgetReservation,
-    ).toEqual(admission.permit.budgetReservation);
+      }).crewhelmRun,
+    ).toMatchObject({
+      budgetReservation: admission.permit.budgetReservation,
+      configuration: verified.configuration,
+    });
+    const historicalModel = "@cf/legacy/retired-model";
+    expect(
+      admittedTurnMetadataSchema.parse({
+        crewhelmRun: {
+          budgetReservation: legacyBudgetReservation(
+            admission.permit.budgetReservation,
+            historicalModel,
+          ),
+          configuration: legacyRuntimeConfiguration(verified.configuration, historicalModel),
+          promptCharacters: prompt.length,
+          promptDigest: admission.permit.promptDigest,
+          runId: admission.permit.runId,
+        },
+      }).crewhelmRun.configuration.runtimePlan.inference.model,
+    ).toBe(historicalModel);
     await expect(controlPlane.confirmRunAdmission(admission.permit)).resolves.toMatchObject({
       confirmed: true,
       ok: true,
@@ -1048,6 +1091,102 @@ describe("CrewAgent admitted execution", () => {
       expect(JSON.stringify(record)).not.toContain("aiSpendReservationMicrousd");
     });
     await completedRun(controlPlane, authority, admission.permit.runId);
+  });
+
+  it("loads legacy capability state from retained records and turn metadata after eviction", async () => {
+    const authority = await authorityFor("crew-agent-legacy-capability-state");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("crew-agent-legacy-capability-agent"),
+    );
+
+    if (!created.ok) {
+      throw new Error("Expected retained legacy capability Agent.");
+    }
+
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-legacy-capability-run",
+      prompt: SLOW_TEST_PROMPT,
+    });
+
+    if (!started.ok) {
+      throw new Error("Expected retained legacy capability run.");
+    }
+
+    const stub = crewAgentNamespace().getByName(
+      crewAgentObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+      }),
+    );
+
+    await runInDurableObject(stub, async (_agent, state) => {
+      const recordKey = `crewhelm:run:${started.run.runId}`;
+      const record = admittedRunRecordSchema.parse(await state.storage.get(recordKey));
+      const messageId = `crewhelm:${started.run.runId}:user`;
+      const messageRow = state.storage.sql
+        .exec<{ content: string }>("SELECT content FROM assistant_messages WHERE id = ?", messageId)
+        .one();
+      const message: unknown = JSON.parse(messageRow.content);
+
+      if (typeof message !== "object" || message === null || Array.isArray(message)) {
+        throw new Error("Expected one persisted user message.");
+      }
+
+      const metadata = Reflect.get(message, "metadata");
+
+      if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
+        throw new Error("Expected persisted user-message metadata.");
+      }
+
+      const turnMetadata = admittedTurnMetadataSchema.parse(Reflect.get(metadata, "turnMetadata"));
+
+      await state.storage.put(recordKey, {
+        ...record,
+        budgetReservation: legacyBudgetReservation(record.budgetReservation),
+        configuration: legacyRuntimeConfiguration(record.configuration),
+      });
+      state.storage.sql.exec(
+        "UPDATE assistant_messages SET content = ? WHERE id = ?",
+        JSON.stringify({
+          ...message,
+          metadata: {
+            ...metadata,
+            turnMetadata: {
+              crewhelmRun: {
+                ...turnMetadata.crewhelmRun,
+                budgetReservation: legacyBudgetReservation(
+                  turnMetadata.crewhelmRun.budgetReservation,
+                ),
+                configuration: legacyRuntimeConfiguration(turnMetadata.crewhelmRun.configuration),
+              },
+            },
+          },
+        }),
+        messageId,
+      );
+    });
+    await evictDurableObject(stub);
+    await runInDurableObject(stub, async (agent) => {
+      await asTestCrewAgent(agent).onStart();
+      const metadata = admittedTurnMetadataSchema.parse(
+        asTestCrewAgent(agent).activeTurnMetadata,
+      ).crewhelmRun;
+
+      expect(metadata.configuration.capabilities).toEqual(created.agent.capabilities);
+      expect(metadata.configuration.runtimePlan.inference.model).toBe(created.agent.model);
+      expect(metadata.budgetReservation.runtimePlan).toEqual(metadata.configuration.runtimePlan);
+    });
+    await expect(
+      controlPlane.inspectRun(authority, { runId: started.run.runId }),
+    ).resolves.toMatchObject({
+      ok: true,
+      run: { runId: started.run.runId },
+    });
+    await completedRun(controlPlane, authority, started.run.runId);
   });
 
   it("rechecks the current Agent revision before spending the reserved model call", async () => {

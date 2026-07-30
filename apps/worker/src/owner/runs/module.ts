@@ -1,6 +1,7 @@
 import {
   DEFAULT_FLEET_RUN_RETENTION_SECONDS,
   MAXIMUM_RUN_ADMISSIONS_PER_OWNER,
+  MAXIMUM_RUN_INPUT_CHARACTERS,
   MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
   composioToolCapabilityGrantSchema,
   RUN_ADMISSION_LIFETIME_MS,
@@ -8,8 +9,8 @@ import {
   createRunAdmissionInputSchema,
   createRunAdmissionResultSchema,
   crewAgentRuntimeConfigSchema,
+  crewAgentSystemPrompt,
   redeemRunReceiverCapabilityResultSchema,
-  runnableAgentModelSchema,
   runBudgetReservationSchema,
   runAdmissionNonceSchema,
   runAdmissionPermitSchema,
@@ -49,6 +50,11 @@ import {
 } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
+import {
+  AVAILABLE_AGENT_CAPABILITY_PREREQUISITES,
+  agentCapabilityRegistry,
+} from "../../agent-capabilities/registry.js";
+import { WORKERS_AI_CAPABILITY_ID } from "../../agent-capabilities/workers-ai.js";
 import { recordExecutionEvent } from "../../observability/execution.js";
 import {
   agentRevisions,
@@ -133,12 +139,23 @@ function createNonce(): string {
   return runAdmissionNonceSchema.parse(encodeBase64Url(crypto.getRandomValues(new Uint8Array(32))));
 }
 
+function sameBudgetReservation(left: unknown, right: unknown): boolean {
+  const leftReservation = runBudgetReservationSchema.safeParse(left);
+  const rightReservation = runBudgetReservationSchema.safeParse(right);
+
+  return (
+    leftReservation.success &&
+    rightReservation.success &&
+    JSON.stringify(leftReservation.data) === JSON.stringify(rightReservation.data)
+  );
+}
+
 function createBudgetReservation(input: {
   configuration: FleetConfiguration;
   executionLimits: CrewAgentRuntimeConfig["executionLimits"];
-  instructions: string;
-  model: string;
   promptCharacters: number;
+  runtimePlan: CrewAgentRuntimeConfig["runtimePlan"];
+  systemPromptCharacters: number;
   toolGrants: ComposioToolCapabilityGrant[];
 }): RunBudgetReservation {
   const effectiveExecutionLimits = {
@@ -174,9 +191,8 @@ function createBudgetReservation(input: {
     fleetConfigurationRevision: input.configuration.revision,
     integrationLimits: input.configuration.data.integrations,
     maxDurationSeconds: effectiveExecutionLimits.maxDurationSeconds,
-    maxInputCharacters: input.instructions.length + input.promptCharacters,
+    maxInputCharacters: input.systemPromptCharacters + input.promptCharacters,
     maxModelCalls,
-    model: input.model,
     maxOutputTokens: Math.min(
       effectiveExecutionLimits.maxModelTokens,
       MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
@@ -185,6 +201,7 @@ function createBudgetReservation(input: {
     maxTurns,
     reservationId: `budget_${crypto.randomUUID()}`,
     retentionSeconds: input.configuration.data.retention.runSeconds,
+    runtimePlan: input.runtimePlan,
     toolGrants: input.toolGrants,
   });
 }
@@ -313,11 +330,11 @@ export class RunAdmissions {
 
       const agent = transaction
         .select({
+          capabilities: agentRevisions.capabilities,
           capabilityGrants: agentRevisions.capabilityGrants,
           currentRevision: agents.currentRevision,
           executionLimits: agentRevisions.executionLimits,
           instructions: agentRevisions.instructions,
-          model: agentRevisions.model,
           status: agents.status,
         })
         .from(agents)
@@ -343,11 +360,19 @@ export class RunAdmissions {
         return this.#deniedRequest("agent_unavailable");
       }
 
-      if (
-        !runnableAgentModelSchema.safeParse(agent.model).success ||
-        !fleetConfiguration.data.models.allowed.some((model) => model === agent.model)
-      ) {
-        return this.#deniedRequest("model_unavailable");
+      const compiledCapabilities = agentCapabilityRegistry.compile(agent.capabilities, {
+        availablePrerequisites: AVAILABLE_AGENT_CAPABILITY_PREREQUISITES,
+        checkPrerequisites: true,
+        fleetConfiguration: fleetConfiguration.data,
+      });
+
+      if (!compiledCapabilities.ok) {
+        return this.#deniedRequest(
+          compiledCapabilities.code === "configuration_unavailable" &&
+            compiledCapabilities.moduleId === WORKERS_AI_CAPABILITY_ID
+            ? "model_unavailable"
+            : "capability_unavailable",
+        );
       }
 
       const toolGrants = this.#toolGrants(
@@ -359,6 +384,15 @@ export class RunAdmissions {
       );
 
       if (toolGrants === undefined) {
+        return this.#deniedRequest("capability_unavailable");
+      }
+
+      const systemPromptCharacters = crewAgentSystemPrompt({
+        instructions: agent.instructions,
+        runtimePlan: compiledCapabilities.runtimePlan,
+      }).length;
+
+      if (systemPromptCharacters + request.data.promptCharacters > MAXIMUM_RUN_INPUT_CHARACTERS) {
         return this.#deniedRequest("capability_unavailable");
       }
 
@@ -375,9 +409,9 @@ export class RunAdmissions {
       const budgetReservation = createBudgetReservation({
         configuration: fleetConfiguration,
         executionLimits: agent.executionLimits,
-        instructions: agent.instructions,
-        model: agent.model,
         promptCharacters: request.data.promptCharacters,
+        runtimePlan: compiledCapabilities.runtimePlan,
+        systemPromptCharacters,
         toolGrants,
       });
       const runId = `run_${crypto.randomUUID()}`;
@@ -748,7 +782,7 @@ export class RunAdmissions {
         row.idempotencyKey !== request.data.idempotencyKey ||
         row.promptDigest !== request.data.promptDigest ||
         row.scheduleRevision !== request.data.scheduleRevision ||
-        JSON.stringify(row.budgetReservation) !== JSON.stringify(request.data.budgetReservation) ||
+        !sameBudgetReservation(row.budgetReservation, request.data.budgetReservation) ||
         !this.#admissionConfigurationIsActive(transaction, row)
       ) {
         return RUN_ADMISSION_ERROR;
@@ -805,7 +839,7 @@ export class RunAdmissions {
       row.idempotencyKey !== capability.data.idempotencyKey ||
       row.promptDigest !== capability.data.promptDigest ||
       row.scheduleRevision !== capability.data.scheduleRevision ||
-      JSON.stringify(row.budgetReservation) !== JSON.stringify(capability.data.budgetReservation) ||
+      !sameBudgetReservation(row.budgetReservation, capability.data.budgetReservation) ||
       (capability.data.action === "resume" &&
         (row.clientId !== capability.data.clientId ||
           !this.#admissionConfigurationIsActive(this.#database, row))) ||
@@ -1016,11 +1050,11 @@ export class RunAdmissions {
   ): CrewAgentRuntimeConfig | undefined {
     const row = database
       .select({
+        capabilities: agentRevisions.capabilities,
         capabilityGrants: agentRevisions.capabilityGrants,
         currentRevision: agents.currentRevision,
         executionLimits: agentRevisions.executionLimits,
         instructions: agentRevisions.instructions,
-        model: agentRevisions.model,
         status: agents.status,
       })
       .from(agents)
@@ -1040,14 +1074,25 @@ export class RunAdmissions {
       return undefined;
     }
 
+    const compiledCapabilities = agentCapabilityRegistry.compile(row.capabilities, {
+      availablePrerequisites: AVAILABLE_AGENT_CAPABILITY_PREREQUISITES,
+      checkPrerequisites: true,
+      fleetConfiguration: this.#currentFleetConfiguration().data,
+    });
+
+    if (!compiledCapabilities.ok) {
+      return undefined;
+    }
+
     return crewAgentRuntimeConfigSchema.parse({
       agentId,
+      capabilities: compiledCapabilities.capabilities,
       capabilityGrants: row.capabilityGrants,
       executionLimits: row.executionLimits,
       instructions: row.instructions,
-      model: row.model,
       ownerKey: this.#objectName,
       revision,
+      runtimePlan: compiledCapabilities.runtimePlan,
     });
   }
 
@@ -1114,7 +1159,7 @@ export class RunAdmissions {
       row.agentRevision === permit.agentRevision &&
       row.promptDigest === permit.promptDigest &&
       row.scheduleRevision === permit.scheduleRevision &&
-      JSON.stringify(row.budgetReservation) === JSON.stringify(permit.budgetReservation) &&
+      sameBudgetReservation(row.budgetReservation, permit.budgetReservation) &&
       row.expiresAt === Date.parse(permit.expiresAt)
     );
   }
@@ -1157,7 +1202,7 @@ export class RunAdmissions {
   ): boolean {
     return (
       reservation.maxDurationSeconds <= configuration.executionLimits.maxDurationSeconds &&
-      reservation.model === configuration.model &&
+      JSON.stringify(reservation.runtimePlan) === JSON.stringify(configuration.runtimePlan) &&
       reservation.maxOutputTokens <= configuration.executionLimits.maxModelTokens &&
       reservation.maxToolCalls <= configuration.executionLimits.maxToolCalls &&
       reservation.toolGrants.length === activeToolGrants.length &&

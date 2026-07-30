@@ -37,7 +37,7 @@ export function registerAgentTools(server: McpServer, context: McpToolContext): 
         readOnlyHint: false,
       },
       description:
-        "Create an owner-scoped Crewhelm Agent with an immutable initial revision and no capability grants.",
+        "Create an owner-scoped Crewhelm Agent with validated capability modules, an immutable initial revision, and no grants.",
       inputSchema: createAgentInputSchema,
       title: "Create Crewhelm agent",
     },
@@ -139,7 +139,7 @@ export function registerAgentTools(server: McpServer, context: McpToolContext): 
         readOnlyHint: false,
       },
       description:
-        "Replace an owner-scoped Crewhelm Agent definition by creating a new immutable revision.",
+        "Replace an owner-scoped Crewhelm Agent definition and capability configuration with a new immutable revision.",
       inputSchema: updateAgentInputSchema,
       title: "Update Crewhelm agent",
     },

@@ -94,7 +94,6 @@ async function toolExecutionFixture(
     },
     idempotencyKey: `${subject}-agent`,
     instructions: "Use only explicitly admitted recovery tools.",
-    model: "@cf/meta/llama-4-scout-17b-16e-instruct",
     name: "Recovery tool execution fixture",
   });
 
@@ -411,7 +410,6 @@ describe("admitted tool execution", () => {
       },
       idempotencyKey: "tool-agent-701",
       instructions: "Use only explicitly admitted tools.",
-      model: "@cf/meta/llama-4-scout-17b-16e-instruct",
       name: "Tool execution fixture",
     });
 

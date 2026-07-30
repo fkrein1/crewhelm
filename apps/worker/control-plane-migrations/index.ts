@@ -15,6 +15,7 @@ import migration13 from "./0013_scale_fleet_configuration.sql";
 import migration14 from "./0014_closed_patriot.sql";
 import migration15 from "./0015_simple_thaddeus_ross.sql";
 import migration16 from "./0016_skinny_rattler.sql";
+import migration17 from "./0017_messy_argent.sql";
 
 export const controlPlaneMigrations = [
   {
@@ -101,6 +102,11 @@ export const controlPlaneMigrations = [
     name: "0016_skinny_rattler",
     sql: migration16,
     version: 17,
+  },
+  {
+    name: "0017_messy_argent",
+    sql: migration17,
+    version: 18,
   },
 ] as const;
 

@@ -7,7 +7,7 @@ import {
   MINIMUM_FLEET_RETENTION_SECONDS,
 } from "./fleet-capacity.js";
 
-import { crewAgentRuntimeConfigSchema } from "./agent-runtime.js";
+import { agentRuntimePlanSchema, crewAgentRuntimeConfigSchema } from "./agent-runtime.js";
 import {
   composioToolCapabilityGrantSchema,
   runIdSchema,
@@ -130,7 +130,7 @@ export const runBudgetReservationSchema = z.strictObject({
   maxDurationSeconds: agentExecutionLimitsSchema.shape.maxDurationSeconds,
   maxInputCharacters: z.number().int().min(1).max(MAXIMUM_RUN_INPUT_CHARACTERS),
   maxModelCalls: z.number().int().min(1).max(100),
-  model: runnableAgentModelSchema,
+  runtimePlan: agentRuntimePlanSchema,
   maxOutputTokens: z.number().int().min(1).max(MAXIMUM_RUN_MODEL_OUTPUT_TOKENS),
   maxToolCalls: agentExecutionLimitsSchema.shape.maxToolCalls,
   maxTurns: agentExecutionLimitsSchema.shape.maxTurns,

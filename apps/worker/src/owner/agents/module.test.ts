@@ -21,7 +21,7 @@ import { describe, expect, it } from "vitest";
 import { agentInput, agentUpdate, authorityFor, fixedAgentFailure } from "../testkit.js";
 
 describe("OwnerControlPlane agents", () => {
-  it("uses fleet defaults when Agent creation omits model and execution limits", async () => {
+  it("uses fleet defaults when Agent creation omits capabilities and execution limits", async () => {
     const authority = await authorityFor("agent-omakase-1", [OWNER_READ_SCOPE, OWNER_WRITE_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const configuration = await stub.getFleetConfiguration(authority, {
@@ -40,6 +40,13 @@ describe("OwnerControlPlane agents", () => {
       }),
     ).resolves.toMatchObject({
       agent: {
+        capabilities: [
+          {
+            configuration: { model: configuration.configuration.data.models.default },
+            id: "inference.workers-ai",
+            schemaVersion: 1,
+          },
+        ],
         executionLimits: configuration.configuration.data.execution,
         model: configuration.configuration.data.models.default,
       },
@@ -65,7 +72,7 @@ describe("OwnerControlPlane agents", () => {
         capabilityGrants: [],
         executionLimits: input.executionLimits,
         instructions: input.instructions,
-        model: input.model,
+        model: "@cf/meta/llama-4-scout-17b-16e-instruct",
         name: input.name,
         revision: 1,
       },
@@ -80,7 +87,7 @@ describe("OwnerControlPlane agents", () => {
         {
           createdAt: created.agent.createdAt,
           id: created.agent.id,
-          model: input.model,
+          model: "@cf/meta/llama-4-scout-17b-16e-instruct",
           name: input.name,
           revision: 1,
           status: "active",
@@ -93,6 +100,58 @@ describe("OwnerControlPlane agents", () => {
       agent: created.agent,
       ok: true,
     });
+  });
+
+  it("rejects unknown, incompatible, and conflicting capability envelopes before persistence", async () => {
+    const authority = await authorityFor("capability-validation", [
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const base = agentInput("capability-validation");
+
+    for (const capabilities of [
+      [
+        {
+          configuration: {},
+          id: "inference.unknown",
+          schemaVersion: 1,
+        },
+      ],
+      [
+        {
+          configuration: { model: "@cf/meta/llama-4-scout-17b-16e-instruct" },
+          id: "inference.workers-ai",
+          schemaVersion: 2,
+        },
+      ],
+      [
+        {
+          configuration: { model: "@cf/meta/llama-4-scout-17b-16e-instruct" },
+          id: "inference.workers-ai",
+          schemaVersion: 1,
+        },
+        {
+          configuration: { model: "@cf/zai-org/glm-4.7-flash" },
+          id: "inference.workers-ai",
+          schemaVersion: 1,
+        },
+      ],
+    ]) {
+      await expect(
+        stub.createAgent(authority, {
+          ...base,
+          capabilities,
+          idempotencyKey: `${base.idempotencyKey}-${capabilities.length}-${capabilities[0]?.schemaVersion}`,
+        }),
+      ).resolves.toEqual(fixedAgentFailure("invalid_request"));
+    }
+
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql.exec("SELECT COUNT(*) AS count FROM agents").one(),
+      ),
+    ).resolves.toEqual({ count: 0 });
   });
 
   it("reads the current Agent definition durably without creating an audit side effect", async () => {
@@ -748,13 +807,14 @@ describe("OwnerControlPlane agents", () => {
              WHERE revision < ?
            )
            INSERT INTO agent_revisions
-             (agent_id, revision, name, model, instructions, execution_limits,
+             (agent_id, revision, name, model, capabilities, instructions, execution_limits,
               capability_grants, created_at)
            SELECT
              source.agent_id,
              revision_numbers.revision,
              source.name,
              source.model,
+             source.capabilities,
              source.instructions,
              source.execution_limits,
              source.capability_grants,
@@ -1164,12 +1224,19 @@ describe("OwnerControlPlane agents", () => {
           );
           state.storage.sql.exec(
             `INSERT INTO agent_revisions
-               (agent_id, revision, name, model, instructions, capability_grants,
+               (agent_id, revision, name, model, capabilities, instructions, capability_grants,
                 execution_limits, created_at)
-             VALUES (?, 1, ?, ?, 'Fleet fixture', '[]', ?, ?)`,
+             VALUES (?, 1, ?, ?, ?, 'Fleet fixture', '[]', ?, ?)`,
             agentId,
             `${String(index).padStart(4, "0")}-${"N".repeat(75)}`,
             index % 2 === 0 ? firstModel : secondModel,
+            JSON.stringify([
+              {
+                configuration: { model: index % 2 === 0 ? firstModel : secondModel },
+                id: "inference.workers-ai",
+                schemaVersion: 1,
+              },
+            ]),
             JSON.stringify({
               maxDurationSeconds: 300,
               maxModelTokens: 20_000,

@@ -89,7 +89,7 @@ describe("OwnerControlPlane", () => {
           },
         },
         configurationRevision: 1,
-        schemaVersion: 17,
+        schemaVersion: 18,
         status: "ready",
         usage: {
           agents: { active: 0, total: 0 },
@@ -212,6 +212,11 @@ describe("OwnerControlPlane", () => {
           name: "0016_skinny_rattler",
           version: 17,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0017_messy_argent",
+          version: 18,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });
@@ -234,6 +239,91 @@ describe("OwnerControlPlane", () => {
           ),
         ).toThrow("CHECK constraint failed");
       }
+    });
+  });
+
+  it("migrates persisted model selections and issued admissions into capability plans", async () => {
+    const authority = await authorityFor("capability-plan-migration", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("capability-plan-agent"));
+
+    if (!created.ok) {
+      throw new Error("Expected capability migration Agent fixture.");
+    }
+
+    const prompt = "Preserve this issued admission.";
+    const admission = await stub.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "capability-plan-admission",
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
+    });
+
+    if (!admission.ok || admission.state !== "issued") {
+      throw new Error("Expected capability migration admission fixture.");
+    }
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec("PRAGMA foreign_keys=OFF");
+      state.storage.sql.exec(
+        `CREATE TABLE legacy_agent_revisions (
+           agent_id text NOT NULL,
+           revision integer NOT NULL,
+           name text NOT NULL,
+           model text NOT NULL,
+           instructions text NOT NULL,
+           execution_limits text NOT NULL,
+           capability_grants text NOT NULL,
+           created_at integer NOT NULL,
+           PRIMARY KEY(agent_id, revision),
+           FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE restrict
+         )`,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO legacy_agent_revisions
+           (agent_id, revision, name, model, instructions, execution_limits,
+            capability_grants, created_at)
+         SELECT
+           agent_id, revision, name, model, instructions, execution_limits,
+           capability_grants, created_at
+         FROM agent_revisions`,
+      );
+      state.storage.sql.exec("DROP TABLE agent_revisions");
+      state.storage.sql.exec("ALTER TABLE legacy_agent_revisions RENAME TO agent_revisions");
+      state.storage.sql.exec(
+        `UPDATE run_admissions
+         SET budget_reservation = json_set(
+           json_remove(budget_reservation, '$.runtimePlan'),
+           '$.model',
+           json_extract(budget_reservation, '$.runtimePlan.inference.model')
+         )`,
+      );
+      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version = 18");
+      await state.storage.sync();
+      state.storage.sql.exec("PRAGMA foreign_keys=ON");
+    });
+    await evictDurableObject(stub);
+
+    await expect(stub.getAgent(authority, { id: created.agent.id })).resolves.toMatchObject({
+      agent: {
+        capabilities: created.agent.capabilities,
+        id: created.agent.id,
+      },
+      ok: true,
+    });
+    await expect(stub.verifyRunAdmission(admission.permit)).resolves.toMatchObject({
+      configuration: {
+        capabilities: created.agent.capabilities,
+        runtimePlan: admission.permit.budgetReservation.runtimePlan,
+      },
+      ok: true,
     });
   });
 
@@ -982,7 +1072,7 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 17, status: "ready" },
+      status: { schemaVersion: 18, status: "ready" },
     });
     await expect(
       runInDurableObject(stub, (_instance, state) =>
@@ -1043,12 +1133,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 17, status: "ready" },
+      status: { schemaVersion: 18, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 17, status: "ready" },
+      status: { schemaVersion: 18, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -1268,7 +1358,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 17, status: "ready" },
+      status: { schemaVersion: 18, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       const rows = [
@@ -1344,6 +1434,7 @@ describe("OwnerControlPlane", () => {
         { version: 15 },
         { version: 16 },
         { version: 17 },
+        { version: 18 },
       ]);
     });
   });
@@ -1478,7 +1569,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 17, status: "ready" },
+      status: { schemaVersion: 18, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       expect(
@@ -1574,7 +1665,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec(
         `INSERT INTO control_plane_migrations (version, name, checksum, applied_at)
          VALUES (?, ?, ?, ?)`,
-        18,
+        19,
         "future_migration",
         "f".repeat(64),
         Date.now(),

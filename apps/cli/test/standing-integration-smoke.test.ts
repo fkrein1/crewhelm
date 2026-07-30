@@ -317,6 +317,13 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
   let startCalls = 0;
 
   const agent = () => ({
+    capabilities: [
+      {
+        configuration: { model: "@cf/zai-org/glm-4.7-flash" },
+        id: "inference.workers-ai",
+        schemaVersion: 1,
+      },
+    ],
     capabilityGrants: configuredGrantIds,
     createdAt: timestamp,
     executionLimits: {
@@ -910,13 +917,19 @@ describe("standing integration action smoke", () => {
     expect(
       harness.toolCalls.find((call) => call.name === "crewhelm_create_agent")?.arguments,
     ).toMatchObject({
+      capabilities: [
+        {
+          configuration: { model: "@cf/zai-org/glm-4.7-flash" },
+          id: "inference.workers-ai",
+          schemaVersion: 1,
+        },
+      ],
       executionLimits: {
         maxDurationSeconds: 60,
         maxModelTokens: 1_024,
         maxToolCalls: 1,
         maxTurns: 3,
       },
-      model: "@cf/zai-org/glm-4.7-flash",
     });
     expect(
       harness.toolCalls.find((call) => call.name === "crewhelm_configure_agent_connection")
