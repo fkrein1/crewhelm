@@ -1,4 +1,11 @@
-import { HEALTH_PATH, healthReportSchema } from "@crewhelm/contracts";
+import {
+  CREWHELM_DEPLOYMENT_PROTOCOL_VERSION,
+  HEALTH_PATH,
+  deploymentIdentitySchema,
+  healthReportSchema,
+  legacyHealthReportSchema,
+  type deploymentFingerprintSchema,
+} from "@crewhelm/contracts";
 import * as z from "zod";
 
 const MAX_DIAGNOSTIC_RESPONSE_BYTES = 4_096;
@@ -32,11 +39,30 @@ const doctorCheckSchema = z.strictObject({
   name: z.enum(["worker-health", "mcp-protected-resource", "oauth-authorization-server"]),
   status: z.enum(["pass", "fail"]),
 });
+const deploymentAlignmentSchema = z.enum([
+  "aligned",
+  "cli_outdated",
+  "different",
+  "unavailable",
+  "unverified",
+  "worker_outdated",
+]);
+const deploymentProtocolProbeSchema = z.looseObject({
+  deployment: z.looseObject({
+    protocolVersion: z.number().int().positive().safe(),
+  }),
+  service: z.literal("crewhelm"),
+  status: z.literal("ok"),
+});
 
 export const doctorReportSchema = z.strictObject({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
   ok: z.boolean(),
   checks: z.tuple([doctorCheckSchema, doctorCheckSchema, doctorCheckSchema]),
+  deployment: z.strictObject({
+    alignment: deploymentAlignmentSchema,
+    worker: deploymentIdentitySchema.nullable(),
+  }),
 });
 
 export type DoctorReport = z.infer<typeof doctorReportSchema>;
@@ -171,7 +197,7 @@ function checkDefinitions(origin: URL): [CheckDefinition, CheckDefinition, Check
       invalidPayloadMessage: "Health endpoint returned an invalid Crewhelm health report.",
       name: "worker-health",
       path: HEALTH_PATH,
-      schema: healthReportSchema,
+      schema: z.union([healthReportSchema, legacyHealthReportSchema]),
       subject: "Health",
       validMessage: "Worker health contract is valid.",
     },
@@ -229,6 +255,7 @@ async function runCheck(
   options: DoctorOptions,
   dependencies: DoctorDependencies,
   definition: CheckDefinition,
+  onPayload?: (payload: unknown) => void,
 ): Promise<DoctorCheck> {
   const endpoint = new URL(definition.path, options.origin);
   const requestEndpoint = new URL(endpoint);
@@ -301,7 +328,10 @@ async function runCheck(
     );
   }
 
-  if (!definition.schema.safeParse(payload).success) {
+  onPayload?.(payload);
+  const parsed = definition.schema.safeParse(payload);
+
+  if (!parsed.success) {
     return createCheck(definition, endpoint, "invalid_payload", definition.invalidPayloadMessage);
   }
 
@@ -309,6 +339,7 @@ async function runCheck(
 }
 
 export interface DoctorDependencies {
+  expectedDeploymentFingerprint?: z.infer<typeof deploymentFingerprintSchema>;
   fetch: typeof globalThis.fetch;
 }
 
@@ -317,19 +348,97 @@ export interface DoctorOptions {
   timeoutMs: number;
 }
 
+type HealthDeployment = z.infer<typeof deploymentIdentitySchema> | null | undefined;
+
+function classifyDeployment(
+  healthDeployment: HealthDeployment,
+  advertisedProtocolVersion: number | undefined,
+  expectedFingerprint: DoctorDependencies["expectedDeploymentFingerprint"],
+): DoctorReport["deployment"] {
+  const alignment =
+    advertisedProtocolVersion !== undefined &&
+    advertisedProtocolVersion > CREWHELM_DEPLOYMENT_PROTOCOL_VERSION
+      ? "cli_outdated"
+      : healthDeployment === undefined
+        ? "unavailable"
+        : healthDeployment === null ||
+            healthDeployment.protocolVersion < CREWHELM_DEPLOYMENT_PROTOCOL_VERSION
+          ? "worker_outdated"
+          : healthDeployment.protocolVersion > CREWHELM_DEPLOYMENT_PROTOCOL_VERSION
+            ? "cli_outdated"
+            : expectedFingerprint === undefined
+              ? "unverified"
+              : healthDeployment.fingerprint === expectedFingerprint
+                ? "aligned"
+                : "different";
+
+  return {
+    alignment,
+    worker: healthDeployment ?? null,
+  };
+}
+
+async function inspectDeploymentHealth(
+  options: DoctorOptions,
+  dependencies: DoctorDependencies,
+  definition: CheckDefinition,
+): Promise<{
+  advertisedProtocolVersion: number | undefined;
+  check: DoctorCheck;
+  deployment: HealthDeployment;
+}> {
+  let deployment: HealthDeployment;
+  let advertisedProtocolVersion: number | undefined;
+  const check = await runCheck(options, dependencies, definition, (payload) => {
+    const probe = deploymentProtocolProbeSchema.safeParse(payload);
+    const current = healthReportSchema.safeParse(payload);
+    const legacy = legacyHealthReportSchema.safeParse(payload);
+    advertisedProtocolVersion = probe.success ? probe.data.deployment.protocolVersion : undefined;
+    deployment = current.success ? current.data.deployment : legacy.success ? null : undefined;
+  });
+  return { advertisedProtocolVersion, check, deployment };
+}
+
+export async function diagnoseDeploymentAlignment(
+  options: DoctorOptions,
+  dependencies: DoctorDependencies,
+): Promise<DoctorReport["deployment"]> {
+  const health = await inspectDeploymentHealth(
+    options,
+    dependencies,
+    checkDefinitions(options.origin)[0],
+  );
+  return classifyDeployment(
+    health.deployment,
+    health.advertisedProtocolVersion,
+    dependencies.expectedDeploymentFingerprint,
+  );
+}
+
 export async function diagnoseDeployment(
   options: DoctorOptions,
   dependencies: DoctorDependencies,
 ): Promise<DoctorReport> {
   const definitions = checkDefinitions(options.origin);
-  const health = await runCheck(options, dependencies, definitions[0]);
-  const protectedResource = await runCheck(options, dependencies, definitions[1]);
-  const authorizationServer = await runCheck(options, dependencies, definitions[2]);
-  const checks: DoctorReport["checks"] = [health, protectedResource, authorizationServer];
+  const [health, protectedResource, authorizationServer] = await Promise.all([
+    inspectDeploymentHealth(options, dependencies, definitions[0]),
+    runCheck(options, dependencies, definitions[1]),
+    runCheck(options, dependencies, definitions[2]),
+  ]);
+  const checks: DoctorReport["checks"] = [health.check, protectedResource, authorizationServer];
+  const deployment = classifyDeployment(
+    health.deployment,
+    health.advertisedProtocolVersion,
+    dependencies.expectedDeploymentFingerprint,
+  );
 
   return doctorReportSchema.parse({
-    schemaVersion: 2,
-    ok: checks.every((check) => check.status === "pass"),
+    schemaVersion: 3,
+    ok:
+      checks.every((check) => check.status === "pass") &&
+      (dependencies.expectedDeploymentFingerprint === undefined ||
+        deployment.alignment === "aligned"),
     checks,
+    deployment,
   });
 }

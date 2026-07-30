@@ -75,6 +75,7 @@
   ],
   "vars": {
     "AI_GATEWAY_ID": "crewhelm",
+    "CREWHELM_DEPLOYMENT_FINGERPRINT": "0000000000000000000000000000000000000000000000000000000000000000",
     "PUBLIC_ORIGIN": "https://crewhelm.fkrein.workers.dev",
   },
   "triggers": {

@@ -7,6 +7,7 @@ import * as z from "zod";
 
 import {
   bootstrapDeployment,
+  readPackagedDeploymentFingerprint,
   type BootstrapDependencies,
   type BootstrapOptions,
   type BootstrapProgress,
@@ -61,6 +62,7 @@ const EXPECTED_MIGRATIONS = [
   "0012_access_levels.sql",
 ] as const;
 const WORKER_TEXT_MODULE = "0000000000000000000000000000000000000000-0000_test.sql";
+const deploymentFingerprints = new Map<string, string>();
 const OPTIONS: BootstrapOptions = {
   databaseName: "crewhelm-auth",
   origin: new URL("https://crewhelm.example"),
@@ -98,7 +100,10 @@ const stagedConfigSchema = z.looseObject({
     }),
   ]),
   secrets: z.looseObject({ required: z.array(z.string()) }),
-  vars: z.looseObject({ PUBLIC_ORIGIN: z.url() }),
+  vars: z.looseObject({
+    CREWHELM_DEPLOYMENT_FINGERPRINT: z.string().regex(/^[a-f0-9]{64}$/),
+    PUBLIC_ORIGIN: z.url(),
+  }),
 });
 const stagedSecretsSchema = z.looseObject({
   BETTER_AUTH_SECRET: z.string(),
@@ -149,7 +154,7 @@ function gatewayPayload(limit: number): unknown {
   };
 }
 
-function healthyDeploymentFetch(): typeof globalThis.fetch {
+function healthyDeploymentFetch(fingerprint = "a".repeat(64)): typeof globalThis.fetch {
   return vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
     const url = new URL(input instanceof Request ? input.url : input);
     let payload: unknown;
@@ -157,7 +162,11 @@ function healthyDeploymentFetch(): typeof globalThis.fetch {
     if (url.hostname === "api.cloudflare.com") {
       payload = gatewayPayload(1);
     } else if (url.pathname === "/health") {
-      payload = { service: "crewhelm", status: "ok" };
+      payload = {
+        deployment: { fingerprint, protocolVersion: 1 },
+        service: "crewhelm",
+        status: "ok",
+      };
     } else if (url.pathname === "/.well-known/oauth-protected-resource") {
       payload = {
         authorization_servers: ["https://crewhelm.example/api/auth"],
@@ -280,6 +289,10 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
       vars: { PUBLIC_ORIGIN: "https://template.example" },
     }),
   );
+  deploymentFingerprints.set(
+    assets,
+    await readPackagedDeploymentFingerprint({ deploymentAssetsDirectory: assets }),
+  );
   return { assets, root };
 }
 
@@ -290,7 +303,7 @@ function createDependencies(
 ): BootstrapDependencies {
   return {
     deploymentAssetsDirectory: assets,
-    fetch: healthyDeploymentFetch(),
+    fetch: healthyDeploymentFetch(deploymentFingerprints.get(assets)),
     readEnvironment: (name) => environment[name],
     runWrangler: (arguments_, options) =>
       arguments_[0] === "auth"
@@ -719,6 +732,45 @@ describe("Cloudflare bootstrap", () => {
     }
   });
 
+  it("refuses to replace a Worker that requires a newer deployment protocol", async () => {
+    const fixture = await createDeploymentAssets();
+    const runWrangler = vi.fn<RunWrangler>();
+    const dependencies = createDependencies(fixture.assets, runWrangler);
+    const normalFetch = dependencies.fetch;
+    dependencies.fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+
+        if (url.pathname === "/health") {
+          return Response.json({
+            deployment: {
+              fingerprint: "b".repeat(64),
+              futureDeploymentField: true,
+              protocolVersion: 2,
+            },
+            futureHealthField: true,
+            service: "crewhelm",
+            status: "ok",
+          });
+        }
+
+        return normalFetch(input, init);
+      });
+
+    try {
+      await expect(bootstrapDeployment(REUSE_OPTIONS, dependencies)).rejects.toMatchObject({
+        message: "The installed Worker requires a newer Crewhelm CLI. The Worker was not changed.",
+        name: "BootstrapError",
+        stage: "deployment",
+      });
+      expect(runWrangler).not.toHaveBeenCalled();
+      expect(dependencies.fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
   it("rejects an invalid scoped Gateway token before inventory or D1 mutation", async () => {
     const fixture = await createDeploymentAssets();
     const runWrangler = vi.fn<RunWrangler>(async (arguments_) => {
@@ -754,7 +806,7 @@ describe("Cloudflare bootstrap", () => {
     const fixture = await createDeploymentAssets();
     const events: string[] = [];
     const dependencies = createDependencies(fixture.assets, successfulReuseWrangler(events));
-    const deploymentFetch = healthyDeploymentFetch();
+    const deploymentFetch = healthyDeploymentFetch(deploymentFingerprints.get(fixture.assets));
     let gatewayLimit = 1;
 
     dependencies.fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
@@ -806,7 +858,7 @@ describe("Cloudflare bootstrap", () => {
   it("opens Cloudflare token setup and retries Gateway management with hidden input", async () => {
     const fixture = await createDeploymentAssets();
     const dependencies = createDependencies(fixture.assets, successfulReuseWrangler());
-    const deploymentFetch = healthyDeploymentFetch();
+    const deploymentFetch = healthyDeploymentFetch(deploymentFingerprints.get(fixture.assets));
     const openCloudflareApiTokens = vi.fn<() => Promise<void>>(async () => {});
     const promptSecret = vi.fn<(message: string) => Promise<string>>(
       async () => "scoped-gateway-token-value",
@@ -849,7 +901,7 @@ describe("Cloudflare bootstrap", () => {
     const fixture = await createDeploymentAssets();
     const events: string[] = [];
     const dependencies = createDependencies(fixture.assets, successfulReuseWrangler(events));
-    const deploymentFetch = healthyDeploymentFetch();
+    const deploymentFetch = healthyDeploymentFetch(deploymentFingerprints.get(fixture.assets));
 
     dependencies.fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : input);
@@ -1070,6 +1122,41 @@ describe("Cloudflare bootstrap", () => {
     }
   });
 
+  it("waits for the expected Worker fingerprint to reach the public edge", async () => {
+    const fixture = await createDeploymentAssets();
+    const dependencies = createDependencies(fixture.assets, successfulReuseWrangler());
+    const normalFetch = dependencies.fetch;
+    const wait = vi.fn<(milliseconds: number) => Promise<void>>(async () => {});
+    let healthReads = 0;
+    dependencies.wait = wait;
+    dependencies.fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+
+        if (url.pathname === "/health" && ++healthReads === 2) {
+          return Response.json({
+            deployment: { fingerprint: "b".repeat(64), protocolVersion: 1 },
+            service: "crewhelm",
+            status: "ok",
+          });
+        }
+
+        return normalFetch(input, init);
+      });
+
+    try {
+      await expect(bootstrapDeployment(REUSE_OPTIONS, dependencies)).resolves.toMatchObject({
+        deployment: { action: "updated" },
+        ok: true,
+      });
+      expect(healthReads).toBe(3);
+      expect(wait).toHaveBeenCalledExactlyOnceWith(250);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
   it("reuses existing resources without requiring or replacing secrets", async () => {
     const fixture = await createDeploymentAssets();
     let stagedDirectory: string | undefined;
@@ -1168,6 +1255,9 @@ describe("Cloudflare bootstrap", () => {
         "OWNER_GITHUB_USER_ID",
       ]);
       expect(stagedConfig?.vars.PUBLIC_ORIGIN).toBe(OPTIONS.origin.origin);
+      expect(stagedConfig?.vars.CREWHELM_DEPLOYMENT_FINGERPRINT).toBe(
+        deploymentFingerprints.get(fixture.assets),
+      );
       expect(stagedConfig?.vars.AI_GATEWAY_DAILY_LIMIT_MICROUSD).toBeUndefined();
       expect(stagedConfig?.vars.AI_GATEWAY_ID).toBeUndefined();
       expect(deployArguments).not.toContain("--secrets-file");

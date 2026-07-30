@@ -114,6 +114,7 @@ const mcpRequestSchema = z.looseObject({
   method: z.string(),
   params: z.unknown(),
 });
+const deploymentFingerprint = "a".repeat(64);
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -132,7 +133,11 @@ function requestUrl(input: RequestInfo | URL): URL {
 
 function publicPayload(path: string): unknown {
   if (path === "/health") {
-    return { service: "crewhelm", status: "ok" };
+    return {
+      deployment: { fingerprint: deploymentFingerprint, protocolVersion: 1 },
+      service: "crewhelm",
+      status: "ok",
+    };
   }
 
   if (path === "/.well-known/oauth-protected-resource") {
@@ -858,6 +863,7 @@ async function runSmoke(
       trigger: overrides.trigger ?? "manual",
     },
     {
+      expectedDeploymentFingerprint: deploymentFingerprint,
       fetch: harness.fetch,
       now: overrides.now ?? (() => Date.parse(timestamp)),
       openUrl: approveAuthorization(harness.openedUrls),

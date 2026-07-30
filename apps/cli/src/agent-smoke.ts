@@ -329,7 +329,7 @@ export async function runAgentSmoke(
     skippedCheck(checkDefinitions.oauthTokenRevocation.name, revokeEndpoint),
   ];
 
-  if (!publicReport.ok) {
+  if (!publicReport.ok || publicReport.deployment.alignment !== "aligned") {
     return agentSmokeReportSchema.parse({
       schemaVersion: 1,
       ok: false,

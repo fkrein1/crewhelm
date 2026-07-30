@@ -10,6 +10,7 @@ declare global {
       BETTER_AUTH_SECRET: string;
       COMPOSIO_API_KEY?: string;
       CREW_AGENT: DurableObjectNamespace<CrewAgent>;
+      CREWHELM_DEPLOYMENT_FINGERPRINT: string;
       GITHUB_CLIENT_ID: string;
       GITHUB_CLIENT_SECRET: string;
       AUTH_RATE_LIMIT: RateLimit;

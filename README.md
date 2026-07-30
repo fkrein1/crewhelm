@@ -51,6 +51,10 @@ existing Gateway route, and skip an identical Worker upload while still reconcil
 If that local file is missing but the named Worker already exists, `up` verifies its single active
 version, origin, D1 binding and provenance, and optional Gateway route before recreating the file
 and starting any deployment mutation. Conflicting or ambiguous remote state stops the upgrade.
+The public health contract includes a non-secret packaged-build fingerprint and deployment-protocol
+version. `doctor` reports whether the installed Worker matches the CLI, production smoke commands
+stop before authorization when it does not, and an interactive smoke offers to run the explicit
+matching `up`. A newer Worker protocol is never replaced by an older CLI.
 
 Pass `--ai-budget-usd <dollars>` to enable or change the optional Gateway hard limit. Without a
 Gateway, Crewhelm keeps run and tool-loop safeguards but has no hard dollar ceiling. Use
