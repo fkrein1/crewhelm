@@ -1232,11 +1232,13 @@ describe("authenticated MCP handler", () => {
             scheduleRevision: null,
           },
           kind: "outcome",
+          needsAction: false,
           nextAction: "review_output",
           requestPreview: runInput.prompt,
           resultPreview: TEST_REPLY,
           runId: started.run.runId,
           runStatus: "completed",
+          severity: "info",
         },
       ],
       ok: true,
@@ -1279,6 +1281,7 @@ describe("authenticated MCP handler", () => {
     const item = inbox.items[0];
     const maximumPage = agentInboxResultSchema.parse({
       action: "list",
+      generatedAt: new Date().toISOString(),
       items: Array.from({ length: MAXIMUM_AGENT_INBOX_ITEMS }, (_, index) => {
         const suffix = (index + 1).toString(16).padStart(12, "0");
         const runId = `run_00000000-0000-4000-8000-${suffix}`;
@@ -1294,6 +1297,7 @@ describe("authenticated MCP handler", () => {
       }),
       nextCursor: null,
       ok: true,
+      pollAfterSeconds: 30,
     });
 
     expect(new TextEncoder().encode(JSON.stringify(maximumPage)).byteLength).toBeLessThan(

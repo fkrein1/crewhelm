@@ -289,11 +289,13 @@ describe("OwnerControlPlane Agent schedules", () => {
             scheduleRevision: 1,
           },
           kind: "deferred",
+          needsAction: true,
           policy: {
             layer: "fleet",
             reason: "model_unavailable",
             retryAt: expect.any(String),
           },
+          severity: "attention_required",
         },
       ],
       ok: true,

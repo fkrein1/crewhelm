@@ -184,6 +184,11 @@ function fleetStatus(active: number, unresolvedEffects = 0) {
         diagnostics: { expiredApprovals: 0, pendingAiUsage: 0 },
         inbox: {
           actionRequired: 0,
+          attention: {
+            needsAction: 0,
+            oldestNeedsActionAt: null,
+            warnings: 0,
+          },
           deferred: 0,
           exceptions: 0,
           outcomes: 1,
@@ -766,6 +771,7 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
     } else if (params.name === "crewhelm_agent_inbox") {
       payload = {
         action: "list",
+        generatedAt: timestamp,
         items: [
           {
             acknowledgedAt: null,
@@ -779,6 +785,7 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
             },
             itemId: `inbox_${runId}`,
             kind: "outcome",
+            needsAction: false,
             nextAction: "review_output",
             occurredAt: timestamp,
             policy: null,
@@ -786,12 +793,14 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
             resultPreview: "provider-result-secret",
             runId,
             runStatus: "completed",
+            severity: "info",
             summary: "provider-summary-secret",
             version: timestamp,
           },
         ],
         nextCursor: null,
         ok: true,
+        pollAfterSeconds: 30,
       };
     } else if (params.name === "crewhelm_revoke_authority") {
       advanceTime(options.authorityCleanupLatencyMs ?? 0);

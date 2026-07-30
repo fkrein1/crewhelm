@@ -1,5 +1,7 @@
 import {
+  AGENT_INBOX_POLL_AFTER_SECONDS,
   MAXIMUM_AGENT_INBOX_PREVIEW_CHARACTERS,
+  agentInboxDeferredReasonSchema,
   agentInboxInputSchema,
   agentInboxItemSchema,
   agentInboxResultSchema,
@@ -9,11 +11,12 @@ import {
   type AgentInboxInput,
   type AgentInboxItem,
   type AgentInboxResult,
+  type AgentInboxSeverity,
   type FleetConfigurationData,
   type OwnerAuthority,
   type RecordAgentInboxRunResult,
 } from "@crewhelm/contracts";
-import { and, count, desc, eq, gt, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, inArray, isNull, lt, lte, not, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
@@ -29,6 +32,7 @@ import {
 
 type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type AgentInboxFailure = Extract<AgentInboxResult, { ok: false }>;
+type AgentInboxCounts = Extract<AgentInboxResult, { action: "overview"; ok: true }>["counts"];
 type StoredInboxItem = typeof agentInboxItems.$inferSelect;
 
 const AGENT_INBOX_CLEANUP_BATCH_SIZE = 100;
@@ -121,6 +125,60 @@ function deferredWorkPolicy(reason: AgentInboxDeferredReason): {
   return unreachable(reason);
 }
 
+const DEFERRED_REASONS_REQUIRING_ACTION = agentInboxDeferredReasonSchema.options.filter(
+  (reason) => deferredWorkPolicy(reason).nextAction === "review_configuration",
+);
+
+function needsActionCondition(): SQL {
+  const condition = or(
+    inArray(agentInboxItems.kind, ["action_required", "exception"]),
+    and(
+      eq(agentInboxItems.kind, "deferred"),
+      inArray(agentInboxItems.reason, DEFERRED_REASONS_REQUIRING_ACTION),
+    ),
+  );
+
+  if (condition === undefined) {
+    throw new Error("Agent inbox actionability condition is unavailable.");
+  }
+
+  return condition;
+}
+
+function warningCondition(): SQL {
+  const condition = and(
+    eq(agentInboxItems.kind, "deferred"),
+    not(inArray(agentInboxItems.reason, DEFERRED_REASONS_REQUIRING_ACTION)),
+  );
+
+  if (condition === undefined) {
+    throw new Error("Agent inbox warning condition is unavailable.");
+  }
+
+  return condition;
+}
+
+function severityCondition(severities: AgentInboxSeverity[] | undefined): SQL | undefined {
+  if (severities === undefined) {
+    return undefined;
+  }
+
+  const conditions = severities.map((severity) => {
+    switch (severity) {
+      case "attention_required":
+        return needsActionCondition();
+      case "info":
+        return eq(agentInboxItems.kind, "outcome");
+      case "warning":
+        return warningCondition();
+    }
+
+    return unreachable(severity);
+  });
+
+  return or(...conditions);
+}
+
 function runPresentation(item: StoredInboxItem): {
   nextAction: "decide_approval" | "inspect_run" | "review_output";
   summary: string;
@@ -201,13 +259,7 @@ export class AgentInbox {
     return unreachable(request.data.action);
   }
 
-  usage(): {
-    actionRequired: number;
-    deferred: number;
-    exceptions: number;
-    outcomes: number;
-    total: number;
-  } {
+  usage(): AgentInboxCounts {
     const currentTime = Date.now();
 
     return this.#counts({ action: "overview" }, currentTime);
@@ -226,7 +278,9 @@ export class AgentInbox {
       request.includeAcknowledged !== undefined ||
       request.kinds !== undefined ||
       request.limit !== undefined ||
-      request.occurredAfter !== undefined
+      request.needsAction !== undefined ||
+      request.occurredAfter !== undefined ||
+      request.severities !== undefined
     ) {
       return deniedAgentInbox("invalid_request");
     }
@@ -365,9 +419,11 @@ export class AgentInbox {
 
     return agentInboxResultSchema.parse({
       action: "list",
+      generatedAt: new Date(currentTime).toISOString(),
       items,
       nextCursor: hasMore ? (items.at(-1)?.itemId ?? null) : null,
       ok: true,
+      pollAfterSeconds: AGENT_INBOX_POLL_AFTER_SECONDS,
     });
   }
 
@@ -386,25 +442,29 @@ export class AgentInbox {
     return agentInboxResultSchema.parse({
       action: "overview",
       counts,
-      generatedAt: new Date().toISOString(),
+      generatedAt: new Date(currentTime).toISOString(),
       ok: true,
+      pollAfterSeconds: AGENT_INBOX_POLL_AFTER_SECONDS,
     });
   }
 
-  #counts(
-    request: AgentInboxInput,
-    currentTime: number,
-  ): {
-    actionRequired: number;
-    deferred: number;
-    exceptions: number;
-    outcomes: number;
-    total: number;
-  } {
-    const rows = this.#database
+  #counts(request: AgentInboxInput, currentTime: number): AgentInboxCounts {
+    const needsAction = needsActionCondition();
+    const warning = warningCondition();
+    const row = this.#database
       .select({
-        kind: agentInboxItems.kind,
-        value: count(),
+        actionRequired: sql<number>`count(*) FILTER (
+          WHERE ${agentInboxItems.kind} = 'action_required'
+        )`,
+        deferred: sql<number>`count(*) FILTER (WHERE ${agentInboxItems.kind} = 'deferred')`,
+        exceptions: sql<number>`count(*) FILTER (WHERE ${agentInboxItems.kind} = 'exception')`,
+        needsAction: sql<number>`count(*) FILTER (WHERE ${needsAction})`,
+        oldestNeedsActionAt: sql<number | null>`min(
+          CASE WHEN ${needsAction} THEN ${agentInboxItems.occurredAt} END
+        )`,
+        outcomes: sql<number>`count(*) FILTER (WHERE ${agentInboxItems.kind} = 'outcome')`,
+        total: count(),
+        warnings: sql<number>`count(*) FILTER (WHERE ${warning})`,
       })
       .from(agentInboxItems)
       .leftJoin(
@@ -415,19 +475,19 @@ export class AgentInbox {
         ),
       )
       .where(and(...this.#filterConditions(request, currentTime)))
-      .groupBy(agentInboxItems.kind)
-      .all();
-    const byKind = new Map(rows.map((row) => [row.kind, row.value]));
-    const counts = {
-      actionRequired: byKind.get("action_required") ?? 0,
-      deferred: byKind.get("deferred") ?? 0,
-      exceptions: byKind.get("exception") ?? 0,
-      outcomes: byKind.get("outcome") ?? 0,
-    };
+      .get();
 
     return {
-      ...counts,
-      total: counts.actionRequired + counts.deferred + counts.exceptions + counts.outcomes,
+      actionRequired: row?.actionRequired ?? 0,
+      attention: {
+        needsAction: row?.needsAction ?? 0,
+        oldestNeedsActionAt: timestampOrNull(row?.oldestNeedsActionAt ?? null),
+        warnings: row?.warnings ?? 0,
+      },
+      deferred: row?.deferred ?? 0,
+      exceptions: row?.exceptions ?? 0,
+      outcomes: row?.outcomes ?? 0,
+      total: row?.total ?? 0,
     };
   }
 
@@ -437,9 +497,15 @@ export class AgentInbox {
       request.agentId === undefined ? undefined : eq(agentInboxItems.agentId, request.agentId),
       request.includeAcknowledged === true ? undefined : isNull(agentInboxAcknowledgements.itemId),
       request.kinds === undefined ? undefined : inArray(agentInboxItems.kind, request.kinds),
+      request.needsAction === undefined
+        ? undefined
+        : request.needsAction
+          ? needsActionCondition()
+          : not(needsActionCondition()),
       request.occurredAfter === undefined
         ? undefined
         : gt(agentInboxItems.occurredAt, Date.parse(request.occurredAfter)),
+      severityCondition(request.severities),
     ];
   }
 
@@ -449,6 +515,15 @@ export class AgentInbox {
         ? deferredWorkPolicy(item.reason)
         : undefined;
     const run = deferred === undefined ? runPresentation(item) : undefined;
+    const needsAction =
+      item.kind === "action_required" ||
+      item.kind === "exception" ||
+      (item.kind === "deferred" && deferred?.nextAction === "review_configuration");
+    const severity = needsAction
+      ? "attention_required"
+      : item.kind === "deferred"
+        ? "warning"
+        : "info";
 
     return agentInboxItemSchema.parse({
       acknowledgedAt: timestampOrNull(acknowledgedAt),
@@ -462,6 +537,7 @@ export class AgentInbox {
       },
       itemId: item.itemId,
       kind: item.kind,
+      needsAction,
       nextAction: deferred?.nextAction ?? run?.nextAction,
       occurredAt: item.version,
       policy:
@@ -476,6 +552,7 @@ export class AgentInbox {
       resultPreview: item.resultPreview,
       runId: item.runId,
       runStatus: item.runStatus,
+      severity,
       summary: deferred?.summary ?? run?.summary,
       version: item.version,
     });
@@ -738,10 +815,9 @@ export class AgentInbox {
   }
 
   #pruneCapacity(): void {
-    const priority = sql<number>`CASE ${agentInboxItems.kind}
-      WHEN 'action_required' THEN 3
-      WHEN 'deferred' THEN 2
-      WHEN 'exception' THEN 1
+    const priority = sql<number>`CASE
+      WHEN ${needsActionCondition()} THEN 2
+      WHEN ${warningCondition()} THEN 1
       ELSE 0
     END`;
     const itemIds = this.#database

@@ -107,6 +107,11 @@ export const controlPlaneStatusSchema = z.strictObject({
     }),
     inbox: z.strictObject({
       actionRequired: z.number().int().nonnegative().safe(),
+      attention: z.strictObject({
+        needsAction: z.number().int().nonnegative().safe(),
+        oldestNeedsActionAt: z.iso.datetime().nullable(),
+        warnings: z.number().int().nonnegative().safe(),
+      }),
       deferred: z.number().int().nonnegative().safe(),
       exceptions: z.number().int().nonnegative().safe(),
       outcomes: z.number().int().nonnegative().safe(),

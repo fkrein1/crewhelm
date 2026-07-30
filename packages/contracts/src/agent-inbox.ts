@@ -9,6 +9,7 @@ import { agentInboxDeferredReasonSchema } from "./diagnostics.js";
 
 export const MAXIMUM_AGENT_INBOX_ITEMS = 25;
 export const MAXIMUM_AGENT_INBOX_PREVIEW_CHARACTERS = 240;
+export const AGENT_INBOX_POLL_AFTER_SECONDS = 30;
 
 export const agentInboxItemIdSchema = z
   .string()
@@ -26,6 +27,7 @@ export const agentInboxItemKindSchema = z.enum([
   "exception",
   "outcome",
 ]);
+export const agentInboxSeveritySchema = z.enum(["attention_required", "info", "warning"]);
 export const agentInboxNextActionSchema = z.enum([
   "decide_approval",
   "inspect_run",
@@ -50,6 +52,7 @@ export const agentInboxItemSchema = z.strictObject({
   configuration: agentInboxConfigurationSchema,
   itemId: agentInboxItemIdSchema,
   kind: agentInboxItemKindSchema,
+  needsAction: z.boolean(),
   nextAction: agentInboxNextActionSchema,
   occurredAt: z.iso.datetime(),
   policy: z
@@ -63,6 +66,7 @@ export const agentInboxItemSchema = z.strictObject({
   resultPreview: agentInboxPreviewSchema.nullable(),
   runId: runIdSchema.nullable(),
   runStatus: z.enum(["cancelled", "completed", "failed", "running"]).nullable(),
+  severity: agentInboxSeveritySchema,
   summary: agentInboxPreviewSchema,
   version: agentInboxItemVersionSchema,
 });
@@ -80,7 +84,21 @@ const agentInboxFilterFields = {
     .refine((kinds) => new Set(kinds).size === kinds.length, "Expected unique inbox kinds.")
     .optional()
     .describe("Return only these inbox kinds."),
+  needsAction: z
+    .boolean()
+    .optional()
+    .describe("Return only items that do or do not require an owner action."),
   occurredAfter: z.iso.datetime().optional().describe("Return items occurring after this time."),
+  severities: z
+    .array(agentInboxSeveritySchema)
+    .min(1)
+    .max(agentInboxSeveritySchema.options.length)
+    .refine(
+      (severities) => new Set(severities).size === severities.length,
+      "Expected unique inbox severities.",
+    )
+    .optional()
+    .describe("Return only these deterministic severity classes."),
 };
 
 export const agentInboxInputSchema = z.strictObject({
@@ -125,6 +143,11 @@ export const agentInboxResultSchema = z.union([
     action: z.literal("overview"),
     counts: z.strictObject({
       actionRequired: z.number().int().nonnegative().safe(),
+      attention: z.strictObject({
+        needsAction: z.number().int().nonnegative().safe(),
+        oldestNeedsActionAt: z.iso.datetime().nullable(),
+        warnings: z.number().int().nonnegative().safe(),
+      }),
       deferred: z.number().int().nonnegative().safe(),
       exceptions: z.number().int().nonnegative().safe(),
       outcomes: z.number().int().nonnegative().safe(),
@@ -132,12 +155,15 @@ export const agentInboxResultSchema = z.union([
     }),
     generatedAt: z.iso.datetime(),
     ok: z.literal(true),
+    pollAfterSeconds: z.literal(AGENT_INBOX_POLL_AFTER_SECONDS),
   }),
   z.strictObject({
     action: z.literal("list"),
+    generatedAt: z.iso.datetime(),
     items: z.array(agentInboxItemSchema).max(MAXIMUM_AGENT_INBOX_ITEMS),
     nextCursor: agentInboxItemIdSchema.nullable(),
     ok: z.literal(true),
+    pollAfterSeconds: z.literal(AGENT_INBOX_POLL_AFTER_SECONDS),
   }),
   z.strictObject({
     acknowledged: z.literal(true),
@@ -223,5 +249,6 @@ export type AgentInboxDeferredReason = z.infer<typeof agentInboxDeferredReasonSc
 export type AgentInboxInput = z.infer<typeof agentInboxInputSchema>;
 export type AgentInboxItem = z.infer<typeof agentInboxItemSchema>;
 export type AgentInboxResult = z.infer<typeof agentInboxResultSchema>;
+export type AgentInboxSeverity = z.infer<typeof agentInboxSeveritySchema>;
 export type RecordAgentInboxRunInput = z.infer<typeof recordAgentInboxRunInputSchema>;
 export type RecordAgentInboxRunResult = z.infer<typeof recordAgentInboxRunResultSchema>;
