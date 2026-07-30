@@ -12,6 +12,7 @@ import {
   inspectInstallationInfrastructure,
   readPackagedDeploymentFingerprint,
   readPackagedMigrationInventory,
+  skillBucketNameForWorker,
   type BootstrapDependencies,
   type BootstrapFailure,
   type BootstrapOptions,
@@ -72,6 +73,7 @@ const BOOTSTRAP_ACTIVITY_LABELS = {
   deployment: "Deployment",
   gateway: "AI spending",
   migrations: "Storage",
+  storage: "Storage",
   worker: "Worker",
 } as const satisfies Record<BootstrapProgress["stage"], string>;
 
@@ -290,7 +292,11 @@ async function resolveUpOptions(
   command: Extract<CliCommand, { kind: "up" }>,
   dependencies: CliDependencies,
   presentation: CliPresentation,
-): Promise<{ options: BootstrapOptions; recoverExisting: boolean }> {
+): Promise<{
+  expectedSkillBucketName?: string;
+  options: BootstrapOptions;
+  recoverExisting: boolean;
+}> {
   let previous: Installation | undefined;
 
   try {
@@ -331,7 +337,7 @@ async function resolveUpOptions(
     throw new CliUsageError("up requires an HTTPS endpoint on the first run.");
   }
 
-  let aiDailySpendUsd = command.aiDailySpendUsd;
+  let aiDailySpendUsd = command.aiDailySpendUsd ?? previous?.aiDailySpendUsd;
 
   if (previous === undefined && aiDailySpendUsd === undefined && dependencies.promptText) {
     let answer: string;
@@ -387,7 +393,13 @@ async function resolveUpOptions(
     );
   }
 
-  return { options: resolved.data, recoverExisting: previous === undefined };
+  return {
+    ...(previous?.skillBucketName === undefined
+      ? {}
+      : { expectedSkillBucketName: previous.skillBucketName }),
+    options: resolved.data,
+    recoverExisting: previous === undefined,
+  };
 }
 
 async function saveInstallationCoordinates(
@@ -404,13 +416,19 @@ async function saveInstallationCoordinates(
   );
 }
 
-async function saveInstallation(path: string, report: BootstrapReport): Promise<void> {
+async function saveInstallation(
+  path: string,
+  report: BootstrapReport,
+  aiDailySpendUsd?: number,
+): Promise<void> {
   await saveInstallationCoordinates(path, {
     accountId: report.account.id,
+    ...(report.aiGateway.enabled && aiDailySpendUsd !== undefined ? { aiDailySpendUsd } : {}),
     ...(report.aiGateway.enabled ? { aiGatewayId: report.aiGateway.id } : {}),
     databaseId: report.database.id,
     databaseName: report.database.name,
     origin: report.deployment.origin,
+    skillBucketName: skillBucketNameForWorker(report.deployment.workerName),
     workerName: report.deployment.workerName,
   });
 }
@@ -566,7 +584,7 @@ export async function runCli(
     }
 
     try {
-      const { options, recoverExisting } = await resolveUpOptions(
+      const { expectedSkillBucketName, options, recoverExisting } = await resolveUpOptions(
         command,
         executionDependencies,
         presentation,
@@ -576,9 +594,15 @@ export async function runCli(
         dependencies.writeOutput(formatBootstrapTarget(options, recoverExisting, presentation));
       }
 
+      const installationDependencies: BootstrapDependencies = {
+        ...executionDependencies,
+        ...(expectedSkillBucketName === undefined ? {} : { expectedSkillBucketName }),
+        persistProvisionedInstallation: (installation) =>
+          saveInstallationCoordinates(command.installationPath, installation),
+      };
       const bootstrapDependencies: BootstrapDependencies = recoverExisting
         ? {
-            ...executionDependencies,
+            ...installationDependencies,
             recoverExistingInstallation: {
               ...(command.databaseId === undefined
                 ? {}
@@ -590,12 +614,12 @@ export async function runCli(
                 saveInstallationCoordinates(command.installationPath, installation),
             },
           }
-        : executionDependencies;
+        : installationDependencies;
       const report = await bootstrapDeployment(options, bootstrapDependencies);
 
       if (report.ok) {
         try {
-          await saveInstallation(command.installationPath, report);
+          await saveInstallation(command.installationPath, report, options.aiDailySpendUsd);
         } catch {
           throw new BootstrapError(
             "configuration",

@@ -32,6 +32,13 @@ import migration2 from "../../control-plane-migrations/0002_cool_rictor.sql";
 
 import { agentInput, authorityFor, fixedRunAdmissionFailure } from "./testkit.js";
 
+function removeSkillLibrarySchema(storage: DurableObjectStorage): void {
+  storage.sql.exec("DROP TABLE skill_mutations");
+  storage.sql.exec("DROP TABLE skill_versions");
+  storage.sql.exec("DROP TABLE skill_objects");
+  storage.sql.exec("DROP TABLE skills");
+}
+
 describe("owner identity", () => {
   it("derives a deterministic opaque key without retaining provider identity", async () => {
     const identity = {
@@ -89,7 +96,7 @@ describe("OwnerControlPlane", () => {
           },
         },
         configurationRevision: 1,
-        schemaVersion: 18,
+        schemaVersion: 19,
         status: "ready",
         usage: {
           agents: { active: 0, total: 0 },
@@ -109,6 +116,7 @@ describe("OwnerControlPlane", () => {
           },
           recovery: { unresolvedEffects: 0 },
           runs: { active: 0 },
+          skills: { active: 0, pendingObjects: 0, storedBytes: 0, total: 0, versions: 0 },
         },
       },
     });
@@ -217,6 +225,11 @@ describe("OwnerControlPlane", () => {
           name: "0017_messy_argent",
           version: 18,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0018_clear_franklin_richards",
+          version: 19,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });
@@ -305,7 +318,8 @@ describe("OwnerControlPlane", () => {
            json_extract(budget_reservation, '$.runtimePlan.inference.model')
          )`,
       );
-      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version = 18");
+      removeSkillLibrarySchema(state.storage);
+      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 18");
       await state.storage.sync();
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
     });
@@ -895,6 +909,7 @@ describe("OwnerControlPlane", () => {
       );
       state.storage.sql.exec("DROP TABLE agent_inbox_acknowledgements");
       state.storage.sql.exec("DROP TABLE agent_inbox_items");
+      removeSkillLibrarySchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 12");
     });
     await evictDurableObject(stub);
@@ -954,6 +969,7 @@ describe("OwnerControlPlane", () => {
          WHERE run_id = ?`,
         admission.permit.runId,
       );
+      removeSkillLibrarySchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 14");
     });
     await evictDurableObject(stub);
@@ -1066,13 +1082,14 @@ describe("OwnerControlPlane", () => {
       );
       state.storage.sql.exec("DROP TABLE agent_inbox_acknowledgements");
       state.storage.sql.exec("DROP TABLE agent_inbox_items");
+      removeSkillLibrarySchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 11");
     });
     await evictDurableObject(stub);
 
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 18, status: "ready" },
+      status: { schemaVersion: 19, status: "ready" },
     });
     await expect(
       runInDurableObject(stub, (_instance, state) =>
@@ -1133,12 +1150,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 18, status: "ready" },
+      status: { schemaVersion: 19, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 18, status: "ready" },
+      status: { schemaVersion: 19, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -1330,6 +1347,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec("DROP TABLE migration_v2_run_rows");
       state.storage.sql.exec("DROP TABLE agent_inbox_acknowledgements");
       state.storage.sql.exec("DROP TABLE agent_inbox_items");
+      removeSkillLibrarySchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 3");
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
 
@@ -1358,7 +1376,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 18, status: "ready" },
+      status: { schemaVersion: 19, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       const rows = [
@@ -1435,6 +1453,7 @@ describe("OwnerControlPlane", () => {
         { version: 16 },
         { version: 17 },
         { version: 18 },
+        { version: 19 },
       ]);
     });
   });
@@ -1562,6 +1581,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec("ALTER TABLE legacy_run_admissions RENAME TO run_admissions");
       state.storage.sql.exec("DROP TABLE agent_inbox_acknowledgements");
       state.storage.sql.exec("DROP TABLE agent_inbox_items");
+      removeSkillLibrarySchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 5");
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
     });
@@ -1569,7 +1589,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 18, status: "ready" },
+      status: { schemaVersion: 19, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       expect(
@@ -1665,7 +1685,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec(
         `INSERT INTO control_plane_migrations (version, name, checksum, applied_at)
          VALUES (?, ?, ?, ?)`,
-        19,
+        20,
         "future_migration",
         "f".repeat(64),
         Date.now(),

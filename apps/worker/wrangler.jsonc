@@ -73,6 +73,12 @@
       },
     },
   ],
+  "r2_buckets": [
+    {
+      "binding": "SKILL_PACKAGES",
+      "bucket_name": "crewhelm-skills",
+    },
+  ],
   "vars": {
     "AI_GATEWAY_ID": "crewhelm",
     "CREWHELM_DEPLOYMENT_FINGERPRINT": "0000000000000000000000000000000000000000000000000000000000000000",

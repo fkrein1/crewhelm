@@ -98,6 +98,7 @@ function fleetStatus() {
           total: 2,
         },
         runs: { active: 1 },
+        skills: { active: 0, pendingObjects: 0, storedBytes: 0, total: 0, versions: 0 },
       },
     },
   };

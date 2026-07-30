@@ -13,9 +13,16 @@ export const installationSchema = z.strictObject({
     .string()
     .regex(/^[a-z][a-z0-9-]{0,62}$/)
     .optional(),
+  aiDailySpendUsd: z.number().finite().min(0.01).max(1_000).optional(),
   databaseId: z.uuid(),
   databaseName: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
   origin: z.url(),
+  skillBucketName: z
+    .string()
+    .min(3)
+    .max(63)
+    .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])$/)
+    .optional(),
   updatedAt: z.iso.datetime(),
   workerName: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
 });

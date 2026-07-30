@@ -135,6 +135,7 @@ function fleetStatus(active: number) {
           total: 0,
         },
         runs: { active: 0 },
+        skills: { active: 0, pendingObjects: 0, storedBytes: 0, total: 0, versions: 0 },
       },
     },
   };

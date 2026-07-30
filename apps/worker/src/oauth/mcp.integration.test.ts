@@ -113,6 +113,7 @@ function integrationEnv(
     OWNER_CONTROL_PLANE: env.OWNER_CONTROL_PLANE,
     OWNER_GITHUB_USER_ID: configuredOwnerGithubUserId,
     PUBLIC_ORIGIN: origin,
+    SKILL_PACKAGES: env.SKILL_PACKAGES,
   };
 }
 
@@ -799,7 +800,7 @@ describe("public OAuth to MCP integration", () => {
     ).toMatchObject({
       ok: true,
       status: {
-        schemaVersion: 18,
+        schemaVersion: 19,
         status: "ready",
       },
     });

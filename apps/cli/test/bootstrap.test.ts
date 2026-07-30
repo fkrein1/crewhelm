@@ -11,6 +11,7 @@ import {
   inspectInstallationInfrastructure,
   rateLimitNamespacesForWorker,
   readPackagedDeploymentFingerprint,
+  skillBucketNameForWorker,
   type BootstrapDependencies,
   type BootstrapOptions,
   type BootstrapProgress,
@@ -96,6 +97,12 @@ const stagedConfigSchema = z.looseObject({
     logs: z.looseObject({ invocation_logs: z.literal(false) }),
     traces: z.looseObject({ enabled: z.literal(false) }),
   }),
+  r2_buckets: z.tuple([
+    z.looseObject({
+      binding: z.literal("SKILL_PACKAGES"),
+      bucket_name: z.literal("crewhelm-skills"),
+    }),
+  ]),
   ratelimits: z.tuple([
     z.looseObject({ namespace_id: z.string() }),
     z.looseObject({ namespace_id: z.string() }),
@@ -279,6 +286,7 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
           enabled: false,
         },
       },
+      r2_buckets: [{ binding: "SKILL_PACKAGES", bucket_name: "template-skills" }],
       ratelimits: [
         {
           name: "AUTH_RATE_LIMIT",
@@ -307,15 +315,46 @@ function createDependencies(
   assets: string,
   runWrangler: RunWrangler,
   environment: Readonly<Record<string, string>> = {},
+  initialBuckets: readonly string[] = [],
 ): BootstrapDependencies {
+  const buckets = new Set(initialBuckets);
+
   return {
     deploymentAssetsDirectory: assets,
     fetch: healthyDeploymentFetch(deploymentFingerprints.get(assets)),
     readEnvironment: (name) => environment[name],
-    runWrangler: (arguments_, options) =>
-      arguments_[0] === "auth"
-        ? Promise.resolve(success(JSON.stringify({ token: "test-token", type: "oauth" })))
-        : runWrangler(arguments_, options),
+    runWrangler: (arguments_, options) => {
+      if (arguments_[0] === "auth") {
+        return Promise.resolve(success(JSON.stringify({ token: "test-token", type: "oauth" })));
+      }
+
+      if (arguments_.slice(0, 3).join(" ") === "r2 bucket info") {
+        const name = arguments_[3] ?? "";
+
+        return Promise.resolve(
+          buckets.has(name)
+            ? success(JSON.stringify({ name }))
+            : {
+                exitCode: 1,
+                outcome: "completed",
+                stderr: "The specified bucket does not exist. [code: 10006]",
+                stdout: "",
+              },
+        );
+      }
+
+      if (arguments_.slice(0, 3).join(" ") === "r2 bucket create") {
+        buckets.add(arguments_[3] ?? "");
+        return Promise.resolve(success("Created"));
+      }
+
+      if (arguments_.slice(0, 3).join(" ") === "r2 bucket delete") {
+        buckets.delete(arguments_[3] ?? "");
+        return Promise.resolve(success("Deleted"));
+      }
+
+      return runWrangler(arguments_, options);
+    },
   };
 }
 
@@ -493,6 +532,17 @@ describe("Cloudflare bootstrap", () => {
     );
   });
 
+  it("derives one stable R2 Skill bucket per Worker", () => {
+    const longWorkerName = `crewhelm-${"a".repeat(54)}`;
+
+    expect(skillBucketNameForWorker("crewhelm")).toBe("crewhelm-skills");
+    expect(skillBucketNameForWorker(longWorkerName)).toBe(skillBucketNameForWorker(longWorkerName));
+    expect(skillBucketNameForWorker(longWorkerName)).toMatch(/^[a-z0-9-]{3,63}$/u);
+    expect(skillBucketNameForWorker(longWorkerName)).not.toBe(
+      skillBucketNameForWorker(`crewhelm-${"b".repeat(54)}`),
+    );
+  });
+
   it("recovers an existing installation before any deployment mutation", async () => {
     const fixture = await createDeploymentAssets();
     const databaseName = "crewhelm-development-auth";
@@ -530,6 +580,7 @@ describe("Cloudflare bootstrap", () => {
         "authentication",
         "worker",
         "database",
+        "storage",
         "configuration",
         "migrations",
         "deployment",
@@ -599,6 +650,56 @@ describe("Cloudflare bootstrap", () => {
       });
       expect(persist).not.toHaveBeenCalled();
       expect(events).toEqual(["whoami:--json", "deployments:list", "versions:view"]);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a conflicting Skill package binding before D1 mutation", async () => {
+    const fixture = await createDeploymentAssets();
+    const events: string[] = [];
+    const persist = vi.fn<(installation: unknown) => Promise<void>>(async () => {});
+    const dependencies = {
+      ...createDependencies(
+        fixture.assets,
+        recoveryWrangler({
+          bindings: [
+            { database_id: DATABASE_ID, name: "AUTH_DB", type: "d1" },
+            { bucket_name: "another-fleet-skills", name: "SKILL_PACKAGES", type: "r2_bucket" },
+            { name: "PUBLIC_ORIGIN", text: OPTIONS.origin.origin, type: "plain_text" },
+          ],
+          events,
+        }),
+      ),
+      recoverExistingInstallation: { persist },
+    };
+
+    try {
+      await expect(bootstrapDeployment(OPTIONS, dependencies)).rejects.toMatchObject({
+        message: "Existing Worker has an invalid SKILL_PACKAGES binding.",
+        stage: "worker",
+      });
+      expect(persist).not.toHaveBeenCalled();
+      expect(events).toEqual(["whoami:--json", "deployments:list", "versions:view"]);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("does not adopt an occupied Skill bucket from a legacy Worker", async () => {
+    const fixture = await createDeploymentAssets();
+    const persist = vi.fn<(installation: unknown) => Promise<void>>(async () => {});
+    const dependencies = {
+      ...createDependencies(fixture.assets, recoveryWrangler(), {}, ["crewhelm-skills"]),
+      recoverExistingInstallation: { persist },
+    };
+
+    try {
+      await expect(bootstrapDeployment(OPTIONS, dependencies)).rejects.toMatchObject({
+        message: "Existing R2 Skill package storage is not bound to this Worker.",
+        stage: "storage",
+      });
+      expect(persist).toHaveBeenCalledOnce();
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
     }
@@ -982,6 +1083,7 @@ describe("Cloudflare bootstrap", () => {
       });
       expect(gatewayMethods).toEqual(["GET", "GET", "POST", "PUT", "GET"]);
       expect(createdResources).toEqual([
+        { accountId: ACCOUNT_ID, kind: "bucket", name: "crewhelm-skills" },
         { accountId: ACCOUNT_ID, id: OPTIONS.workerName, kind: "gateway" },
       ]);
     } finally {
@@ -1039,6 +1141,7 @@ describe("Cloudflare bootstrap", () => {
       });
       expect(gatewayMethods).toEqual(["GET", "GET", "POST", "GET", "PUT", "GET"]);
       expect(createdResources).toEqual([
+        { accountId: ACCOUNT_ID, kind: "bucket", name: "crewhelm-skills" },
         { accountId: ACCOUNT_ID, id: OPTIONS.workerName, kind: "gateway" },
       ]);
     } finally {
@@ -1634,6 +1737,7 @@ describe("Cloudflare bootstrap", () => {
 
     try {
       const first = await bootstrapDeployment(REUSE_OPTIONS, dependencies);
+      dependencies.expectedSkillBucketName = skillBucketNameForWorker(REUSE_OPTIONS.workerName);
       const second = await bootstrapDeployment(REUSE_OPTIONS, dependencies);
 
       expect(first.deployment.action).toBe("updated");
@@ -1704,6 +1808,7 @@ describe("Cloudflare bootstrap", () => {
 
     try {
       const first = await bootstrapUpgradeDeployment(REUSE_OPTIONS, dependencies, ["a".repeat(64)]);
+      dependencies.expectedSkillBucketName = skillBucketNameForWorker(REUSE_OPTIONS.workerName);
       const second = await bootstrapUpgradeDeployment(REUSE_OPTIONS, dependencies, [
         "a".repeat(64),
       ]);
@@ -1819,6 +1924,7 @@ describe("Cloudflare bootstrap", () => {
       await expect(bootstrapDeployment(REUSE_OPTIONS, dependencies)).resolves.toMatchObject({
         deployment: { action: "updated" },
       });
+      dependencies.expectedSkillBucketName = skillBucketNameForWorker(REUSE_OPTIONS.workerName);
       await expect(bootstrapDeployment(REUSE_OPTIONS, dependencies)).rejects.toMatchObject({
         message: "Worker code is current, but route or schedule reconciliation failed.",
         stage: "deployment",
@@ -1947,6 +2053,7 @@ describe("Cloudflare bootstrap", () => {
           kind: "database",
           name: OPTIONS.databaseName,
         },
+        { accountId: ACCOUNT_ID, kind: "bucket", name: "crewhelm-skills" },
         { accountId: ACCOUNT_ID, kind: "worker", name: OPTIONS.workerName },
       ]);
       expect(stagedDirectory).toBeDefined();
@@ -2148,6 +2255,7 @@ describe("Cloudflare bootstrap", () => {
           kind: "database",
           name: OPTIONS.databaseName,
         },
+        { accountId: ACCOUNT_ID, kind: "bucket", name: "crewhelm-skills" },
         { accountId: ACCOUNT_ID, id: OPTIONS.workerName, kind: "gateway" },
       ]);
     } finally {
@@ -2230,6 +2338,7 @@ describe("Cloudflare bootstrap", () => {
           kind: "database",
           name: OPTIONS.databaseName,
         },
+        { accountId: ACCOUNT_ID, kind: "bucket", name: "crewhelm-skills" },
       ]);
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
@@ -2475,13 +2584,24 @@ describe("Cloudflare bootstrap", () => {
 
       return success();
     });
+    const dependencies = createDependencies(fixture.assets, runWrangler);
+    const persistProvisionedInstallation = vi.fn<
+      NonNullable<BootstrapDependencies["persistProvisionedInstallation"]>
+    >(async () => {});
+    dependencies.persistProvisionedInstallation = persistProvisionedInstallation;
 
     try {
-      await expect(
-        bootstrapDeployment(REUSE_OPTIONS, createDependencies(fixture.assets, runWrangler)),
-      ).rejects.toMatchObject({
+      await expect(bootstrapDeployment(REUSE_OPTIONS, dependencies)).rejects.toMatchObject({
         message: "Worker code was deployed, but route or schedule reconciliation failed.",
         stage: "deployment",
+      });
+      expect(persistProvisionedInstallation).toHaveBeenCalledWith({
+        accountId: ACCOUNT_ID,
+        databaseId: DATABASE_ID,
+        databaseName: OPTIONS.databaseName,
+        origin: OPTIONS.origin.origin,
+        skillBucketName: "crewhelm-skills",
+        workerName: OPTIONS.workerName,
       });
       expect(deployCount).toBe(2);
       expect(stagedDirectory).toBeDefined();

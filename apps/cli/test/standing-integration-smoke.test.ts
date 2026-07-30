@@ -195,6 +195,7 @@ function fleetStatus(active: number, unresolvedEffects = 0) {
           total: 1,
         },
         runs: { active: 0 },
+        skills: { active: 0, pendingObjects: 0, storedBytes: 0, total: 0, versions: 0 },
         recovery: { unresolvedEffects },
       },
     },

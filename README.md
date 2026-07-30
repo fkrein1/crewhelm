@@ -45,7 +45,8 @@ node apps/cli/dist/crewhelm.js up \
 On a fresh installation, `crewhelm up` creates a private GitHub App in your browser and securely
 prompts for the Composio project key. Interactive setup recommends Cloudflare AI Gateway spend
 protection, asks for the daily USD limit when enabled, and also lets you skip it. The CLI applies
-packaged migrations, deploys, and diagnoses the public origin. It saves only non-secret
+packaged migrations, provisions isolated Skill package storage, deploys, and diagnoses the public
+origin. It saves only non-secret
 coordinates in `crewhelm.installation.json`; `crewhelm.installation.example.json` shows the shape.
 Repeat upgrades preserve deployed secrets and an existing Gateway route, and skip an identical
 Worker upload while still reconciling triggers.
@@ -58,7 +59,7 @@ stop before authorization when it does not, and an interactive smoke offers to r
 matching `up`. A newer Worker protocol is never replaced by an older CLI.
 
 One Cloudflare account may host multiple installations when each uses explicit, distinct Worker,
-D1, metadata, and callback coordinates. Rate-limit counters and Durable Objects remain
+D1, R2, metadata, and callback coordinates. Rate-limit counters and Durable Objects remain
 Worker-specific; shared Gateways and GitHub Apps must be explicit, with every callback allowlisted.
 
 Pass `--ai-budget-usd <dollars>` to enable or change the optional Gateway hard limit. Without a

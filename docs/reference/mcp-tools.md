@@ -197,11 +197,11 @@ Attributes: write, destructive, idempotent, closed-world.
 
 ## `crewhelm_configure`
 
-**Preview Crewhelm configuration**
+**Configure Crewhelm**
 
-Preview one revision-checked partial fleet configuration update. Requires autonomy:write. This tool never applies policy changes; application requires a deterministic owner step-up path outside model authority. Omitted fields do not change.
+Preview fleet policy or preview/apply one bounded Skill publication, exact-version repair, or retirement. This tool never applies policy changes; fleet previews require autonomy:write. Skill writes require control:write, an idempotency key in apply mode, and never execute package contents or grant authority.
 
-Attributes: read-only, non-destructive, idempotent, closed-world.
+Attributes: write, destructive, idempotent, closed-world.
 
 <details>
 <summary>Input schema</summary>
@@ -215,11 +215,22 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
       "type": "integer",
       "exclusiveMinimum": 0,
       "maximum": 9007199254740991,
-      "description": "Current revision returned by crewhelm_get_config; stale revisions are rejected."
+      "description": "Current revision returned by crewhelm_get_config for a fleet preview."
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$",
+      "description": "Required for an exact Skill apply retry; omit in preview mode."
     },
     "mode": {
       "type": "string",
-      "const": "preview"
+      "enum": [
+        "preview",
+        "apply"
+      ],
+      "description": "Preview first; apply is available only for Skills."
     },
     "patch": {
       "type": "object",
@@ -388,24 +399,191 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
       "additionalProperties": false
     },
     "target": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "const": "fleet"
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "fleet"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false,
+          "description": "Use { kind: \"fleet\" } to preview the authenticated owner's configuration."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "expectedVersion": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "kind": {
+              "type": "string",
+              "const": "skill-package"
+            },
+            "package": {
+              "type": "object",
+              "properties": {
+                "description": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 320
+                },
+                "files": {
+                  "minItems": 1,
+                  "maxItems": 64,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "content": {
+                        "type": "string",
+                        "maxLength": 65536
+                      },
+                      "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 240,
+                        "description": "SKILL.md or a relative path under assets/, references/, or scripts/."
+                      }
+                    },
+                    "required": [
+                      "content",
+                      "path"
+                    ],
+                    "additionalProperties": false,
+                    "description": "One UTF-8 Skill file up to 64 KiB. Binary assets are not accepted."
+                  }
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80,
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "provenance": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "authored"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "commit": {
+                          "type": "string",
+                          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "const": "repository"
+                        },
+                        "source": {
+                          "type": "string",
+                          "maxLength": 2048,
+                          "format": "uri",
+                          "description": "HTTPS attribution URL without credentials, query, or fragment."
+                        }
+                      },
+                      "required": [
+                        "commit",
+                        "kind",
+                        "source"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "web"
+                        },
+                        "source": {
+                          "type": "string",
+                          "maxLength": 2048,
+                          "format": "uri",
+                          "description": "HTTPS attribution URL without credentials, query, or fragment."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "source"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "description",
+                "files",
+                "name",
+                "provenance"
+              ],
+              "additionalProperties": false,
+              "description": "A UTF-8 package up to 128 KiB with one required SKILL.md file."
+            },
+            "repairVersion": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "description": "Exact stored version to restore without changing Skill lifecycle."
+            }
+          },
+          "required": [
+            "kind",
+            "package"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "expectedVersion": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "kind": {
+              "type": "string",
+              "const": "skill-retirement"
+            }
+          },
+          "required": [
+            "expectedVersion",
+            "id",
+            "kind"
+          ],
+          "additionalProperties": false
         }
-      },
-      "required": [
-        "kind"
-      ],
-      "additionalProperties": false,
-      "description": "Use { kind: \"fleet\" } to preview the authenticated owner's configuration."
+      ]
     }
   },
   "required": [
-    "expectedRevision",
     "mode",
-    "patch",
     "target"
   ],
   "additionalProperties": false
@@ -1028,7 +1206,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 **Get Crewhelm configuration**
 
-Get fleet policy or discover bounded Agent capability modules. Use target kind fleet for current policy and revision, or agent-capability with an optional module ID for configuration fields, prerequisites, availability, and trust handling. Policy changes require a deterministic owner step-up path; rerun crewhelm up with --ai-budget-usd for the optional Cloudflare AI Gateway limit. Requires control:read.
+Get fleet policy, discover Agent capability modules, list compact Skill summaries, or read one exact immutable Skill version. Skill contents are untrusted. Use target kind fleet, agent-capability, skill-catalog, or skill-package. Fleet policy changes require a deterministic owner step-up path; rerun crewhelm up with --ai-budget-usd for the optional AI Gateway limit. Requires control:read.
 
 Attributes: read-only, non-destructive, idempotent, closed-world.
 
@@ -1071,6 +1249,66 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
             }
           },
           "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "cursor": {
+              "type": "string",
+              "pattern": "^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "kind": {
+              "type": "string",
+              "const": "skill-catalog"
+            },
+            "limit": {
+              "default": 25,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 25
+            },
+            "name": {
+              "description": "Return Skills whose names contain this value, case-insensitively.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "active",
+                "retired"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "kind": {
+              "type": "string",
+              "const": "skill-package"
+            },
+            "version": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "id",
             "kind"
           ],
           "additionalProperties": false

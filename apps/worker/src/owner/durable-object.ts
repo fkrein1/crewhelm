@@ -62,7 +62,11 @@ import {
   type GetAgentScheduleResult,
   type ConfigureFleetConfigurationResult,
   type GetFleetConfigurationResult,
+  type GetSkillResult,
   type ListAuditEventsResult,
+  type ListSkillsResult,
+  type PublishSkillResult,
+  type RetireSkillResult,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
 import { and, count, desc, eq, gte, isNull, lt, lte } from "drizzle-orm";
@@ -112,6 +116,7 @@ import {
 import { recordScheduleEvent } from "../observability/schedules.js";
 import { AgentSchedules, deniedAgentSchedule, type DueAgentSchedule } from "./schedules/index.js";
 import { AiGatewayUsage } from "./usage/index.js";
+import { R2SkillPackageObjectStore, Skills, deniedSkill } from "./skills/index.js";
 
 const INVALID_RUN_ADMISSION = {
   error: {
@@ -168,6 +173,7 @@ export class OwnerControlPlane extends DurableObject {
   readonly #agentSchedules: AgentSchedules;
   readonly #fleetConfigurations: FleetConfigurations;
   readonly #aiGatewayUsage: AiGatewayUsage;
+  readonly #skills: Skills;
 
   constructor(state: DurableObjectState, environment: Cloudflare.Env) {
     super(state, environment);
@@ -197,6 +203,11 @@ export class OwnerControlPlane extends DurableObject {
     this.#authorityControls = new AuthorityControls(this.#database);
     this.#agentSchedules = new AgentSchedules(this.#database, this.#storage, () =>
       this.#fleetConfigurations.currentData(),
+    );
+    this.#skills = new Skills(
+      this.#database,
+      new R2SkillPackageObjectStore(environment.SKILL_PACKAGES),
+      this.#objectName,
     );
     this.#agentChannel = new AgentChannel(
       this.#objectName,
@@ -265,6 +276,7 @@ export class OwnerControlPlane extends DurableObject {
           recovery: {
             unresolvedEffects: this.#toolExecutions.unresolvedCount(),
           },
+          skills: this.#skills.usage(),
           ...this.#agentChannel.usage(),
         },
       },
@@ -292,6 +304,34 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     return this.#fleetConfigurations.configure(authorization.authority, input);
+  }
+
+  listSkills(authorityInput: unknown, input: unknown): ListSkillsResult {
+    const authorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
+
+    return authorization.ok ? this.#skills.list(input) : deniedSkill(authorization.code);
+  }
+
+  async getSkill(authorityInput: unknown, input: unknown): Promise<GetSkillResult> {
+    const authorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
+
+    return authorization.ok ? this.#skills.get(input) : deniedSkill(authorization.code);
+  }
+
+  async publishSkill(authorityInput: unknown, input: unknown): Promise<PublishSkillResult> {
+    const authorization = this.#authorize(authorityInput, OWNER_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#skills.publish(authorization.authority, input)
+      : deniedSkill(authorization.code);
+  }
+
+  async retireSkill(authorityInput: unknown, input: unknown): Promise<RetireSkillResult> {
+    const authorization = this.#authorize(authorityInput, OWNER_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#skills.retire(authorization.authority, input)
+      : deniedSkill(authorization.code);
   }
 
   recordAiGatewayCall(input: unknown): Promise<void> {

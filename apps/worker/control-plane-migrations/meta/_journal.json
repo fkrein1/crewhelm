@@ -127,6 +127,13 @@
       "when": 1785438993594,
       "tag": "0017_messy_argent",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1785447583058,
+      "tag": "0018_clear_franklin_richards",
+      "breakpoints": true
     }
   ]
 }
