@@ -101,7 +101,9 @@ export const fleetConfigurationDataSchema = z
       allowed: allowedFleetModelsSchema.describe(
         "Supported models that Agents in this fleet may select.",
       ),
-      default: runnableAgentModelSchema.describe("Model used when Agent creation omits a model."),
+      default: runnableAgentModelSchema.describe(
+        "Workers AI model used when Agent creation omits capability configuration.",
+      ),
     }),
     schedules: z.strictObject({
       minimumIntervalSeconds: z
@@ -196,7 +198,7 @@ export const fleetConfigurationPatchSchema = z
       .strictObject({
         allowed: allowedFleetModelsSchema.optional(),
         default: runnableAgentModelSchema
-          .describe("New model used when Agent creation omits a model.")
+          .describe("New Workers AI model used when Agent creation omits capability configuration.")
           .optional(),
       })
       .describe("Fleet model selection defaults and allowlist.")

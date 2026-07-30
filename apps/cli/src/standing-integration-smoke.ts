@@ -17,6 +17,8 @@ import {
   listConnectionsResultSchema,
   listUnresolvedToolEffectsResultSchema,
   startRunResultSchema,
+  WORKERS_AI_CAPABILITY_ID,
+  WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
   type Agent,
   type AgentSchedule,
   type ConnectionSummary,
@@ -799,9 +801,15 @@ export async function runStandingIntegrationSmoke(
   };
   const runPrompt = `Create exactly one Gmail draft addressed only to "${SAFE_DRAFT_RECIPIENT}" with subject "${fixtureSubject}" and body "This draft was created by an explicitly authorized Crewhelm standing-authority rehearsal." Do not add Cc, Bcc, extra recipients, attachments, HTML, or a thread ID. Do not perform any other action.`;
   const createInput = {
+    capabilities: [
+      {
+        configuration: { model: TOOL_CALLING_MODEL },
+        id: WORKERS_AI_CAPABILITY_ID,
+        schemaVersion: WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
+      },
+    ],
     executionLimits: AGENT_LIMITS,
     idempotencyKey: `smoke-integration-create-${suffix}`,
-    model: TOOL_CALLING_MODEL,
     ...fixture,
   };
   let activeCheckIndex = 1;

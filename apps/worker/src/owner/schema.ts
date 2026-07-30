@@ -1,5 +1,6 @@
 import type {
   Agent,
+  AgentCapabilityConfigurations,
   AgentInboxDeferredReason,
   AgentExecutionLimits,
   AgentScheduleConfiguration,
@@ -117,6 +118,9 @@ export const agentRevisions = sqliteTable(
     revision: integer("revision").notNull(),
     name: text("name").notNull(),
     model: text("model").notNull(),
+    capabilities: text("capabilities", { mode: "json" })
+      .$type<AgentCapabilityConfigurations>()
+      .notNull(),
     instructions: text("instructions").notNull(),
     executionLimits: text("execution_limits", { mode: "json" })
       .$type<AgentExecutionLimits>()
@@ -133,6 +137,7 @@ export const agentRevisions = sqliteTable(
       foreignColumns: [agents.agentId],
     }).onDelete("restrict"),
     check("agent_revisions_revision_positive", sql`${table.revision} > 0`),
+    check("agent_revisions_capabilities_json", sql`json_valid(${table.capabilities})`),
     check("agent_revisions_capability_grants_json", sql`json_valid(${table.capabilityGrants})`),
     check("agent_revisions_created_at_positive", sql`${table.createdAt} > 0`),
   ],

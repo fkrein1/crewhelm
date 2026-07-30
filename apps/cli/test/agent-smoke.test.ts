@@ -180,6 +180,13 @@ function smokeHarness(options: SmokeHarnessOptions = {}): SmokeHarness {
   let fixtureName = "Crewhelm lifecycle smoke fixture";
 
   const agent = (overrides: { id?: string; name?: string } = {}) => ({
+    capabilities: [
+      {
+        configuration: { model: "@cf/meta/llama-4-scout-17b-16e-instruct" },
+        id: "inference.workers-ai",
+        schemaVersion: 1,
+      },
+    ],
     capabilityGrants: [],
     createdAt: timestamp,
     executionLimits: {

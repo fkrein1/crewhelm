@@ -5,6 +5,7 @@ import {
   cancelAdmittedRunResultSchema,
   confirmRunAdmissionResultSchema,
   crewAgentObjectName,
+  crewAgentSystemPrompt,
   inspectAdmittedRunInputSchema,
   inspectAdmittedRunResultSchema,
   MAXIMUM_AGENT_INBOX_PREVIEW_CHARACTERS,
@@ -1463,7 +1464,10 @@ export class CrewAgent extends Think {
     const configuration = this.#activeRuntimeConfig();
     const selectedModel = model ?? this.getModel();
 
-    if (typeof selectedModel === "string" && selectedModel !== configuration.model) {
+    if (
+      typeof selectedModel === "string" &&
+      selectedModel !== configuration.runtimePlan.inference.model
+    ) {
       throw runtimeAdmissionError();
     }
 
@@ -1471,11 +1475,11 @@ export class CrewAgent extends Think {
   }
 
   override getModel(): ThinkModel {
-    return this.#activeRuntimeConfig().model;
+    return this.#activeRuntimeConfig().runtimePlan.inference.model;
   }
 
   override getSystemPrompt(): string {
-    return this.#activeRuntimeConfig().instructions;
+    return crewAgentSystemPrompt(this.#activeRuntimeConfig());
   }
 
   override getTools(): ToolSet {
@@ -2921,7 +2925,7 @@ export class CrewAgent extends Think {
   ): boolean {
     return (
       reservation.maxDurationSeconds <= configuration.executionLimits.maxDurationSeconds &&
-      reservation.model === configuration.model &&
+      JSON.stringify(reservation.runtimePlan) === JSON.stringify(configuration.runtimePlan) &&
       reservation.maxOutputTokens <= configuration.executionLimits.maxModelTokens &&
       reservation.maxToolCalls <= configuration.executionLimits.maxToolCalls &&
       reservation.maxTurns <= configuration.executionLimits.maxTurns
@@ -2933,7 +2937,10 @@ export class CrewAgent extends Think {
     configuration: CrewAgentRuntimeConfig,
     promptCharacters: number,
   ): boolean {
-    return reservation.maxInputCharacters === configuration.instructions.length + promptCharacters;
+    return (
+      reservation.maxInputCharacters ===
+      crewAgentSystemPrompt(configuration).length + promptCharacters
+    );
   }
 }
 

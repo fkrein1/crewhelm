@@ -200,6 +200,13 @@ function ownerFixtureSession(): TemporaryOwnerMcpSession {
   const createdAt = "2026-07-30T12:00:00.000Z";
   const revisedAt = "2026-07-30T12:01:00.000Z";
   const exactAgent = {
+    capabilities: [
+      {
+        configuration: { model: DEFAULT_RUNNABLE_AGENT_MODEL },
+        id: "inference.workers-ai",
+        schemaVersion: 1,
+      },
+    ],
     capabilityGrants: [],
     createdAt,
     executionLimits: {
@@ -437,7 +444,7 @@ describe("supported upgrade rehearsal", () => {
       captureOwnerState: vi
         .fn<NonNullable<UpgradeSmokeDependencies["captureOwnerState"]>>()
         .mockResolvedValueOnce(ownerState())
-        .mockResolvedValueOnce(ownerState("1", 17)),
+        .mockResolvedValueOnce(ownerState("1", 18)),
       reportUpgradeProgress,
     });
 
@@ -450,7 +457,7 @@ describe("supported upgrade rehearsal", () => {
       before: { infrastructure: { migrations: { count: 1 } } },
       after: { infrastructure: { migrations: { count: 2 } } },
     });
-    expect(report.after.owner.status.schemaVersion).toBe(17);
+    expect(report.after.owner.status.schemaVersion).toBe(18);
     expect(harness.bootstrap).toHaveBeenCalledTimes(2);
     expect(harness.bootstrap).toHaveBeenNthCalledWith(1, expect.any(Object), BASELINE_FINGERPRINT);
     expect(harness.bootstrap).toHaveBeenNthCalledWith(2, expect.any(Object), CURRENT_FINGERPRINT);

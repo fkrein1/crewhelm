@@ -799,7 +799,7 @@ describe("public OAuth to MCP integration", () => {
     ).toMatchObject({
       ok: true,
       status: {
-        schemaVersion: 17,
+        schemaVersion: 18,
         status: "ready",
       },
     });
@@ -816,7 +816,6 @@ describe("public OAuth to MCP integration", () => {
         },
         idempotencyKey: "oauth-integration-create-agent",
         instructions: "Maintain a concise authenticated work queue.",
-        model: "@cf/meta/llama-4-scout-17b-16e-instruct",
         name: "Authenticated work queue",
       },
     );
@@ -856,12 +855,12 @@ describe("public OAuth to MCP integration", () => {
       token.access_token,
       MCP_UPDATE_AGENT_TOOL_NAME,
       {
+        capabilities: createdAgent.agent.capabilities,
         executionLimits: createdAgent.agent.executionLimits,
         expectedRevision: 1,
         id: createdAgent.agent.id,
         idempotencyKey: "oauth-integration-update-agent",
         instructions: "Maintain and coordinate a concise authenticated work queue.",
-        model: createdAgent.agent.model,
         name: "Authenticated work coordinator",
       },
     );

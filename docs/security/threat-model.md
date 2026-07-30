@@ -83,6 +83,10 @@ exact owner, client, Agent revision, prompt, idempotency key, and budget. `CrewA
 its namespace or authority-bearing framework entrypoints to public callers. Interrupted inference
 is charged when it cannot be proven unspent and is not silently repeated.
 
+Agent capability configuration is inert owner input until its statically registered module
+validates prerequisites and contributes to the admitted runtime plan. Modules may require grants;
+they cannot create authority.
+
 Run and tool authority is also bound to the exact fleet-configuration revision admitted. Any later
 configuration revision invalidates unconsumed admission, approval, and dispatch authority; the
 owner starts a new run under the new policy.

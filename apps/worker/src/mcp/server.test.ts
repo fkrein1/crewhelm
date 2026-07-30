@@ -24,6 +24,7 @@ import {
   enableIntegrationResultSchema,
   getAgentRevisionResultSchema,
   getAgentResultSchema,
+  getAgentCapabilityCatalogResultSchema,
   getFleetConfigurationResultSchema,
   integrationAuthConfigListResultSchema,
   integrationCatalogSearchResultSchema,
@@ -392,6 +393,11 @@ describe("authenticated MCP handler", () => {
       description: expect.stringContaining("deterministic owner step-up path"),
     });
     expect(getConfigurationTool?.description).toContain("--ai-budget-usd");
+    const getConfigurationInputSchema = JSON.stringify(getConfigurationTool?.inputSchema);
+    expect(getConfigurationInputSchema).toContain('"target"');
+    expect(getConfigurationInputSchema).toContain('"fleet"');
+    expect(getConfigurationInputSchema).toContain('"agent-capability"');
+    expect(getConfigurationInputSchema).toContain('"id"');
     expect(configureTool).toMatchObject({
       annotations: {
         destructiveHint: false,
@@ -434,7 +440,7 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toMatchObject({
       ok: true,
       status: {
-        schemaVersion: 17,
+        schemaVersion: 18,
         status: "ready",
         usage: {
           recovery: { unresolvedEffects: 0 },
@@ -567,6 +573,77 @@ describe("authenticated MCP handler", () => {
     expect(unchanged).toMatchObject({ configuration: { revision: 1 }, ok: true });
   });
 
+  it("discovers one bounded Agent capability through the existing configuration surface", async () => {
+    const authority = await ownerAuthority("mcp-capability-catalog-owner", [OWNER_READ_SCOPE]);
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 1,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              target: {
+                id: "inference.workers-ai",
+                kind: "agent-capability",
+              },
+            },
+            name: MCP_GET_CONFIGURATION_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const result = jsonRpcToolResultSchema.parse(await response.json()).result;
+
+    expect(
+      getAgentCapabilityCatalogResultSchema.parse(JSON.parse(result.content[0]?.text ?? "")),
+    ).toEqual({
+      capabilities: [
+        {
+          availability: {
+            missingPrerequisites: [],
+            state: "available",
+          },
+          configurationFields: [
+            {
+              description: "Supported Workers AI model; the fleet policy may narrow this list.",
+              enum: [
+                "@cf/ibm-granite/granite-4.0-h-micro",
+                "@cf/meta/llama-4-scout-17b-16e-instruct",
+                "@cf/openai/gpt-oss-20b",
+                "@cf/qwen/qwen3-30b-a3b-fp8",
+                "@cf/zai-org/glm-4.7-flash",
+              ],
+              name: "model",
+              required: true,
+              type: "string",
+            },
+          ],
+          description:
+            "Selects the Cloudflare Workers AI model used for Agent reasoning and tool orchestration.",
+          id: "inference.workers-ai",
+          prerequisites: [
+            {
+              description: "Cloudflare Workers AI binding used for admitted model calls.",
+              id: "binding.ai",
+              kind: "binding",
+            },
+          ],
+          schemaVersion: 1,
+          title: "Workers AI inference",
+          trust: {
+            configuration: "untrusted-until-validated",
+            runtimeContribution: "module-validated",
+          },
+        },
+      ],
+      ok: true,
+    });
+    expect(result.isError).toBe(false);
+  });
+
   it("disables an Agent through the recovery MCP tool", async () => {
     const authority = await ownerAuthority("mcp-recovery-owner", [
       OWNER_WRITE_SCOPE,
@@ -583,7 +660,6 @@ describe("authenticated MCP handler", () => {
       },
       idempotencyKey: "mcp-recovery-agent",
       instructions: "Stop immediately when disabled.",
-      model: "@cf/meta/llama-4-scout-17b-16e-instruct",
       name: "Recovery Agent",
     });
 
@@ -636,7 +712,6 @@ describe("authenticated MCP handler", () => {
         },
         idempotencyKey: "mcp-batch-recovery-agent-1",
         instructions: "Stop immediately when disabled.",
-        model: "@cf/meta/llama-4-scout-17b-16e-instruct",
         name: "Batch Recovery Agent One",
       }),
       controlPlane.createAgent(authority, {
@@ -648,7 +723,6 @@ describe("authenticated MCP handler", () => {
         },
         idempotencyKey: "mcp-batch-recovery-agent-2",
         instructions: "Stop immediately when disabled.",
-        model: "@cf/meta/llama-4-scout-17b-16e-instruct",
         name: "Batch Recovery Agent Two",
       }),
     ]);
@@ -903,7 +977,6 @@ describe("authenticated MCP handler", () => {
       },
       idempotencyKey: "mcp-create-agent-1",
       instructions: "Keep a concise owner-controlled work queue.",
-      model: "@cf/meta/llama-4-scout-17b-16e-instruct",
       name: "Work queue",
     };
     const createResponse = await handleAuthenticatedMcpRequest(
@@ -999,6 +1072,7 @@ describe("authenticated MCP handler", () => {
           params: {
             arguments: {
               ...input,
+              capabilities: created.agent.capabilities,
               expectedRevision: 1,
               id: created.agent.id,
               idempotencyKey: "mcp-update-agent-1",
@@ -1103,7 +1177,6 @@ describe("authenticated MCP handler", () => {
       },
       idempotencyKey: "mcp-run-agent",
       instructions: "Return one concise, plain-text answer.",
-      model: "@cf/meta/llama-4-scout-17b-16e-instruct",
       name: "MCP run Agent",
     });
 
@@ -1407,7 +1480,6 @@ describe("authenticated MCP handler", () => {
               },
               idempotencyKey: "mcp-read-only-create",
               instructions: "This request must not create state.",
-              model: "anthropic/claude-sonnet-4",
               name: "Denied Agent",
             },
             name: MCP_CREATE_AGENT_TOOL_NAME,
@@ -1478,11 +1550,19 @@ describe("authenticated MCP handler", () => {
                 maxToolCalls: 0,
                 maxTurns: 3,
               },
+              capabilities: [
+                {
+                  configuration: {
+                    model: "@cf/meta/llama-4-scout-17b-16e-instruct",
+                  },
+                  id: "inference.workers-ai",
+                  schemaVersion: 1,
+                },
+              ],
               expectedRevision: 1,
               id: "agent_00000000-0000-4000-8000-000000000000",
               idempotencyKey: "mcp-legacy-update",
               instructions: "This request must not update state.",
-              model: "anthropic/claude-sonnet-4",
               name: "Denied update",
             },
             name: MCP_UPDATE_AGENT_TOOL_NAME,
@@ -2537,7 +2617,6 @@ describe("authenticated MCP handler", () => {
       },
       idempotencyKey: "mcp-configure-agent",
       instructions: "Read project items with the attached connection.",
-      model: "@cf/meta/llama-4-scout-17b-16e-instruct",
       name: "Project reader",
     });
 

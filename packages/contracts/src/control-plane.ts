@@ -6,6 +6,7 @@ import {
   fleetRetentionSchema,
 } from "./fleet-capacity.js";
 import { auditEventSummarySchema } from "./audit.js";
+import { agentCapabilityConfigurationsSchema } from "./agent-capabilities.js";
 
 export const AGENTS_READ_SCOPE = "agents:read";
 export const AGENTS_WRITE_SCOPE = "agents:write";
@@ -200,6 +201,7 @@ export const agentSummarySchema = z.strictObject({
   status: agentStatusSchema,
 });
 export const agentSchema = agentSummarySchema.extend({
+  capabilities: agentCapabilityConfigurationsSchema,
   capabilityGrants: agentCapabilityGrantsSchema,
   executionLimits: agentExecutionLimitsSchema,
   instructions: agentInstructionsSchema,
@@ -221,6 +223,11 @@ export const agentMutationIdempotencyKeySchema = z
   .regex(/^[A-Za-z0-9._~-]+$/, "Expected an opaque idempotency key.");
 export const agentCreationIdempotencyKeySchema = agentMutationIdempotencyKeySchema;
 export const createAgentInputSchema = z.strictObject({
+  capabilities: agentCapabilityConfigurationsSchema
+    .describe(
+      "Optional capability module configuration. Omit to use the fleet's default inference module.",
+    )
+    .optional(),
   executionLimits: agentExecutionLimitsSchema
     .describe(
       "Optional Agent-specific ceilings. Omit to inherit the current fleet execution defaults.",
@@ -228,9 +235,6 @@ export const createAgentInputSchema = z.strictObject({
     .optional(),
   idempotencyKey: agentCreationIdempotencyKeySchema,
   instructions: agentInstructionsSchema,
-  model: agentModelSchema
-    .describe("Optional model override. Omit to use the current fleet default model.")
-    .optional(),
   name: agentNameSchema,
 });
 export const getAgentInputSchema = z.strictObject({
@@ -257,12 +261,12 @@ export const listAgentRevisionsInputSchema = z.strictObject({
   limit: z.number().int().min(1).max(MAXIMUM_FLEET_LIST_ITEMS).default(25),
 });
 export const updateAgentInputSchema = z.strictObject({
+  capabilities: agentCapabilityConfigurationsSchema,
   executionLimits: agentExecutionLimitsSchema,
   expectedRevision: agentRevisionNumberSchema,
   id: agentIdSchema,
   idempotencyKey: agentMutationIdempotencyKeySchema,
   instructions: agentInstructionsSchema,
-  model: agentModelSchema,
   name: agentNameSchema,
 });
 

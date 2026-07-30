@@ -15,6 +15,7 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
 import { digestRunPrompt } from "../../agent/admitted-runs/index.js";
+import { workersAiCapabilityConfiguration } from "../../agent-capabilities/workers-ai.js";
 import { agentInput, agentUpdate, authorityFor, fixedRunAdmissionFailure } from "../testkit.js";
 
 describe("OwnerControlPlane runs", () => {
@@ -273,11 +274,17 @@ describe("OwnerControlPlane runs", () => {
           maxDurationSeconds: created.agent.executionLimits.maxDurationSeconds,
           maxInputCharacters: created.agent.instructions.length + prompt.length,
           maxModelCalls: 1,
-          model: created.agent.model,
           maxOutputTokens: MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
           maxToolCalls: 0,
           maxTurns: 1,
           reservationId: expect.stringMatching(/^budget_/),
+          runtimePlan: {
+            inference: {
+              model: created.agent.model,
+              moduleId: "inference.workers-ai",
+              schemaVersion: 1,
+            },
+          },
         },
         clientId: authority.clientId,
         nonce: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
@@ -384,12 +391,13 @@ describe("OwnerControlPlane runs", () => {
     await expect(stub.verifyRunAdmission(replay.permit)).resolves.toEqual({
       configuration: {
         agentId: created.agent.id,
+        capabilities: created.agent.capabilities,
         capabilityGrants: [],
         executionLimits: created.agent.executionLimits,
         instructions: created.agent.instructions,
-        model: created.agent.model,
         ownerKey: authority.ownerKey,
         revision: created.agent.revision,
+        runtimePlan: replay.permit.budgetReservation.runtimePlan,
       },
       ok: true,
       runId: first.permit.runId,
@@ -482,11 +490,17 @@ describe("OwnerControlPlane runs", () => {
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const supported = await stub.createAgent(authority, {
       ...agentInput("create-supported-model-agent-236"),
-      model: "@cf/zai-org/glm-4.7-flash",
+      capabilities: [workersAiCapabilityConfiguration("@cf/zai-org/glm-4.7-flash")],
     });
     const unlisted = await stub.createAgent(authority, {
       ...agentInput("create-unlisted-model-agent-236"),
-      model: "@cf/example/unlisted-model",
+      capabilities: [
+        {
+          configuration: { model: "@cf/example/unlisted-model" },
+          id: "inference.workers-ai",
+          schemaVersion: 1,
+        },
+      ],
     });
     const prompt = "Perform the exact admitted task.";
 
@@ -510,7 +524,11 @@ describe("OwnerControlPlane runs", () => {
       ok: true,
       permit: {
         budgetReservation: {
-          model: "@cf/zai-org/glm-4.7-flash",
+          runtimePlan: {
+            inference: {
+              model: "@cf/zai-org/glm-4.7-flash",
+            },
+          },
         },
       },
       state: "issued",

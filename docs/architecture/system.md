@@ -49,6 +49,7 @@ cost-reconciliation controls.
 | ------------------------------------- | ------------------------- |
 | Owner authorization and wiring        | `owner/durable-object.ts` |
 | Agent definitions and revisions       | `owner/agents/`           |
+| Agent capability registry and plans   | `agent-capabilities/`     |
 | Run admission, budgets, and execution | `owner/runs/`             |
 | Recurring Agent schedules             | `owner/schedules/`        |
 | Disablement, revocation, recovery     | `owner/recovery/`         |
@@ -71,8 +72,8 @@ branding, stylesheet assets, and terminal color roles.
 
 1. The Worker verifies identity and scope, then selects the owner object. Bearer tokens stop at the
    Worker.
-2. `OwnerControlPlane` revalidates authority and admits work against immutable Agent and fleet
-   revisions, issuing a bounded single-use permit.
+2. `OwnerControlPlane` revalidates authority, compiles validated Agent modules into an immutable
+   runtime plan, and issues a bounded single-use permit against the exact Agent and fleet revisions.
 3. `CrewAgent` redeems the permit before inference. Discovery and configuration grant no execution
    authority.
 4. `ToolGate` rechecks the grant, policy, connection, effect, approval, and budget before Composio

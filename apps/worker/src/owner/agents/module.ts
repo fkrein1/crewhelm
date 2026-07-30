@@ -27,6 +27,7 @@ import {
   resolveConnectionForAttachmentInputSchema,
   resolvedConnectionForAttachmentSchema,
   type Agent,
+  type AgentCapabilityConfigurations,
   type AgentRevision,
   type AgentRevisionSummary,
   type AgentSummary,
@@ -50,6 +51,10 @@ import { and, asc, count, desc, eq, gt, lt, sql } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import {
+  AVAILABLE_AGENT_CAPABILITY_PREREQUISITES,
+  agentCapabilityRegistry,
+} from "../../agent-capabilities/registry.js";
+import {
   agentCreations,
   agentRevisions,
   agentUpdates,
@@ -63,6 +68,7 @@ import {
 type AgentRequestFailure = Extract<CreateAgentResult, { ok: false }>;
 type StoredAgentRow = {
   agentId: string;
+  capabilities: AgentCapabilityConfigurations;
   capabilityGrants: Agent["capabilityGrants"];
   createdAt: number;
   currentRevision: number;
@@ -108,8 +114,8 @@ async function digestAgentCreation(input: CreateAgentInput): Promise<string> {
   return digestCanonicalRequest(
     JSON.stringify({
       executionLimits: input.executionLimits,
+      capabilities: input.capabilities,
       instructions: input.instructions,
-      model: input.model,
       name: input.name,
     }),
   );
@@ -119,6 +125,7 @@ async function digestAgentUpdate(input: UpdateAgentInput): Promise<string> {
   return digestCanonicalRequest(
     JSON.stringify({
       id: input.id,
+      capabilities: input.capabilities,
       expectedRevision: input.expectedRevision,
       executionLimits: {
         maxDurationSeconds: input.executionLimits.maxDurationSeconds,
@@ -127,7 +134,6 @@ async function digestAgentUpdate(input: UpdateAgentInput): Promise<string> {
         maxTurns: input.executionLimits.maxTurns,
       },
       instructions: input.instructions,
-      model: input.model,
       name: input.name,
     }),
   );
@@ -246,6 +252,7 @@ export class AgentRegistry {
     const existingUpdate = this.#database
       .select({
         agentId: agents.agentId,
+        capabilities: agentRevisions.capabilities,
         capabilityGrants: agentRevisions.capabilityGrants,
         createdAt: agents.createdAt,
         currentRevision: agentUpdates.revision,
@@ -326,6 +333,7 @@ export class AgentRegistry {
       const existingUpdate = transaction
         .select({
           agentId: agents.agentId,
+          capabilities: agentRevisions.capabilities,
           capabilityGrants: agentRevisions.capabilityGrants,
           createdAt: agents.createdAt,
           currentRevision: agentUpdates.revision,
@@ -368,6 +376,7 @@ export class AgentRegistry {
       const currentRow = transaction
         .select({
           agentId: agents.agentId,
+          capabilities: agentRevisions.capabilities,
           capabilityGrants: agentRevisions.capabilityGrants,
           createdAt: agents.createdAt,
           currentRevision: agents.currentRevision,
@@ -506,6 +515,7 @@ export class AgentRegistry {
         .insert(agentRevisions)
         .values({
           agentId: currentRow.agentId,
+          capabilities: currentRow.capabilities,
           capabilityGrants: grantIds,
           createdAt,
           executionLimits: currentRow.executionLimits,
@@ -570,6 +580,7 @@ export class AgentRegistry {
 
       return configureAgentConnectionResultSchema.parse({
         agent: {
+          capabilities: currentRow.capabilities,
           capabilityGrants: grantIds,
           createdAt: new Date(currentRow.createdAt).toISOString(),
           executionLimits: currentRow.executionLimits,
@@ -596,12 +607,12 @@ export class AgentRegistry {
     const requestDigest = await digestAgentCreation(request.data);
     const fleetConfiguration = this.#currentFleetConfiguration();
     const executionLimits = request.data.executionLimits ?? fleetConfiguration.execution;
-    const model = request.data.model ?? fleetConfiguration.models.default;
 
     return this.#database.transaction((transaction) => {
       const existingRow = transaction
         .select({
           agentId: agents.agentId,
+          capabilities: agentRevisions.capabilities,
           capabilityGrants: agentRevisions.capabilityGrants,
           createdAt: agents.createdAt,
           currentRevision: agentCreations.revision,
@@ -641,10 +652,18 @@ export class AgentRegistry {
         });
       }
 
-      if (!fleetConfiguration.models.allowed.some((candidate) => candidate === model)) {
+      const compiledCapabilities = agentCapabilityRegistry.compile(request.data.capabilities, {
+        availablePrerequisites: AVAILABLE_AGENT_CAPABILITY_PREREQUISITES,
+        checkPrerequisites: false,
+        fleetConfiguration,
+      });
+
+      if (!compiledCapabilities.ok) {
         return deniedAgent("invalid_request");
       }
 
+      const { capabilities, runtimePlan } = compiledCapabilities;
+      const model = runtimePlan.inference.model;
       const agentCount = transaction.select({ value: count() }).from(agents).get()?.value ?? 0;
 
       if (agentCount >= fleetConfiguration.capacity.maxAgents) {
@@ -659,6 +678,7 @@ export class AgentRegistry {
         .insert(agentRevisions)
         .values({
           agentId,
+          capabilities,
           capabilityGrants: [],
           createdAt,
           executionLimits,
@@ -689,6 +709,7 @@ export class AgentRegistry {
         .run();
 
       const agent = agentSchema.parse({
+        capabilities,
         capabilityGrants: [],
         createdAt: new Date(createdAt).toISOString(),
         executionLimits,
@@ -792,11 +813,13 @@ export class AgentRegistry {
     }
 
     const requestDigest = await digestAgentUpdate(request.data);
+    const fleetConfiguration = this.#currentFleetConfiguration();
 
     return this.#database.transaction((transaction) => {
       const existingUpdate = transaction
         .select({
           agentId: agents.agentId,
+          capabilities: agentRevisions.capabilities,
           capabilityGrants: agentRevisions.capabilityGrants,
           createdAt: agents.createdAt,
           currentRevision: agentUpdates.revision,
@@ -836,9 +859,22 @@ export class AgentRegistry {
         });
       }
 
+      const compiledCapabilities = agentCapabilityRegistry.compile(request.data.capabilities, {
+        availablePrerequisites: AVAILABLE_AGENT_CAPABILITY_PREREQUISITES,
+        checkPrerequisites: false,
+        fleetConfiguration,
+      });
+
+      if (!compiledCapabilities.ok) {
+        return deniedAgent("invalid_request");
+      }
+
+      const { capabilities, runtimePlan } = compiledCapabilities;
+      const model = runtimePlan.inference.model;
       const currentRow = transaction
         .select({
           agentId: agents.agentId,
+          capabilities: agentRevisions.capabilities,
           capabilityGrants: agentRevisions.capabilityGrants,
           createdAt: agents.createdAt,
           currentRevision: agents.currentRevision,
@@ -871,7 +907,7 @@ export class AgentRegistry {
 
       if (
         currentAgent.name === request.data.name &&
-        currentAgent.model === request.data.model &&
+        JSON.stringify(currentAgent.capabilities) === JSON.stringify(capabilities) &&
         currentAgent.instructions === request.data.instructions &&
         currentAgent.executionLimits.maxDurationSeconds ===
           request.data.executionLimits.maxDurationSeconds &&
@@ -926,11 +962,12 @@ export class AgentRegistry {
         .insert(agentRevisions)
         .values({
           agentId: currentAgent.id,
+          capabilities,
           capabilityGrants: grantIds,
           createdAt: updatedAt,
           executionLimits: request.data.executionLimits,
           instructions: request.data.instructions,
-          model: request.data.model,
+          model,
           name: request.data.name,
           revision,
         })
@@ -977,12 +1014,13 @@ export class AgentRegistry {
 
       return updateAgentResultSchema.parse({
         agent: {
+          capabilities,
           capabilityGrants: grantIds,
           createdAt: currentAgent.createdAt,
           executionLimits: request.data.executionLimits,
           id: currentAgent.id,
           instructions: request.data.instructions,
-          model: request.data.model,
+          model,
           name: request.data.name,
           revision,
           status: currentAgent.status,
@@ -1060,6 +1098,7 @@ export class AgentRegistry {
 
   #agentFromRow(row: StoredAgentRow): Agent {
     return agentSchema.parse({
+      capabilities: row.capabilities,
       capabilityGrants: row.capabilityGrants,
       createdAt: new Date(row.createdAt).toISOString(),
       executionLimits: row.executionLimits,
@@ -1083,6 +1122,7 @@ export class AgentRegistry {
     return this.#database
       .select({
         agentId: agents.agentId,
+        capabilities: agentRevisions.capabilities,
         capabilityGrants: agentRevisions.capabilityGrants,
         createdAt: agents.createdAt,
         currentRevision: agentRevisions.revision,
@@ -1113,6 +1153,7 @@ export class AgentRegistry {
     return this.#database
       .select({
         agentId: agents.agentId,
+        capabilities: agentRevisions.capabilities,
         capabilityGrants: agentRevisions.capabilityGrants,
         createdAt: agents.createdAt,
         currentRevision: agents.currentRevision,

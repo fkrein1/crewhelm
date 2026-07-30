@@ -348,7 +348,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
                 "@cf/qwen/qwen3-30b-a3b-fp8",
                 "@cf/zai-org/glm-4.7-flash"
               ],
-              "description": "New model used when Agent creation omits a model."
+              "description": "New Workers AI model used when Agent creation omits capability configuration."
             }
           },
           "additionalProperties": false,
@@ -633,7 +633,7 @@ Attributes: write, destructive, idempotent, closed-world.
 
 **Create Crewhelm agent**
 
-Create an owner-scoped Crewhelm Agent with an immutable initial revision and no capability grants.
+Create an owner-scoped Crewhelm Agent with validated capability modules, an immutable initial revision, and no grants.
 
 Attributes: write, non-destructive, idempotent, closed-world.
 
@@ -645,6 +645,109 @@ Attributes: write, non-destructive, idempotent, closed-world.
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
+    "capabilities": {
+      "minItems": 1,
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "configuration": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 2048
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                {
+                  "maxItems": 64,
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 2048
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 2048
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "id": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 80,
+            "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "configuration",
+          "id",
+          "schemaVersion"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Optional capability module configuration. Omit to use the fleet's default inference module."
+    },
     "executionLimits": {
       "type": "object",
       "properties": {
@@ -688,13 +791,6 @@ Attributes: write, non-destructive, idempotent, closed-world.
       "type": "string",
       "minLength": 1,
       "maxLength": 8192
-    },
-    "model": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 160,
-      "pattern": "^(?:@cf\\/)?[A-Za-z0-9][A-Za-z0-9._:/-]*$",
-      "description": "Optional model override. Omit to use the current fleet default model."
     },
     "name": {
       "type": "string",
@@ -932,7 +1028,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 **Get Crewhelm configuration**
 
-Get the authenticated owner's current fleet configuration and revision. Requires control:read. To evaluate a change, pass this revision and a partial patch to crewhelm_configure with mode preview. Policy changes are not model-applicable and require a deterministic owner step-up path. Cloudflare AI Gateway is the optional hard dollar limit; configure it by rerunning crewhelm up with --ai-budget-usd <dollars>.
+Get fleet policy or discover bounded Agent capability modules. Use target kind fleet for current policy and revision, or agent-capability with an optional module ID for configuration fields, prerequisites, availability, and trust handling. Policy changes require a deterministic owner step-up path; rerun crewhelm up with --ai-budget-usd for the optional Cloudflare AI Gateway limit. Requires control:read.
 
 Attributes: read-only, non-destructive, idempotent, closed-world.
 
@@ -945,18 +1041,41 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
   "type": "object",
   "properties": {
     "target": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "const": "fleet"
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "fleet"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false,
+          "description": "Use { kind: \"fleet\" } to read the authenticated owner's configuration."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 80,
+              "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
+            },
+            "kind": {
+              "type": "string",
+              "const": "agent-capability"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
         }
-      },
-      "required": [
-        "kind"
-      ],
-      "additionalProperties": false,
-      "description": "Use { kind: \"fleet\" } to read the authenticated owner's configuration."
+      ]
     }
   },
   "required": [
@@ -1639,7 +1758,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 **Update Crewhelm agent**
 
-Replace an owner-scoped Crewhelm Agent definition by creating a new immutable revision.
+Replace an owner-scoped Crewhelm Agent definition and capability configuration with a new immutable revision.
 
 Attributes: write, destructive, idempotent, closed-world.
 
@@ -1651,6 +1770,108 @@ Attributes: write, destructive, idempotent, closed-world.
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
+    "capabilities": {
+      "minItems": 1,
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "configuration": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 2048
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                {
+                  "maxItems": 64,
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 2048
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 2048
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "id": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 80,
+            "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "configuration",
+          "id",
+          "schemaVersion"
+        ],
+        "additionalProperties": false
+      }
+    },
     "executionLimits": {
       "type": "object",
       "properties": {
@@ -1703,12 +1924,6 @@ Attributes: write, destructive, idempotent, closed-world.
       "minLength": 1,
       "maxLength": 8192
     },
-    "model": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 160,
-      "pattern": "^(?:@cf\\/)?[A-Za-z0-9][A-Za-z0-9._:/-]*$"
-    },
     "name": {
       "type": "string",
       "minLength": 1,
@@ -1716,12 +1931,12 @@ Attributes: write, destructive, idempotent, closed-world.
     }
   },
   "required": [
+    "capabilities",
     "executionLimits",
     "expectedRevision",
     "id",
     "idempotencyKey",
     "instructions",
-    "model",
     "name"
   ],
   "additionalProperties": false
