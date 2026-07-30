@@ -10,8 +10,9 @@ and authority flow. This document records threats, control choices, and residual
 ## Assets and boundaries
 
 Protected assets are owner identity and grants; OAuth clients, sessions, signing keys, and
-revocations; Composio project authority and connected accounts; Agent configuration and execution
-state; audit, budgets, and recovery data; and repository or deployment authority.
+revocations; Composio project authority and connected accounts; Agent configuration, Skill
+packages, and execution state; audit, budgets, and recovery data; and repository or deployment
+authority.
 
 Trust changes at:
 
@@ -31,6 +32,7 @@ Trust changes at:
 | Token theft, confused identity, or cross-owner access  | Audience-bound short-lived tokens, exact owner and scope checks at ingress and execution, owner-named objects, explicit revocation                                            |
 | Malicious OAuth clients, replay, or storage exhaustion | S256 PKCE, HTTPS or exact-loopback redirects, protected state, bounded bodies and sessions, rate limits, expiring registrations, hashed rotating refresh tokens               |
 | Prompt injection or hostile provider data              | Treat all model, recipe, MCP, retrieved, and provider content as inert input; trusted code classifies authority, effects, targets, and cost                                   |
+| Malicious Skill packages                               | Validate bounded UTF-8 files and safe paths, reject suspected credentials, store immutable content-addressed objects, and never execute scripts or derive authority           |
 | Credential disclosure                                  | Keep provider credentials outside models and Crewhelm state; bound and normalize responses; exclude secrets from results, errors, telemetry, URLs, and backups                |
 | SSRF or redirected egress                              | Use fixed HTTPS provider endpoints, manual redirect handling, bounded response size and time, and no model-selected network destination                                       |
 | Stale, replayed, or amplified authority                | Bind permits and approvals to owner, client, Agent revision, action digest, budget, nonce, and short expiry; recheck current policy immediately before execution              |
@@ -86,6 +88,10 @@ is charged when it cannot be proven unspent and is not silently repeated.
 Agent capability configuration is inert owner input until its statically registered module
 validates prerequisites and contributes to the admitted runtime plan. Modules may require grants;
 they cannot create authority.
+
+Skill contents are untrusted owner input. R2 stores immutable package versions; owner-local SQLite
+stores only compact metadata and digests. Exact reads verify both before returning files. Publishing
+or retiring a Skill grants no runtime capability, and `scripts/` remains inert.
 
 Run and tool authority is also bound to the exact fleet-configuration revision admitted. Any later
 configuration revision invalidates unconsumed admission, approval, and dispatch authority; the
@@ -153,9 +159,9 @@ request and response payload logging is disabled, while model, token, cost, late
 opaque Crewhelm correlation metadata remain available for diagnosis.
 
 The bootstrap CLI holds operator deployment authority. It uses pinned Wrangler without a shell,
-an allowlisted environment, explicit account and database identity, validated release artifacts,
-and bounded output. Ambiguous remote mutations stop with resources preserved for inspection; they
-are not assumed successful or automatically repeated.
+an allowlisted environment, explicit account, database, and R2 identity, validated release
+artifacts, and bounded output. Ambiguous remote mutations stop with resources preserved for
+inspection; they are not assumed successful or automatically repeated.
 
 Fresh-install rehearsal cleanup is limited to exact resources recorded after creation in a bounded
 local receipt. Occupied names are never adopted, and unverified deletion remains retryable.

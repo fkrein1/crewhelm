@@ -2291,17 +2291,24 @@ describe("CrewAgent admitted execution", () => {
     });
     await expect(runDurableObjectAlarm(deadlineStub)).resolves.toBe(true);
 
-    const inspected = await controlPlane.inspectRun(authority, {
-      runId: started.run.runId,
-    });
+    const inspected = await vi.waitFor(
+      async () => {
+        const result = await controlPlane.inspectRun(authority, {
+          runId: started.run.runId,
+        });
 
-    expect(inspected).toMatchObject({
-      ok: true,
-      run: {
-        runId: started.run.runId,
-        status: "cancelled",
+        expect(result).toMatchObject({
+          ok: true,
+          run: {
+            runId: started.run.runId,
+            status: "cancelled",
+          },
+        });
+
+        return result;
       },
-    });
+      { interval: 25, timeout: 5_000 },
+    );
     expect(inspected.ok ? inspected.run.output : undefined).toBeUndefined();
   });
 

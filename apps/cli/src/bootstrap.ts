@@ -107,6 +107,15 @@ const d1DatabaseSchema = z.looseObject({
   uuid: databaseIdSchema,
 });
 const d1ListSchema = z.array(d1DatabaseSchema).max(10_000);
+const r2BucketNameSchema = z
+  .string()
+  .min(3)
+  .max(63)
+  .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])$/);
+const r2BucketSchema = z.looseObject({
+  name: r2BucketNameSchema,
+});
+const missingR2BucketCode = /\[code:\s*10006\]/u;
 const githubSecretsSchema = z.strictObject({
   clientId: z.string().min(1).max(255),
   clientSecret: z.string().min(1).max(1_024),
@@ -188,6 +197,7 @@ const workerVersionSchema = z.looseObject({
     bindings: z
       .array(
         z.looseObject({
+          bucket_name: r2BucketNameSchema.optional(),
           database_id: databaseIdSchema.optional(),
           name: z.string().min(1).max(255),
           text: z.string().max(2_048).optional(),
@@ -284,6 +294,12 @@ const deploymentTemplateSchema = z.strictObject({
       }),
     }),
   ]),
+  r2_buckets: z.tuple([
+    z.strictObject({
+      binding: z.literal("SKILL_PACKAGES"),
+      bucket_name: deploymentNameSchema,
+    }),
+  ]),
   rules: z.tuple([
     z.strictObject({
       fallthrough: z.literal(true),
@@ -320,6 +336,7 @@ const bootstrapFailureStageSchema = z.enum([
   "worker",
   "configuration",
   "database",
+  "storage",
   "migrations",
   "deployment",
 ]);
@@ -366,6 +383,7 @@ export type BootstrapReport = z.infer<typeof bootstrapReportSchema>;
 export type BootstrapCreatedResource =
   | { accountId: string; id: string; kind: "gateway" }
   | { accountId: string; id: string; kind: "database"; name: string }
+  | { accountId: string; kind: "bucket"; name: string }
   | { accountId: string; kind: "worker"; name: string };
 type BootstrapFailureStage = BootstrapProgressStage;
 type DeploymentTemplate = z.infer<typeof deploymentTemplateSchema>;
@@ -373,10 +391,12 @@ type GitHubSecrets = z.infer<typeof githubSecretsSchema>;
 type CloudflareCredentials = z.infer<typeof cloudflareCredentialsSchema>;
 export interface ExistingInstallationCoordinates {
   accountId: string;
+  aiDailySpendUsd?: number;
   aiGatewayId?: string;
   databaseId: string;
   databaseName: string;
   origin: string;
+  skillBucketName?: string;
   workerName: string;
 }
 
@@ -415,6 +435,21 @@ export function rateLimitNamespacesForWorker(workerName: string): {
   };
 }
 
+export function skillBucketNameForWorker(workerName: string): string {
+  const direct = `${workerName}-skills`;
+
+  if (direct.length <= 63) {
+    return r2BucketNameSchema.parse(direct);
+  }
+
+  const digest = createHash("sha256")
+    .update("crewhelm:skill-bucket:")
+    .update(workerName)
+    .digest("hex");
+
+  return r2BucketNameSchema.parse(`${workerName.slice(0, 46)}-${digest.slice(0, 8)}-skills`);
+}
+
 interface CloudflareContext {
   accountId: string;
   accountConfigPath: string;
@@ -431,6 +466,8 @@ export interface BootstrapDependencies extends DoctorDependencies {
   createGitHubApp?: (options: { origin: URL; workerName: string }) => Promise<GitHubSecrets>;
   deploymentAssetsDirectory: string;
   promptSecret?: (message: string) => Promise<string>;
+  expectedSkillBucketName?: string;
+  persistProvisionedInstallation?: (installation: ExistingInstallationCoordinates) => Promise<void>;
   readEnvironment: (name: string) => string | undefined;
   recordCreatedResource?: (resource: BootstrapCreatedResource) => Promise<void>;
   reportProgress?: (progress: BootstrapProgress) => void;
@@ -1345,6 +1382,35 @@ async function listDatabases(context: CloudflareContext) {
   }
 }
 
+async function readBucket(name: string, context: CloudflareContext) {
+  const result = await runCloudflare(
+    context,
+    ["r2", "bucket", "info", name, "--json", "--config", context.accountConfigPath],
+    "storage",
+  );
+  requireCompleted(result, "storage", "R2 bucket outcome could not be confirmed.");
+
+  if (result.exitCode !== 0) {
+    if (missingR2BucketCode.test(result.stderr)) {
+      return undefined;
+    }
+
+    throw commandFailed("storage", "R2 bucket could not be read.");
+  }
+
+  try {
+    const bucket = r2BucketSchema.parse(JSON.parse(result.stdout));
+
+    if (bucket.name !== name) {
+      throw new Error("R2 bucket identity mismatch.");
+    }
+
+    return bucket;
+  } catch {
+    throw commandFailed("storage", "R2 bucket returned an invalid response.");
+  }
+}
+
 async function executeInventory(
   databaseId: string,
   sql: string,
@@ -1529,6 +1595,7 @@ async function recoverExistingInstallation(
   );
   const originBinding = bindings.find((binding) => binding.name === "PUBLIC_ORIGIN");
   const gatewayBinding = bindings.find((binding) => binding.name === "AI_GATEWAY_ID");
+  const skillBucketBinding = bindings.find((binding) => binding.name === "SKILL_PACKAGES");
 
   if (databaseBinding?.type !== "d1" || databaseBinding.database_id === undefined) {
     throw commandFailed("worker", "Existing Worker has no valid Crewhelm AUTH_DB binding.");
@@ -1552,6 +1619,14 @@ async function recoverExistingInstallation(
       !deploymentNameSchema.safeParse(gatewayBinding.text).success)
   ) {
     throw commandFailed("worker", "Existing Worker has an invalid AI_GATEWAY_ID binding.");
+  }
+
+  if (
+    skillBucketBinding !== undefined &&
+    (skillBucketBinding.type !== "r2_bucket" ||
+      skillBucketBinding.bucket_name !== skillBucketNameForWorker(options.workerName))
+  ) {
+    throw commandFailed("worker", "Existing Worker has an invalid SKILL_PACKAGES binding.");
   }
 
   if (
@@ -1631,6 +1706,9 @@ async function recoverExistingInstallation(
     databaseId: database.uuid,
     databaseName: database.name,
     origin: options.origin.origin,
+    ...(skillBucketBinding?.bucket_name === undefined
+      ? {}
+      : { skillBucketName: skillBucketBinding.bucket_name }),
     workerName: options.workerName,
   };
 
@@ -1730,10 +1808,121 @@ async function ensureDatabase(
   return { action: "created" as const, database: reconciled[0] };
 }
 
+async function ensureSkillBucket(
+  workerInventory: WorkerInventory,
+  requireFresh: boolean,
+  workerName: string,
+  context: CloudflareContext,
+) {
+  const name = skillBucketNameForWorker(workerName);
+  const existing = await readBucket(name, context);
+
+  if (existing !== undefined) {
+    if (context.dependencies.expectedSkillBucketName === name) {
+      return { action: "reused" as const, name };
+    }
+
+    if (requireFresh || !workerInventory.exists) {
+      throw commandFailed(
+        "storage",
+        `R2 bucket ${name} already exists without the requested Worker. Choose another Worker name or remove the unused bucket.`,
+      );
+    }
+
+    const versionId = readSingleActiveVersionId(workerInventory);
+
+    if (versionId === undefined) {
+      throw commandFailed(
+        "storage",
+        "Existing R2 Skill package storage could not be matched to one active Worker version.",
+      );
+    }
+
+    const result = await runCloudflare(
+      context,
+      [
+        "versions",
+        "view",
+        versionId,
+        "--name",
+        workerName,
+        "--json",
+        "--config",
+        context.accountConfigPath,
+      ],
+      "storage",
+    );
+    requireCompleted(result, "storage", "Worker Skill package binding could not be confirmed.");
+
+    if (result.exitCode !== 0) {
+      throw commandFailed("storage", "Worker Skill package binding could not be read.");
+    }
+
+    let version: z.infer<typeof workerVersionSchema>;
+
+    try {
+      version = workerVersionSchema.parse(JSON.parse(result.stdout));
+    } catch {
+      throw commandFailed("storage", "Worker Skill package binding returned an invalid response.");
+    }
+
+    const bindings = version.resources.bindings.filter(
+      (binding) => binding.name === "SKILL_PACKAGES",
+    );
+
+    if (
+      version.id !== versionId ||
+      bindings.length !== 1 ||
+      bindings[0]?.type !== "r2_bucket" ||
+      bindings[0].bucket_name !== name
+    ) {
+      throw commandFailed(
+        "storage",
+        "Existing R2 Skill package storage is not bound to this Worker.",
+      );
+    }
+
+    return { action: "reused" as const, name };
+  }
+
+  const created = await runCloudflare(
+    context,
+    ["r2", "bucket", "create", name, "--config", context.accountConfigPath],
+    "storage",
+  );
+
+  if (created.outcome !== "completed" || created.exitCode !== 0) {
+    const reconciled = await readBucket(name, context);
+
+    if (reconciled !== undefined) {
+      throw commandFailed(
+        "storage",
+        "R2 bucket creation outcome was ambiguous. Inspect ownership before retrying.",
+      );
+    }
+
+    throw commandFailed("storage", "R2 Skill package bucket could not be created.");
+  }
+
+  await recordCreatedResource(context.dependencies, {
+    accountId: context.accountId,
+    kind: "bucket",
+    name,
+  });
+  const reconciled = await readBucket(name, context);
+
+  if (reconciled === undefined) {
+    throw commandFailed("storage", "Created R2 Skill package bucket could not be reconciled.");
+  }
+
+  return { action: "created" as const, name };
+}
+
 async function stageDeployment(
   options: BootstrapOptions,
   accountId: string,
   database: { name: string; uuid: string },
+  skillBucketName: string,
   aiGateway: { id: string } | undefined,
   assets: DeploymentAssets,
   context: CloudflareContext,
@@ -1779,6 +1968,12 @@ async function stageDeployment(
         namespace_id:
           rateLimit.name === "AUTH_RATE_LIMIT" ? rateLimitNamespaces.auth : rateLimitNamespaces.mcp,
       })),
+      r2_buckets: [
+        {
+          binding: "SKILL_PACKAGES",
+          bucket_name: skillBucketName,
+        },
+      ],
       rules: assets.template.rules,
       secrets: {
         required: REQUIRED_SECRET_NAMES,
@@ -1889,13 +2084,18 @@ export const bootstrapCleanupReportSchema = z.strictObject({
           status: cleanupStatusSchema,
         }),
         z.strictObject({
+          kind: z.literal("bucket"),
+          name: r2BucketNameSchema,
+          status: cleanupStatusSchema,
+        }),
+        z.strictObject({
           kind: z.literal("worker"),
           name: deploymentNameSchema,
           status: cleanupStatusSchema,
         }),
       ]),
     )
-    .max(3),
+    .max(4),
 });
 
 export type BootstrapCleanupReport = z.infer<typeof bootstrapCleanupReportSchema>;
@@ -1908,7 +2108,7 @@ function unresolvedCleanupReport(
     ok: false,
     resources: resources.map((resource) => ({
       ...(resource.kind === "gateway" || resource.kind === "database" ? { id: resource.id } : {}),
-      ...(resource.kind === "worker" || resource.kind === "database"
+      ...(resource.kind === "worker" || resource.kind === "database" || resource.kind === "bucket"
         ? { name: resource.name }
         : {}),
       kind: resource.kind,
@@ -1991,6 +2191,34 @@ async function cleanupDatabase(
   }
 }
 
+async function cleanupBucket(
+  resource: Extract<BootstrapCreatedResource, { kind: "bucket" }>,
+  context: CloudflareContext,
+): Promise<BootstrapCleanupReport["resources"][number]> {
+  try {
+    const matching = await readBucket(resource.name, context);
+
+    if (matching === undefined) {
+      return { kind: "bucket", name: resource.name, status: "absent" };
+    }
+
+    await runCloudflare(
+      context,
+      ["r2", "bucket", "delete", resource.name, "--config", context.accountConfigPath],
+      "storage",
+    );
+    const remains = (await readBucket(resource.name, context)) !== undefined;
+
+    return {
+      kind: "bucket",
+      name: resource.name,
+      status: remains ? "unresolved" : "deleted",
+    };
+  } catch {
+    return { kind: "bucket", name: resource.name, status: "unresolved" };
+  }
+}
+
 async function cleanupGateway(
   resource: Extract<BootstrapCreatedResource, { kind: "gateway" }>,
   context: CloudflareContext,
@@ -2033,6 +2261,11 @@ export async function cleanupCreatedInstallationResources(
       z.discriminatedUnion("kind", [
         z.strictObject({
           accountId: accountIdSchema,
+          kind: z.literal("bucket"),
+          name: r2BucketNameSchema,
+        }),
+        z.strictObject({
+          accountId: accountIdSchema,
           id: deploymentNameSchema,
           kind: z.literal("gateway"),
         }),
@@ -2050,7 +2283,7 @@ export async function cleanupCreatedInstallationResources(
       ]),
     )
     .min(1)
-    .max(3)
+    .max(4)
     .parse(resources);
   const accountIds = new Set(parsed.map((resource) => resource.accountId));
 
@@ -2075,8 +2308,8 @@ export async function cleanupCreatedInstallationResources(
     const context = { accountId: account.id, accountConfigPath, cwd, dependencies };
     const ordered = parsed.toSorted(
       (left, right) =>
-        ["worker", "database", "gateway"].indexOf(left.kind) -
-        ["worker", "database", "gateway"].indexOf(right.kind),
+        ["worker", "bucket", "database", "gateway"].indexOf(left.kind) -
+        ["worker", "bucket", "database", "gateway"].indexOf(right.kind),
     );
     const results: BootstrapCleanupReport["resources"] = [];
 
@@ -2084,9 +2317,11 @@ export async function cleanupCreatedInstallationResources(
       results.push(
         resource.kind === "worker"
           ? await cleanupWorker(resource, context)
-          : resource.kind === "database"
-            ? await cleanupDatabase(resource, context)
-            : await cleanupGateway(resource, context),
+          : resource.kind === "bucket"
+            ? await cleanupBucket(resource, context)
+            : resource.kind === "database"
+              ? await cleanupDatabase(resource, context)
+              : await cleanupGateway(resource, context),
       );
     }
 
@@ -2263,12 +2498,45 @@ export async function bootstrapDeployment(
       assets.migrations,
       context,
     );
+    reportProgress(dependencies, "storage", "Preparing the Skill package store");
+    const skillBucket = await ensureSkillBucket(
+      workerInventory,
+      deploymentOptions.requireFresh === true,
+      deploymentOptions.workerName,
+      context,
+    );
     const aiGatewayId = aiGatewayPlan?.id ?? deploymentOptions.aiGatewayId;
+    const aiDailySpendUsd =
+      aiGatewayPlan === undefined ? undefined : deploymentOptions.aiDailySpendUsd;
+    const persistProvisionedInstallation = async (installedAiGatewayId?: string) => {
+      try {
+        await dependencies.persistProvisionedInstallation?.({
+          accountId: account.id,
+          ...(aiDailySpendUsd === undefined ? {} : { aiDailySpendUsd }),
+          ...(installedAiGatewayId === undefined ? {} : { aiGatewayId: installedAiGatewayId }),
+          databaseId: database.uuid,
+          databaseName: database.name,
+          origin: deploymentOptions.origin.origin,
+          skillBucketName: skillBucket.name,
+          workerName: deploymentOptions.workerName,
+        });
+      } catch {
+        throw commandFailed(
+          "configuration",
+          "Provisioned infrastructure could not be recorded for a safe retry.",
+        );
+      }
+    };
+
+    if (skillBucket.action === "created") {
+      await persistProvisionedInstallation(deploymentOptions.aiGatewayId);
+    }
     reportProgress(dependencies, "configuration", "Preparing deployment configuration");
     const configPath = await stageDeployment(
       deploymentOptions,
       account.id,
       database,
+      skillBucket.name,
       aiGatewayId === undefined ? undefined : { id: aiGatewayId },
       assets,
       context,
@@ -2300,6 +2568,7 @@ export async function bootstrapDeployment(
     if (aiGatewayPlan !== undefined && gatewayCredentials !== undefined) {
       reportProgress(dependencies, "gateway", "Applying the AI Gateway spend limit");
       await applyAiGatewayPlan(aiGatewayPlan, account.id, gatewayCredentials, dependencies);
+      await persistProvisionedInstallation(aiGatewayId);
     }
 
     githubSecrets ??= await readGitHubSecrets(

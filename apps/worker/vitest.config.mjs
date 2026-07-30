@@ -59,6 +59,7 @@ export default defineConfig({
             },
           },
         },
+        r2Buckets: ["SKILL_PACKAGES"],
       },
     })),
   ],

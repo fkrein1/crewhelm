@@ -173,6 +173,7 @@ async function createDeploymentAssetsDirectory(): Promise<string> {
         logs: { enabled: true, head_sampling_rate: 1, invocation_logs: false },
         traces: { enabled: false },
       },
+      r2_buckets: [{ binding: "SKILL_PACKAGES", bucket_name: "crewhelm-skills" }],
       ratelimits: [
         {
           name: "AUTH_RATE_LIMIT",
@@ -861,6 +862,11 @@ describe("Crewhelm CLI", () => {
             resources: {
               bindings: [
                 { database_id: DATABASE_ID, name: "AUTH_DB", type: "d1" },
+                {
+                  bucket_name: "crewhelm-skills",
+                  name: "SKILL_PACKAGES",
+                  type: "r2_bucket",
+                },
                 { name: "AI_GATEWAY_ID", text: "crewhelm", type: "plain_text" },
                 {
                   name: "PUBLIC_ORIGIN",
@@ -906,6 +912,9 @@ describe("Crewhelm CLI", () => {
             },
           ]),
         );
+      }
+      if (arguments_.slice(0, 3).join(" ") === "r2 bucket info") {
+        return completedWrangler(JSON.stringify({ name: "crewhelm-skills" }));
       }
       if (arguments_[0] === "d1" && arguments_[1] === "migrations") {
         metadataAtMutation = await readInstallation(installationPath);

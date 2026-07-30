@@ -15,6 +15,7 @@ import {
   cleanupCreatedInstallationResources,
   createBootstrapFailure,
   readPackagedDeploymentFingerprint,
+  skillBucketNameForWorker,
   type BootstrapDependencies,
 } from "./bootstrap.js";
 
@@ -37,6 +38,11 @@ const smokeResourceSchema = z.discriminatedUnion("kind", [
     id: databaseIdSchema,
     kind: z.literal("database"),
     name: rehearsalNameSchema,
+  }),
+  z.strictObject({
+    accountId: accountIdSchema,
+    kind: z.literal("bucket"),
+    name: deploymentNameSchema,
   }),
   z.strictObject({
     accountId: accountIdSchema,
@@ -68,7 +74,7 @@ const installationSmokeReceiptSchema = z
     databaseName: rehearsalNameSchema,
     origin: z.url(),
     phase: z.enum(["provisioning", "cleanup_pending", "completed"]),
-    resources: z.array(smokeResourceSchema).max(3),
+    resources: z.array(smokeResourceSchema).max(4),
     updatedAt: z.iso.datetime(),
     workerName: rehearsalNameSchema,
   })
@@ -85,7 +91,9 @@ const installationSmokeReceiptSchema = z
           ? resource.name === receipt.databaseName
           : resource.kind === "worker"
             ? resource.name === receipt.workerName
-            : resource.id === receipt.workerName;
+            : resource.kind === "bucket"
+              ? resource.name === skillBucketNameForWorker(receipt.workerName)
+              : resource.id === receipt.workerName;
 
       if (!matches) {
         context.addIssue({ code: "custom", message: "Rehearsal resource coordinates differ." });
@@ -220,7 +228,9 @@ function retainUnresolvedResources(
           ? `worker:${resource.name}`
           : resource.kind === "database"
             ? `database:${resource.id}`
-            : `gateway:${resource.id}`,
+            : resource.kind === "bucket"
+              ? `bucket:${resource.name}`
+              : `gateway:${resource.id}`,
       ),
   );
 
@@ -230,7 +240,9 @@ function retainUnresolvedResources(
         ? `worker:${resource.name}`
         : resource.kind === "database"
           ? `database:${resource.id}`
-          : `gateway:${resource.id}`,
+          : resource.kind === "bucket"
+            ? `bucket:${resource.name}`
+            : `gateway:${resource.id}`,
     ),
   );
 }

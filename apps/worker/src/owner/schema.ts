@@ -8,6 +8,8 @@ import type {
   ConnectionAuthorizationOutcome,
   FleetConfigurationData,
   RunBudgetReservation,
+  SkillProvenance,
+  SkillWarning,
 } from "@crewhelm/contracts";
 import {
   check,
@@ -349,6 +351,123 @@ export const agentScheduleUpdates = sqliteTable(
     }).onDelete("restrict"),
     check("agent_schedule_updates_request_digest_length", sql`length(${table.requestDigest}) = 43`),
     check("agent_schedule_updates_revision_positive", sql`${table.revision} > 0`),
+  ],
+);
+
+export const skills = sqliteTable(
+  "skills",
+  {
+    skillId: text("skill_id").primaryKey(),
+    currentVersion: integer("current_version").notNull(),
+    name: text("name").notNull(),
+    status: text("status", { enum: ["active", "retired"] }).notNull(),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+    retiredAt: integer("retired_at"),
+  },
+  (table) => [
+    index("skills_status_id").on(table.status, table.skillId),
+    uniqueIndex("skills_active_name")
+      .on(table.name)
+      .where(sql`${table.status} = 'active'`),
+    check("skills_current_version_positive", sql`${table.currentVersion} > 0`),
+    check("skills_status", sql`${table.status} IN ('active', 'retired')`),
+    check("skills_created_at_positive", sql`${table.createdAt} > 0`),
+    check("skills_updated_after_creation", sql`${table.updatedAt} >= ${table.createdAt}`),
+    check(
+      "skills_state",
+      sql`(
+        (${table.status} = 'active' AND ${table.retiredAt} IS NULL)
+        OR (${table.status} = 'retired'
+          AND ${table.retiredAt} IS NOT NULL
+          AND ${table.retiredAt} >= ${table.createdAt})
+      )`,
+    ),
+  ],
+);
+
+export const skillObjects = sqliteTable(
+  "skill_objects",
+  {
+    packageDigest: text("package_digest").primaryKey(),
+    objectKey: text("object_key").notNull().unique(),
+    sizeBytes: integer("size_bytes").notNull(),
+    status: text("status", { enum: ["pending", "committed"] }).notNull(),
+    createdAt: integer("created_at").notNull(),
+    committedAt: integer("committed_at"),
+  },
+  (table) => [
+    check("skill_objects_package_digest_length", sql`length(${table.packageDigest}) = 64`),
+    check("skill_objects_size_bytes_positive", sql`${table.sizeBytes} > 0`),
+    check("skill_objects_status", sql`${table.status} IN ('pending', 'committed')`),
+    check("skill_objects_created_at_positive", sql`${table.createdAt} > 0`),
+    check(
+      "skill_objects_state",
+      sql`(
+        (${table.status} = 'pending' AND ${table.committedAt} IS NULL)
+        OR (${table.status} = 'committed'
+          AND ${table.committedAt} IS NOT NULL
+          AND ${table.committedAt} >= ${table.createdAt})
+      )`,
+    ),
+  ],
+);
+
+export const skillVersions = sqliteTable(
+  "skill_versions",
+  {
+    skillId: text("skill_id").notNull(),
+    version: integer("version").notNull(),
+    name: text("name").notNull(),
+    description: text("description").notNull(),
+    packageDigest: text("package_digest").notNull(),
+    objectKey: text("object_key").notNull(),
+    fileCount: integer("file_count").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    warnings: text("warnings", { mode: "json" }).$type<SkillWarning[]>().notNull(),
+    provenance: text("provenance", { mode: "json" }).$type<SkillProvenance>().notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.skillId, table.version] }),
+    foreignKey({
+      columns: [table.skillId],
+      foreignColumns: [skills.skillId],
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.packageDigest],
+      foreignColumns: [skillObjects.packageDigest],
+    }).onDelete("restrict"),
+    index("skill_versions_object_key").on(table.objectKey),
+    check("skill_versions_version_positive", sql`${table.version} > 0`),
+    check("skill_versions_package_digest_length", sql`length(${table.packageDigest}) = 64`),
+    check("skill_versions_file_count_positive", sql`${table.fileCount} > 0`),
+    check("skill_versions_size_bytes_positive", sql`${table.sizeBytes} > 0`),
+    check("skill_versions_warnings_json", sql`json_valid(${table.warnings})`),
+    check("skill_versions_provenance_json", sql`json_valid(${table.provenance})`),
+    check("skill_versions_created_at_positive", sql`${table.createdAt} > 0`),
+  ],
+);
+
+export const skillMutations = sqliteTable(
+  "skill_mutations",
+  {
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    operation: text("operation", { enum: ["publish", "retire"] }).notNull(),
+    skillId: text("skill_id").notNull(),
+    version: integer("version").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.clientId, table.idempotencyKey] }),
+    foreignKey({
+      columns: [table.skillId, table.version],
+      foreignColumns: [skillVersions.skillId, skillVersions.version],
+    }).onDelete("restrict"),
+    check("skill_mutations_request_digest_length", sql`length(${table.requestDigest}) = 43`),
+    check("skill_mutations_operation", sql`${table.operation} IN ('publish', 'retire')`),
+    check("skill_mutations_version_positive", sql`${table.version} > 0`),
   ],
 );
 
@@ -1024,6 +1143,10 @@ export const controlPlaneSchema = {
   integrationUsageEvents,
   integrationEnablementRequests,
   runAdmissions,
+  skillMutations,
+  skillObjects,
+  skills,
+  skillVersions,
   toolApprovals,
   toolExecutions,
 };

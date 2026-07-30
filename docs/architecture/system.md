@@ -13,6 +13,7 @@ flowchart LR
     MCP["Authorized MCP client"] --> Worker["OAuth MCP Worker"]
     Worker --> Auth["Auth D1"]
     Worker --> Owner["OwnerControlPlane"]
+    Owner --> Skills["Skill packages / R2"]
     Owner --> Agent["CrewAgent / Think"]
     Agent -. optional .-> Gateway["Dedicated AI Gateway"]
     Worker --> Catalog["Composio catalog and Connect Links"]
@@ -29,6 +30,7 @@ server per request. There is one SQLite-backed `OwnerControlPlane` per owner and
 | Worker              | Authenticated request context only                                                                                     |
 | Auth D1             | OAuth state, signing keys, rotating refresh tokens, and token revocation                                               |
 | `OwnerControlPlane` | Agent and connection lifecycle, grants, schedules, admission, owner inbox, approvals, effect reconciliation, and audit |
+| Skill package R2    | Immutable, content-addressed Skill files; owner-local SQLite holds metadata and lifecycle                              |
 | `CrewAgent`         | Think submissions, transcripts, output, deadlines, and approval waits                                                  |
 | AI Gateway          | Optional installation-wide hard spend ceiling and model-call cost metadata                                             |
 | Composio            | Connected-account credentials and refresh                                                                              |
@@ -54,6 +56,7 @@ cost-reconciliation controls.
 | Recurring Agent schedules             | `owner/schedules/`        |
 | Disablement, revocation, recovery     | `owner/recovery/`         |
 | Connection lifecycle                  | `owner/connections/`      |
+| Skill package lifecycle               | `owner/skills/`           |
 | Owner inbox and Agent capabilities    | `owner/agent-channel/`    |
 | Admitted Think execution              | `agent/admitted-runs/`    |
 | MCP presentation                      | `mcp/*-tools.ts`          |

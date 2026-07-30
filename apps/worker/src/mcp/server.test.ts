@@ -26,6 +26,7 @@ import {
   getAgentResultSchema,
   getAgentCapabilityCatalogResultSchema,
   getFleetConfigurationResultSchema,
+  getSkillResultSchema,
   integrationAuthConfigListResultSchema,
   integrationCatalogSearchResultSchema,
   inspectIntegrationToolResultSchema,
@@ -34,8 +35,11 @@ import {
   listAgentRevisionsResultSchema,
   listAgentsResultSchema,
   listConnectionsResultSchema,
+  listSkillsResultSchema,
   listUnresolvedToolEffectsResultSchema,
   ownerAuthoritySchema,
+  publishSkillResultSchema,
+  retireSkillResultSchema,
   startRunResultSchema,
   updateAgentResultSchema,
   type OwnerScope,
@@ -397,13 +401,15 @@ describe("authenticated MCP handler", () => {
     expect(getConfigurationInputSchema).toContain('"target"');
     expect(getConfigurationInputSchema).toContain('"fleet"');
     expect(getConfigurationInputSchema).toContain('"agent-capability"');
+    expect(getConfigurationInputSchema).toContain('"skill-catalog"');
+    expect(getConfigurationInputSchema).toContain('"skill-package"');
     expect(getConfigurationInputSchema).toContain('"id"');
     expect(configureTool).toMatchObject({
       annotations: {
-        destructiveHint: false,
+        destructiveHint: true,
         idempotentHint: true,
         openWorldHint: false,
-        readOnlyHint: true,
+        readOnlyHint: false,
       },
       description: expect.stringContaining("never applies policy changes"),
     });
@@ -440,7 +446,7 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toMatchObject({
       ok: true,
       status: {
-        schemaVersion: 18,
+        schemaVersion: 19,
         status: "ready",
         usage: {
           recovery: { unresolvedEffects: 0 },
@@ -644,6 +650,121 @@ describe("authenticated MCP handler", () => {
     expect(result.isError).toBe(false);
   });
 
+  it("publishes, discovers, reads, and retires an immutable Skill through MCP", async () => {
+    const authority = await ownerAuthority("mcp-skill-library", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+    ]);
+    const skillPackage = {
+      description: "Review release provenance before publication.",
+      files: [
+        {
+          content: "# Release reviewer\n\nReview provenance and rollback.",
+          path: "SKILL.md",
+        },
+        {
+          content: "Check the changelog and deployment fingerprint.",
+          path: "references/checklist.md",
+        },
+      ],
+      name: "release-reviewer",
+      provenance: { kind: "authored" },
+    };
+    const call = async (name: string, arguments_: Record<string, unknown>) => {
+      const response = await handleAuthenticatedMcpRequest(
+        toolRequest(
+          JSON.stringify({
+            id: crypto.randomUUID(),
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: { arguments: arguments_, name },
+          }),
+        ),
+        env,
+        { authority },
+      );
+      const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+
+      return {
+        isError: payload.isError,
+        result: JSON.parse(payload.content[0]?.text ?? ""),
+      };
+    };
+
+    const preview = await call(MCP_CONFIGURE_TOOL_NAME, {
+      mode: "preview",
+      target: { kind: "skill-package", package: skillPackage },
+    });
+
+    expect(preview.isError).toBe(false);
+    expect(publishSkillResultSchema.parse(preview.result)).toMatchObject({
+      applied: false,
+      ok: true,
+      package: { fileCount: 2 },
+      version: 1,
+    });
+
+    const publication = await call(MCP_CONFIGURE_TOOL_NAME, {
+      idempotencyKey: "mcp-skill-publish",
+      mode: "apply",
+      target: { kind: "skill-package", package: skillPackage },
+    });
+    const published = publishSkillResultSchema.parse(publication.result);
+
+    expect(publication.isError).toBe(false);
+    expect(published).toMatchObject({
+      applied: true,
+      ok: true,
+      skill: { name: "release-reviewer", status: "active" },
+    });
+    if (!published.ok || published.skill === undefined) {
+      throw new Error("Expected MCP Skill publication.");
+    }
+
+    const catalog = await call(MCP_GET_CONFIGURATION_TOOL_NAME, {
+      target: { kind: "skill-catalog", limit: 25 },
+    });
+
+    expect(catalog.isError).toBe(false);
+    expect(listSkillsResultSchema.parse(catalog.result)).toEqual({
+      nextCursor: null,
+      ok: true,
+      skills: [published.skill],
+    });
+    expect(JSON.stringify(catalog.result)).not.toContain("Review provenance and rollback.");
+
+    const exact = await call(MCP_GET_CONFIGURATION_TOOL_NAME, {
+      target: { id: published.skill.id, kind: "skill-package", version: 1 },
+    });
+
+    expect(exact.isError).toBe(false);
+    expect(getSkillResultSchema.parse(exact.result)).toMatchObject({
+      ok: true,
+      version: {
+        files: skillPackage.files,
+        id: published.skill.id,
+        version: 1,
+      },
+    });
+
+    const retirement = await call(MCP_CONFIGURE_TOOL_NAME, {
+      idempotencyKey: "mcp-skill-retire",
+      mode: "apply",
+      target: {
+        expectedVersion: 1,
+        id: published.skill.id,
+        kind: "skill-retirement",
+      },
+    });
+
+    expect(retirement.isError).toBe(false);
+    expect(retireSkillResultSchema.parse(retirement.result)).toMatchObject({
+      applied: true,
+      ok: true,
+      skill: { id: published.skill.id, status: "retired" },
+    });
+  });
+
   it("disables an Agent through the recovery MCP tool", async () => {
     const authority = await ownerAuthority("mcp-recovery-owner", [
       OWNER_WRITE_SCOPE,
@@ -803,7 +924,7 @@ describe("authenticated MCP handler", () => {
   it("rejects oversized requests before reading their body", async () => {
     const authority = await ownerAuthority();
     const response = await handleAuthenticatedMcpRequest(
-      toolRequest("{}", { "content-length": String(64 * 1024 + 1) }),
+      toolRequest("{}", { "content-length": String(512 * 1024 + 1) }),
       env,
       { authority },
     );
@@ -865,6 +986,9 @@ describe("authenticated MCP handler", () => {
           getFleetConfiguration: async () => {
             throw new Error("do-not-reflect-this");
           },
+          getSkill: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           inspectRun: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -883,6 +1007,9 @@ describe("authenticated MCP handler", () => {
           listConnections: async () => {
             throw new Error("do-not-reflect-this");
           },
+          listSkills: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           listUnresolvedToolEffects: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -899,6 +1026,12 @@ describe("authenticated MCP handler", () => {
             throw new Error("do-not-reflect-this");
           },
           reconcileToolExecution: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          publishSkill: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          retireSkill: async () => {
             throw new Error("do-not-reflect-this");
           },
           resolveConnectionForAttachment: async () => {
@@ -2179,12 +2312,14 @@ describe("authenticated MCP handler", () => {
           getAgentRevision: unavailableControlPlane,
           getAgentSchedule: unavailableControlPlane,
           getFleetConfiguration: unavailableControlPlane,
+          getSkill: unavailableControlPlane,
           inspectRun: unavailableControlPlane,
           decideRunToolApproval: unavailableControlPlane,
           listAgentRevisions: unavailableControlPlane,
           listAgentRuns: unavailableControlPlane,
           listAgents: unavailableControlPlane,
           listConnections: unavailableControlPlane,
+          listSkills: unavailableControlPlane,
           listUnresolvedToolEffects: unavailableControlPlane,
           listRunToolApprovals: unavailableControlPlane,
           lookupAgentConnectionConfiguration: unavailableControlPlane,
@@ -2198,6 +2333,8 @@ describe("authenticated MCP handler", () => {
           }),
           reserveIntegrationEnablement: unavailableControlPlane,
           reconcileToolExecution: unavailableControlPlane,
+          publishSkill: unavailableControlPlane,
+          retireSkill: unavailableControlPlane,
           resolveConnectionForAttachment: unavailableControlPlane,
           status: unavailableControlPlane,
           startRun: unavailableControlPlane,
@@ -2298,12 +2435,14 @@ describe("authenticated MCP handler", () => {
           getAgentRevision: unavailableControlPlane,
           getAgentSchedule: unavailableControlPlane,
           getFleetConfiguration: unavailableControlPlane,
+          getSkill: unavailableControlPlane,
           inspectRun: unavailableControlPlane,
           decideRunToolApproval: unavailableControlPlane,
           listAgentRevisions: unavailableControlPlane,
           listAgentRuns: unavailableControlPlane,
           listAgents: unavailableControlPlane,
           listConnections: unavailableControlPlane,
+          listSkills: unavailableControlPlane,
           listUnresolvedToolEffects: unavailableControlPlane,
           listRunToolApprovals: unavailableControlPlane,
           lookupAgentConnectionConfiguration: unavailableControlPlane,
@@ -2313,6 +2452,8 @@ describe("authenticated MCP handler", () => {
             ),
           reserveIntegrationEnablement: unavailableControlPlane,
           reconcileToolExecution: unavailableControlPlane,
+          publishSkill: unavailableControlPlane,
+          retireSkill: unavailableControlPlane,
           resolveConnectionForAttachment: unavailableControlPlane,
           status: unavailableControlPlane,
           startRun: unavailableControlPlane,

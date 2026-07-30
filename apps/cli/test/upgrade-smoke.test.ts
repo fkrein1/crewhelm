@@ -245,6 +245,7 @@ function ownerFixtureSession(): TemporaryOwnerMcpSession {
             },
             recovery: { unresolvedEffects: 0 },
             runs: { active: 0 },
+            skills: { active: 0, pendingObjects: 0, storedBytes: 0, total: 0, versions: 0 },
           },
         },
       },
@@ -444,7 +445,7 @@ describe("supported upgrade rehearsal", () => {
       captureOwnerState: vi
         .fn<NonNullable<UpgradeSmokeDependencies["captureOwnerState"]>>()
         .mockResolvedValueOnce(ownerState())
-        .mockResolvedValueOnce(ownerState("1", 18)),
+        .mockResolvedValueOnce(ownerState("1", 19)),
       reportUpgradeProgress,
     });
 
@@ -457,7 +458,7 @@ describe("supported upgrade rehearsal", () => {
       before: { infrastructure: { migrations: { count: 1 } } },
       after: { infrastructure: { migrations: { count: 2 } } },
     });
-    expect(report.after.owner.status.schemaVersion).toBe(18);
+    expect(report.after.owner.status.schemaVersion).toBe(19);
     expect(harness.bootstrap).toHaveBeenCalledTimes(2);
     expect(harness.bootstrap).toHaveBeenNthCalledWith(1, expect.any(Object), BASELINE_FINGERPRINT);
     expect(harness.bootstrap).toHaveBeenNthCalledWith(2, expect.any(Object), CURRENT_FINGERPRINT);

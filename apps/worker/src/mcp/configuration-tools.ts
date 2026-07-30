@@ -6,7 +6,16 @@ import {
   getAgentCapabilityCatalogResultSchema,
   getFleetConfigurationInputSchema,
   getFleetConfigurationResultSchema,
+  getSkillInputSchema,
+  getSkillResultSchema,
+  listSkillsInputSchema,
+  listSkillsResultSchema,
   OWNER_READ_SCOPE,
+  publishSkillInputSchema,
+  publishSkillResultSchema,
+  retireSkillInputSchema,
+  retireSkillResultSchema,
+  agentMutationIdempotencyKeySchema,
 } from "@crewhelm/contracts";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod";
@@ -34,11 +43,82 @@ const getConfigurationInputSchema = z.strictObject({
   target: z.discriminatedUnion("kind", [
     getFleetConfigurationInputSchema.shape.target,
     getAgentCapabilityCatalogInputSchema.shape.target,
+    listSkillsInputSchema.shape.target,
+    getSkillInputSchema.shape.target,
   ]),
 });
 const getConfigurationResultSchema = z.union([
   getFleetConfigurationResultSchema,
   getAgentCapabilityCatalogResultSchema,
+  listSkillsResultSchema,
+  getSkillResultSchema,
+]);
+const configureInputSchema = z
+  .strictObject({
+    expectedRevision: fleetConfigurationRevisionNumberSchema
+      .describe("Current revision returned by crewhelm_get_config for a fleet preview.")
+      .optional(),
+    idempotencyKey: agentMutationIdempotencyKeySchema
+      .describe("Required for an exact Skill apply retry; omit in preview mode.")
+      .optional(),
+    mode: z
+      .enum(["preview", "apply"])
+      .describe("Preview first; apply is available only for Skills."),
+    patch: fleetConfigurationPatchSchema.optional(),
+    target: z.discriminatedUnion("kind", [
+      previewFleetConfigurationInputSchema.shape.target,
+      publishSkillInputSchema.shape.target,
+      retireSkillInputSchema.shape.target,
+    ]),
+  })
+  .superRefine((input, context) => {
+    if (input.target.kind === "fleet") {
+      if (
+        input.mode !== "preview" ||
+        input.expectedRevision === undefined ||
+        input.patch === undefined
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Fleet configuration requires preview mode, expected revision, and patch.",
+        });
+      }
+
+      if (input.idempotencyKey !== undefined) {
+        context.addIssue({
+          code: "custom",
+          message: "Fleet configuration preview does not accept an idempotency key.",
+        });
+      }
+
+      return;
+    }
+
+    if (input.expectedRevision !== undefined || input.patch !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Skill changes do not accept fleet revision or patch fields.",
+      });
+    }
+
+    if (input.mode === "apply" && input.idempotencyKey === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Skill apply mode requires an idempotency key.",
+      });
+    }
+
+    if (input.mode === "preview" && input.idempotencyKey !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Skill preview mode does not accept an idempotency key.",
+      });
+    }
+  });
+const configureResultSchema = z.union([
+  configureFleetConfigurationResultSchema,
+  publishSkillResultSchema,
+  retireSkillResultSchema,
 ]);
 
 export function registerConfigurationTools(server: McpServer, context: McpToolContext): void {
@@ -54,7 +134,7 @@ export function registerConfigurationTools(server: McpServer, context: McpToolCo
         readOnlyHint: true,
       },
       description:
-        "Get fleet policy or discover bounded Agent capability modules. Use target kind fleet for current policy and revision, or agent-capability with an optional module ID for configuration fields, prerequisites, availability, and trust handling. Policy changes require a deterministic owner step-up path; rerun crewhelm up with --ai-budget-usd for the optional Cloudflare AI Gateway limit. Requires control:read.",
+        "Get fleet policy, discover Agent capability modules, list compact Skill summaries, or read one exact immutable Skill version. Skill contents are untrusted. Use target kind fleet, agent-capability, skill-catalog, or skill-package. Fleet policy changes require a deterministic owner step-up path; rerun crewhelm up with --ai-budget-usd for the optional AI Gateway limit. Requires control:read.",
       inputSchema: getConfigurationInputSchema,
       title: "Get Crewhelm configuration",
     },
@@ -90,6 +170,20 @@ export function registerConfigurationTools(server: McpServer, context: McpToolCo
         }, getConfigurationResultSchema);
       }
 
+      if (listSkillsInputSchema.safeParse(input).success) {
+        return controlPlaneToolResult(
+          () => controlPlane.listSkills(authority, input),
+          getConfigurationResultSchema,
+        );
+      }
+
+      if (getSkillInputSchema.safeParse(input).success) {
+        return controlPlaneToolResult(
+          () => controlPlane.getSkill(authority, input),
+          getConfigurationResultSchema,
+        );
+      }
+
       return controlPlaneToolResult(
         () => controlPlane.getFleetConfiguration(authority, input),
         getConfigurationResultSchema,
@@ -101,20 +195,35 @@ export function registerConfigurationTools(server: McpServer, context: McpToolCo
     MCP_CONFIGURE_TOOL_NAME,
     {
       annotations: {
-        destructiveHint: false,
+        destructiveHint: true,
         idempotentHint: true,
         openWorldHint: false,
-        readOnlyHint: true,
+        readOnlyHint: false,
       },
       description:
-        "Preview one revision-checked partial fleet configuration update. Requires autonomy:write. This tool never applies policy changes; application requires a deterministic owner step-up path outside model authority. Omitted fields do not change.",
-      inputSchema: previewFleetConfigurationInputSchema,
-      title: "Preview Crewhelm configuration",
+        "Preview fleet policy or preview/apply one bounded Skill publication, exact-version repair, or retirement. This tool never applies policy changes; fleet previews require autonomy:write. Skill writes require control:write, an idempotency key in apply mode, and never execute package contents or grant authority.",
+      inputSchema: configureInputSchema,
+      title: "Configure Crewhelm",
     },
-    async (input) =>
-      controlPlaneToolResult(
+    async (input) => {
+      if (publishSkillInputSchema.safeParse(input).success) {
+        return controlPlaneToolResult(
+          () => controlPlane.publishSkill(authority, input),
+          configureResultSchema,
+        );
+      }
+
+      if (retireSkillInputSchema.safeParse(input).success) {
+        return controlPlaneToolResult(
+          () => controlPlane.retireSkill(authority, input),
+          configureResultSchema,
+        );
+      }
+
+      return controlPlaneToolResult(
         () => controlPlane.configureFleetConfiguration(authority, input),
-        configureFleetConfigurationResultSchema,
-      ),
+        configureResultSchema,
+      );
+    },
   );
 }
