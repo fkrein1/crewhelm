@@ -203,7 +203,7 @@ function createMcpServer(
         readOnlyHint: true,
       },
       description:
-        "Return a cheap owner-local fleet dashboard with active usage, diagnostic counts, and optional recent safe audit events.",
+        "Return a cheap owner-local fleet dashboard with usage, inbox attention, diagnostics, and optional recent safe audit events.",
       inputSchema: controlPlaneStatusInputSchema,
       title: "Crewhelm status",
     },

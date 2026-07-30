@@ -37,6 +37,7 @@ Proposed commit:
   the owning capability; avoid speculative seams.
 - Review changed direct dependencies for purpose, exact version, license, install behavior, and
   runtime authority.
+- Document what matters beyond the code, omit change history, and make every word carry its weight.
 - Do not disable checks. The sole `skipLibCheck` exception is defined in
   `references/declaration-check-exception.md`.
 - Reduce scope when a capability exceeds its appetite; never defer correctness or security.

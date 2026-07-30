@@ -26,12 +26,15 @@ exact connection reads include lifecycle events; status can include recent audit
 writes return `recoverAfter` and pin the idempotency key until the same request can safely renew
 the reservation. Existing tools carry this detail, preserving the 30-tool catalog limit.
 
+The owner inbox is the polling surface for operational attention; Crewhelm neither broadcasts nor
+model-classifies its events. Fleet status exposes attention counts and age so clients can avoid
+unnecessary inbox reads. Inbox severity and actionability derive from persisted state, and responses
+include a polling interval hint.
+
 Fleet mutations remain explicit rather than selector-driven. Bounded Agent shutdown accepts at
 most 25 unique Agent IDs with exact expected revisions, applies owner-local changes in one durable
 transaction, and returns one compact ordered receipt per input. Revision conflicts and missing
 Agents do not prevent safe targets in the same request from being disabled.
 
-New fleets default to 100 Agents, 100 connections, and 25 concurrent runs. The capacity migration
-preserves the former 1,000-connection and 1,000-admission ceilings for existing fleets so an upgrade
-does not silently tighten operating policy; owners can lower those values through a revisioned
-configuration change.
+Fleet capacity is revisioned owner configuration. Defaults are 100 Agents, 100 connections, and 25
+concurrent runs.

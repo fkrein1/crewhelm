@@ -97,6 +97,11 @@ describe("OwnerControlPlane", () => {
           diagnostics: { expiredApprovals: 0, pendingAiUsage: 0 },
           inbox: {
             actionRequired: 0,
+            attention: {
+              needsAction: 0,
+              oldestNeedsActionAt: null,
+              warnings: 0,
+            },
             deferred: 0,
             exceptions: 0,
             outcomes: 0,
@@ -355,6 +360,44 @@ describe("OwnerControlPlane", () => {
              result_preview = NULL
          WHERE run_id = 'run_00000000-0000-4000-8000-000000000001'`,
       );
+      state.storage.sql.exec(
+        `INSERT INTO agent_inbox_items (
+           item_id,
+           agent_id,
+           agent_revision,
+           fleet_revision,
+           schedule_revision,
+           kind,
+           approval_count,
+           request_preview,
+           reason,
+           scheduled_at,
+           retry_at,
+           occurred_at,
+           version,
+           cleanup_at
+         )
+         VALUES (
+           'inbox_deferred_' || substr(?, 7),
+           ?,
+           ?,
+           1,
+           1,
+           'deferred',
+           0,
+           'Wait for the current run.',
+           'active_run',
+           2,
+           3,
+           2,
+           '1970-01-01T00:00:00.002Z',
+           ?
+         )`,
+        created.agent.id,
+        created.agent.id,
+        created.agent.revision,
+        Date.now() + 60_000,
+      );
     });
     await expect(
       stub.recordAgentInboxRun({
@@ -422,6 +465,194 @@ describe("OwnerControlPlane", () => {
           runStatus: "completed",
         },
       ],
+      ok: true,
+    });
+    await expect(
+      stub.agentInbox(authority, {
+        action: "overview",
+        agentId: created.agent.id,
+      }),
+    ).resolves.toMatchObject({
+      action: "overview",
+      counts: {
+        actionRequired: 1,
+        attention: {
+          needsAction: 1,
+          oldestNeedsActionAt: "1970-01-01T00:00:00.001Z",
+          warnings: 1,
+        },
+        deferred: 1,
+        total: 10_000,
+      },
+      ok: true,
+      pollAfterSeconds: 30,
+    });
+    await expect(stub.status(authority)).resolves.toMatchObject({
+      ok: true,
+      status: {
+        usage: {
+          inbox: {
+            attention: {
+              needsAction: 1,
+              oldestNeedsActionAt: "1970-01-01T00:00:00.001Z",
+              warnings: 1,
+            },
+          },
+        },
+      },
+    });
+    await expect(
+      stub.agentInbox(authority, {
+        action: "list",
+        agentId: created.agent.id,
+        limit: 25,
+        needsAction: true,
+        severities: ["attention_required"],
+      }),
+    ).resolves.toMatchObject({
+      action: "list",
+      items: [
+        {
+          kind: "action_required",
+          needsAction: true,
+          severity: "attention_required",
+        },
+      ],
+      ok: true,
+      pollAfterSeconds: 30,
+    });
+    await expect(
+      stub.agentInbox(authority, {
+        action: "list",
+        agentId: created.agent.id,
+        limit: 25,
+        needsAction: false,
+        severities: ["warning"],
+      }),
+    ).resolves.toMatchObject({
+      action: "list",
+      items: [
+        {
+          kind: "deferred",
+          needsAction: false,
+          severity: "warning",
+        },
+      ],
+      ok: true,
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("DELETE FROM agent_inbox_acknowledgements");
+      state.storage.sql.exec("DELETE FROM agent_inbox_items");
+      state.storage.sql.exec(
+        `WITH digits(value) AS (
+           VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
+         ),
+         numbers(value) AS (
+           SELECT
+             ones.value
+             + 10 * tens.value
+             + 100 * hundreds.value
+             + 1000 * thousands.value
+             + 1
+           FROM digits AS ones
+           CROSS JOIN digits AS tens
+           CROSS JOIN digits AS hundreds
+           CROSS JOIN digits AS thousands
+           ORDER BY 1
+         )
+         INSERT INTO agent_inbox_items (
+           item_id,
+           agent_id,
+           agent_revision,
+           fleet_revision,
+           schedule_revision,
+           kind,
+           approval_count,
+           request_preview,
+           reason,
+           scheduled_at,
+           retry_at,
+           occurred_at,
+           version,
+           cleanup_at
+         )
+         SELECT
+           'inbox_warning_' || printf('%012x', value),
+           ?,
+           ?,
+           1,
+           1,
+           'deferred',
+           0,
+           'Wait for the current run.',
+           'active_run',
+           value,
+           value + 1,
+           value,
+           '1970-01-01T00:00:00.002Z',
+           ?
+         FROM numbers`,
+        created.agent.id,
+        created.agent.revision,
+        Date.now() + 60_000,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO agent_inbox_items (
+           item_id,
+           agent_id,
+           agent_revision,
+           fleet_revision,
+           run_id,
+           trigger,
+           run_status,
+           kind,
+           approval_count,
+           request_preview,
+           occurred_at,
+           version,
+           cleanup_at
+         )
+         VALUES (
+           'inbox_run_00000000-0000-4000-8000-ffffffffffff',
+           ?,
+           ?,
+           1,
+           'run_00000000-0000-4000-8000-ffffffffffff',
+           'manual',
+           'failed',
+           'exception',
+           0,
+           'Inspect this failed run.',
+           1,
+           '1970-01-01T00:00:00.001Z',
+           ?
+         )`,
+        created.agent.id,
+        created.agent.revision,
+        Date.now() + 60_000,
+      );
+    });
+    await expect(stub.recordAgentInboxRun(completed)).resolves.toEqual({
+      ok: true,
+      recorded: true,
+    });
+    await expect(
+      stub.agentInbox(authority, {
+        action: "overview",
+        agentId: created.agent.id,
+      }),
+    ).resolves.toMatchObject({
+      action: "overview",
+      counts: {
+        attention: {
+          needsAction: 1,
+          oldestNeedsActionAt: "1970-01-01T00:00:00.001Z",
+          warnings: 9_999,
+        },
+        exceptions: 1,
+        outcomes: 0,
+        total: 10_000,
+      },
       ok: true,
     });
   });
@@ -542,6 +773,11 @@ describe("OwnerControlPlane", () => {
           connections: { active: 1, pending: 0, total: 1 },
           inbox: {
             actionRequired: 0,
+            attention: {
+              needsAction: 0,
+              oldestNeedsActionAt: null,
+              warnings: 0,
+            },
             deferred: 0,
             exceptions: 0,
             outcomes: 1,

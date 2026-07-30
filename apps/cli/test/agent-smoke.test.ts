@@ -124,6 +124,11 @@ function fleetStatus(active: number) {
         diagnostics: { expiredApprovals: 0, pendingAiUsage: 0 },
         inbox: {
           actionRequired: 0,
+          attention: {
+            needsAction: 0,
+            oldestNeedsActionAt: null,
+            warnings: 0,
+          },
           deferred: 0,
           exceptions: 0,
           outcomes: 0,
