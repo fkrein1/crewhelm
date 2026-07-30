@@ -13,6 +13,7 @@ import { readInstallation } from "../src/installation.js";
 import { installationSmokeFailureSchema } from "../src/installation-smoke.js";
 import { CLI_BANNER } from "../src/presentation.js";
 import { standingIntegrationSmokeReportSchema } from "../src/standing-integration-smoke.js";
+import { upgradeSmokeFailureSchema } from "../src/upgrade-smoke.js";
 
 const DATABASE_ID = "c58217fd-fe09-447b-b79c-5d63ed1cedc0";
 const DEPLOYMENT_VERSION_ID = "37bcd44d-e373-41a2-8a47-eb03cce01d32";
@@ -440,6 +441,122 @@ describe("Crewhelm CLI", () => {
       kind: "installation-smoke",
       workerName: "crewhelm-smoke-example",
     });
+  });
+
+  it("requires a pinned build and explicit confirmation for the upgrade smoke", () => {
+    expect(() =>
+      parseCli([
+        "smoke",
+        "upgrade",
+        "--endpoint",
+        "https://crewhelm-upgrade.example",
+        "--from-fingerprint",
+        "b".repeat(64),
+      ]),
+    ).toThrow("smoke upgrade requires --confirm-production.");
+    expect(() =>
+      parseCli([
+        "smoke",
+        "upgrade",
+        "--endpoint",
+        "https://crewhelm-upgrade.example",
+        "--from-fingerprint",
+        "not-a-fingerprint",
+        "--confirm-production",
+      ]),
+    ).toThrow("One or more command values were invalid or outside their bounds.");
+    expect(
+      parseCli([
+        "smoke",
+        "upgrade",
+        "--endpoint",
+        "https://crewhelm-upgrade.example",
+        "--from-fingerprint",
+        "b".repeat(64),
+        "--confirm-production",
+      ]),
+    ).toMatchObject({
+      baselineFingerprint: "b".repeat(64),
+      kind: "upgrade-smoke",
+      receiptPath: "crewhelm.upgrade-receipt.json",
+    });
+  });
+
+  it("routes only upgrade options into the strict rehearsal contract", async () => {
+    const harness = createHarness(healthyDeploymentFetch());
+    const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-upgrade-smoke-cli-test-"));
+    const receiptPath = resolve(directory, "receipt.json");
+
+    try {
+      await expect(
+        runCli(
+          [
+            "smoke",
+            "upgrade",
+            "--endpoint",
+            "https://crewhelm-upgrade.example",
+            "--from-fingerprint",
+            "b".repeat(64),
+            "--installation",
+            resolve(directory, "missing-installation.json"),
+            "--receipt",
+            receiptPath,
+            "--confirm-production",
+            "--json",
+          ],
+          harness.dependencies,
+        ),
+      ).resolves.toBe(1);
+
+      expect(upgradeSmokeFailureSchema.parse(JSON.parse(harness.errors.join("")))).toMatchObject({
+        code: "invalid_input",
+        ok: false,
+        receiptPath,
+        recovery: "fix_input",
+        stage: "upgrade",
+      });
+      expect(harness.errors.join("")).not.toContain("unrecognized_keys");
+      expect(harness.output).toEqual([]);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("classifies malformed upgrade metadata as an input failure", async () => {
+    const harness = createHarness(healthyDeploymentFetch());
+    const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-upgrade-smoke-cli-test-"));
+    const installationPath = resolve(directory, "installation.json");
+    const receiptPath = resolve(directory, "receipt.json");
+    await writeFile(installationPath, "{", { mode: 0o600 });
+
+    try {
+      await expect(
+        runCli(
+          [
+            "smoke",
+            "upgrade",
+            "--endpoint",
+            "https://crewhelm-upgrade.example",
+            "--from-fingerprint",
+            "b".repeat(64),
+            "--installation",
+            installationPath,
+            "--receipt",
+            receiptPath,
+            "--confirm-production",
+            "--json",
+          ],
+          harness.dependencies,
+        ),
+      ).resolves.toBe(1);
+
+      expect(upgradeSmokeFailureSchema.parse(JSON.parse(harness.errors.join("")))).toMatchObject({
+        code: "invalid_input",
+        recovery: "fix_input",
+      });
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 
   it("keeps thrown fresh-install failures machine-readable in JSON mode", async () => {

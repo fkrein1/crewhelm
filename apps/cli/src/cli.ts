@@ -5,10 +5,13 @@ import {
 import { agentSmokeReportSchema, runAgentSmoke, type AgentSmokeReport } from "./agent-smoke.js";
 import {
   bootstrapDeployment,
+  bootstrapUpgradeDeployment,
   BootstrapError,
   bootstrapOptionsSchema,
   createBootstrapFailure,
+  inspectInstallationInfrastructure,
   readPackagedDeploymentFingerprint,
+  readPackagedMigrationInventory,
   type BootstrapDependencies,
   type BootstrapFailure,
   type BootstrapOptions,
@@ -41,6 +44,12 @@ import {
   standingIntegrationSmokeReportSchema,
   type StandingIntegrationSmokeReport,
 } from "./standing-integration-smoke.js";
+import {
+  createUpgradeSmokeFailure,
+  runUpgradeSmoke,
+  upgradeSmokeReportSchema,
+  type UpgradeSmokeReport,
+} from "./upgrade-smoke.js";
 
 export { CLI_HELP, parseCli } from "./command.js";
 
@@ -65,6 +74,13 @@ const BOOTSTRAP_ACTIVITY_LABELS = {
   migrations: "Storage",
   worker: "Worker",
 } as const satisfies Record<BootstrapProgress["stage"], string>;
+
+const UPGRADE_SMOKE_ACTIVITY_LABELS = {
+  baseline: "Baseline",
+  deployment: "Upgrade",
+  retry: "Retry",
+  verification: "Verification",
+} as const;
 
 function formatDoctorReport(report: DoctorReport, presentation: CliPresentation): string {
   const checks = report.checks
@@ -184,6 +200,25 @@ function formatInstallationSmokeReport(
     : `${presentation.status("fail")} Fresh-install rehearsal needs attention.`;
 
   return `${outcome}\n${deployment}${agent}${cleanup}Recovery receipt: ${report.receiptPath}\n`;
+}
+
+function formatUpgradeSmokeReport(
+  report: UpgradeSmokeReport,
+  presentation: CliPresentation,
+): string {
+  return [
+    presentation.accent("Supported-upgrade rehearsal passed."),
+    `  Worker      ${report.coordinates.workerName}`,
+    `  Package     ${report.baselineFingerprint.slice(0, 12)} -> ${report.currentFingerprint.slice(0, 12)}`,
+    `  Migrations  ${report.before.infrastructure.migrations.count} -> ${report.after.infrastructure.migrations.count}`,
+    `  Agents      ${report.after.owner.agents.count}`,
+    `  Revisions   ${report.after.owner.agentRevisions.count}`,
+    `  Connections ${report.after.owner.connections.count}`,
+    `  Schedules   ${report.after.owner.schedules.count}`,
+    `  Retry       ${report.deployment.retryAction}`,
+    `Recovery receipt: ${report.receiptPath}`,
+    "",
+  ].join("\n");
 }
 
 function formatBootstrapReport(report: BootstrapReport, presentation: CliPresentation): string {
@@ -677,6 +712,81 @@ export async function runCli(
           : `Error: ${error instanceof Error ? error.message : "Installation rehearsal failed."}\n`,
       );
       return 1;
+    }
+  }
+
+  if (command.kind === "upgrade-smoke") {
+    const openUrl =
+      dependencies.openUrl ??
+      (async () => {
+        throw new Error("Browser unavailable.");
+      });
+
+    if (!command.json) {
+      presentation.banner();
+    }
+
+    try {
+      const report = upgradeSmokeReportSchema.parse(
+        await runUpgradeSmoke(
+          {
+            baselineFingerprint: command.baselineFingerprint,
+            installationPath: command.installationPath,
+            origin: command.origin,
+            receiptPath: command.receiptPath,
+            timeoutMs: command.timeoutMs,
+          },
+          {
+            ...dependencies,
+            bootstrap: (options, expectedFingerprint) =>
+              bootstrapUpgradeDeployment(options, dependencies, [expectedFingerprint]),
+            diagnose: (expectedFingerprint) =>
+              diagnoseDeployment(command, {
+                expectedDeploymentFingerprint: expectedFingerprint,
+                fetch: dependencies.fetch,
+              }),
+            inspectInfrastructure: (coordinates) =>
+              inspectInstallationInfrastructure(coordinates, dependencies),
+            openUrl: async (url) => {
+              if (!command.json) {
+                presentation.stopProgress();
+                presentation.waiting(
+                  "Owner verification",
+                  "Approve temporary View access in the browser. Crewhelm revokes it after the snapshot.",
+                );
+              }
+              await openUrl(url);
+            },
+            readCurrentFingerprint: () => expectedDeploymentFingerprint(dependencies),
+            readCurrentMigrations: () => readPackagedMigrationInventory(dependencies),
+            reportUpgradeProgress: (progress) => {
+              if (!command.json) {
+                presentation.progress({
+                  label: UPGRADE_SMOKE_ACTIVITY_LABELS[progress.stage],
+                  message: progress.message,
+                });
+              }
+            },
+          },
+        ),
+      );
+      presentation.stopProgress();
+      dependencies.writeOutput(
+        command.json
+          ? `${JSON.stringify(report)}\n`
+          : formatUpgradeSmokeReport(report, presentation),
+      );
+      return 0;
+    } catch (error) {
+      presentation.stopProgress();
+      dependencies.writeError(
+        command.json
+          ? `${JSON.stringify(createUpgradeSmokeFailure(command.receiptPath, error))}\n`
+          : `Error: ${error instanceof Error ? error.message : "Upgrade rehearsal failed."}\n`,
+      );
+      return 1;
+    } finally {
+      presentation.stopProgress();
     }
   }
 
