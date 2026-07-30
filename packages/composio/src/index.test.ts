@@ -1008,7 +1008,6 @@ describe("Composio runtime adapter", () => {
       operation: "execute",
       outcome: "provider_rejected",
       providerErrorCode: 4001,
-      providerErrorSlug: "invalid_tool_input",
       status: 400,
       toolSlug: "PROJECT_TOOLKIT_READ_ITEM",
     });

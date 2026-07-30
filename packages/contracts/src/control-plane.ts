@@ -5,6 +5,7 @@ import {
   fleetCapacitySchema,
   fleetRetentionSchema,
 } from "./fleet-capacity.js";
+import { auditEventSummarySchema } from "./audit.js";
 
 export const AGENTS_READ_SCOPE = "agents:read";
 export const AGENTS_WRITE_SCOPE = "agents:write";
@@ -74,6 +75,14 @@ export const ownerAuthoritySchema = z.strictObject({
   scopes: ownerScopesSchema,
 });
 
+export const controlPlaneStatusInputSchema = z.strictObject({
+  auditLimit: z.number().int().min(1).max(20).default(10),
+  includeRecentAudit: z
+    .boolean()
+    .default(false)
+    .describe("Include a bounded recent mutation timeline without client IDs or payloads."),
+});
+
 export const controlPlaneStatusSchema = z.strictObject({
   capacity: fleetCapacitySchema.extend({
     retention: fleetRetentionSchema,
@@ -81,6 +90,7 @@ export const controlPlaneStatusSchema = z.strictObject({
   configurationRevision: z.number().int().positive().safe(),
   schemaVersion: z.number().int().positive(),
   status: z.literal("ready"),
+  recentAudit: z.array(auditEventSummarySchema).max(20).optional(),
   usage: z.strictObject({
     agents: z.strictObject({
       active: z.number().int().nonnegative().safe(),
@@ -90,6 +100,10 @@ export const controlPlaneStatusSchema = z.strictObject({
       active: z.number().int().nonnegative().safe(),
       pending: z.number().int().nonnegative().safe(),
       total: z.number().int().nonnegative().safe(),
+    }),
+    diagnostics: z.strictObject({
+      expiredApprovals: z.number().int().nonnegative().safe(),
+      pendingAiUsage: z.number().int().nonnegative().safe(),
     }),
     inbox: z.strictObject({
       actionRequired: z.number().int().nonnegative().safe(),
@@ -120,6 +134,7 @@ export const controlPlaneStatusResultSchema = z.discriminatedUnion("ok", [
         "incompatible_schema",
         "insufficient_scope",
         "invalid_authority",
+        "invalid_request",
         "owner_mismatch",
       ]),
       message: z.literal("Control-plane request denied."),

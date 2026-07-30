@@ -242,6 +242,13 @@ const integrationEnablementErrorSchema = z.strictObject({
     "owner_mismatch",
   ]),
   message: z.literal("Integration enablement request denied."),
+  operation: z
+    .strictObject({
+      nextAction: z.literal("retry_same_request"),
+      recoverAfter: z.iso.datetime(),
+      reservationId: integrationEnablementReservationIdSchema,
+    })
+    .optional(),
 });
 export const enableIntegrationResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
@@ -268,6 +275,7 @@ export const reserveIntegrationEnablementResultSchema = z.union([
   }),
   z.strictObject({
     ok: z.literal(true),
+    recoverAfter: z.iso.datetime(),
     reservationId: integrationEnablementReservationIdSchema,
     state: z.literal("dispatch"),
   }),

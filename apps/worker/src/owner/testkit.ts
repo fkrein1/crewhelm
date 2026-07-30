@@ -7,6 +7,7 @@ import {
   type OwnerScope,
   type UpdateAgentInput,
 } from "@crewhelm/contracts";
+import { expect } from "vitest";
 
 import { deriveOwnerKey } from "./identity.js";
 
@@ -86,6 +87,15 @@ export function fixedConnectionLinkFailure(code: string) {
     error: {
       code,
       message: "Connection link request denied.",
+      ...(code === "connection_link_outcome_unknown"
+        ? {
+            operation: {
+              nextAction: "retry_same_request",
+              recoverAfter: expect.any(String),
+              reservationId: expect.stringMatching(/^connection_link_/),
+            },
+          }
+        : {}),
     },
     ok: false,
   };

@@ -7,6 +7,7 @@ export {
 export {
   Connections,
   deniedConnectionAuthorizationReturn,
+  deniedConnectionInspect,
   deniedConnectionLink,
   deniedConnectionRead,
   deniedIntegrationEnablement,

@@ -40,11 +40,19 @@ function integrationEnablementMcpResult(result: unknown) {
   return validatedToolResult(result, enableIntegrationResultSchema);
 }
 
-function unknownIntegrationEnablementMcpResult() {
+function unknownIntegrationEnablementMcpResult(operation: {
+  recoverAfter: string;
+  reservationId: string;
+}) {
   return integrationEnablementMcpResult({
     error: {
       code: "integration_enablement_outcome_unknown",
       message: "Integration enablement request denied.",
+      operation: {
+        nextAction: "retry_same_request",
+        recoverAfter: operation.recoverAfter,
+        reservationId: operation.reservationId,
+      },
     },
     ok: false,
   });
@@ -110,11 +118,13 @@ async function enableIntegration(
       integrationSlug: request.integrationSlug,
     });
   } catch {
-    return unknownIntegrationEnablementMcpResult();
+    return unknownIntegrationEnablementMcpResult(reservation);
   }
 
   if (!providerResult.ok) {
-    return integrationEnablementMcpResult(providerResult);
+    return providerResult.error.code === "integration_enablement_outcome_unknown"
+      ? unknownIntegrationEnablementMcpResult(reservation)
+      : integrationEnablementMcpResult(providerResult);
   }
 
   try {
@@ -129,7 +139,7 @@ async function enableIntegration(
       ),
     );
   } catch {
-    return unknownIntegrationEnablementMcpResult();
+    return unknownIntegrationEnablementMcpResult(reservation);
   }
 }
 

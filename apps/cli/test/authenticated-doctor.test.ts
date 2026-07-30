@@ -84,6 +84,7 @@ function fleetStatus() {
       usage: {
         agents: { active: 2, total: 3 },
         connections: { active: 1, pending: 0, total: 1 },
+        diagnostics: { expiredApprovals: 0, pendingAiUsage: 0 },
         inbox: {
           actionRequired: 0,
           deferred: 0,

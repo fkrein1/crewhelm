@@ -1001,9 +1001,26 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
+    "includeUsage": {
+      "default": true,
+      "description": "Include compact admitted and consumed run usage.",
+      "type": "boolean"
+    },
     "runId": {
       "type": "string",
       "pattern": "^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "timelineCursor": {
+      "default": 0,
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "timelineLimit": {
+      "default": 20,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50
     }
   },
   "required": [
@@ -1184,7 +1201,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 **List integration connections**
 
-List bounded owner-scoped connection summaries with integration and provider account IDs, but never credentials.
+List bounded owner-scoped connection summaries, or inspect one exact connection with its safe lifecycle timeline, but never credentials.
 
 Attributes: read-only, non-destructive, idempotent, closed-world.
 
@@ -1208,6 +1225,11 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
       ]
     },
     "cursor": {
+      "type": "string",
+      "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "connectionId": {
+      "description": "Inspect one exact connection, including its bounded safe lifecycle timeline.",
       "type": "string",
       "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
@@ -1565,7 +1587,7 @@ Attributes: write, non-destructive, idempotent, closed-world.
 
 **Crewhelm status**
 
-Return a cheap owner-local fleet dashboard with active usage, inbox and unresolved-effect counts, and configured capacity.
+Return a cheap owner-local fleet dashboard with active usage, diagnostic counts, and optional recent safe audit events.
 
 Attributes: read-only, non-destructive, idempotent, closed-world.
 
@@ -1576,7 +1598,19 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
-  "properties": {},
+  "properties": {
+    "auditLimit": {
+      "default": 10,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20
+    },
+    "includeRecentAudit": {
+      "default": false,
+      "description": "Include a bounded recent mutation timeline without client IDs or payloads.",
+      "type": "boolean"
+    }
+  },
   "additionalProperties": false
 }
 ```

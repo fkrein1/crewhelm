@@ -266,6 +266,20 @@ describe("OwnerControlPlane Agent schedules", () => {
       ok: true,
     });
     await expect(
+      controlPlane.getAgentSchedule(authority, { agentId: created.agent.id }),
+    ).resolves.toMatchObject({
+      ok: true,
+      schedule: {
+        lastAttempt: {
+          occurredAt: expect.any(String),
+          outcome: "deferred",
+          reason: "model_unavailable",
+          retryAt: expect.any(String),
+          runId: null,
+        },
+      },
+    });
+    await expect(
       runInDurableObject(controlPlane, (_instance, state) =>
         state.storage.sql
           .exec<{ value: number }>(

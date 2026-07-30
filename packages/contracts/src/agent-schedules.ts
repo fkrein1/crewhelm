@@ -6,6 +6,7 @@ import {
   agentRevisionNumberSchema,
 } from "./control-plane.js";
 import { runIdSchema } from "./capabilities.js";
+import { agentInboxDeferredReasonSchema } from "./diagnostics.js";
 import { runPromptSchema } from "./run-admission.js";
 
 export const MINIMUM_AGENT_SCHEDULE_INTERVAL_SECONDS = 60;
@@ -27,6 +28,15 @@ export const agentScheduleSchema = z.strictObject({
   configuration: agentScheduleConfigurationSchema.nullable(),
   createdAt: z.iso.datetime(),
   lastDispatchedAt: z.iso.datetime().nullable(),
+  lastAttempt: z
+    .strictObject({
+      occurredAt: z.iso.datetime(),
+      outcome: z.enum(["deferred", "dispatched"]),
+      reason: agentInboxDeferredReasonSchema.nullable(),
+      retryAt: z.iso.datetime().nullable(),
+      runId: runIdSchema.nullable(),
+    })
+    .nullable(),
   lastRunId: runIdSchema.nullable(),
   nextRunAt: z.iso.datetime().nullable(),
   revision: agentScheduleRevisionNumberSchema,

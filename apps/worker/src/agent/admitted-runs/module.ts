@@ -14,6 +14,7 @@ import {
   redeemRunReceiverCapabilityResultSchema,
   resumeRunAdmissionInputSchema,
   runIdSchema,
+  runTimelineEventSchema,
   completeToolExecutionResultSchema,
   evaluateToolExecutionResultSchema,
   reserveToolExecutionResultSchema,
@@ -27,6 +28,7 @@ import {
   MAXIMUM_RUN_TIMELINE_EVENTS,
   TOOL_APPROVAL_LIFETIME_MS,
   toolAuthorizationTimelineEventSchema,
+  toolProviderFailureSchema,
   verifyActiveRunAdmissionResultSchema,
   verifyRunAdmissionResultSchema,
   type AcceptRunAdmissionResult,
@@ -36,6 +38,7 @@ import {
   type RunAdmissionPermit,
   type RunBudgetReservation,
   type RunReceiverCapability,
+  type RunTimelineEvent,
   type ClassifiedComposioToolAction,
   type ComposioToolCapabilityGrant,
   type ToolExecutionPermit,
@@ -2086,12 +2089,38 @@ export class CrewAgent extends Think {
       execute: async (input, context) => {
         const runtime = createComposioRuntime({
           apiKey: this.env.COMPOSIO_API_KEY,
-          onResponse: (event) =>
+          onResponse: (event) => {
             recordExecutionProviderResponse({
               ...event,
               runId: context.permit.action.runId,
               toolCallId: context.permit.action.toolCallId,
-            }),
+            });
+
+            if (event.operation === "execute" && event.outcome !== "accepted") {
+              const provider = toolProviderFailureSchema.safeParse({
+                ...(event.providerErrorCode === undefined
+                  ? {}
+                  : { errorCode: event.providerErrorCode }),
+                outcome: event.outcome,
+                status: event.status,
+                toolSlug: event.toolSlug,
+              });
+
+              if (provider.success) {
+                this.ctx.waitUntil(
+                  this.#recordRunTraceEvent(
+                    context.permit.action.runId,
+                    runTimelineEventSchema.parse({
+                      event: "tool.provider_failed",
+                      occurredAt: new Date().toISOString(),
+                      provider: provider.data,
+                      toolCallId: context.permit.action.toolCallId,
+                    }),
+                  ),
+                );
+              }
+            }
+          },
         });
         const resolved = resolveToolExecutionConnectionResultSchema.safeParse(
           await this.env.OWNER_CONTROL_PLANE.getByName(
@@ -2476,15 +2505,50 @@ export class CrewAgent extends Think {
     return admittedRunRecordSchema.parse(stored);
   }
 
-  async #readRunTrace(runId: string): Promise<ToolAuthorizationTimelineEvent[]> {
+  async #readRunTrace(runId: string): Promise<RunTimelineEvent[]> {
     const stored = await this.ctx.storage.get(runTraceKey(runId));
 
     if (stored === undefined) {
       return [];
     }
 
-    const trace = z.array(toolAuthorizationTimelineEventSchema).safeParse(stored);
+    const trace = z.array(runTimelineEventSchema).safeParse(stored);
     return trace.success ? trace.data : [];
+  }
+
+  async #recordRunTraceEvent(runId: string, event: RunTimelineEvent): Promise<void> {
+    try {
+      await this.ctx.storage.transaction(async (transaction) => {
+        const stored = await transaction.get(runTraceKey(runId));
+        const parsed =
+          stored === undefined
+            ? { data: [] as RunTimelineEvent[], success: true as const }
+            : z.array(runTimelineEventSchema).safeParse(stored);
+
+        if (!parsed.success) {
+          return;
+        }
+
+        const { occurredAt: _occurredAt, ...eventIdentity } = event;
+        const serializedIdentity = JSON.stringify(eventIdentity);
+        const duplicate = parsed.data.some((candidate) => {
+          const { occurredAt: _candidateOccurredAt, ...candidateIdentity } = candidate;
+
+          return JSON.stringify(candidateIdentity) === serializedIdentity;
+        });
+
+        if (duplicate) {
+          return;
+        }
+
+        await transaction.put(runTraceKey(runId), [
+          ...parsed.data.slice(-(MAXIMUM_RUN_TIMELINE_EVENTS - 1)),
+          event,
+        ]);
+      });
+    } catch {
+      // Diagnostic trace persistence must not alter execution.
+    }
   }
 
   async #recordToolAuthorization(input: {
@@ -2536,38 +2600,7 @@ export class CrewAgent extends Think {
       toolCallId: input.toolCallId,
     });
 
-    try {
-      await this.ctx.storage.transaction(async (transaction) => {
-        const stored = await transaction.get(runTraceKey(input.runId));
-        const parsed =
-          stored === undefined
-            ? { data: [] as ToolAuthorizationTimelineEvent[], success: true as const }
-            : z.array(toolAuthorizationTimelineEventSchema).safeParse(stored);
-
-        if (!parsed.success) {
-          return;
-        }
-
-        const duplicate = parsed.data.some(
-          (candidate) =>
-            candidate.event === event.event &&
-            candidate.toolCallId === event.toolCallId &&
-            ("reason" in candidate ? candidate.reason : undefined) ===
-              ("reason" in event ? event.reason : undefined),
-        );
-
-        if (duplicate) {
-          return;
-        }
-
-        await transaction.put(runTraceKey(input.runId), [
-          ...parsed.data.slice(-(MAXIMUM_RUN_TIMELINE_EVENTS - 1)),
-          event,
-        ]);
-      });
-    } catch {
-      // Diagnostic trace persistence must not alter execution.
-    }
+    await this.#recordRunTraceEvent(input.runId, event);
   }
 
   async #redeemReceiverCapability(capability: RunReceiverCapability): Promise<boolean> {

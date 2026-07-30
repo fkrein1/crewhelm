@@ -12,13 +12,14 @@ import {
   type GetAgentScheduleResult,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
-import { and, eq, lte, min } from "drizzle-orm";
+import { and, desc, eq, lte, min } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import {
   agentScheduleRevisions,
   agentSchedules,
   agentScheduleUpdates,
+  agentInboxItems,
   agents,
   auditEvents,
   type ControlPlaneDatabaseSchema,
@@ -282,6 +283,7 @@ export class AgentSchedules {
             current?.lastDispatchedAt === null || current?.lastDispatchedAt === undefined
               ? null
               : new Date(current.lastDispatchedAt).toISOString(),
+          lastAttempt: null,
           lastRunId: current?.lastRunId ?? null,
           nextRunAt: nextRunAt === null ? null : new Date(nextRunAt).toISOString(),
           revision,
@@ -517,6 +519,45 @@ export class AgentSchedules {
       | undefined,
   ): AgentSchedule {
     const isCurrent = state?.currentRevision === revision.revision;
+    const deferred = isCurrent
+      ? this.#database
+          .select({
+            occurredAt: agentInboxItems.occurredAt,
+            reason: agentInboxItems.reason,
+            retryAt: agentInboxItems.retryAt,
+          })
+          .from(agentInboxItems)
+          .where(
+            and(
+              eq(agentInboxItems.agentId, revision.agentId),
+              eq(agentInboxItems.kind, "deferred"),
+              eq(agentInboxItems.scheduleRevision, revision.revision),
+            ),
+          )
+          .orderBy(desc(agentInboxItems.occurredAt))
+          .limit(1)
+          .get()
+      : undefined;
+    const lastDispatchedAt = isCurrent && state !== undefined ? state.lastDispatchedAt : null;
+    const lastAttempt =
+      deferred !== undefined &&
+      (lastDispatchedAt === null || deferred.occurredAt > lastDispatchedAt)
+        ? {
+            occurredAt: new Date(deferred.occurredAt).toISOString(),
+            outcome: "deferred" as const,
+            reason: deferred.reason,
+            retryAt: deferred.retryAt === null ? null : new Date(deferred.retryAt).toISOString(),
+            runId: null,
+          }
+        : lastDispatchedAt === null
+          ? null
+          : {
+              occurredAt: new Date(lastDispatchedAt).toISOString(),
+              outcome: "dispatched" as const,
+              reason: null,
+              retryAt: null,
+              runId: state?.lastRunId ?? null,
+            };
 
     return agentScheduleSchema.parse({
       agentId: revision.agentId,
@@ -527,6 +568,7 @@ export class AgentSchedules {
         !isCurrent || state.lastDispatchedAt === null
           ? null
           : new Date(state.lastDispatchedAt).toISOString(),
+      lastAttempt,
       lastRunId: isCurrent ? state.lastRunId : null,
       nextRunAt:
         !isCurrent || state.nextRunAt === null ? null : new Date(state.nextRunAt).toISOString(),

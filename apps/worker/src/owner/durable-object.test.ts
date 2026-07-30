@@ -94,6 +94,7 @@ describe("OwnerControlPlane", () => {
         usage: {
           agents: { active: 0, total: 0 },
           connections: { active: 0, pending: 0, total: 0 },
+          diagnostics: { expiredApprovals: 0, pendingAiUsage: 0 },
           inbox: {
             actionRequired: 0,
             deferred: 0,
@@ -105,6 +106,12 @@ describe("OwnerControlPlane", () => {
           runs: { active: 0 },
         },
       },
+    });
+    await expect(
+      stub.status(authority, { auditLimit: 5, includeRecentAudit: true }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: { recentAudit: [] },
     });
     await expect(
       runInDurableObject(stub, (_instance, state) => ({

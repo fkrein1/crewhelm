@@ -571,7 +571,8 @@ function validateStartedRun(
 }
 
 function validateSingleDispatch(inspected: Extract<InspectRunResult, { ok: true }>): string {
-  const unreconciledEffect = inspected.timeline.find(
+  const timeline = inspected.timeline;
+  const unreconciledEffect = timeline.find(
     (event) =>
       event.event === "tool.authorization_blocked" && event.reason === "unreconciled_effect",
   );
@@ -587,17 +588,11 @@ function validateSingleDispatch(inspected: Extract<InspectRunResult, { ok: true 
     "tool.execution_failed",
     "tool.execution_unknown",
   ]);
-  const eventNames = inspected.timeline.map((event) => event.event);
-  const dispatched = inspected.timeline.filter(
-    (event) => event.event === "tool.execution_dispatched",
-  );
-  const completed = inspected.timeline.filter(
-    (event) => event.event === "tool.execution_completed",
-  );
-  const allowed = inspected.timeline.filter(
-    (event) => event.event === "tool.authorization_allowed",
-  );
-  const reserved = inspected.timeline.filter((event) => event.event === "tool.execution_reserved");
+  const eventNames = timeline.map((event) => event.event);
+  const dispatched = timeline.filter((event) => event.event === "tool.execution_dispatched");
+  const completed = timeline.filter((event) => event.event === "tool.execution_completed");
+  const allowed = timeline.filter((event) => event.event === "tool.authorization_allowed");
+  const reserved = timeline.filter((event) => event.event === "tool.execution_reserved");
   const toolCallId = dispatched[0]?.toolCallId;
 
   if (
@@ -1057,7 +1052,7 @@ export async function runStandingIntegrationSmoke(
             inspected = await callTool(
               session,
               "crewhelm_inspect_run",
-              { runId: startedRun.runId },
+              { runId: startedRun.runId, timelineLimit: 50 },
               inspectRunResultSchema,
               "Standing integration run inspection returned an invalid payload.",
             );
@@ -1084,10 +1079,9 @@ export async function runStandingIntegrationSmoke(
             );
           }
 
-          const unknown = inspected.timeline.find(
-            (event) => event.event === "tool.execution_unknown",
-          );
-          const unreconciledEffect = inspected.timeline.some(
+          const timeline = inspected.timeline;
+          const unknown = timeline.find((event) => event.event === "tool.execution_unknown");
+          const unreconciledEffect = timeline.some(
             (event) =>
               event.event === "tool.authorization_blocked" &&
               event.reason === "unreconciled_effect",

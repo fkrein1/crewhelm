@@ -76,7 +76,6 @@ export type ComposioRuntimeResponseEvent =
         | "sensitive_response"
         | "transport_error";
       providerErrorCode?: number;
-      providerErrorSlug?: string;
       status: number | null;
       toolSlug: string;
     }
@@ -354,7 +353,6 @@ export function createComposioRuntime(options: ComposioRuntimeOptions): Composio
               ? {}
               : {
                   providerErrorCode: providerError.error.code,
-                  providerErrorSlug: providerError.error.slug,
                 }),
             status: response.status,
             toolSlug,

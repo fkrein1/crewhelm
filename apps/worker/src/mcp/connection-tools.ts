@@ -33,11 +33,19 @@ function connectionLinkMcpResult(result: unknown) {
   return validatedToolResult(result, createConnectionLinkResultSchema);
 }
 
-function unknownConnectionLinkMcpResult() {
+function unknownConnectionLinkMcpResult(operation: {
+  recoverAfter: string;
+  reservationId: string;
+}) {
   return connectionLinkMcpResult({
     error: {
       code: "connection_link_outcome_unknown",
       message: "Connection link request denied.",
+      operation: {
+        nextAction: "retry_same_request",
+        recoverAfter: operation.recoverAfter,
+        reservationId: operation.reservationId,
+      },
     },
     ok: false,
   });
@@ -111,11 +119,13 @@ async function createConnectionLink(
       userId: authority.ownerKey,
     });
   } catch {
-    return unknownConnectionLinkMcpResult();
+    return unknownConnectionLinkMcpResult(reservation);
   }
 
   if (!providerResult.ok) {
-    return connectionLinkMcpResult(providerResult);
+    return providerResult.error.code === "connection_link_outcome_unknown"
+      ? unknownConnectionLinkMcpResult(reservation)
+      : connectionLinkMcpResult(providerResult);
   }
 
   try {
@@ -129,7 +139,7 @@ async function createConnectionLink(
       await controlPlane.completeConnectionLink(authority, completion),
     );
   } catch {
-    return unknownConnectionLinkMcpResult();
+    return unknownConnectionLinkMcpResult(reservation);
   }
 }
 
@@ -167,7 +177,7 @@ export function registerConnectionTools(
         readOnlyHint: true,
       },
       description:
-        "List bounded owner-scoped connection summaries with integration and provider account IDs, but never credentials.",
+        "List bounded owner-scoped connection summaries, or inspect one exact connection with its safe lifecycle timeline, but never credentials.",
       inputSchema: listConnectionsInputSchema,
       title: "List integration connections",
     },

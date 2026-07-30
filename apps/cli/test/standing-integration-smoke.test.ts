@@ -158,6 +158,7 @@ function fleetStatus(active: number, unresolvedEffects = 0) {
       usage: {
         agents: { active, total: 9 },
         connections: { active: 1, pending: 0, total: 1 },
+        diagnostics: { expiredApprovals: 0, pendingAiUsage: 0 },
         inbox: {
           actionRequired: 0,
           deferred: 0,
@@ -169,6 +170,24 @@ function fleetStatus(active: number, unresolvedEffects = 0) {
         recovery: { unresolvedEffects },
       },
     },
+  };
+}
+
+function inspectionMetadata(totalEvents: number) {
+  return {
+    diagnosis: null,
+    retention: {
+      availableUntil: timestamp,
+      output: { limitCharacters: 65_536, retainedCharacters: 0, truncated: false },
+    },
+    timelinePage: {
+      nextCursor: null,
+      omittedEvents: 0,
+      startSequence: 0,
+      totalEvents,
+      truncated: false,
+    },
+    usage: null,
   };
 }
 
@@ -508,6 +527,7 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
       payload =
         options.terminalFailureAfterUnknown && inspectCalls > 1
           ? {
+              ...inspectionMetadata(1),
               ok: true,
               request: { prompt: "provider-prompt-secret" },
               run: run("failed"),
@@ -515,6 +535,7 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
             }
           : options.authorizationBlockedReason
             ? {
+                ...inspectionMetadata(4),
                 ok: true,
                 request: { prompt: "provider-prompt-secret" },
                 run: run("failed"),
@@ -532,6 +553,7 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
               }
             : options.unknownEffect || options.unknownEffectRunning
               ? {
+                  ...inspectionMetadata(options.unknownEffectRunning ? 6 : 7),
                   ok: true,
                   request: { prompt: "provider-prompt-secret" },
                   run: run(options.unknownEffectRunning ? "running" : "failed"),
@@ -540,6 +562,7 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
                     : unknownTimeline,
                 }
               : {
+                  ...inspectionMetadata(7),
                   ok: true,
                   request: { prompt: "provider-prompt-secret" },
                   run: run("completed"),

@@ -151,6 +151,7 @@ export const decideRunToolApprovalResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     error: z.strictObject({
       code: z.enum([
+        "approval_expired",
         "approval_not_found",
         "incompatible_schema",
         "insufficient_scope",

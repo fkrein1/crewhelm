@@ -10,7 +10,10 @@ import {
   changeAuthorityInputSchema,
   completeAgentConnectionConfigurationInputSchema,
   configureAgentScheduleInputSchema,
+  controlPlaneStatusInputSchema,
   controlPlaneStatusResultSchema,
+  listAuditEventsInputSchema,
+  listAuditEventsResultSchema,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   RUNS_WRITE_SCOPE,
@@ -59,9 +62,10 @@ import {
   type GetAgentScheduleResult,
   type ConfigureFleetConfigurationResult,
   type GetFleetConfigurationResult,
+  type ListAuditEventsResult,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
-import { eq } from "drizzle-orm";
+import { and, count, desc, eq, gte, isNull, lt, lte } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import {
@@ -84,7 +88,14 @@ import {
 } from "./connections/index.js";
 import { FleetConfigurations, deniedFleetConfiguration } from "./configuration/index.js";
 import { CONTROL_PLANE_SCHEMA_VERSION, migrateControlPlane } from "./migrations.js";
-import { controlPlane, controlPlaneSchema, type ControlPlaneDatabaseSchema } from "./schema.js";
+import {
+  auditEvents,
+  aiGatewayCalls,
+  controlPlane,
+  controlPlaneSchema,
+  toolApprovals,
+  type ControlPlaneDatabaseSchema,
+} from "./schema.js";
 
 import {
   AuthorityControls,
@@ -201,7 +212,13 @@ export class OwnerControlPlane extends DurableObject {
     });
   }
 
-  status(authorityInput: unknown): ControlPlaneStatusResult {
+  status(authorityInput: unknown, input: unknown = {}): ControlPlaneStatusResult {
+    const request = controlPlaneStatusInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return this.#deniedStatus("invalid_request");
+    }
+
     const authorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
 
     if (!authorization.ok) {
@@ -209,6 +226,11 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     const configuration = this.#fleetConfigurations.current();
+    const recentAudit = request.data.includeRecentAudit
+      ? this.listAuditEvents(authorization.authority, {
+          limit: request.data.auditLimit,
+        })
+      : null;
 
     return controlPlaneStatusResultSchema.parse({
       ok: true,
@@ -218,11 +240,28 @@ export class OwnerControlPlane extends DurableObject {
           retention: configuration.data.retention,
         },
         configurationRevision: configuration.revision,
+        ...(recentAudit?.ok ? { recentAudit: recentAudit.events } : {}),
         schemaVersion: CONTROL_PLANE_SCHEMA_VERSION,
         status: "ready",
         usage: {
           agents: this.#agents.usage(),
           connections: this.#connections.usage(),
+          diagnostics: {
+            expiredApprovals:
+              this.#database
+                .select({ value: count() })
+                .from(toolApprovals)
+                .where(
+                  and(isNull(toolApprovals.decision), lte(toolApprovals.expiresAt, Date.now())),
+                )
+                .get()?.value ?? 0,
+            pendingAiUsage:
+              this.#database
+                .select({ value: count() })
+                .from(aiGatewayCalls)
+                .where(eq(aiGatewayCalls.status, "pending"))
+                .get()?.value ?? 0,
+          },
           recovery: {
             unresolvedEffects: this.#toolExecutions.unresolvedCount(),
           },
@@ -394,6 +433,68 @@ export class OwnerControlPlane extends DurableObject {
     return authorization.ok
       ? this.#toolExecutions.listUnresolved(input)
       : deniedUnresolvedToolEffects(authorization.code);
+  }
+
+  listAuditEvents(authorityInput: unknown, input: unknown): ListAuditEventsResult {
+    const authorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
+
+    if (!authorization.ok) {
+      return {
+        error: { code: authorization.code, message: "Audit request denied." },
+        ok: false,
+      };
+    }
+
+    const request = listAuditEventsInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return {
+        error: { code: "invalid_request", message: "Audit request denied." },
+        ok: false,
+      };
+    }
+
+    const rows = this.#database
+      .select()
+      .from(auditEvents)
+      .where(
+        and(
+          request.data.action === undefined
+            ? undefined
+            : eq(auditEvents.action, request.data.action),
+          request.data.cursor === undefined
+            ? undefined
+            : lt(auditEvents.eventId, request.data.cursor),
+          request.data.occurredAfter === undefined
+            ? undefined
+            : gte(auditEvents.occurredAt, Date.parse(request.data.occurredAfter)),
+          request.data.subjectId === undefined
+            ? undefined
+            : eq(auditEvents.subjectId, request.data.subjectId),
+        ),
+      )
+      .orderBy(desc(auditEvents.eventId))
+      .limit(request.data.limit + 1)
+      .all();
+    const hasMore = rows.length > request.data.limit;
+    const events = rows.slice(0, request.data.limit).map((event) => ({
+      action: event.action,
+      actor:
+        event.clientId === "crewhelm:scheduler"
+          ? ("scheduler" as const)
+          : event.clientId.startsWith("crewhelm:")
+            ? ("runtime" as const)
+            : ("owner_client" as const),
+      eventId: event.eventId,
+      occurredAt: new Date(event.occurredAt).toISOString(),
+      subjectId: event.subjectId,
+    }));
+
+    return listAuditEventsResultSchema.parse({
+      events,
+      nextCursor: hasMore ? (events.at(-1)?.eventId ?? null) : null,
+      ok: true,
+    });
   }
 
   redeemRunReceiverCapability(input: unknown): RedeemRunReceiverCapabilityResult {
@@ -884,7 +985,7 @@ export class OwnerControlPlane extends DurableObject {
     return { authority, ok: true };
   }
 
-  #deniedStatus(code: AuthorityErrorCode): ControlPlaneStatusResult {
+  #deniedStatus(code: AuthorityErrorCode | "invalid_request"): ControlPlaneStatusResult {
     return controlPlaneStatusResultSchema.parse({
       error: {
         code,

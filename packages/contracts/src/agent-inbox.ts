@@ -4,6 +4,7 @@ import { runIdSchema, sha256DigestSchema } from "./capabilities.js";
 import { agentIdSchema, agentRevisionNumberSchema, ownerKeySchema } from "./control-plane.js";
 import { fleetConfigurationRevisionNumberSchema } from "./fleet-configuration.js";
 import { runAdmissionIdempotencyKeySchema } from "./run-admission.js";
+import { agentInboxDeferredReasonSchema } from "./diagnostics.js";
 
 export const MAXIMUM_AGENT_INBOX_ITEMS = 25;
 export const MAXIMUM_AGENT_INBOX_PREVIEW_CHARACTERS = 240;
@@ -30,21 +31,6 @@ export const agentInboxNextActionSchema = z.enum([
   "review_configuration",
   "review_output",
   "wait_until_retry",
-]);
-
-export const agentInboxDeferredReasonSchema = z.enum([
-  "active_run",
-  "admission_limit_exceeded",
-  "agent_not_found",
-  "agent_unavailable",
-  "budget_exhausted",
-  "capability_unavailable",
-  "dispatch_exception",
-  "idempotency_conflict",
-  "model_unavailable",
-  "record_dispatch_conflict",
-  "revision_conflict",
-  "run_unavailable",
 ]);
 
 const agentInboxConfigurationSchema = z.strictObject({

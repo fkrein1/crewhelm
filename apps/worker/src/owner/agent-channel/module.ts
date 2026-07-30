@@ -11,7 +11,7 @@ import {
   inspectRunResultSchema,
   listAgentRunsInputSchema,
   listAgentRunsResultSchema,
-  MAXIMUM_RUN_TIMELINE_EVENTS,
+  MAXIMUM_RUN_OUTPUT_CHARACTERS,
   listAdmittedRunToolApprovalsResultSchema,
   listRunToolApprovalsInputSchema,
   listRunToolApprovalsResultSchema,
@@ -31,6 +31,7 @@ import {
   type RecordAgentInboxRunResult,
   type RedeemRunReceiverCapabilityResult,
   type Run,
+  type RunDiagnostic,
   type RunTimelineEvent,
   type StartRunResult,
 } from "@crewhelm/contracts";
@@ -40,6 +41,7 @@ import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { digestRunPrompt, type CrewAgent } from "../../agent/admitted-runs/index.js";
 import { recordExecutionEvent } from "../../observability/execution.js";
 import {
+  aiGatewayCalls,
   agents,
   auditEvents,
   capabilityGrants,
@@ -70,11 +72,13 @@ const TIMELINE_EVENT_ORDER = [
   "tool.authorization_blocked",
   "tool.approval_required",
   "tool.approval_approved",
+  "tool.approval_expired",
   "tool.approval_rejected",
   "tool.execution_reserved",
   "tool.execution_dispatched",
   "tool.execution_completed",
   "tool.execution_failed",
+  "tool.provider_failed",
   "tool.execution_unknown",
   "tool.execution_reconciled_applied",
   "tool.execution_reconciled_not_applied",
@@ -366,6 +370,7 @@ export class AgentChannel {
       .select({
         decidedAt: toolApprovals.decidedAt,
         decision: toolApprovals.decision,
+        expiresAt: toolApprovals.expiresAt,
         requestedAt: toolApprovals.requestedAt,
         toolCallId: toolApprovals.toolCallId,
       })
@@ -380,6 +385,8 @@ export class AgentChannel {
           approval.decidedAt,
           approval.toolCallId,
         );
+      } else if (approval.expiresAt <= Date.now()) {
+        add("tool.approval_expired", approval.expiresAt, approval.toolCallId);
       }
     }
 
@@ -446,15 +453,203 @@ export class AgentChannel {
       }
     }
 
-    return [...events.values()]
-      .toSorted(
-        (left, right) =>
-          Date.parse(left.occurredAt) - Date.parse(right.occurredAt) ||
-          (TIMELINE_EVENT_PRIORITY.get(left.event) ?? Number.MAX_SAFE_INTEGER) -
-            (TIMELINE_EVENT_PRIORITY.get(right.event) ?? Number.MAX_SAFE_INTEGER) ||
-          (left.toolCallId ?? "").localeCompare(right.toolCallId ?? ""),
-      )
-      .slice(0, MAXIMUM_RUN_TIMELINE_EVENTS);
+    return [...events.values()].toSorted(
+      (left, right) =>
+        Date.parse(left.occurredAt) - Date.parse(right.occurredAt) ||
+        (TIMELINE_EVENT_PRIORITY.get(left.event) ?? Number.MAX_SAFE_INTEGER) -
+          (TIMELINE_EVENT_PRIORITY.get(right.event) ?? Number.MAX_SAFE_INTEGER) ||
+        (left.toolCallId ?? "").localeCompare(right.toolCallId ?? ""),
+    );
+  }
+
+  #diagnosis(
+    admission: StoredRunAdmission,
+    run: Run,
+    timeline: RunTimelineEvent[],
+  ): RunDiagnostic | null {
+    if (run.status !== "failed") {
+      return null;
+    }
+
+    const failure = timeline.findLast((event, index) => {
+      if (
+        event.event !== "tool.execution_unknown" &&
+        event.event !== "tool.provider_failed" &&
+        event.event !== "tool.authorization_blocked" &&
+        event.event !== "tool.execution_failed"
+      ) {
+        return false;
+      }
+
+      return !timeline
+        .slice(index + 1)
+        .some(
+          (later) =>
+            later.toolCallId === event.toolCallId &&
+            (later.event === "tool.execution_reconciled_applied" ||
+              later.event === "tool.execution_reconciled_not_applied"),
+        );
+    });
+
+    if (failure?.event === "tool.execution_unknown") {
+      return {
+        certainty: "confirmed",
+        disposition: "verify_effect",
+        nextAction: "list_unresolved_effects",
+        phase: "tool.execution",
+        reason: "tool_effect_unknown",
+        ...(failure.toolCallId === undefined ? {} : { toolCallId: failure.toolCallId }),
+      };
+    }
+
+    if (failure?.event === "tool.provider_failed") {
+      return {
+        certainty: "confirmed",
+        disposition: "inspect_first",
+        nextAction: "inspect_run",
+        phase: "tool.execution",
+        reason: "tool_provider_failed",
+        ...(failure.toolCallId === undefined ? {} : { toolCallId: failure.toolCallId }),
+      };
+    }
+
+    if (failure?.event === "tool.authorization_blocked") {
+      const unresolved = failure.reason === "unreconciled_effect";
+
+      return {
+        certainty: "confirmed",
+        disposition: unresolved ? "verify_effect" : "inspect_first",
+        nextAction: unresolved ? "list_unresolved_effects" : "review_configuration",
+        phase: "tool.authorization",
+        reason: "authorization_blocked",
+        toolCallId: failure.toolCallId,
+      };
+    }
+
+    if (failure?.event === "tool.execution_failed") {
+      return {
+        certainty: "confirmed",
+        disposition: "inspect_first",
+        nextAction: "inspect_run",
+        phase: "tool.execution",
+        reason: "tool_execution_failed",
+        ...(failure.toolCallId === undefined ? {} : { toolCallId: failure.toolCallId }),
+      };
+    }
+
+    const reconciliation = timeline.findLast(
+      (event) =>
+        event.event === "tool.execution_reconciled_applied" ||
+        event.event === "tool.execution_reconciled_not_applied",
+    );
+
+    if (reconciliation !== undefined) {
+      const applied = reconciliation.event === "tool.execution_reconciled_applied";
+
+      return {
+        certainty: "confirmed",
+        disposition: applied ? "do_not_retry" : "start_new_run",
+        nextAction: applied ? "inspect_run" : "start_new_run",
+        phase: "tool.execution",
+        reason: applied ? "tool_effect_applied" : "tool_effect_not_applied",
+        ...(reconciliation.toolCallId === undefined
+          ? {}
+          : { toolCallId: reconciliation.toolCallId }),
+      };
+    }
+
+    if (admission.status === "expired") {
+      return {
+        certainty: "confirmed",
+        disposition: "start_new_run",
+        nextAction: "start_new_run",
+        phase: "run.admission",
+        reason: "admission_expired",
+      };
+    }
+
+    return {
+      certainty: "unknown",
+      disposition: "contact_operator",
+      nextAction: "contact_operator",
+      phase: "run.runtime",
+      reason: "runtime_failed",
+    };
+  }
+
+  #inspection(
+    admission: StoredRunAdmission,
+    run: Run,
+    timeline: RunTimelineEvent[],
+    input: { includeUsage: boolean; timelineCursor: number; timelineLimit: number },
+  ): Extract<InspectRunResult, { ok: true }> {
+    const start = Math.min(input.timelineCursor, timeline.length);
+    const page = timeline.slice(start, start + input.timelineLimit);
+    const nextCursor = start + page.length < timeline.length ? start + page.length : null;
+    const gatewayCalls = input.includeUsage
+      ? this.#database
+          .select({
+            costMicrousd: aiGatewayCalls.costMicrousd,
+            inputTokens: aiGatewayCalls.inputTokens,
+            outputTokens: aiGatewayCalls.outputTokens,
+            reservationMicrousd: aiGatewayCalls.reservationMicrousd,
+            status: aiGatewayCalls.status,
+          })
+          .from(aiGatewayCalls)
+          .where(eq(aiGatewayCalls.runId, admission.runId))
+          .all()
+      : [];
+    const pendingUsage = gatewayCalls.some((call) => call.status === "pending");
+    const output = run.output ?? "";
+
+    return inspectRunResultSchema.options[0].parse({
+      diagnosis: this.#diagnosis(admission, run, timeline),
+      ok: true,
+      request: { prompt: admission.prompt },
+      retention: {
+        availableUntil: new Date(admission.cleanupAt).toISOString(),
+        output: {
+          limitCharacters: MAXIMUM_RUN_OUTPUT_CHARACTERS,
+          retainedCharacters: output.length,
+          truncated: run.outputTruncated ?? false,
+        },
+      },
+      run,
+      timeline: page,
+      timelinePage: {
+        nextCursor,
+        omittedEvents: Math.max(0, timeline.length - page.length),
+        startSequence: start,
+        totalEvents: timeline.length,
+        truncated: nextCursor !== null || start > 0,
+      },
+      usage: input.includeUsage
+        ? {
+            ai: {
+              calls: gatewayCalls.length,
+              costMicrousd: gatewayCalls.reduce(
+                (total, call) => total + (call.costMicrousd ?? call.reservationMicrousd),
+                0,
+              ),
+              inputTokens: gatewayCalls.reduce((total, call) => total + (call.inputTokens ?? 0), 0),
+              outputTokens: gatewayCalls.reduce(
+                (total, call) => total + (call.outputTokens ?? 0),
+                0,
+              ),
+              settlement:
+                gatewayCalls.length === 0 ? "not_configured" : pendingUsage ? "pending" : "settled",
+            },
+            modelCalls: {
+              limit: admission.budgetReservation.maxModelCalls,
+              used: admission.modelCallsConsumed,
+            },
+            toolCalls: {
+              limit: admission.budgetReservation.maxToolCalls,
+              used: admission.toolCallsConsumed,
+            },
+          }
+        : null,
+    });
   }
 
   #authoritativeRun(run: Run, authorizationTrace: RunTimelineEvent[]): Run {
@@ -650,12 +845,12 @@ export class AgentChannel {
         trigger: admission.trigger,
       };
 
-      return inspectRunResultSchema.parse({
-        ok: true,
-        request: { prompt: admission.prompt },
+      return this.#inspection(
+        admission,
         run,
-        timeline: this.#timeline(admission, run, [], inspected?.trace ?? []),
-      });
+        this.#timeline(admission, run, [], inspected?.trace ?? []),
+        request.data,
+      );
     }
 
     if (admission.status !== "redeemed") {
@@ -668,12 +863,7 @@ export class AgentChannel {
         trigger: admission.trigger,
       };
 
-      return inspectRunResultSchema.parse({
-        ok: true,
-        request: { prompt: admission.prompt },
-        run,
-        timeline: this.#timeline(admission, run),
-      });
+      return this.#inspection(admission, run, this.#timeline(admission, run), request.data);
     }
 
     const agent = this.#agent(authority, admission);
@@ -716,12 +906,7 @@ export class AgentChannel {
       this.#inbox.repairFailedRun(alignedRun.runId);
     }
 
-    return inspectRunResultSchema.parse({
-      ok: true,
-      request: { prompt: admission.prompt },
-      run: alignedRun,
-      timeline,
-    });
+    return this.#inspection(admission, alignedRun, timeline, request.data);
   }
 
   async listRuns(_authority: OwnerAuthority, input: unknown): Promise<ListAgentRunsResult> {
@@ -960,6 +1145,23 @@ export class AgentChannel {
     }
 
     const agent = this.#agent(authority, admission);
+    const storedApproval = this.#database
+      .select({
+        expiresAt: toolApprovals.expiresAt,
+        runId: toolApprovals.runId,
+      })
+      .from(toolApprovals)
+      .where(eq(toolApprovals.executionId, request.data.executionId))
+      .get();
+
+    if (
+      storedApproval !== undefined &&
+      storedApproval.runId === request.data.runId &&
+      storedApproval.expiresAt <= Date.now()
+    ) {
+      return deniedDecideRunToolApproval("approval_expired");
+    }
+
     const pending = await this.#pendingApprovals(authority, admission, agent);
 
     if (pending.state === "unavailable") {
@@ -971,8 +1173,12 @@ export class AgentChannel {
         ? pending.approvals.find((candidate) => candidate.executionId === request.data.executionId)
         : undefined;
 
-    if (approval === undefined || Date.parse(approval.expiresAt) <= Date.now()) {
+    if (approval === undefined) {
       return deniedDecideRunToolApproval("approval_not_found");
+    }
+
+    if (Date.parse(approval.expiresAt) <= Date.now()) {
+      return deniedDecideRunToolApproval("approval_expired");
     }
 
     const currentTime = Date.now();

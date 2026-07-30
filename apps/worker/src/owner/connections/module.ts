@@ -11,6 +11,8 @@ import {
   createConnectionLinkResultSchema,
   enableIntegrationInputSchema,
   enableIntegrationResultSchema,
+  inspectConnectionInputSchema,
+  inspectConnectionResultSchema,
   listConnectionsInputSchema,
   listConnectionsResultSchema,
   recordConnectionAuthorizationReturnInputSchema,
@@ -23,13 +25,14 @@ import {
   type EnableIntegrationInput,
   type EnableIntegrationResult,
   type FleetConfigurationData,
+  type InspectConnectionResult,
   type ListConnectionsResult,
   type OwnerAuthority,
   type RecordConnectionAuthorizationReturnResult,
   type ReserveIntegrationEnablementResult,
   type ReserveConnectionLinkResult,
 } from "@crewhelm/contracts";
-import { and, asc, count, eq, gt, lte, min, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, lte, min, sql } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { alias } from "drizzle-orm/sqlite-core";
 
@@ -49,6 +52,7 @@ type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type DatabaseWriter = Pick<Database, "update">;
 type ConnectionLinkFailure = Extract<CreateConnectionLinkResult, { ok: false }>;
 type ConnectionReadFailure = Extract<ListConnectionsResult, { ok: false }>;
+type ConnectionInspectFailure = Extract<InspectConnectionResult, { ok: false }>;
 type ConnectionAuthorizationReturnFailure = Extract<
   RecordConnectionAuthorizationReturnResult,
   { ok: false }
@@ -113,9 +117,14 @@ function isCanonicalComposioConnectUrl(value: string): boolean {
 
 export function deniedConnectionLink(
   code: ConnectionLinkFailure["error"]["code"],
+  operation?: ConnectionLinkFailure["error"]["operation"],
 ): ConnectionLinkFailure {
   return {
-    error: { code, message: "Connection link request denied." },
+    error: {
+      code,
+      message: "Connection link request denied.",
+      ...(operation === undefined ? {} : { operation }),
+    },
     ok: false,
   };
 }
@@ -123,6 +132,15 @@ export function deniedConnectionLink(
 export function deniedConnectionRead(
   code: ConnectionReadFailure["error"]["code"],
 ): ConnectionReadFailure {
+  return {
+    error: { code, message: "Connection request denied." },
+    ok: false,
+  };
+}
+
+export function deniedConnectionInspect(
+  code: ConnectionInspectFailure["error"]["code"],
+): ConnectionInspectFailure {
   return {
     error: { code, message: "Connection request denied." },
     ok: false,
@@ -138,9 +156,14 @@ export function deniedConnectionAuthorizationReturn(): ConnectionAuthorizationRe
 
 export function deniedIntegrationEnablement(
   code: IntegrationEnablementFailure["error"]["code"],
+  operation?: IntegrationEnablementFailure["error"]["operation"],
 ): IntegrationEnablementFailure {
   return {
-    error: { code, message: "Integration enablement request denied." },
+    error: {
+      code,
+      message: "Integration enablement request denied.",
+      ...(operation === undefined ? {} : { operation }),
+    },
     ok: false,
   };
 }
@@ -183,7 +206,9 @@ export class Connections {
           authConfigId: integrationEnablementRequests.authConfigId,
           authScheme: integrationEnablementRequests.authScheme,
           integrationSlug: integrationEnablementRequests.integrationSlug,
+          recoverAfter: integrationEnablementRequests.recoverAfter,
           requestDigest: integrationEnablementRequests.requestDigest,
+          reservationId: integrationEnablementRequests.reservationId,
           status: integrationEnablementRequests.status,
         })
         .from(integrationEnablementRequests)
@@ -200,21 +225,76 @@ export class Connections {
           return deniedIntegrationEnablement("idempotency_conflict");
         }
 
-        if (
-          existing.status !== "completed" ||
-          existing.authConfigId === null ||
-          existing.authScheme === null
-        ) {
-          return deniedIntegrationEnablement("integration_enablement_outcome_unknown");
+        if (existing.status === "pending") {
+          return deniedIntegrationEnablement("integration_enablement_outcome_unknown", {
+            nextAction: "retry_same_request",
+            recoverAfter: new Date(existing.recoverAfter).toISOString(),
+            reservationId: existing.reservationId,
+          });
         }
 
+        if (existing.status === "completed") {
+          if (existing.authConfigId === null || existing.authScheme === null) {
+            return deniedIntegrationEnablement("integration_enablement_outcome_unknown", {
+              nextAction: "retry_same_request",
+              recoverAfter: new Date(existing.recoverAfter).toISOString(),
+              reservationId: existing.reservationId,
+            });
+          }
+
+          return reserveIntegrationEnablementResultSchema.parse({
+            authConfigId: existing.authConfigId,
+            authScheme: existing.authScheme,
+            integrationSlug: existing.integrationSlug,
+            managed: true,
+            ok: true,
+            state: "replay",
+          });
+        }
+
+        const pending = transaction
+          .select({ reservationId: integrationEnablementRequests.reservationId })
+          .from(integrationEnablementRequests)
+          .where(
+            and(
+              eq(integrationEnablementRequests.integrationSlug, request.data.integrationSlug),
+              eq(integrationEnablementRequests.status, "pending"),
+              gt(integrationEnablementRequests.recoverAfter, currentTime),
+            ),
+          )
+          .limit(1)
+          .all()[0];
+
+        if (pending !== undefined) {
+          return deniedIntegrationEnablement("integration_enablement_in_progress");
+        }
+
+        transaction
+          .update(integrationEnablementRequests)
+          .set({ recoverAfter, status: "pending" })
+          .where(
+            and(
+              eq(integrationEnablementRequests.clientId, authority.clientId),
+              eq(integrationEnablementRequests.reservationId, existing.reservationId),
+              eq(integrationEnablementRequests.status, "abandoned"),
+            ),
+          )
+          .run();
+        transaction
+          .insert(auditEvents)
+          .values({
+            action: "integration.enablement_reserved",
+            clientId: authority.clientId,
+            occurredAt: currentTime,
+            subjectId: existing.reservationId,
+          })
+          .run();
+
         return reserveIntegrationEnablementResultSchema.parse({
-          authConfigId: existing.authConfigId,
-          authScheme: existing.authScheme,
-          integrationSlug: existing.integrationSlug,
-          managed: true,
           ok: true,
-          state: "replay",
+          recoverAfter: new Date(recoverAfter).toISOString(),
+          reservationId: existing.reservationId,
+          state: "dispatch",
         });
       }
 
@@ -270,6 +350,7 @@ export class Connections {
 
       return reserveIntegrationEnablementResultSchema.parse({
         ok: true,
+        recoverAfter: new Date(recoverAfter).toISOString(),
         reservationId,
         state: "dispatch",
       });
@@ -330,7 +411,11 @@ export class Connections {
       }
 
       if (row.status !== "pending" || currentTime >= row.recoverAfter) {
-        return deniedIntegrationEnablement("integration_enablement_outcome_unknown");
+        return deniedIntegrationEnablement("integration_enablement_outcome_unknown", {
+          nextAction: "retry_same_request",
+          recoverAfter: new Date(row.recoverAfter).toISOString(),
+          reservationId: request.data.reservationId,
+        });
       }
 
       transaction
@@ -390,8 +475,10 @@ export class Connections {
 
       const existingRequest = transaction
         .select({
+          authConfigId: connectionLinkRequests.authConfigId,
           connectionId: connectionLinkRequests.connectionId,
           expiresAt: connectionLinkRequests.expiresAt,
+          recoverAfter: connectionLinkRequests.recoverAfter,
           redirectUrl: connectionLinkRequests.redirectUrl,
           requestDigest: connectionLinkRequests.requestDigest,
           reservationId: connectionLinkRequests.reservationId,
@@ -415,18 +502,104 @@ export class Connections {
           return deniedConnectionLink("connection_link_expired");
         }
 
-        if (existingRequest.status !== "completed") {
-          return deniedConnectionLink("connection_link_outcome_unknown");
+        if (existingRequest.status === "pending") {
+          return deniedConnectionLink("connection_link_outcome_unknown", {
+            nextAction: "retry_same_request",
+            recoverAfter: new Date(existingRequest.recoverAfter).toISOString(),
+            reservationId: existingRequest.reservationId,
+          });
         }
 
-        if (existingRequest.expiresAt === null || existingRequest.expiresAt <= currentTime) {
-          return deniedConnectionLink("connection_link_expired");
+        if (existingRequest.status === "completed") {
+          if (existingRequest.expiresAt === null || existingRequest.expiresAt <= currentTime) {
+            return deniedConnectionLink("connection_link_expired");
+          }
+
+          return reserveConnectionLinkResultSchema.parse({
+            connectionLink: this.#linkFromRow(existingRequest),
+            ok: true,
+            state: "replay",
+          });
         }
+
+        const pendingRequest = transaction
+          .select({ reservationId: connectionLinkRequests.reservationId })
+          .from(connectionLinkRequests)
+          .where(
+            and(
+              eq(connectionLinkRequests.authConfigId, existingRequest.authConfigId),
+              eq(connectionLinkRequests.status, "pending"),
+              gt(connectionLinkRequests.recoverAfter, currentTime),
+            ),
+          )
+          .limit(1)
+          .all()[0];
+
+        if (pendingRequest !== undefined) {
+          return deniedConnectionLink("connection_link_in_progress");
+        }
+
+        const connectionCount =
+          transaction.select({ value: count() }).from(connections).get()?.value ?? 0;
+        const pendingCount =
+          transaction
+            .select({ value: count() })
+            .from(connectionLinkRequests)
+            .where(
+              and(
+                eq(connectionLinkRequests.status, "pending"),
+                gt(connectionLinkRequests.recoverAfter, currentTime),
+              ),
+            )
+            .get()?.value ?? 0;
+
+        if (
+          connectionCount + pendingCount >=
+          this.#currentFleetConfiguration().capacity.maxConnections
+        ) {
+          return deniedConnectionLink("connection_limit_exceeded");
+        }
+
+        transaction
+          .update(connectionLinkRequests)
+          .set({ recoverAfter, status: "pending" })
+          .where(
+            and(
+              eq(connectionLinkRequests.clientId, authority.clientId),
+              eq(connectionLinkRequests.reservationId, existingRequest.reservationId),
+              eq(connectionLinkRequests.status, "abandoned"),
+            ),
+          )
+          .run();
+        transaction
+          .update(connectionAuthorizationReturns)
+          .set({
+            completedAt: null,
+            connectionId: null,
+            createdAt: currentTime,
+            expiresAt: recoverAfter,
+            status: "pending",
+            tokenDigest: authorizationTokenDigest,
+          })
+          .where(eq(connectionAuthorizationReturns.reservationId, existingRequest.reservationId))
+          .run();
+        transaction
+          .insert(auditEvents)
+          .values({
+            action: "connection.link_reserved",
+            clientId: authority.clientId,
+            occurredAt: currentTime,
+            subjectId: existingRequest.reservationId,
+          })
+          .run();
 
         return reserveConnectionLinkResultSchema.parse({
-          connectionLink: this.#linkFromRow(existingRequest),
+          authorizationExpiresAt: new Date(recoverAfter).toISOString(),
+          authorizationToken,
           ok: true,
-          state: "replay",
+          recoverAfter: new Date(recoverAfter).toISOString(),
+          reservationId: existingRequest.reservationId,
+          state: "dispatch",
         });
       }
 
@@ -514,6 +687,7 @@ export class Connections {
         authorizationExpiresAt: new Date(recoverAfter).toISOString(),
         authorizationToken,
         ok: true,
+        recoverAfter: new Date(recoverAfter).toISOString(),
         reservationId,
         state: "dispatch",
       });
@@ -618,7 +792,11 @@ export class Connections {
           correlationId: request.data.reservationId,
           outcome: "invalid_state",
         });
-        return deniedConnectionLink("connection_link_outcome_unknown");
+        return deniedConnectionLink("connection_link_outcome_unknown", {
+          nextAction: "retry_same_request",
+          recoverAfter: new Date(recoverAfter).toISOString(),
+          reservationId: request.data.reservationId,
+        });
       }
 
       const existingConnection = transaction
@@ -646,7 +824,11 @@ export class Connections {
           .run();
       } else {
         if (existingConnection.authConfigId !== row.authConfigId) {
-          return deniedConnectionLink("connection_link_outcome_unknown");
+          return deniedConnectionLink("connection_link_outcome_unknown", {
+            nextAction: "retry_same_request",
+            recoverAfter: new Date(recoverAfter).toISOString(),
+            reservationId: request.data.reservationId,
+          });
         }
 
         connectionId = existingConnection.connectionId;
@@ -835,6 +1017,22 @@ export class Connections {
       return deniedConnectionRead("invalid_request");
     }
 
+    if (request.data.connectionId !== undefined) {
+      const inspected = this.inspect({ connectionId: request.data.connectionId });
+
+      return inspected.ok
+        ? listConnectionsResultSchema.parse({
+            connections: [inspected.connection],
+            detail: {
+              nextAction: inspected.nextAction,
+              timeline: inspected.timeline,
+            },
+            nextCursor: null,
+            ok: true,
+          })
+        : deniedConnectionRead(inspected.error.code);
+    }
+
     const listedConnections = alias(connections, "listed_connections");
     const latestAuthorizationOutcome = sql<ConnectionSummary["authorizationOutcome"]>`coalesce(
       (
@@ -902,6 +1100,90 @@ export class Connections {
     const nextCursor = hasMore ? (page.at(-1)?.connectionId ?? null) : null;
 
     return listConnectionsResultSchema.parse({ connections: page, nextCursor, ok: true });
+  }
+
+  inspect(input: unknown): InspectConnectionResult {
+    const request = inspectConnectionInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return deniedConnectionInspect("invalid_request");
+    }
+
+    const row = this.#database
+      .select()
+      .from(connections)
+      .where(eq(connections.connectionId, request.data.connectionId))
+      .get();
+
+    if (row === undefined) {
+      return deniedConnectionInspect("connection_not_found");
+    }
+
+    const authorization = this.#database
+      .select({ status: connectionAuthorizationReturns.status })
+      .from(connectionAuthorizationReturns)
+      .where(eq(connectionAuthorizationReturns.connectionId, row.connectionId))
+      .orderBy(
+        desc(connectionAuthorizationReturns.createdAt),
+        desc(connectionAuthorizationReturns.reservationId),
+      )
+      .limit(1)
+      .get();
+    const integration = this.#database
+      .select({ integrationSlug: integrationEnablementRequests.integrationSlug })
+      .from(integrationEnablementRequests)
+      .where(
+        and(
+          eq(integrationEnablementRequests.authConfigId, row.authConfigId),
+          eq(integrationEnablementRequests.status, "completed"),
+        ),
+      )
+      .orderBy(
+        desc(integrationEnablementRequests.completedAt),
+        desc(integrationEnablementRequests.reservationId),
+      )
+      .limit(1)
+      .get();
+    const timeline = this.#database
+      .select({
+        action: auditEvents.action,
+        eventId: auditEvents.eventId,
+        occurredAt: auditEvents.occurredAt,
+      })
+      .from(auditEvents)
+      .where(eq(auditEvents.subjectId, row.connectionId))
+      .orderBy(asc(auditEvents.eventId))
+      .limit(25)
+      .all()
+      .map((event) => ({
+        ...event,
+        occurredAt: new Date(event.occurredAt).toISOString(),
+      }));
+    const summary = this.#summaryFromRow({
+      accountLabel: row.accountLabel,
+      authConfigId: row.authConfigId,
+      authorizationOutcome: authorization?.status ?? "untracked",
+      connectionId: row.connectionId,
+      createdAt: row.createdAt,
+      integrationSlug: integration?.integrationSlug ?? null,
+      providerConnectionId: row.providerConnectionId,
+      status: row.status,
+    });
+    const nextAction =
+      summary.status === "revoked"
+        ? "reconnect"
+        : summary.status === "unavailable" || summary.authorizationOutcome === "failed"
+          ? "review_authorization"
+          : summary.authorizationOutcome === "pending"
+            ? "wait"
+            : "none";
+
+    return inspectConnectionResultSchema.parse({
+      connection: summary,
+      nextAction,
+      ok: true,
+      timeline,
+    });
   }
 
   usage(): { active: number; pending: number; total: number } {

@@ -97,6 +97,9 @@ single-use permit at the relevant boundaries.
 The complete [MCP tool reference](docs/reference/mcp-tools.md) is generated from the authenticated
 `tools/list` response:
 
+Stable failure fields and bounded follow-up reads are documented in
+[MCP errors and recovery](docs/reference/errors.md).
+
 ```sh
 pnpm docs:mcp
 ```
