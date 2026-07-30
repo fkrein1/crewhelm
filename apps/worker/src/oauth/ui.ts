@@ -10,6 +10,12 @@ import {
 import type { CrewhelmAuth } from "./auth.js";
 import { OFFLINE_ACCESS_SCOPE, oauthScopeClaimSchema } from "./scopes.js";
 import type { WorkerEnv } from "../env.js";
+import {
+  escapePageHtml,
+  renderWorkerPage,
+  workerPageResponse,
+  workerStylesheetResponse,
+} from "../http/page.js";
 import { readBoundedPostRequest } from "../http/request-body.js";
 
 const MAX_OAUTH_FORM_BYTES = 8 * 1024;
@@ -38,162 +44,6 @@ const navigationResultSchema = z.looseObject({
 const navigationJsonSchema = z.strictObject({
   redirectUrl: z.url().max(2_048),
 });
-const OAUTH_STYLES = `
-:root {
-  color-scheme: light;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #18212f;
-  background: #f4f6f8;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-[hidden] {
-  display: none !important;
-}
-
-body {
-  min-height: 100vh;
-  margin: 0;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background:
-    radial-gradient(circle at top, #ffffff 0, #f4f6f8 52%),
-    #f4f6f8;
-}
-
-main {
-  width: min(100%, 560px);
-  padding: 36px;
-  border: 1px solid #dfe4ea;
-  border-radius: 16px;
-  background: #ffffff;
-  box-shadow: 0 18px 50px rgb(25 35 50 / 9%);
-}
-
-.eyebrow {
-  margin: 0 0 12px;
-  color: #526071;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-h1 {
-  margin: 0 0 12px;
-  color: #111827;
-  font-size: clamp(28px, 5vw, 36px);
-  line-height: 1.12;
-  letter-spacing: -0.025em;
-}
-
-p,
-li {
-  color: #526071;
-  line-height: 1.6;
-}
-
-ul {
-  margin: 20px 0;
-  padding: 18px 18px 18px 38px;
-  border-radius: 10px;
-  background: #f7f8fa;
-}
-
-li + li {
-  margin-top: 8px;
-}
-
-.meta {
-  padding-top: 16px;
-  border-top: 1px solid #e6e9ee;
-  font-size: 14px;
-}
-
-code {
-  overflow-wrap: anywhere;
-  color: #263244;
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 26px;
-}
-
-.actions form {
-  margin: 0;
-}
-
-button,
-.button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 44px;
-  padding: 0 18px;
-  border: 1px solid transparent;
-  border-radius: 9px;
-  text-decoration: none;
-  font: inherit;
-  font-weight: 650;
-  cursor: pointer;
-}
-
-button:hover,
-.button:hover {
-  transform: translateY(-1px);
-}
-
-button:focus-visible,
-.button:focus-visible {
-  outline: 3px solid rgb(37 99 235 / 28%);
-  outline-offset: 2px;
-}
-
-button:disabled,
-.button[aria-disabled="true"] {
-  cursor: wait;
-  opacity: 0.62;
-  transform: none;
-  box-shadow: none;
-}
-
-.primary {
-  color: #ffffff;
-  background: #18212f;
-  box-shadow: 0 6px 16px rgb(24 33 47 / 18%);
-}
-
-.secondary {
-  color: #344054;
-  border-color: #d0d5dd;
-  background: #ffffff;
-}
-
-@media (max-width: 520px) {
-  body {
-    padding: 14px;
-  }
-
-  main {
-    padding: 26px 22px;
-    border-radius: 13px;
-  }
-
-  .actions button,
-  .actions .button,
-  .actions form {
-    width: 100%;
-  }
-}
-`.trim();
 const OAUTH_ACTIONS_SCRIPT = `
 const consentForms = document.querySelectorAll("[data-consent-form]");
 const navigationStarts = document.querySelectorAll("[data-navigation-start]");
@@ -236,45 +86,11 @@ type OAuthApp = Hono<{ Bindings: WorkerEnv }>;
 type WorkerContext = Context<{ Bindings: WorkerEnv }>;
 type AuthFactory = (context: WorkerContext) => CrewhelmAuth;
 
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function htmlResponse(body: string, formActionOrigin?: string): Response {
-  const formAction = formActionOrigin === undefined ? "'self'" : `'self' ${formActionOrigin}`;
-
-  return new Response(body, {
-    headers: {
-      "cache-control": "no-store",
-      "content-security-policy": `default-src 'none'; base-uri 'none'; connect-src 'self'; form-action ${formAction}; frame-ancestors 'none'; script-src 'self'; style-src 'self'`,
-      "content-type": "text/html; charset=utf-8",
-      "referrer-policy": "no-referrer",
-      "x-content-type-options": "nosniff",
-      "x-frame-options": "DENY",
-    },
-  });
-}
-
 function actionsScriptResponse(): Response {
   return new Response(`${OAUTH_ACTIONS_SCRIPT}\n`, {
     headers: {
       "cache-control": "no-store",
       "content-type": "text/javascript; charset=utf-8",
-      "x-content-type-options": "nosniff",
-    },
-  });
-}
-
-function stylesheetResponse(): Response {
-  return new Response(`${OAUTH_STYLES}\n`, {
-    headers: {
-      "cache-control": "no-store",
-      "content-type": "text/css; charset=utf-8",
       "x-content-type-options": "nosniff",
     },
   });
@@ -435,28 +251,16 @@ async function navigationJsonResponse(response: Response, request: Request): Pro
 }
 
 function loginPage(query: string): string {
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Sign in to Crewhelm</title>
-    <link rel="stylesheet" href="/oauth/styles.css">
-    <script src="/oauth/actions.js" defer></script>
-  </head>
-  <body>
-    <main>
-      <p class="eyebrow">Crewhelm</p>
-      <h1>Sign in to Crewhelm</h1>
-      <p>Continue with the GitHub account configured as this Crewhelm deployment's owner.</p>
-      <input type="hidden" name="oauth_query" value="${escapeHtml(query)}">
+  return renderWorkerPage({
+    body: `      <p>Continue with the GitHub account configured as this Crewhelm deployment's owner.</p>
+      <input type="hidden" name="oauth_query" value="${escapePageHtml(query)}">
       <div class="actions">
-        <a class="button primary" href="/oauth/login/continue?${escapeHtml(query)}" data-navigation-start data-pending-label="Opening GitHub…">Continue with GitHub</a>
-      </div>
-    </main>
-  </body>
-</html>
-`;
+        <a class="button primary" href="/oauth/login/continue?${escapePageHtml(query)}" data-navigation-start data-pending-label="Opening GitHub…">Continue with GitHub</a>
+      </div>`,
+    heading: "Sign in to Crewhelm",
+    scriptPath: "/oauth/actions.js",
+    title: "Sign in to Crewhelm",
+  });
 }
 
 function consentPage(
@@ -492,46 +296,36 @@ function consentPage(
       : "",
   ].join("");
 
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Authorize Crewhelm</title>
-    <link rel="stylesheet" href="/oauth/styles.css">
-    <script src="/oauth/actions.js" defer></script>
-  </head>
-  <body>
-    <main>
-      <p class="eyebrow">Crewhelm</p>
-      <h1>Authorize Crewhelm</h1>
-      <p><strong>${escapeHtml(client.name)}</strong> is requesting these permissions:</p>
+  return renderWorkerPage({
+    body: `      <p><strong>${escapePageHtml(client.name)}</strong> is requesting these permissions:</p>
       <ul>${permissions}</ul>
       <div class="meta">
-        <p>Client: <code>${escapeHtml(client.id)}</code></p>
-        <p>After authorization, Crewhelm will return you to <code>${escapeHtml(redirectOrigin)}</code>.</p>
+        <p>Client: <code>${escapePageHtml(client.id)}</code></p>
+        <p>After authorization, Crewhelm will return you to <code>${escapePageHtml(redirectOrigin)}</code>.</p>
       </div>
       <div class="actions">
         <form method="post" action="/oauth/consent" data-consent-form>
-          <input type="hidden" name="oauth_query" value="${escapeHtml(query)}">
+          <input type="hidden" name="oauth_query" value="${escapePageHtml(query)}">
           <input type="hidden" name="decision" value="approve">
           <button class="primary" type="submit" data-pending-label="Authorizing…">Authorize</button>
         </form>
         <form method="post" action="/oauth/consent" data-consent-form>
-          <input type="hidden" name="oauth_query" value="${escapeHtml(query)}">
+          <input type="hidden" name="oauth_query" value="${escapePageHtml(query)}">
           <input type="hidden" name="decision" value="deny">
           <button class="secondary" type="submit" data-pending-label="Denying…">Deny</button>
         </form>
-      </div>
-    </main>
-  </body>
-</html>
-`;
+      </div>`,
+    heading: "Authorize Crewhelm",
+    scriptPath: "/oauth/actions.js",
+    title: "Authorize Crewhelm",
+  });
 }
 
 async function showLogin(context: WorkerContext): Promise<Response> {
   const query = signedQuery(context.req.raw);
-  return query === null ? authorizationDenied() : htmlResponse(loginPage(query));
+  return query === null
+    ? authorizationDenied()
+    : workerPageResponse(loginPage(query), { connections: true, scripts: true });
 }
 
 async function submitLogin(context: WorkerContext, createAuth: AuthFactory): Promise<Response> {
@@ -616,7 +410,7 @@ async function showConsent(context: WorkerContext, createAuth: AuthFactory): Pro
 
     const redirectOrigin = new URL(parsedQuery.data.redirect_uri).origin;
 
-    return htmlResponse(
+    return workerPageResponse(
       consentPage(
         query,
         {
@@ -626,7 +420,12 @@ async function showConsent(context: WorkerContext, createAuth: AuthFactory): Pro
         redirectOrigin,
         parsedQuery.data.scope,
       ),
-      redirectOrigin,
+      {
+        connections: true,
+        formActionOrigin: redirectOrigin,
+        forms: true,
+        scripts: true,
+      },
     );
   } catch {
     return authorizationUnavailable("consent");
@@ -713,7 +512,7 @@ async function startConsent(
 export function registerOAuthUiRoutes(worker: OAuthApp, createAuth: AuthFactory): void {
   worker.get("/oauth/error", authorizationError);
   worker.all("/oauth/error", () => fixedResponse("Method not allowed.\n", 405));
-  worker.get("/oauth/styles.css", stylesheetResponse);
+  worker.get("/oauth/styles.css", workerStylesheetResponse);
   worker.all("/oauth/styles.css", () => fixedResponse("Method not allowed.\n", 405));
   worker.get("/oauth/actions.js", actionsScriptResponse);
   worker.all("/oauth/actions.js", () => fixedResponse("Method not allowed.\n", 405));

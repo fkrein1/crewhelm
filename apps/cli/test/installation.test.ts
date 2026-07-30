@@ -1,10 +1,10 @@
-import { lstat, mkdtemp, rm, symlink } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { readInstallation, writeInstallation } from "../src/installation.js";
+import { installationSchema, readInstallation, writeInstallation } from "../src/installation.js";
 
 const INSTALLATION = {
   schemaVersion: 1,
@@ -18,6 +18,13 @@ const INSTALLATION = {
 } as const;
 
 describe("local installation metadata", () => {
+  it("keeps the tracked example valid and secret-free", async () => {
+    const text = await readFile(resolve("crewhelm.installation.example.json"), "utf8");
+
+    expect(installationSchema.parse(JSON.parse(text))).toBeDefined();
+    expect(text.toLowerCase()).not.toContain("secret");
+  });
+
   it("round-trips non-secret upgrade coordinates through a private file", async () => {
     const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-installation-test-"));
     const path = resolve(directory, "nested", "installation.json");

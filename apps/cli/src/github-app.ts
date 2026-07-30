@@ -3,6 +3,13 @@ import { createServer, type Server } from "node:http";
 
 import * as z from "zod";
 
+import {
+  LOCAL_PAGE_STYLES,
+  LOCAL_PAGE_STYLES_PATH,
+  localPageHeaders,
+  renderLocalPage,
+} from "./local-page.js";
+
 const GITHUB_APP_MANIFEST_URL = "https://github.com/settings/apps/new";
 const GITHUB_API_URL = "https://api.github.com";
 const CALLBACK_TIMEOUT_MS = 10 * 60 * 1_000;
@@ -32,14 +39,6 @@ export interface CreateGitHubAppDependencies {
 export interface CreateGitHubAppOptions {
   origin: URL;
   workerName: string;
-}
-
-function escapeAttribute(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
 }
 
 function closeServer(server: Server): Promise<void> {
@@ -116,25 +115,40 @@ export async function createGitHubApp(
 
     const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
 
+    if (request.method === "GET" && requestUrl.pathname === LOCAL_PAGE_STYLES_PATH) {
+      response.writeHead(200, {
+        "cache-control": "private, max-age=600",
+        "content-type": "text/css; charset=utf-8",
+        "x-content-type-options": "nosniff",
+      });
+      response.end(`${LOCAL_PAGE_STYLES}\n`);
+      return;
+    }
+
     if (request.method === "GET" && requestUrl.pathname === "/callback") {
       const returnedState = requestUrl.searchParams.get("state");
       const returnedCode = requestUrl.searchParams.get("code");
 
       if (returnedState !== state || !returnedCode || returnedCode.length > 1_024) {
-        response.writeHead(400, {
-          "cache-control": "no-store",
-          "content-type": "text/plain; charset=utf-8",
-        });
-        response.end("GitHub App setup could not be verified.");
+        response.writeHead(400, localPageHeaders());
+        response.end(
+          renderLocalPage({
+            heading: "GitHub App setup could not be verified",
+            paragraphs: ["Return to Crewhelm and start the setup again."],
+            title: "GitHub App setup not verified",
+          }),
+        );
         return;
       }
 
-      response.writeHead(200, {
-        "cache-control": "no-store",
-        "content-security-policy": "default-src 'none'; style-src 'self'",
-        "content-type": "text/plain; charset=utf-8",
-      });
-      response.end("GitHub App connected. Return to Crewhelm.");
+      response.writeHead(200, localPageHeaders());
+      response.end(
+        renderLocalPage({
+          heading: "GitHub App connected",
+          paragraphs: ["Return to Crewhelm to finish the installation."],
+          title: "GitHub App connected",
+        }),
+      );
       resolveCallback?.(returnedCode);
       return;
     }
@@ -155,25 +169,21 @@ export async function createGitHubApp(
 
     const redirectUrl = new URL(`http://127.0.0.1:${address.port}/callback`);
     const manifest = JSON.stringify(manifestFor(options, redirectUrl));
-    response.writeHead(200, {
-      "cache-control": "no-store",
-      "content-security-policy":
-        "default-src 'none'; form-action https://github.com; style-src 'unsafe-inline'",
-      "content-type": "text/html; charset=utf-8",
-      "x-content-type-options": "nosniff",
-    });
-    response.end(`<!doctype html>
-<html lang="en">
-  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Connect Crewhelm to GitHub</title></head>
-  <body style="font-family:system-ui;max-width:36rem;margin:4rem auto;padding:0 1rem;line-height:1.5">
-    <h1>Create your Crewhelm GitHub App</h1>
-    <p>GitHub will create a private app with no repository permissions. Crewhelm uses it only to verify the fleet owner.</p>
-    <form method="post" action="${GITHUB_APP_MANIFEST_URL}?state=${escapeAttribute(state)}">
-      <input type="hidden" name="manifest" value="${escapeAttribute(manifest)}">
-      <button type="submit">Continue to GitHub</button>
-    </form>
-  </body>
-</html>`);
+    response.writeHead(200, localPageHeaders("https://github.com"));
+    response.end(
+      renderLocalPage({
+        form: {
+          action: `${GITHUB_APP_MANIFEST_URL}?state=${encodeURIComponent(state)}`,
+          fields: { manifest },
+          label: "Continue to GitHub",
+        },
+        heading: "Create your Crewhelm GitHub App",
+        paragraphs: [
+          "GitHub will create a private app with no repository permissions. Crewhelm uses it only to verify the fleet owner.",
+        ],
+        title: "Connect Crewhelm to GitHub",
+      }),
+    );
   });
 
   await new Promise<void>((resolve, reject) => {

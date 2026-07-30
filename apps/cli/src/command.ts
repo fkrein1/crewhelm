@@ -5,6 +5,7 @@ import * as z from "zod";
 
 import { bootstrapOptionsSchema } from "./bootstrap.js";
 import { DoctorInputError, parseDeploymentOrigin } from "./doctor.js";
+import { installationSmokeOptionsSchema } from "./installation-smoke.js";
 
 function formatRootHelp(style: ChalkInstance): string {
   return `
@@ -13,6 +14,7 @@ ${style.cyan.bold("Examples:")}
   ${style.cyan("$ crewhelm doctor --endpoint https://crewhelm.example")}
   ${style.cyan("$ crewhelm smoke agent --help")}
   ${style.cyan("$ crewhelm smoke integration --help")}
+  ${style.cyan("$ crewhelm smoke installation --help")}
 
 ${style.dim("Run crewhelm <command> --help for command-specific options and safety notes.")}
 `;
@@ -75,6 +77,17 @@ ${style.yellow.bold("Production rehearsal:")}
 `;
 }
 
+function formatInstallationSmokeHelp(style: ChalkInstance): string {
+  return `
+${style.yellow.bold("Fresh-install rehearsal:")}
+  Creates an isolated Worker and D1 database, runs the Agent lifecycle smoke, then deletes them.
+  ${style.cyan("--ai-budget-usd")} also creates and deletes an isolated AI Gateway.
+  Existing resources are rejected; exact cleanup coordinates remain in the bounded receipt.
+  Supplied GitHub App credentials must allow this Worker's callback origin.
+  Requires ${style.yellow("--confirm-production")} and crewhelm-smoke-* resource names.
+`;
+}
+
 const cliCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("help"),
@@ -128,6 +141,20 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
       .max(10 * 60 * 1_000),
     timeoutMs: z.number().int().min(100).max(30_000),
   }),
+  z.strictObject({
+    accountId: installationSmokeOptionsSchema.shape.accountId,
+    aiDailySpendUsd: installationSmokeOptionsSchema.shape.aiDailySpendUsd,
+    cleanupOnly: z.boolean(),
+    confirmProduction: z.literal(true),
+    databaseName: installationSmokeOptionsSchema.shape.databaseName,
+    json: z.boolean(),
+    kind: z.literal("installation-smoke"),
+    origin: installationSmokeOptionsSchema.shape.origin,
+    receiptPath: installationSmokeOptionsSchema.shape.receiptPath,
+    runTimeoutMs: installationSmokeOptionsSchema.shape.runTimeoutMs,
+    timeoutMs: installationSmokeOptionsSchema.shape.timeoutMs,
+    workerName: installationSmokeOptionsSchema.shape.workerName,
+  }),
 ]);
 
 export type CliCommand = z.infer<typeof cliCommandSchema>;
@@ -166,13 +193,27 @@ interface StandingIntegrationSmokeCommandOptions extends AgentSmokeCommandOption
   trigger: string;
 }
 
+interface InstallationSmokeCommandOptions {
+  accountId?: string;
+  aiBudgetUsd?: string;
+  cleanupOnly?: boolean;
+  confirmProduction: boolean;
+  databaseName: string;
+  endpoint: string;
+  json?: boolean;
+  receipt: string;
+  runTimeoutMs: string;
+  timeoutMs: string;
+  workerName: string;
+}
+
 export class CliUsageError extends Error {
   override readonly name = "CliUsageError";
 }
 
 function parseOrigin(
   endpoint: string | undefined,
-  kind: "up" | "doctor" | "agent-smoke" | "standing-integration-smoke",
+  kind: "up" | "doctor" | "agent-smoke" | "installation-smoke" | "standing-integration-smoke",
 ) {
   if (endpoint === undefined) {
     return undefined;
@@ -191,16 +232,21 @@ function parseOrigin(
   }
 
   if (
-    (kind === "up" || kind === "agent-smoke" || kind === "standing-integration-smoke") &&
+    (kind === "up" ||
+      kind === "agent-smoke" ||
+      kind === "installation-smoke" ||
+      kind === "standing-integration-smoke") &&
     origin.protocol !== "https:"
   ) {
     throw new CliUsageError(
       `${
         kind === "agent-smoke"
           ? "smoke agent"
-          : kind === "standing-integration-smoke"
-            ? "smoke integration"
-            : kind
+          : kind === "installation-smoke"
+            ? "smoke installation"
+            : kind === "standing-integration-smoke"
+              ? "smoke integration"
+              : kind
       } requires an HTTPS endpoint.`,
     );
   }
@@ -364,6 +410,42 @@ function createCliProgram(
       );
     });
 
+  smoke
+    .command("installation")
+    .summary("rehearse one isolated fresh installation")
+    .description("Create, exercise, and exactly remove one fresh Crewhelm installation.")
+    .requiredOption("--endpoint <origin>", "HTTPS origin for the rehearsal Worker")
+    .requiredOption("--worker-name <name>", "unused crewhelm-smoke-* Worker name")
+    .requiredOption("--database-name <name>", "unused crewhelm-smoke-* D1 database name")
+    .requiredOption("--confirm-production", "confirm Cloudflare resource creation and deletion")
+    .option("--account-id <id>", "Cloudflare account identifier")
+    .option("--ai-budget-usd <dollars>", "create an AI Gateway with this daily hard limit")
+    .option("--receipt <path>", "recovery receipt path", "crewhelm.smoke-receipt.json")
+    .option("--cleanup-only", "retry exact cleanup from an existing receipt")
+    .option("--run-timeout-ms <milliseconds>", "maximum Agent run duration", "120000")
+    .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")
+    .option("--json", "write one machine-readable JSON result")
+    .addHelpText("after", formatInstallationSmokeHelp(style))
+    .action((options: InstallationSmokeCommandOptions) => {
+      onCommand?.(
+        validatedCommand({
+          accountId: options.accountId,
+          aiDailySpendUsd:
+            options.aiBudgetUsd === undefined ? undefined : Number(options.aiBudgetUsd),
+          cleanupOnly: options.cleanupOnly === true,
+          confirmProduction: options.confirmProduction,
+          databaseName: options.databaseName,
+          json: options.json === true,
+          kind: "installation-smoke",
+          origin: parseOrigin(options.endpoint, "installation-smoke"),
+          receiptPath: options.receipt,
+          runTimeoutMs: Number(options.runTimeoutMs),
+          timeoutMs: Number(options.timeoutMs),
+          workerName: options.workerName,
+        }),
+      );
+    });
+
   return program;
 }
 
@@ -426,25 +508,38 @@ export function parseCli(
   const helpRequested = hasFlag(arguments_, "--help") || arguments_.includes("-h");
   const agentSmoke = arguments_[0] === "smoke" && arguments_[1] === "agent";
   const integrationSmoke = arguments_[0] === "smoke" && arguments_[1] === "integration";
+  const installationSmoke = arguments_[0] === "smoke" && arguments_[1] === "installation";
 
   if (
     !helpRequested &&
-    (agentSmoke || integrationSmoke) &&
+    (agentSmoke || integrationSmoke || installationSmoke) &&
     !hasFlag(arguments_, "--confirm-production")
   ) {
     throw new CliUsageError(
-      `${integrationSmoke ? "smoke integration" : "smoke agent"} requires --confirm-production.`,
+      `${
+        integrationSmoke
+          ? "smoke integration"
+          : installationSmoke
+            ? "smoke installation"
+            : "smoke agent"
+      } requires --confirm-production.`,
     );
   }
 
   if (
     !helpRequested &&
-    (arguments_[0] === "doctor" || agentSmoke || integrationSmoke) &&
+    (arguments_[0] === "doctor" || agentSmoke || integrationSmoke || installationSmoke) &&
     !hasFlag(arguments_, "--endpoint")
   ) {
     throw new CliUsageError(
       `${
-        agentSmoke ? "agent-smoke" : integrationSmoke ? "standing-integration-smoke" : "doctor"
+        agentSmoke
+          ? "agent-smoke"
+          : integrationSmoke
+            ? "standing-integration-smoke"
+            : installationSmoke
+              ? "installation-smoke"
+              : "doctor"
       } requires --endpoint.`,
     );
   }

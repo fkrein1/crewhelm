@@ -14,6 +14,8 @@ Correctness and security outrank clarity, locality, consistency, and brevity.
 - Add abstractions for demonstrated variation or hidden complexity, not hypothetical flexibility.
 - Test observable contracts, state transitions, and negative policy behavior rather than private
   steps.
+- Render browser pages through the owning runtime's page module and shared assets; route handlers
+  must not inline document shells.
 
 A valuable module hides complexity that would otherwise spread into callers. If deleting it only
 removes indirection, the module is too shallow.

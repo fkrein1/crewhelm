@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 
 import * as z from "zod";
 
+import type { CloudflareGatewayAuthorization } from "./cloudflare-gateway-authorization.js";
 import {
   diagnoseDeployment,
   diagnoseDeploymentAlignment,
@@ -65,7 +66,11 @@ const DEPLOYMENT_DIGEST_HEX_LENGTH = 40;
 const WORKER_TEXT_MODULE_NAME = /^[0-9a-f]{40}-[0-9]{4}_[a-z0-9_]{1,128}\.sql$/u;
 const WORKER_TEXT_MODULE_IMPORT = /from "\.\/([^"]+\.sql)";/gu;
 const WORKER_NOT_FOUND_CODE = /\[code:\s*10007\]/u;
-const DEPLOYMENT_VERIFICATION_DELAYS_MS = [250, 500, 1_000, 2_000] as const;
+const MINIMUM_DERIVED_RATE_LIMIT_NAMESPACE_ID = 10_000n;
+const MAXIMUM_RATE_LIMIT_NAMESPACE_ID = 2_147_483_647n;
+const RATE_LIMIT_NAMESPACE_PAIR_COUNT =
+  (MAXIMUM_RATE_LIMIT_NAMESPACE_ID - MINIMUM_DERIVED_RATE_LIMIT_NAMESPACE_ID + 1n) / 2n;
+const DEPLOYMENT_VERIFICATION_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 16_000] as const;
 const TABLE_INVENTORY_SQL = "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name";
 const MIGRATION_INVENTORY_SQL = "SELECT name FROM d1_migrations ORDER BY id";
 const ALLOWED_AUTH_TABLES = new Set([
@@ -293,6 +298,7 @@ export const bootstrapOptionsSchema = z.strictObject({
   databaseId: databaseIdSchema.optional(),
   databaseName: deploymentNameSchema,
   origin: z.instanceof(URL).refine((origin) => origin.protocol === "https:"),
+  requireFresh: z.boolean().optional(),
   setupGitHub: z.boolean().optional(),
   timeoutMs: z.number().int().min(100).max(30_000),
   workerName: deploymentNameSchema,
@@ -348,6 +354,10 @@ export type BootstrapFailure = z.infer<typeof bootstrapFailureSchema>;
 export type BootstrapOptions = z.infer<typeof bootstrapOptionsSchema>;
 export type BootstrapProgressStage = z.infer<typeof bootstrapFailureStageSchema>;
 export type BootstrapReport = z.infer<typeof bootstrapReportSchema>;
+export type BootstrapCreatedResource =
+  | { accountId: string; id: string; kind: "gateway" }
+  | { accountId: string; id: string; kind: "database"; name: string }
+  | { accountId: string; kind: "worker"; name: string };
 type BootstrapFailureStage = BootstrapProgressStage;
 type DeploymentTemplate = z.infer<typeof deploymentTemplateSchema>;
 type GitHubSecrets = z.infer<typeof githubSecretsSchema>;
@@ -373,6 +383,24 @@ interface DeploymentAssets {
   workerTextModules: readonly string[];
 }
 
+export function rateLimitNamespacesForWorker(workerName: string): {
+  auth: string;
+  mcp: string;
+} {
+  const digest = createHash("sha256")
+    .update("crewhelm:rate-limits:")
+    .update(workerName)
+    .digest("hex");
+  const first =
+    (BigInt(`0x${digest.slice(0, 32)}`) % RATE_LIMIT_NAMESPACE_PAIR_COUNT) * 2n +
+    MINIMUM_DERIVED_RATE_LIMIT_NAMESPACE_ID;
+
+  return {
+    auth: first.toString(),
+    mcp: (first + 1n).toString(),
+  };
+}
+
 interface CloudflareContext {
   accountId: string;
   accountConfigPath: string;
@@ -388,9 +416,9 @@ interface WorkerInventory {
 export interface BootstrapDependencies extends DoctorDependencies {
   createGitHubApp?: (options: { origin: URL; workerName: string }) => Promise<GitHubSecrets>;
   deploymentAssetsDirectory: string;
-  openCloudflareApiTokens?: () => Promise<void>;
   promptSecret?: (message: string) => Promise<string>;
   readEnvironment: (name: string) => string | undefined;
+  recordCreatedResource?: (resource: BootstrapCreatedResource) => Promise<void>;
   reportProgress?: (progress: BootstrapProgress) => void;
   recoverExistingInstallation?: {
     expectedDatabaseId?: string;
@@ -398,6 +426,11 @@ export interface BootstrapDependencies extends DoctorDependencies {
     persist: (installation: ExistingInstallationCoordinates) => Promise<void>;
   };
   runWrangler: RunWrangler;
+  requestCloudflareGatewayAuthorization?: (request: {
+    accountId: string;
+    canSkip: boolean;
+    workerName: string;
+  }) => Promise<CloudflareGatewayAuthorization>;
   wait?: (milliseconds: number) => Promise<void>;
 }
 
@@ -422,6 +455,20 @@ function reportProgress(
   message: string,
 ): void {
   dependencies.reportProgress?.({ message, stage });
+}
+
+async function recordCreatedResource(
+  dependencies: BootstrapDependencies,
+  resource: BootstrapCreatedResource,
+): Promise<void> {
+  try {
+    await dependencies.recordCreatedResource?.(resource);
+  } catch {
+    throw commandFailed(
+      "configuration",
+      "A created Cloudflare resource could not be recorded for recovery.",
+    );
+  }
 }
 
 async function waitFor(
@@ -630,7 +677,7 @@ export async function readPackagedDeploymentFingerprint(
 }
 
 async function authenticate(
-  options: BootstrapOptions,
+  options: Pick<BootstrapOptions, "accountId">,
   cwd: string,
   configPath: string,
   dependencies: BootstrapDependencies,
@@ -876,29 +923,87 @@ async function applyAiGatewayPlan(
   accountId: string,
   credentials: CloudflareCredentials,
   dependencies: BootstrapDependencies,
-): Promise<{ id: string }> {
+): Promise<void> {
   const collectionUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-gateway/gateways`;
   const gatewayUrl = `${collectionUrl}/${plan.id}`;
+  let recoveredVerification: Awaited<ReturnType<typeof cloudflareApiRequest>> | undefined;
 
   if (plan.needsMutation) {
-    const response = await cloudflareApiRequest(
-      dependencies,
-      credentials,
-      plan.exists ? gatewayUrl : collectionUrl,
-      {
-        body: aiGatewayBody(plan),
-        method: plan.exists ? "PUT" : "POST",
-      },
-    );
+    let response: Awaited<ReturnType<typeof cloudflareApiRequest>> | undefined;
 
-    if (!response.success) {
-      throw commandFailed("gateway", "Cloudflare AI Gateway could not be configured.");
+    if (!plan.exists) {
+      const fresh = await cloudflareApiRequest(dependencies, credentials, gatewayUrl, {
+        method: "GET",
+      });
+
+      if (fresh.status !== 404) {
+        throw commandFailed(
+          "gateway",
+          "AI Gateway name became occupied before creation; no mutation was attempted.",
+        );
+      }
+    }
+
+    try {
+      response = await cloudflareApiRequest(
+        dependencies,
+        credentials,
+        plan.exists ? gatewayUrl : collectionUrl,
+        {
+          body: aiGatewayBody(plan),
+          method: plan.exists ? "PUT" : "POST",
+        },
+      );
+    } catch (error) {
+      if (plan.exists) {
+        throw error;
+      }
+
+      recoveredVerification = await cloudflareApiRequest(dependencies, credentials, gatewayUrl, {
+        method: "GET",
+      });
+
+      if (
+        !recoveredVerification.success ||
+        parseConfiguredAiGateway(recoveredVerification.result, plan.id, plan.dailySpendUsd) ===
+          undefined
+      ) {
+        throw error;
+      }
+    }
+
+    if (response !== undefined && !response.success) {
+      if (plan.exists || response.status < 500) {
+        throw commandFailed("gateway", "Cloudflare AI Gateway could not be configured.");
+      }
+
+      recoveredVerification = await cloudflareApiRequest(dependencies, credentials, gatewayUrl, {
+        method: "GET",
+      });
+
+      if (
+        !recoveredVerification.success ||
+        parseConfiguredAiGateway(recoveredVerification.result, plan.id, plan.dailySpendUsd) ===
+          undefined
+      ) {
+        throw commandFailed("gateway", "Cloudflare AI Gateway could not be configured.");
+      }
+    }
+
+    if (!plan.exists) {
+      await recordCreatedResource(dependencies, {
+        accountId,
+        id: plan.id,
+        kind: "gateway",
+      });
     }
   }
 
-  const verified = await cloudflareApiRequest(dependencies, credentials, gatewayUrl, {
-    method: "GET",
-  });
+  const verified =
+    recoveredVerification ??
+    (await cloudflareApiRequest(dependencies, credentials, gatewayUrl, {
+      method: "GET",
+    }));
 
   if (
     !verified.success ||
@@ -906,8 +1011,6 @@ async function applyAiGatewayPlan(
   ) {
     throw commandFailed("gateway", "Cloudflare AI Gateway configuration could not be verified.");
   }
-
-  return { id: plan.id };
 }
 
 async function writeAccountConfig(cwd: string, accountId?: string): Promise<string> {
@@ -1440,6 +1543,12 @@ async function ensureDatabase(
 
   if (created.outcome !== "completed" || created.exitCode !== 0) {
     if (reconciled.length === 1 && reconciled[0]) {
+      await recordCreatedResource(context.dependencies, {
+        accountId: context.accountId,
+        id: reconciled[0].uuid,
+        kind: "database",
+        name: reconciled[0].name,
+      });
       throw commandFailed(
         "database",
         `D1 creation outcome was not clean. Inspect it, then confirm reuse with --database-id ${reconciled[0].uuid}.`,
@@ -1452,6 +1561,13 @@ async function ensureDatabase(
   if (reconciled.length !== 1 || !reconciled[0]) {
     throw commandFailed("database", "Created D1 database could not be reconciled.");
   }
+
+  await recordCreatedResource(context.dependencies, {
+    accountId: context.accountId,
+    id: reconciled[0].uuid,
+    kind: "database",
+    name: reconciled[0].name,
+  });
 
   return { action: "created" as const, database: reconciled[0] };
 }
@@ -1481,6 +1597,7 @@ async function stageDeployment(
       );
     }
 
+    const rateLimitNamespaces = rateLimitNamespacesForWorker(options.workerName);
     const config = {
       account_id: accountId,
       ai: assets.template.ai,
@@ -1499,7 +1616,11 @@ async function stageDeployment(
       main: "./index.js",
       name: options.workerName,
       observability: assets.template.observability,
-      ratelimits: assets.template.ratelimits,
+      ratelimits: assets.template.ratelimits.map((rateLimit) => ({
+        ...rateLimit,
+        namespace_id:
+          rateLimit.name === "AUTH_RATE_LIMIT" ? rateLimitNamespaces.auth : rateLimitNamespaces.mcp,
+      })),
       rules: assets.template.rules,
       secrets: {
         required: REQUIRED_SECRET_NAMES,
@@ -1590,6 +1711,239 @@ export function createBootstrapFailure(error: BootstrapError): BootstrapFailure 
   });
 }
 
+const cleanupStatusSchema = z.enum(["absent", "deleted", "unresolved"]);
+
+export const bootstrapCleanupReportSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  ok: z.boolean(),
+  resources: z
+    .array(
+      z.discriminatedUnion("kind", [
+        z.strictObject({
+          id: deploymentNameSchema,
+          kind: z.literal("gateway"),
+          status: cleanupStatusSchema,
+        }),
+        z.strictObject({
+          id: databaseIdSchema,
+          kind: z.literal("database"),
+          name: deploymentNameSchema,
+          status: cleanupStatusSchema,
+        }),
+        z.strictObject({
+          kind: z.literal("worker"),
+          name: deploymentNameSchema,
+          status: cleanupStatusSchema,
+        }),
+      ]),
+    )
+    .max(3),
+});
+
+export type BootstrapCleanupReport = z.infer<typeof bootstrapCleanupReportSchema>;
+
+function unresolvedCleanupReport(
+  resources: readonly BootstrapCreatedResource[],
+): BootstrapCleanupReport {
+  return bootstrapCleanupReportSchema.parse({
+    schemaVersion: 1,
+    ok: false,
+    resources: resources.map((resource) => ({
+      ...(resource.kind === "gateway" || resource.kind === "database" ? { id: resource.id } : {}),
+      ...(resource.kind === "worker" || resource.kind === "database"
+        ? { name: resource.name }
+        : {}),
+      kind: resource.kind,
+      status: "unresolved",
+    })),
+  });
+}
+
+async function cleanupWorker(
+  resource: Extract<BootstrapCreatedResource, { kind: "worker" }>,
+  context: CloudflareContext,
+): Promise<BootstrapCleanupReport["resources"][number]> {
+  try {
+    if (!(await readWorkerInventory(resource.name, context)).exists) {
+      return { kind: "worker", name: resource.name, status: "absent" };
+    }
+
+    await runCloudflare(
+      context,
+      ["delete", resource.name, "--config", context.accountConfigPath],
+      "worker",
+    );
+    const status = (await readWorkerInventory(resource.name, context)).exists
+      ? "unresolved"
+      : "deleted";
+    return { kind: "worker", name: resource.name, status };
+  } catch {
+    return { kind: "worker", name: resource.name, status: "unresolved" };
+  }
+}
+
+async function cleanupDatabase(
+  resource: Extract<BootstrapCreatedResource, { kind: "database" }>,
+  context: CloudflareContext,
+): Promise<BootstrapCleanupReport["resources"][number]> {
+  try {
+    const matchingName = (await listDatabases(context)).filter(
+      (database) => database.name === resource.name,
+    );
+
+    if (matchingName.length === 0) {
+      return {
+        id: resource.id,
+        kind: "database",
+        name: resource.name,
+        status: "absent",
+      };
+    }
+
+    if (matchingName.length !== 1 || matchingName[0]?.uuid !== resource.id) {
+      return {
+        id: resource.id,
+        kind: "database",
+        name: resource.name,
+        status: "unresolved",
+      };
+    }
+
+    await runCloudflare(
+      context,
+      ["d1", "delete", resource.name, "--skip-confirmation", "--config", context.accountConfigPath],
+      "database",
+    );
+    const remains = (await listDatabases(context)).some(
+      (database) => database.name === resource.name && database.uuid === resource.id,
+    );
+    return {
+      id: resource.id,
+      kind: "database",
+      name: resource.name,
+      status: remains ? "unresolved" : "deleted",
+    };
+  } catch {
+    return {
+      id: resource.id,
+      kind: "database",
+      name: resource.name,
+      status: "unresolved",
+    };
+  }
+}
+
+async function cleanupGateway(
+  resource: Extract<BootstrapCreatedResource, { kind: "gateway" }>,
+  context: CloudflareContext,
+): Promise<BootstrapCleanupReport["resources"][number]> {
+  try {
+    const credentials = await readCloudflareCredentials(context);
+    const url = `https://api.cloudflare.com/client/v4/accounts/${context.accountId}/ai-gateway/gateways/${resource.id}`;
+    const existing = await cloudflareApiRequest(context.dependencies, credentials, url, {
+      method: "GET",
+    });
+
+    if (existing.status === 404) {
+      return { id: resource.id, kind: "gateway", status: "absent" };
+    }
+
+    if (!existing.success) {
+      return { id: resource.id, kind: "gateway", status: "unresolved" };
+    }
+
+    await cloudflareApiRequest(context.dependencies, credentials, url, { method: "DELETE" });
+    const verified = await cloudflareApiRequest(context.dependencies, credentials, url, {
+      method: "GET",
+    });
+    return {
+      id: resource.id,
+      kind: "gateway",
+      status: verified.status === 404 ? "deleted" : "unresolved",
+    };
+  } catch {
+    return { id: resource.id, kind: "gateway", status: "unresolved" };
+  }
+}
+
+export async function cleanupCreatedInstallationResources(
+  resources: readonly BootstrapCreatedResource[],
+  dependencies: BootstrapDependencies,
+): Promise<BootstrapCleanupReport> {
+  const parsed = z
+    .array(
+      z.discriminatedUnion("kind", [
+        z.strictObject({
+          accountId: accountIdSchema,
+          id: deploymentNameSchema,
+          kind: z.literal("gateway"),
+        }),
+        z.strictObject({
+          accountId: accountIdSchema,
+          id: databaseIdSchema,
+          kind: z.literal("database"),
+          name: deploymentNameSchema,
+        }),
+        z.strictObject({
+          accountId: accountIdSchema,
+          kind: z.literal("worker"),
+          name: deploymentNameSchema,
+        }),
+      ]),
+    )
+    .min(1)
+    .max(3)
+    .parse(resources);
+  const accountIds = new Set(parsed.map((resource) => resource.accountId));
+
+  if (accountIds.size !== 1) {
+    throw commandFailed(
+      "configuration",
+      "Cleanup resources must belong to one Cloudflare account.",
+    );
+  }
+
+  const cwd = await createPrivateWorkspace();
+
+  try {
+    const neutralConfigPath = await writeAccountConfig(cwd);
+    const account = await authenticate(
+      { accountId: parsed[0]!.accountId },
+      cwd,
+      neutralConfigPath,
+      dependencies,
+    );
+    const accountConfigPath = await writeAccountConfig(cwd, account.id);
+    const context = { accountId: account.id, accountConfigPath, cwd, dependencies };
+    const ordered = parsed.toSorted(
+      (left, right) =>
+        ["worker", "database", "gateway"].indexOf(left.kind) -
+        ["worker", "database", "gateway"].indexOf(right.kind),
+    );
+    const results: BootstrapCleanupReport["resources"] = [];
+
+    for (const resource of ordered) {
+      results.push(
+        resource.kind === "worker"
+          ? await cleanupWorker(resource, context)
+          : resource.kind === "database"
+            ? await cleanupDatabase(resource, context)
+            : await cleanupGateway(resource, context),
+      );
+    }
+
+    return bootstrapCleanupReportSchema.parse({
+      schemaVersion: 1,
+      ok: results.every((resource) => resource.status !== "unresolved"),
+      resources: results,
+    });
+  } catch {
+    return unresolvedCleanupReport(parsed);
+  } finally {
+    await rm(cwd, { force: true, recursive: true });
+  }
+}
+
 export async function bootstrapDeployment(
   options: BootstrapOptions,
   dependencies: BootstrapDependencies,
@@ -1631,6 +1985,11 @@ export async function bootstrapDeployment(
 
     reportProgress(dependencies, "worker", "Inspecting the existing Worker");
     const workerInventory = await readWorkerInventory(options.workerName, context);
+
+    if (options.requireFresh === true && workerInventory.exists) {
+      throw commandFailed("worker", "Fresh installation requires an unused Worker name.");
+    }
+
     const deploymentOptions = await recoverExistingInstallation(
       options,
       workerInventory,
@@ -1679,45 +2038,57 @@ export async function bootstrapDeployment(
           !(error instanceof BootstrapError) ||
           error.message !== CLOUDFLARE_GATEWAY_DENIED_MESSAGE ||
           dependencies.readEnvironment(CLOUDFLARE_API_TOKEN_ENVIRONMENT) !== undefined ||
-          dependencies.promptSecret === undefined
+          dependencies.requestCloudflareGatewayAuthorization === undefined
         ) {
           throw error;
         }
 
-        if (dependencies.openCloudflareApiTokens) {
-          try {
-            await dependencies.openCloudflareApiTokens();
-          } catch {
-            throw commandFailed("gateway", "Cloudflare API token setup page could not be opened.");
-          }
-        }
-
-        let token: string;
+        let authorization: CloudflareGatewayAuthorization;
 
         try {
-          token = await dependencies.promptSecret(
-            "Cloudflare account API token with AI Gateway Edit: ",
-          );
+          authorization = await dependencies.requestCloudflareGatewayAuthorization({
+            accountId: account.id,
+            canSkip: deploymentOptions.aiGatewayId === undefined,
+            workerName: deploymentOptions.workerName,
+          });
         } catch {
-          throw commandFailed("gateway", "Cloudflare API token input did not complete.");
+          throw commandFailed("gateway", "Cloudflare API token recovery did not complete.");
         }
 
-        const parsed = cloudflareApiTokenSchema.safeParse(token);
-
-        if (!parsed.success) {
+        if (authorization.action === "stop") {
           throw commandFailed(
             "gateway",
-            `Set ${CLOUDFLARE_API_TOKEN_ENVIRONMENT} to a valid account API token with AI Gateway Edit.`,
+            "AI Gateway setup stopped before infrastructure was changed.",
           );
         }
 
-        gatewayCredentials = { token: parsed.data, type: "api_token" };
-        aiGatewayPlan = await planAiGateway(
-          deploymentOptions,
-          account.id,
-          gatewayCredentials,
-          dependencies,
-        );
+        if (authorization.action === "skip") {
+          if (deploymentOptions.aiGatewayId !== undefined) {
+            throw commandFailed("gateway", "An existing AI Gateway cannot be skipped implicitly.");
+          }
+          gatewayCredentials = undefined;
+        } else {
+          const parsed = cloudflareApiTokenSchema.safeParse(authorization.token);
+
+          if (!parsed.success) {
+            throw commandFailed(
+              "gateway",
+              `Set ${CLOUDFLARE_API_TOKEN_ENVIRONMENT} to a valid account API token with AI Gateway Edit.`,
+            );
+          }
+
+          gatewayCredentials = { token: parsed.data, type: "api_token" };
+          aiGatewayPlan = await planAiGateway(
+            deploymentOptions,
+            account.id,
+            gatewayCredentials,
+            dependencies,
+          );
+        }
+      }
+
+      if (deploymentOptions.requireFresh === true && aiGatewayPlan?.exists === true) {
+        throw commandFailed("gateway", "Fresh installation requires an unused AI Gateway name.");
       }
     }
 
@@ -1820,6 +2191,14 @@ export async function bootstrapDeployment(
           );
         }
 
+        if (!workerInventory.exists) {
+          await recordCreatedResource(dependencies, {
+            accountId: account.id,
+            kind: "worker",
+            name: deploymentOptions.workerName,
+          });
+        }
+
         const triggerReconciliation = await runCloudflare(context, deployArguments, "deployment");
 
         if (triggerReconciliation.outcome !== "completed" || triggerReconciliation.exitCode !== 0) {
@@ -1828,6 +2207,12 @@ export async function bootstrapDeployment(
             "Worker code was deployed, but route or schedule reconciliation failed.",
           );
         }
+      } else if (!workerInventory.exists) {
+        await recordCreatedResource(dependencies, {
+          accountId: account.id,
+          kind: "worker",
+          name: deploymentOptions.workerName,
+        });
       }
     } else {
       const triggerReconciliation = await runCloudflare(

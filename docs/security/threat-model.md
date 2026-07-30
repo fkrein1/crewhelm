@@ -153,6 +153,9 @@ an allowlisted environment, explicit account and database identity, validated re
 and bounded output. Ambiguous remote mutations stop with resources preserved for inspection; they
 are not assumed successful or automatically repeated.
 
+Fresh-install rehearsal cleanup is limited to exact resources recorded after creation in a bounded
+local receipt. Occupied names are never adopted, and unverified deletion remains retryable.
+
 The public health response exposes only a deployment-protocol version and SHA-256 fingerprint of
 the packaged Worker assets; it does not expose credentials, owner identity, configuration, or
 runtime state. The CLI compares that identity before production rehearsals and verifies it after
@@ -171,10 +174,11 @@ approval. Privileged workflows never execute pull-request artifacts or restore t
 future npm release separates package construction from stage-only publishing and requires
 independent npm 2FA approval.
 
-AI Gateway management may use a process-scoped `CREWHELM_CLOUDFLARE_API_TOKEN` limited to AI
-Gateway Edit. Bootstrap skips Gateway management unless the operator chooses a daily USD limit.
-Routine upgrades preserve only the non-secret Gateway route; an explicit limit change is applied
-and read back through Cloudflare.
+AI Gateway management may use a process-scoped `CREWHELM_CLOUDFLARE_API_TOKEN` limited to
+account-level AI Gateway Edit. Interactive recovery prints a scoped token recipe and never stores
+or deploys the token. Bootstrap skips Gateway management unless the operator chooses a daily USD
+limit. Routine upgrades preserve only the non-secret Gateway route; an explicit limit change is
+applied and read back through Cloudflare.
 
 ## Update triggers
 

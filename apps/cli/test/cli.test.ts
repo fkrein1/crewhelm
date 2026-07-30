@@ -10,6 +10,7 @@ import { readPackagedDeploymentFingerprint } from "../src/bootstrap.js";
 import { CLI_HELP, parseCli, runCli, type CliDependencies } from "../src/cli.js";
 import { doctorReportSchema } from "../src/doctor.js";
 import { readInstallation } from "../src/installation.js";
+import { installationSmokeFailureSchema } from "../src/installation-smoke.js";
 import { CLI_BANNER } from "../src/presentation.js";
 import { standingIntegrationSmokeReportSchema } from "../src/standing-integration-smoke.js";
 
@@ -384,6 +385,97 @@ describe("Crewhelm CLI", () => {
     expect(() =>
       parseCli(["smoke", "agent", "--endpoint", "http://127.0.0.1:8787", "--confirm-production"]),
     ).toThrow("smoke agent requires an HTTPS endpoint.");
+  });
+
+  it("requires isolated coordinates for the fresh-install smoke command", () => {
+    expect(() =>
+      parseCli([
+        "smoke",
+        "installation",
+        "--endpoint",
+        "https://crewhelm-smoke-example.workers.dev",
+        "--worker-name",
+        "crewhelm-smoke-example",
+        "--database-name",
+        "crewhelm-smoke-example",
+      ]),
+    ).toThrow("smoke installation requires --confirm-production.");
+    expect(() =>
+      parseCli([
+        "smoke",
+        "installation",
+        "--endpoint",
+        "https://crewhelm-smoke-example.workers.dev",
+        "--worker-name",
+        "crewhelm",
+        "--database-name",
+        "crewhelm-smoke-example",
+        "--confirm-production",
+      ]),
+    ).toThrow("One or more command values were invalid or outside their bounds.");
+    expect(
+      parseCli([
+        "smoke",
+        "installation",
+        "--endpoint",
+        "https://crewhelm-smoke-example.workers.dev",
+        "--worker-name",
+        "crewhelm-smoke-example",
+        "--database-name",
+        "crewhelm-smoke-example",
+        "--ai-budget-usd",
+        "3",
+        "--confirm-production",
+      ]),
+    ).toMatchObject({
+      aiDailySpendUsd: 3,
+      cleanupOnly: false,
+      kind: "installation-smoke",
+      workerName: "crewhelm-smoke-example",
+    });
+  });
+
+  it("keeps thrown fresh-install failures machine-readable in JSON mode", async () => {
+    const harness = createHarness(healthyDeploymentFetch());
+    const receiptPath = resolve(
+      await mkdtemp(resolve(tmpdir(), "crewhelm-installation-smoke-cli-test-")),
+      "missing.json",
+    );
+
+    try {
+      await expect(
+        runCli(
+          [
+            "smoke",
+            "installation",
+            "--endpoint",
+            "https://crewhelm-smoke-example.workers.dev",
+            "--worker-name",
+            "crewhelm-smoke-example",
+            "--database-name",
+            "crewhelm-smoke-example",
+            "--receipt",
+            receiptPath,
+            "--cleanup-only",
+            "--confirm-production",
+            "--json",
+          ],
+          harness.dependencies,
+        ),
+      ).resolves.toBe(1);
+
+      expect(
+        installationSmokeFailureSchema.parse(JSON.parse(harness.errors.join(""))),
+      ).toMatchObject({
+        ok: false,
+        receiptPath,
+        recovery: "cleanup_retry_failed",
+        stage: "rehearsal",
+      });
+      expect(harness.output).toEqual([]);
+    } finally {
+      await rm(resolve(receiptPath, ".."), { force: true, recursive: true });
+    }
   });
 
   it("parses bounded Agent smoke timeouts and routes public failures without authorization", async () => {

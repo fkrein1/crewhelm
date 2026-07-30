@@ -11,6 +11,7 @@ dist/
 !.dev.vars.example
 *.tsbuildinfo
 crewhelm.installation.json
+crewhelm.*.installation.json
 
 *.log
 pnpm-debug.log*
