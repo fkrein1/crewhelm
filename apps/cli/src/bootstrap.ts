@@ -429,6 +429,7 @@ export interface BootstrapDependencies extends DoctorDependencies {
   requestCloudflareGatewayAuthorization?: (request: {
     accountId: string;
     canSkip: boolean;
+    dailySpendUsd: number;
     workerName: string;
   }) => Promise<CloudflareGatewayAuthorization>;
   wait?: (milliseconds: number) => Promise<void>;
@@ -488,7 +489,14 @@ async function verifyDeployedControlPlane(
   expectedDeploymentFingerprint: string,
   dependencies: BootstrapDependencies,
 ): Promise<DoctorReport> {
-  for (const delay of [...DEPLOYMENT_VERIFICATION_DELAYS_MS, undefined]) {
+  const attempts = [...DEPLOYMENT_VERIFICATION_DELAYS_MS, undefined];
+
+  for (const [index, delay] of attempts.entries()) {
+    reportProgress(
+      dependencies,
+      "deployment",
+      `Checking the deployed control plane (attempt ${index + 1} of ${attempts.length})`,
+    );
     const doctor = await diagnoseDeployment(options, {
       expectedDeploymentFingerprint,
       fetch: dependencies.fetch,
@@ -2049,6 +2057,7 @@ export async function bootstrapDeployment(
           authorization = await dependencies.requestCloudflareGatewayAuthorization({
             accountId: account.id,
             canSkip: deploymentOptions.aiGatewayId === undefined,
+            dailySpendUsd: deploymentOptions.aiDailySpendUsd,
             workerName: deploymentOptions.workerName,
           });
         } catch {
@@ -2229,7 +2238,6 @@ export async function bootstrapDeployment(
       }
     }
 
-    reportProgress(dependencies, "deployment", "Verifying the deployed control plane");
     const doctor = await verifyDeployedControlPlane(deploymentOptions, assets.digest, dependencies);
 
     return bootstrapReportSchema.parse({

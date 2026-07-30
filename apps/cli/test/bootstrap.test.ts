@@ -917,6 +917,7 @@ describe("Cloudflare bootstrap", () => {
       expect(requestCloudflareGatewayAuthorization).toHaveBeenCalledWith({
         accountId: ACCOUNT_ID,
         canSkip: true,
+        dailySpendUsd: 5,
         workerName: OPTIONS.workerName,
       });
       expect(JSON.stringify(report)).not.toContain("scoped-gateway-token-value");
@@ -953,6 +954,7 @@ describe("Cloudflare bootstrap", () => {
       expect(dependencies.requestCloudflareGatewayAuthorization).toHaveBeenCalledWith({
         accountId: ACCOUNT_ID,
         canSkip: true,
+        dailySpendUsd: 5,
         workerName: OPTIONS.workerName,
       });
     } finally {
@@ -1247,8 +1249,10 @@ describe("Cloudflare bootstrap", () => {
     const dependencies = createDependencies(fixture.assets, successfulReuseWrangler());
     const normalFetch = dependencies.fetch;
     const wait = vi.fn<(milliseconds: number) => Promise<void>>(async () => {});
+    const progress: BootstrapProgress[] = [];
     let healthReads = 0;
     dependencies.wait = wait;
+    dependencies.reportProgress = (event) => progress.push(event);
     dependencies.fetch = vi
       .fn<typeof globalThis.fetch>()
       .mockImplementation(async (input, init) => {
@@ -1273,6 +1277,20 @@ describe("Cloudflare bootstrap", () => {
       expect(healthReads).toBe(9);
       expect(wait.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([
         250, 500, 1_000, 2_000, 4_000, 8_000, 16_000,
+      ]);
+      expect(
+        progress
+          .filter(({ message }) => message.startsWith("Checking the deployed control plane"))
+          .map(({ message }) => message),
+      ).toEqual([
+        "Checking the deployed control plane (attempt 1 of 8)",
+        "Checking the deployed control plane (attempt 2 of 8)",
+        "Checking the deployed control plane (attempt 3 of 8)",
+        "Checking the deployed control plane (attempt 4 of 8)",
+        "Checking the deployed control plane (attempt 5 of 8)",
+        "Checking the deployed control plane (attempt 6 of 8)",
+        "Checking the deployed control plane (attempt 7 of 8)",
+        "Checking the deployed control plane (attempt 8 of 8)",
       ]);
     } finally {
       await rm(fixture.root, { force: true, recursive: true });

@@ -49,6 +49,7 @@ function styledBanner(style: CliTextStyle): string {
 export interface CliPresentationOptions {
   color: boolean;
   interactive: boolean;
+  liveProgress?: boolean;
   writeError: (text: string) => void;
   writeOutput: (text: string) => void;
 }
@@ -56,13 +57,58 @@ export interface CliPresentationOptions {
 export interface CliPresentation {
   accent: (text: string) => string;
   banner: () => void;
+  heading: (text: string) => string;
   muted: (text: string) => string;
-  progress: (message: string) => void;
+  progress: (activity: { label: string; message: string }) => void;
+  result: (status: "pass" | "fail" | "skip", message: string) => void;
   status: (status: "pass" | "fail" | "skip") => string;
+  stopProgress: () => void;
+  strong: (text: string) => string;
+  waiting: (heading: string, message: string) => void;
+  warning: (text: string) => string;
 }
 
 export function createCliPresentation(options: CliPresentationOptions): CliPresentation {
   const style = createCliTextStyle(options.color);
+  const liveProgress = options.liveProgress ?? options.interactive;
+  const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+  const clearLine = "\r\u001B[2K";
+  let active: { frame: number; label: string; message: string; startedAt: number } | undefined;
+  let spinner: ReturnType<typeof setInterval> | undefined;
+
+  const renderProgress = () => {
+    if (!active) {
+      return;
+    }
+
+    const elapsedSeconds = Math.floor((Date.now() - active.startedAt) / 1_000);
+    const elapsed = elapsedSeconds > 0 ? style.muted(`  ${elapsedSeconds}s`) : "";
+    const frame = spinnerFrames[active.frame % spinnerFrames.length] ?? spinnerFrames[0];
+
+    options.writeError(
+      `${clearLine}${style.accent(frame)} ${style.strong(active.label)} ${style.muted("·")} ${active.message}${elapsed}`,
+    );
+    active.frame += 1;
+  };
+
+  const stopProgress = () => {
+    if (spinner) {
+      clearInterval(spinner);
+      spinner = undefined;
+    }
+
+    if (active) {
+      active = undefined;
+      options.writeError(clearLine);
+    }
+  };
+
+  const status = (value: "pass" | "fail" | "skip") =>
+    value === "pass"
+      ? style.positiveStrong("PASS")
+      : value === "fail"
+        ? style.negativeStrong("FAIL")
+        : style.warningStrong("SKIP");
 
   return {
     accent: style.accent,
@@ -71,17 +117,40 @@ export function createCliPresentation(options: CliPresentationOptions): CliPrese
         options.writeOutput(`${styledBanner(style)}\n`);
       }
     },
+    heading: style.accentStrong,
     muted: style.muted,
-    progress: (message) => {
-      if (options.interactive) {
-        options.writeError(`${style.accent("==>")} ${message}\n`);
+    progress: ({ label, message }) => {
+      if (!liveProgress) {
+        return;
+      }
+
+      const changed = active?.label !== label || active.message !== message;
+      active = {
+        frame: changed ? 0 : (active?.frame ?? 0),
+        label,
+        message,
+        startedAt: changed ? Date.now() : (active?.startedAt ?? Date.now()),
+      };
+      renderProgress();
+
+      if (!spinner) {
+        spinner = setInterval(renderProgress, 80);
+        spinner.unref?.();
       }
     },
-    status: (status) =>
-      status === "pass"
-        ? style.positiveStrong("PASS")
-        : status === "fail"
-          ? style.negativeStrong("FAIL")
-          : style.warningStrong("SKIP"),
+    result: (value, message) => {
+      stopProgress();
+      options.writeOutput(`${status(value)} ${message}\n`);
+    },
+    status,
+    stopProgress,
+    strong: style.strong,
+    waiting: (heading, message) => {
+      stopProgress();
+      options.writeOutput(
+        `${style.warningStrong("WAITING")} ${style.strong(heading)}\n${message}\n\n`,
+      );
+    },
+    warning: style.warning,
   };
 }

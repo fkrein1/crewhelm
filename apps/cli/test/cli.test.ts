@@ -246,6 +246,9 @@ describe("Crewhelm CLI", () => {
     expect(harness.output[0]).toContain(">_");
     expect(harness.output[0]).toContain("CREWHELM");
     expect(harness.output[0]).toContain("\u001B[");
+    expect(harness.output.join("")).toContain("Installation target");
+    expect(harness.output.join("")).toContain("Worker    crewhelm");
+    expect(harness.output.join("")).toContain("Endpoint  https://crewhelm.example");
     expect(harness.errors.join("")).toContain("Loading packaged deployment assets");
     expect(harness.errors.join("")).toContain("\u001B[");
 
@@ -300,15 +303,12 @@ describe("Crewhelm CLI", () => {
   it.each([
     {
       answers: ["yes", "7.50"],
-      expectedPrompts: [
-        "Enable a Cloudflare AI Gateway hard spend limit? Recommended [Y/n]: ",
-        "Daily hard spend limit in USD: ",
-      ],
+      expectedPrompts: ["Choose [1]: ", "Daily limit in USD: "],
       label: "enables the recommended Gateway with an explicit amount",
     },
     {
       answers: ["skip"],
-      expectedPrompts: ["Enable a Cloudflare AI Gateway hard spend limit? Recommended [Y/n]: "],
+      expectedPrompts: ["Choose [1]: "],
       label: "skips the optional Gateway",
     },
   ])("$label during first-run guidance", async ({ answers, expectedPrompts }) => {
@@ -332,7 +332,11 @@ describe("Crewhelm CLI", () => {
         ),
       ).resolves.toBe(1);
       expect(promptText.mock.calls.map(([message]) => message)).toEqual(expectedPrompts);
-      expect(harness.errors.join("")).toContain("FAIL up-assets");
+      expect(harness.output.join("")).toContain("AI spending protection");
+      expect(harness.output.join("")).toContain("1. Configure a spending limit (recommended)");
+      expect(harness.output.join("")).toContain("2. Continue without a spending limit");
+      expect(harness.errors.join("")).toContain("FAIL Setup stopped");
+      expect(harness.errors.join("")).toContain("Stage  Preparation");
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
