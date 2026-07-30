@@ -326,6 +326,7 @@ function closeServer(server: Server): Promise<void> {
 async function startCallbackListener(state: string, issuer: string): Promise<CallbackListener> {
   const capability = randomBytes(32).toString("base64url");
   const callbackPath = `/oauth/callback/${capability}`;
+  const completionUrl = new URL("/oauth/complete", issuer);
   let expectedHost: string | undefined;
   let resolveCallback: ((result: CallbackResult) => void) | undefined;
   let settled = false;
@@ -369,9 +370,10 @@ async function startCallbackListener(state: string, issuer: string): Promise<Cal
     const denied =
       validEnvelope && errors.length === 1 && errors[0] === "access_denied" && codes.length === 0;
 
-    response.writeHead(validCode ? 200 : denied ? 403 : 400, {
+    response.writeHead(validCode || denied ? 303 : 400, {
       "cache-control": "no-store",
       "content-security-policy": "default-src 'none'",
+      ...(validCode || denied ? { location: completionUrl.href } : {}),
       "content-type": "text/plain; charset=utf-8",
       "x-content-type-options": "nosniff",
     });

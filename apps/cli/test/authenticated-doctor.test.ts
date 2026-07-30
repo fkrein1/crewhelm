@@ -252,9 +252,10 @@ function approveAuthorization(openedUrls: URL[]): (url: URL) => Promise<void> {
     callback.searchParams.set("code", authorizationCode);
     callback.searchParams.set("iss", `${origin}/api/auth`);
     callback.searchParams.set("state", url.searchParams.get("state") ?? "");
-    const response = await globalThis.fetch(callback);
+    const response = await globalThis.fetch(callback, { redirect: "manual" });
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe(`${origin}/oauth/complete`);
   };
 }
 
@@ -434,7 +435,7 @@ describe("authenticated deployment diagnosis", () => {
           callback.searchParams.set("error", "access_denied");
           callback.searchParams.set("iss", `${origin}/api/auth`);
           callback.searchParams.set("state", url.searchParams.get("state") ?? "");
-          await globalThis.fetch(callback);
+          await globalThis.fetch(callback, { redirect: "manual" });
         },
       },
     );
@@ -647,7 +648,7 @@ describe("authenticated deployment diagnosis", () => {
           callback.searchParams.append("iss", `${origin}/api/auth`);
           callback.searchParams.append("state", url.searchParams.get("state") ?? "");
           callback.searchParams.append("state", "duplicate");
-          await globalThis.fetch(callback);
+          await globalThis.fetch(callback, { redirect: "manual" });
         },
       },
     );
@@ -676,7 +677,7 @@ describe("authenticated deployment diagnosis", () => {
           callback.searchParams.set("code", authorizationCode);
           callback.searchParams.set("iss", `${origin}/api/auth`);
           callback.searchParams.set("state", url.searchParams.get("state") ?? "");
-          expect((await globalThis.fetch(callback)).status).toBe(200);
+          expect((await globalThis.fetch(callback, { redirect: "manual" })).status).toBe(303);
         },
       },
     );

@@ -607,6 +607,8 @@ describe("public OAuth to MCP integration", () => {
       "text/javascript; charset=utf-8",
     );
     const actionsScript = await actionsScriptResponse.text();
+    const completionPageResponse = await request(workerEnv, "/oauth/complete");
+    const completionPage = await completionPageResponse.text();
 
     expect(actionsScript).toContain('consentForm.addEventListener("submit", () => {');
     expect(actionsScript).toContain('link.setAttribute("aria-disabled", "true")');
@@ -615,6 +617,9 @@ describe("public OAuth to MCP integration", () => {
     expect(actionsScript).not.toContain("fetch(consentForm.action");
     expect(actionsScript).not.toContain("new FormData(consentForm)");
     expect(actionsScript).not.toContain("window.location.assign(result.redirectUrl)");
+    expect(completionPageResponse.status).toBe(200);
+    expect(completionPage).toContain("Crewhelm authorization complete");
+    expect(completionPage).toContain("Authorization response received.");
     const speculativeGetResponse = await request(workerEnv, "/oauth/consent/decision");
     const unauthenticatedApproveResponse = await request(workerEnv, "/oauth/consent", {
       body: new URLSearchParams({ decision: "approve", oauth_query: consentQuery }),

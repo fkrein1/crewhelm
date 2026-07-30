@@ -263,6 +263,14 @@ function loginPage(query: string): string {
   });
 }
 
+function completionPage(): string {
+  return renderWorkerPage({
+    body: '      <p class="ch-copy">Authorization response received. Return to your client.</p>',
+    heading: "Crewhelm authorization complete",
+    title: "Crewhelm authorization complete",
+  });
+}
+
 function consentPage(
   query: string,
   client: { id: string; name: string },
@@ -513,6 +521,8 @@ async function startConsent(
 export function registerOAuthUiRoutes(worker: OAuthApp, createAuth: AuthFactory): void {
   worker.get("/oauth/error", authorizationError);
   worker.all("/oauth/error", () => fixedResponse("Method not allowed.\n", 405));
+  worker.get("/oauth/complete", () => workerPageResponse(completionPage()));
+  worker.all("/oauth/complete", () => fixedResponse("Method not allowed.\n", 405));
   worker.get("/oauth/styles.css", workerStylesheetResponse);
   worker.all("/oauth/styles.css", () => fixedResponse("Method not allowed.\n", 405));
   worker.get("/oauth/actions.js", actionsScriptResponse);

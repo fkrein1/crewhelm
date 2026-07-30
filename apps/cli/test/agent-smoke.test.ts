@@ -426,7 +426,7 @@ function approveAuthorization(openedUrls: URL[]): (url: URL) => Promise<void> {
     callback.searchParams.set("code", authorizationCode);
     callback.searchParams.set("iss", `${origin}/api/auth`);
     callback.searchParams.set("state", url.searchParams.get("state") ?? "");
-    expect((await globalThis.fetch(callback)).status).toBe(200);
+    expect((await globalThis.fetch(callback, { redirect: "manual" })).status).toBe(303);
   };
 }
 
@@ -713,7 +713,7 @@ describe("disposable Agent lifecycle smoke", () => {
           callback.searchParams.set("error", "access_denied");
           callback.searchParams.set("iss", `${origin}/api/auth`);
           callback.searchParams.set("state", url.searchParams.get("state") ?? "");
-          await globalThis.fetch(callback);
+          await globalThis.fetch(callback, { redirect: "manual" });
         },
       },
     );

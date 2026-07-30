@@ -75,7 +75,11 @@ const MINIMUM_DERIVED_RATE_LIMIT_NAMESPACE_ID = 10_000n;
 const MAXIMUM_RATE_LIMIT_NAMESPACE_ID = 2_147_483_647n;
 const RATE_LIMIT_NAMESPACE_PAIR_COUNT =
   (MAXIMUM_RATE_LIMIT_NAMESPACE_ID - MINIMUM_DERIVED_RATE_LIMIT_NAMESPACE_ID + 1n) / 2n;
-const DEPLOYMENT_VERIFICATION_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000, 16_000] as const;
+const DEPLOYMENT_VERIFICATION_DELAYS_MS = [
+  1_000, 1_000, 1_000, 1_000, 1_000, 2_000, 4_000, 8_000, 16_000,
+] as const;
+const MINIMUM_DEPLOYMENT_STABILITY_MS = 10_000;
+const REQUIRED_CONSECUTIVE_DEPLOYMENT_MATCHES = 3;
 const TABLE_INVENTORY_SQL = "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name";
 const MIGRATION_INVENTORY_SQL = "SELECT name FROM d1_migrations ORDER BY id";
 const ALLOWED_AUTH_TABLES = new Set([
@@ -543,6 +547,8 @@ async function verifyDeployedControlPlane(
   dependencies: BootstrapDependencies,
 ): Promise<DoctorReport> {
   const attempts = [...DEPLOYMENT_VERIFICATION_DELAYS_MS, undefined];
+  let consecutiveMatches = 0;
+  let stableMilliseconds = 0;
 
   for (const [index, delay] of attempts.entries()) {
     reportProgress(
@@ -555,8 +561,20 @@ async function verifyDeployedControlPlane(
       fetch: dependencies.fetch,
     });
 
-    if (doctor.ok && doctor.deployment.alignment === "aligned") {
-      return doctor;
+    const matched = doctor.ok && doctor.deployment.alignment === "aligned";
+
+    if (matched) {
+      consecutiveMatches += 1;
+
+      if (
+        consecutiveMatches >= REQUIRED_CONSECUTIVE_DEPLOYMENT_MATCHES &&
+        stableMilliseconds >= MINIMUM_DEPLOYMENT_STABILITY_MS
+      ) {
+        return doctor;
+      }
+    } else {
+      consecutiveMatches = 0;
+      stableMilliseconds = 0;
     }
 
     if (doctor.deployment.alignment === "cli_outdated" || delay === undefined) {
@@ -564,6 +582,9 @@ async function verifyDeployedControlPlane(
     }
 
     await waitFor(delay, dependencies);
+    if (matched) {
+      stableMilliseconds += delay;
+    }
   }
 
   throw commandFailed(
