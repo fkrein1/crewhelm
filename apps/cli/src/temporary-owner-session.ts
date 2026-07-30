@@ -122,6 +122,7 @@ export interface TemporaryOwnerMcpSession {
     method: string,
     params: unknown,
     schema: z.ZodType<T>,
+    timeoutMs?: number,
   ): Promise<T>;
   endpoint: URL;
 }
@@ -479,6 +480,7 @@ async function callMcp<T extends { id: number | string }>(
   method: string,
   params: unknown,
   schema: z.ZodType<T>,
+  timeoutMs = options.timeoutMs,
 ): Promise<T> {
   const result = await fetchJson(
     dependencies,
@@ -488,7 +490,7 @@ async function callMcp<T extends { id: number | string }>(
       headers: mcpHeaders(accessToken),
       method: "POST",
     },
-    options.timeoutMs,
+    timeoutMs,
     MAXIMUM_MCP_RESPONSE_BYTES,
     schema,
   );
@@ -691,7 +693,7 @@ export async function runTemporaryOwnerSession<T>(
     authorization = { ok: true };
     let nextRequestId = 1;
     const session: TemporaryOwnerMcpSession = {
-      call: (method, params, schema) =>
+      call: (method, params, schema, timeoutMs) =>
         callMcp(
           options,
           dependencies,
@@ -700,6 +702,7 @@ export async function runTemporaryOwnerSession<T>(
           method,
           params,
           schema,
+          timeoutMs,
         ),
       endpoint: mcpEndpoint,
     };

@@ -68,8 +68,9 @@ function formatStandingIntegrationSmokeHelp(style: ChalkInstance): string {
   return `
 ${style.yellow.bold("Production rehearsal:")}
   Creates one draft to the reserved, non-deliverable example.invalid domain.
+  ${style.cyan("--trigger schedule")} waits for one autonomous scheduled dispatch; manual is default.
   Requires an exact authorized Gmail connection and retains the draft for verification.
-  Revokes the grant, disables the Agent, and revokes temporary Full control before exit.
+  Pauses any schedule, revokes the grant, disables the Agent, and revokes temporary Full control.
   Requires ${style.yellow("--confirm-production")} and an HTTPS endpoint.
 `;
 }
@@ -111,6 +112,7 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
       .min(1_000)
       .max(10 * 60 * 1_000),
     timeoutMs: z.number().int().min(100).max(30_000),
+    trigger: z.enum(["manual", "schedule"]),
   }),
   z.strictObject({
     confirmProduction: z.literal(true),
@@ -158,6 +160,7 @@ interface AgentSmokeCommandOptions {
 
 interface StandingIntegrationSmokeCommandOptions extends AgentSmokeCommandOptions {
   connectionId: string;
+  trigger: string;
 }
 
 export class CliUsageError extends Error {
@@ -334,7 +337,8 @@ function createCliProgram(
     .requiredOption("--endpoint <origin>", "HTTPS Crewhelm deployment origin")
     .requiredOption("--connection-id <id>", "exact authorized Crewhelm Gmail connection")
     .requiredOption("--confirm-production", "confirm the mutating production rehearsal")
-    .option("--run-timeout-ms <milliseconds>", "maximum Agent run duration", "120000")
+    .option("--trigger <trigger>", "manual or schedule", "manual")
+    .option("--run-timeout-ms <milliseconds>", "maximum trigger and Agent run duration", "180000")
     .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")
     .option("--json", "write one machine-readable JSON result")
     .addHelpText("after", formatStandingIntegrationSmokeHelp(style))
@@ -348,6 +352,7 @@ function createCliProgram(
           origin: parseOrigin(options.endpoint, "standing-integration-smoke"),
           runTimeoutMs: Number(options.runTimeoutMs),
           timeoutMs: Number(options.timeoutMs),
+          trigger: options.trigger,
         }),
       );
     });

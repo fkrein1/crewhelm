@@ -5,16 +5,20 @@ import {
   batchDisableAgentsResultSchema,
   changeAuthorityResultSchema,
   connectionSummarySchema,
+  configureAgentScheduleResultSchema,
   configureAgentConnectionResultSchema,
   controlPlaneStatusResultSchema,
   createAgentResultSchema,
+  getFleetConfigurationResultSchema,
   getAgentResultSchema,
+  getAgentScheduleResultSchema,
   inspectIntegrationToolResultSchema,
   inspectRunResultSchema,
   listConnectionsResultSchema,
   listUnresolvedToolEffectsResultSchema,
   startRunResultSchema,
   type Agent,
+  type AgentSchedule,
   type ConnectionSummary,
   type InspectRunResult,
   type Run,
@@ -54,6 +58,8 @@ const TOOL_CALLING_MODEL = "@cf/zai-org/glm-4.7-flash";
 const MAXIMUM_CONNECTION_PAGES = 50;
 const MAXIMUM_MCP_SCHEMA_BYTES = 64 * 1_024;
 const POLL_INTERVAL_MS = 1_000;
+const CLEANUP_REQUEST_TIMEOUT_MS = 5_000;
+const SCHEDULE_INTERVAL_SECONDS = 60;
 const UNRECONCILED_EFFECT_MESSAGE =
   "The provider action was blocked before dispatch because an earlier unknown external effect requires reconciliation.";
 const TERMINAL_RUN_STATUSES = ["cancelled", "completed", "failed"] as const;
@@ -90,6 +96,12 @@ const REQUIRED_TOOLS = {
     openWorldHint: true,
     readOnlyHint: false,
   },
+  crewhelm_configure_agent_schedule: {
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+    readOnlyHint: false,
+  },
   crewhelm_create_agent: {
     destructiveHint: false,
     idempotentHint: true,
@@ -97,6 +109,18 @@ const REQUIRED_TOOLS = {
     readOnlyHint: false,
   },
   crewhelm_get_agent: {
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+    readOnlyHint: true,
+  },
+  crewhelm_get_agent_schedule: {
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+    readOnlyHint: true,
+  },
+  crewhelm_get_config: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
@@ -198,8 +222,10 @@ const standingIntegrationSmokeCheckSchema = z.strictObject({
     "integration-tool",
     "agent-create",
     "standing-grant",
+    "trigger-ready",
     "run-single-dispatch",
     "inbox-outcome",
+    "trigger-cleanup",
     "grant-revoke",
     "agent-disable",
     "oauth-token-revocation",
@@ -208,11 +234,12 @@ const standingIntegrationSmokeCheckSchema = z.strictObject({
 });
 
 export const standingIntegrationSmokeReportSchema = z.strictObject({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   ok: z.boolean(),
   public: doctorReportSchema,
   connectionId: z.string().optional(),
   connection: connectionSummarySchema.optional(),
+  trigger: z.enum(["manual", "schedule"]),
   agentId: z.string().optional(),
   grantId: z.string().optional(),
   runId: z.string().optional(),
@@ -220,9 +247,13 @@ export const standingIntegrationSmokeReportSchema = z.strictObject({
   toolCallId: z.string().optional(),
   fixtureSubject: z.string().max(160).optional(),
   retainedDraft: z.boolean().optional(),
+  schedulePaused: z.boolean().optional(),
+  scheduleRevision: z.number().int().positive().safe().optional(),
   activeAgentsBefore: z.number().int().nonnegative().safe().optional(),
   activeAgentsAfter: z.number().int().nonnegative().safe().optional(),
   checks: z.tuple([
+    standingIntegrationSmokeCheckSchema,
+    standingIntegrationSmokeCheckSchema,
     standingIntegrationSmokeCheckSchema,
     standingIntegrationSmokeCheckSchema,
     standingIntegrationSmokeCheckSchema,
@@ -247,6 +278,7 @@ export interface StandingIntegrationSmokeOptions extends DoctorOptions {
   authorizationTimeoutMs?: number;
   connectionId: string;
   runTimeoutMs: number;
+  trigger: "manual" | "schedule";
 }
 
 export interface StandingIntegrationSmokeDependencies extends TemporaryOwnerSessionDependencies {
@@ -307,6 +339,14 @@ const checkDefinitions = {
     name: "standing-grant",
     validMessage: "One expiring, one-call standing Gmail draft grant was attached.",
   },
+  triggerCleanup: {
+    name: "trigger-cleanup",
+    validMessage: "The scheduled trigger was paused after its first dispatch.",
+  },
+  triggerReady: {
+    name: "trigger-ready",
+    validMessage: "One near-term schedule dispatched the exact Agent revision.",
+  },
 } as const satisfies Record<string, { name: SmokeCheckName; validMessage: string }>;
 
 function createCheck(
@@ -351,11 +391,13 @@ async function callTool<T>(
   arguments_: unknown,
   schema: z.ZodType<T>,
   invalidMessage: string,
+  timeoutMs?: number,
 ): Promise<T> {
   const response = await session.call(
     "tools/call",
     { arguments: arguments_, name },
     toolCallResponseSchema,
+    timeoutMs,
   );
   return parseMcpToolResult(response, schema, invalidMessage);
 }
@@ -374,6 +416,32 @@ async function readStatus(session: TemporaryOwnerMcpSession) {
   }
 
   return result.status;
+}
+
+async function validateSchedulePolicy(session: TemporaryOwnerMcpSession): Promise<void> {
+  const result = await callTool(
+    session,
+    "crewhelm_get_config",
+    { target: { kind: "fleet" } },
+    getFleetConfigurationResultSchema,
+    "Fleet schedule policy returned an invalid payload.",
+  );
+
+  if (!result.ok) {
+    throw new TemporaryOwnerSessionError(
+      "invalid_payload",
+      "Fleet schedule policy could not be verified before mutation.",
+    );
+  }
+
+  const minimumIntervalSeconds = result.configuration.data.schedules.minimumIntervalSeconds;
+
+  if (minimumIntervalSeconds > SCHEDULE_INTERVAL_SECONDS) {
+    throw new TemporaryOwnerSessionError(
+      "invalid_payload",
+      `Scheduled rehearsal requires a fleet minimum interval of ${SCHEDULE_INTERVAL_SECONDS} seconds or less; this fleet requires ${minimumIntervalSeconds} seconds.`,
+    );
+  }
 }
 
 function validateToolCatalog(toolList: z.infer<typeof toolListResponseSchema>): void {
@@ -570,6 +638,71 @@ function validateStartedRun(
   return result.run;
 }
 
+function validateActiveSchedule(
+  schedule: AgentSchedule,
+  agent: Agent,
+  prompt: string,
+): AgentSchedule {
+  if (
+    schedule.agentId !== agent.id ||
+    schedule.agentRevision !== agent.revision ||
+    schedule.revision !== 1 ||
+    schedule.status !== "active" ||
+    schedule.configuration?.intervalSeconds !== SCHEDULE_INTERVAL_SECONDS ||
+    schedule.configuration.prompt !== prompt ||
+    schedule.nextRunAt === null
+  ) {
+    throw new TemporaryOwnerSessionError(
+      "invalid_payload",
+      "Scheduled trigger did not match the exact requested fixture.",
+    );
+  }
+
+  return schedule;
+}
+
+function validateConfiguredSchedule(
+  result: z.infer<typeof configureAgentScheduleResultSchema>,
+  agent: Agent,
+  prompt: string,
+  expectedConfigured?: boolean,
+): AgentSchedule {
+  if (
+    !result.ok ||
+    (expectedConfigured !== undefined && result.configured !== expectedConfigured)
+  ) {
+    throw new TemporaryOwnerSessionError(
+      "invalid_payload",
+      "Scheduled trigger configuration could not be verified.",
+    );
+  }
+
+  return validateActiveSchedule(result.schedule, agent, prompt);
+}
+
+function validatePausedSchedule(
+  schedule: AgentSchedule,
+  agent: Agent,
+  activeSchedule: AgentSchedule,
+): AgentSchedule {
+  if (
+    schedule.agentId !== agent.id ||
+    schedule.agentRevision !== agent.revision ||
+    schedule.revision !== activeSchedule.revision + 1 ||
+    schedule.status !== "paused" ||
+    schedule.configuration !== null ||
+    schedule.nextRunAt !== null ||
+    schedule.lastRunId !== activeSchedule.lastRunId
+  ) {
+    throw new TemporaryOwnerSessionError(
+      "invalid_payload",
+      "Scheduled trigger cleanup could not be verified.",
+    );
+  }
+
+  return schedule;
+}
+
 function validateSingleDispatch(inspected: Extract<InspectRunResult, { ok: true }>): string {
   const timeline = inspected.timeline;
   const unreconciledEffect = timeline.find(
@@ -633,8 +766,10 @@ export async function runStandingIntegrationSmoke(
     skippedCheck(checkDefinitions.integrationTool.name, mcpEndpoint),
     skippedCheck(checkDefinitions.agentCreate.name, mcpEndpoint),
     skippedCheck(checkDefinitions.standingGrant.name, mcpEndpoint),
+    skippedCheck(checkDefinitions.triggerReady.name, mcpEndpoint),
     skippedCheck(checkDefinitions.runSingleDispatch.name, mcpEndpoint),
     skippedCheck(checkDefinitions.inboxOutcome.name, mcpEndpoint),
+    skippedCheck(checkDefinitions.triggerCleanup.name, mcpEndpoint),
     skippedCheck(checkDefinitions.grantRevoke.name, mcpEndpoint),
     skippedCheck(checkDefinitions.agentDisable.name, mcpEndpoint),
     skippedCheck(checkDefinitions.oauthTokenRevocation.name, revokeEndpoint),
@@ -642,10 +777,11 @@ export async function runStandingIntegrationSmoke(
 
   if (!publicReport.ok) {
     return standingIntegrationSmokeReportSchema.parse({
-      schemaVersion: 1,
+      schemaVersion: 2,
       ok: false,
       public: publicReport,
       connectionId: options.connectionId,
+      trigger: options.trigger,
       checks,
     });
   }
@@ -656,11 +792,12 @@ export async function runStandingIntegrationSmoke(
     ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   const startedAt = now();
   const suffix = fixtureSuffix(startedAt);
-  const fixtureSubject = `Crewhelm standing authority smoke ${suffix}`;
+  const fixtureSubject = `Crewhelm ${options.trigger === "schedule" ? "scheduled " : ""}standing authority smoke ${suffix}`;
   const fixture = {
     instructions: `Execute exactly one Gmail draft creation when explicitly asked. Address it only to ${SAFE_DRAFT_RECIPIENT}. Never send, update, list, read, or delete email. Return only a short confirmation without provider data.`,
-    name: `Crewhelm standing integration smoke ${suffix}`,
+    name: `Crewhelm ${options.trigger === "schedule" ? "scheduled " : ""}standing integration smoke ${suffix}`,
   };
+  const runPrompt = `Create exactly one Gmail draft addressed only to "${SAFE_DRAFT_RECIPIENT}" with subject "${fixtureSubject}" and body "This draft was created by an explicitly authorized Crewhelm standing-authority rehearsal." Do not add Cc, Bcc, extra recipients, attachments, HTML, or a thread ID. Do not perform any other action.`;
   const createInput = {
     executionLimits: AGENT_LIMITS,
     idempotencyKey: `smoke-integration-create-${suffix}`,
@@ -676,12 +813,163 @@ export async function runStandingIntegrationSmoke(
   let runStatus: TerminalRunStatus | undefined;
   let toolCallId: string | undefined;
   let retainedDraft: boolean | undefined;
+  let schedule: AgentSchedule | undefined;
+  let scheduleMayExist = false;
+  let schedulePaused: boolean | undefined;
+  let scheduleRevision: number | undefined;
   let unknownProviderEffect = false;
+  let triggerCleanupFailedWithAuthority = false;
   let activeAgentsBefore: number | undefined;
   let activeAgentsAfter: number | undefined;
 
+  const cleanupTrigger = async (
+    session: TemporaryOwnerMcpSession,
+    reconcile: boolean,
+  ): Promise<boolean> => {
+    activeCheckIndex = 11;
+    const preserveFailure = checks[11].status === "fail";
+
+    const recordSuccess = (message: string): void => {
+      if (!preserveFailure) {
+        checks[11] = createCheck(
+          checkDefinitions.triggerCleanup.name,
+          mcpEndpoint,
+          "valid",
+          message,
+        );
+      }
+    };
+
+    if (options.trigger === "manual") {
+      recordSuccess("The manual trigger created no recurring schedule.");
+      return true;
+    }
+
+    if (!agent || (!scheduleMayExist && !schedule)) {
+      recordSuccess("No scheduled trigger was created.");
+      return true;
+    }
+
+    try {
+      let activeSchedule = schedule;
+
+      if (!activeSchedule) {
+        const recovered = await callTool(
+          session,
+          "crewhelm_get_agent_schedule",
+          { agentId: agent.id },
+          getAgentScheduleResultSchema,
+          "Scheduled trigger state could not be recovered for cleanup.",
+          CLEANUP_REQUEST_TIMEOUT_MS,
+        );
+
+        if (!recovered.ok) {
+          if (recovered.error.code === "schedule_not_found") {
+            recordSuccess("No scheduled trigger required cleanup.");
+            return true;
+          }
+
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Scheduled trigger state could not be recovered for cleanup.",
+          );
+        }
+
+        activeSchedule = validateActiveSchedule(recovered.schedule, agent, runPrompt);
+      }
+
+      if (activeSchedule.status === "paused") {
+        schedulePaused = true;
+        recordSuccess(checkDefinitions.triggerCleanup.validMessage);
+        return true;
+      }
+
+      const pauseInput = {
+        agentId: agent.id,
+        expectedAgentRevision: agent.revision,
+        expectedScheduleRevision: activeSchedule.revision,
+        idempotencyKey: `smoke-integration-schedule-pause-${suffix}`,
+        schedule: null,
+      };
+      let paused: AgentSchedule | undefined;
+
+      try {
+        const result = await callTool(
+          session,
+          "crewhelm_configure_agent_schedule",
+          pauseInput,
+          configureAgentScheduleResultSchema,
+          "Scheduled trigger pause returned an invalid payload.",
+          CLEANUP_REQUEST_TIMEOUT_MS,
+        );
+
+        if (!result.ok || !result.configured) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Scheduled trigger pause could not be verified.",
+          );
+        }
+
+        paused = validatePausedSchedule(result.schedule, agent, activeSchedule);
+      } catch (error) {
+        if (!reconcile) {
+          throw error;
+        }
+
+        try {
+          const replay = await callTool(
+            session,
+            "crewhelm_configure_agent_schedule",
+            pauseInput,
+            configureAgentScheduleResultSchema,
+            "Scheduled trigger pause could not be reconciled after an ambiguous response.",
+            CLEANUP_REQUEST_TIMEOUT_MS,
+          );
+
+          if (!replay.ok) {
+            throw new TemporaryOwnerSessionError(
+              "invalid_payload",
+              "Scheduled trigger pause could not be reconciled after an ambiguous response.",
+            );
+          }
+
+          paused = validatePausedSchedule(replay.schedule, agent, activeSchedule);
+        } catch {
+          const recovered = await callTool(
+            session,
+            "crewhelm_get_agent_schedule",
+            { agentId: agent.id },
+            getAgentScheduleResultSchema,
+            "Scheduled trigger pause state could not be recovered.",
+            CLEANUP_REQUEST_TIMEOUT_MS,
+          );
+
+          if (!recovered.ok) {
+            throw new TemporaryOwnerSessionError(
+              "invalid_payload",
+              "Scheduled trigger pause state could not be recovered.",
+            );
+          }
+
+          paused = validatePausedSchedule(recovered.schedule, agent, activeSchedule);
+        }
+      }
+
+      schedule = paused;
+      schedulePaused = true;
+      recordSuccess(checkDefinitions.triggerCleanup.validMessage);
+      return true;
+    } catch (error) {
+      if (!preserveFailure) {
+        checks[11] = failedCheck(checkDefinitions.triggerCleanup.name, mcpEndpoint, error);
+      }
+
+      return false;
+    }
+  };
+
   const cleanupGrant = async (session: TemporaryOwnerMcpSession): Promise<void> => {
-    activeCheckIndex = 10;
+    activeCheckIndex = 12;
 
     if (!grantId) {
       return;
@@ -694,6 +982,7 @@ export async function runStandingIntegrationSmoke(
         { grantId, target: "capability" },
         changeAuthorityResultSchema,
         "Standing grant revocation returned an invalid payload.",
+        CLEANUP_REQUEST_TIMEOUT_MS,
       );
 
       if (
@@ -708,19 +997,19 @@ export async function runStandingIntegrationSmoke(
         );
       }
 
-      checks[10] = createCheck(
+      checks[12] = createCheck(
         checkDefinitions.grantRevoke.name,
         mcpEndpoint,
         "valid",
         checkDefinitions.grantRevoke.validMessage,
       );
     } catch (error) {
-      checks[10] = failedCheck(checkDefinitions.grantRevoke.name, mcpEndpoint, error);
+      checks[12] = failedCheck(checkDefinitions.grantRevoke.name, mcpEndpoint, error);
     }
   };
 
   const cleanupAgent = async (session: TemporaryOwnerMcpSession): Promise<void> => {
-    activeCheckIndex = 11;
+    activeCheckIndex = 13;
 
     if (!agent) {
       return;
@@ -735,6 +1024,7 @@ export async function runStandingIntegrationSmoke(
         },
         batchDisableAgentsResultSchema,
         "Agent disablement returned an invalid payload.",
+        CLEANUP_REQUEST_TIMEOUT_MS,
       );
       const receipt = disabled.ok ? disabled.receipts[0] : undefined;
 
@@ -757,9 +1047,23 @@ export async function runStandingIntegrationSmoke(
         { id: agent.id },
         getAgentResultSchema,
         "Disabled Agent read returned an invalid payload.",
+        CLEANUP_REQUEST_TIMEOUT_MS,
       );
-      const afterDisable = await readStatus(session);
-      activeAgentsAfter = afterDisable.usage.agents.active;
+      const afterDisable = await callTool(
+        session,
+        "crewhelm_status",
+        {},
+        controlPlaneStatusResultSchema,
+        "Fleet status returned an invalid payload.",
+        CLEANUP_REQUEST_TIMEOUT_MS,
+      );
+
+      if (!afterDisable.ok) {
+        throw new TemporaryOwnerSessionError("invalid_payload", "Fleet status request was denied.");
+      }
+
+      const afterDisableStatus = afterDisable.status;
+      activeAgentsAfter = afterDisableStatus.usage.agents.active;
 
       if (
         !exactAgent.ok ||
@@ -774,14 +1078,14 @@ export async function runStandingIntegrationSmoke(
         );
       }
 
-      checks[11] = createCheck(
+      checks[13] = createCheck(
         checkDefinitions.agentDisable.name,
         mcpEndpoint,
         "valid",
         checkDefinitions.agentDisable.validMessage,
       );
     } catch (error) {
-      checks[11] = failedCheck(checkDefinitions.agentDisable.name, mcpEndpoint, error);
+      checks[13] = failedCheck(checkDefinitions.agentDisable.name, mcpEndpoint, error);
     }
   };
 
@@ -846,6 +1150,10 @@ export async function runStandingIntegrationSmoke(
           "invalid_payload",
           `Fleet has ${recovery.total} unresolved provider effect${recovery.total === 1 ? "" : "s"}; inspect and explicitly reconcile before rehearsal.`,
         );
+      }
+
+      if (options.trigger === "schedule") {
+        await validateSchedulePolicy(session);
       }
 
       checks[3] = createCheck(
@@ -1003,47 +1311,205 @@ export async function runStandingIntegrationSmoke(
         );
 
         activeCheckIndex = 8;
-        const startInput = {
-          agentId: configuredAgent.id,
-          expectedRevision: configuredAgent.revision,
-          idempotencyKey: `smoke-integration-run-${suffix}`,
-          prompt: `Create exactly one Gmail draft addressed only to "${SAFE_DRAFT_RECIPIENT}" with subject "${fixtureSubject}" and body "This draft was created by an explicitly authorized Crewhelm standing-authority rehearsal." Do not add Cc, Bcc, extra recipients, attachments, HTML, or a thread ID. Do not perform any other action.`,
-        };
-        let startedRun: Run | undefined;
-        let started: z.infer<typeof startRunResultSchema> | undefined;
+        const deadline = now() + options.runTimeoutMs;
+        let expectedRunId: string | undefined;
 
-        try {
-          started = await callTool(
-            session,
-            "crewhelm_start_run",
-            startInput,
-            startRunResultSchema,
-            "Standing integration run start returned an invalid payload.",
+        if (options.trigger === "manual") {
+          const startInput = {
+            agentId: configuredAgent.id,
+            expectedRevision: configuredAgent.revision,
+            idempotencyKey: `smoke-integration-run-${suffix}`,
+            prompt: runPrompt,
+          };
+          let startedRun: Run | undefined;
+          let started: z.infer<typeof startRunResultSchema> | undefined;
+
+          try {
+            started = await callTool(
+              session,
+              "crewhelm_start_run",
+              startInput,
+              startRunResultSchema,
+              "Standing integration run start returned an invalid payload.",
+            );
+          } catch {
+            const recovered = await callTool(
+              session,
+              "crewhelm_start_run",
+              startInput,
+              startRunResultSchema,
+              "Standing integration run start could not be reconciled after an ambiguous response.",
+            );
+            startedRun = validateStartedRun(recovered, configuredAgent);
+          }
+
+          if (started) {
+            startedRun = validateStartedRun(started, configuredAgent, true);
+          }
+
+          if (!startedRun) {
+            throw new TemporaryOwnerSessionError(
+              "request_failed",
+              "Standing integration run start did not complete.",
+            );
+          }
+
+          expectedRunId = startedRun.runId;
+          checks[8] = createCheck(
+            checkDefinitions.triggerReady.name,
+            mcpEndpoint,
+            "valid",
+            "The manual trigger started the exact Agent revision.",
           );
-        } catch {
-          const recovered = await callTool(
-            session,
-            "crewhelm_start_run",
-            startInput,
-            startRunResultSchema,
-            "Standing integration run start could not be reconciled after an ambiguous response.",
-          );
-          startedRun = validateStartedRun(recovered, configuredAgent);
+        } else {
+          const scheduleInput = {
+            agentId: configuredAgent.id,
+            expectedAgentRevision: configuredAgent.revision,
+            expectedScheduleRevision: null,
+            idempotencyKey: `smoke-integration-schedule-${suffix}`,
+            schedule: {
+              intervalSeconds: SCHEDULE_INTERVAL_SECONDS,
+              prompt: runPrompt,
+            },
+          };
+          let configuredSchedule: AgentSchedule | undefined;
+          scheduleMayExist = true;
+
+          try {
+            const result = await callTool(
+              session,
+              "crewhelm_configure_agent_schedule",
+              scheduleInput,
+              configureAgentScheduleResultSchema,
+              "Scheduled trigger configuration returned an invalid payload.",
+            );
+            configuredSchedule = validateConfiguredSchedule(
+              result,
+              configuredAgent,
+              runPrompt,
+              true,
+            );
+          } catch {
+            try {
+              const replay = await callTool(
+                session,
+                "crewhelm_configure_agent_schedule",
+                scheduleInput,
+                configureAgentScheduleResultSchema,
+                "Scheduled trigger configuration could not be reconciled after an ambiguous response.",
+              );
+              configuredSchedule = validateConfiguredSchedule(replay, configuredAgent, runPrompt);
+            } catch {
+              const recovered = await callTool(
+                session,
+                "crewhelm_get_agent_schedule",
+                { agentId: configuredAgent.id },
+                getAgentScheduleResultSchema,
+                "Scheduled trigger state could not be recovered after ambiguous responses.",
+              );
+
+              if (!recovered.ok) {
+                throw new TemporaryOwnerSessionError(
+                  "invalid_payload",
+                  "Scheduled trigger state could not be recovered after ambiguous responses.",
+                );
+              }
+
+              configuredSchedule = validateActiveSchedule(
+                recovered.schedule,
+                configuredAgent,
+                runPrompt,
+              );
+            }
+          }
+
+          if (!configuredSchedule) {
+            throw new TemporaryOwnerSessionError(
+              "request_failed",
+              "Scheduled trigger configuration did not complete.",
+            );
+          }
+
+          schedule = configuredSchedule;
+          scheduleRevision = configuredSchedule.revision;
+
+          for (;;) {
+            const scheduled = await callTool(
+              session,
+              "crewhelm_get_agent_schedule",
+              { agentId: configuredAgent.id },
+              getAgentScheduleResultSchema,
+              "Scheduled trigger inspection returned an invalid payload.",
+            );
+
+            if (!scheduled.ok) {
+              throw new TemporaryOwnerSessionError(
+                "invalid_payload",
+                "Scheduled trigger inspection could not be verified.",
+              );
+            }
+
+            schedule = validateActiveSchedule(scheduled.schedule, configuredAgent, runPrompt);
+
+            if (schedule.lastAttempt?.outcome === "deferred") {
+              throw new TemporaryOwnerSessionError(
+                "invalid_payload",
+                "Scheduled trigger was deferred by Crewhelm policy.",
+              );
+            }
+
+            if (schedule.lastRunId !== null) {
+              if (
+                schedule.lastAttempt?.outcome !== "dispatched" ||
+                schedule.lastAttempt.runId !== schedule.lastRunId
+              ) {
+                throw new TemporaryOwnerSessionError(
+                  "invalid_payload",
+                  "Scheduled dispatch evidence did not match its run.",
+                );
+              }
+
+              expectedRunId = schedule.lastRunId;
+              runId = expectedRunId;
+              checks[8] = createCheck(
+                checkDefinitions.triggerReady.name,
+                mcpEndpoint,
+                "valid",
+                checkDefinitions.triggerReady.validMessage,
+              );
+              const paused = await cleanupTrigger(session, false);
+
+              if (!paused) {
+                triggerCleanupFailedWithAuthority = true;
+                throw new TemporaryOwnerSessionError(
+                  "invalid_payload",
+                  "Scheduled trigger pause could not be verified after its first dispatch; authority cleanup started immediately.",
+                );
+              }
+
+              break;
+            }
+
+            if (now() >= deadline) {
+              throw new TemporaryOwnerSessionError(
+                "timeout",
+                "The scheduled trigger did not dispatch in time.",
+              );
+            }
+
+            await wait(Math.min(POLL_INTERVAL_MS, Math.max(1, deadline - now())));
+          }
         }
 
-        if (started) {
-          startedRun = validateStartedRun(started, configuredAgent, true);
-        }
-
-        if (!startedRun) {
+        if (!expectedRunId) {
           throw new TemporaryOwnerSessionError(
             "request_failed",
-            "Standing integration run start did not complete.",
+            "Standing integration trigger did not produce a run.",
           );
         }
 
-        runId = startedRun.runId;
-        const deadline = now() + options.runTimeoutMs;
+        runId = expectedRunId;
+        activeCheckIndex = 9;
 
         for (;;) {
           let inspected: z.infer<typeof inspectRunResultSchema>;
@@ -1052,7 +1518,7 @@ export async function runStandingIntegrationSmoke(
             inspected = await callTool(
               session,
               "crewhelm_inspect_run",
-              { runId: startedRun.runId, timelineLimit: 50 },
+              { runId: expectedRunId, timelineLimit: 50 },
               inspectRunResultSchema,
               "Standing integration run inspection returned an invalid payload.",
             );
@@ -1069,9 +1535,10 @@ export async function runStandingIntegrationSmoke(
 
           if (
             !inspected.ok ||
-            inspected.run.runId !== startedRun.runId ||
+            inspected.run.runId !== expectedRunId ||
             inspected.run.agentId !== configuredAgent.id ||
-            inspected.run.agentRevision !== configuredAgent.revision
+            inspected.run.agentRevision !== configuredAgent.revision ||
+            inspected.run.trigger !== options.trigger
           ) {
             throw new TemporaryOwnerSessionError(
               "invalid_payload",
@@ -1111,7 +1578,7 @@ export async function runStandingIntegrationSmoke(
 
             toolCallId = validateSingleDispatch(inspected);
             retainedDraft = true;
-            checks[8] = createCheck(
+            checks[9] = createCheck(
               checkDefinitions.runSingleDispatch.name,
               mcpEndpoint,
               "valid",
@@ -1132,7 +1599,7 @@ export async function runStandingIntegrationSmoke(
           await wait(Math.min(POLL_INTERVAL_MS, Math.max(1, deadline - now())));
         }
 
-        activeCheckIndex = 9;
+        activeCheckIndex = 10;
 
         for (;;) {
           const inbox = await callTool(
@@ -1157,14 +1624,16 @@ export async function runStandingIntegrationSmoke(
             );
           }
 
-          const item = inbox.items.find((candidate) => candidate.runId === startedRun.runId);
+          const item = inbox.items.find((candidate) => candidate.runId === expectedRunId);
 
           if (item) {
             if (
               item.agentId !== configuredAgent.id ||
               item.kind !== "outcome" ||
               item.runStatus !== "completed" ||
-              item.approvalCount !== 0
+              item.approvalCount !== 0 ||
+              item.configuration.scheduleRevision !==
+                (options.trigger === "schedule" ? scheduleRevision : null)
             ) {
               throw new TemporaryOwnerSessionError(
                 "invalid_payload",
@@ -1172,7 +1641,7 @@ export async function runStandingIntegrationSmoke(
               );
             }
 
-            checks[9] = createCheck(
+            checks[10] = createCheck(
               checkDefinitions.inboxOutcome.name,
               mcpEndpoint,
               "valid",
@@ -1193,8 +1662,22 @@ export async function runStandingIntegrationSmoke(
       } catch (error) {
         checks[activeCheckIndex] = failedCheck(checks[activeCheckIndex]!.name, mcpEndpoint, error);
       } finally {
-        await cleanupGrant(session);
-        await cleanupAgent(session);
+        if (triggerCleanupFailedWithAuthority) {
+          await cleanupGrant(session);
+          await cleanupAgent(session);
+          await cleanupTrigger(session, true);
+        } else {
+          const triggerSafe = await cleanupTrigger(session, false);
+
+          if (!triggerSafe) {
+            await cleanupGrant(session);
+            await cleanupAgent(session);
+            await cleanupTrigger(session, true);
+          } else {
+            await cleanupGrant(session);
+            await cleanupAgent(session);
+          }
+        }
       }
     },
   );
@@ -1221,14 +1704,14 @@ export async function runStandingIntegrationSmoke(
   }
 
   if (sessionResult.revocation.status === "revoked") {
-    checks[12] = createCheck(
+    checks[14] = createCheck(
       checkDefinitions.oauthTokenRevocation.name,
       revokeEndpoint,
       "valid",
       checkDefinitions.oauthTokenRevocation.validMessage,
     );
   } else if (sessionResult.revocation.status === "failed") {
-    checks[12] = failedCheck(
+    checks[14] = failedCheck(
       checkDefinitions.oauthTokenRevocation.name,
       revokeEndpoint,
       sessionResult.revocation.error,
@@ -1236,10 +1719,11 @@ export async function runStandingIntegrationSmoke(
   }
 
   return standingIntegrationSmokeReportSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     ok: publicReport.ok && checks.every((check) => check.status === "pass"),
     public: publicReport,
     connectionId: options.connectionId,
+    trigger: options.trigger,
     ...(connection === undefined ? {} : { connection }),
     fixtureSubject,
     ...(agentId === undefined ? {} : { agentId }),
@@ -1248,6 +1732,8 @@ export async function runStandingIntegrationSmoke(
     ...(runStatus === undefined ? {} : { runStatus }),
     ...(toolCallId === undefined ? {} : { toolCallId }),
     ...(retainedDraft === undefined ? {} : { retainedDraft }),
+    ...(schedulePaused === undefined ? {} : { schedulePaused }),
+    ...(scheduleRevision === undefined ? {} : { scheduleRevision }),
     ...(activeAgentsBefore === undefined ? {} : { activeAgentsBefore }),
     ...(activeAgentsAfter === undefined ? {} : { activeAgentsAfter }),
     checks,

@@ -465,7 +465,39 @@ describe("Crewhelm CLI", () => {
       connectionId,
       kind: "standing-integration-smoke",
       runTimeoutMs: 45_000,
+      trigger: "manual",
     });
+    expect(
+      parseCli([
+        "smoke",
+        "integration",
+        "--endpoint",
+        "https://crewhelm.example",
+        "--connection-id",
+        connectionId,
+        "--confirm-production",
+        "--trigger",
+        "schedule",
+      ]),
+    ).toMatchObject({
+      connectionId,
+      kind: "standing-integration-smoke",
+      runTimeoutMs: 180_000,
+      trigger: "schedule",
+    });
+    expect(() =>
+      parseCli([
+        "smoke",
+        "integration",
+        "--endpoint",
+        "https://crewhelm.example",
+        "--connection-id",
+        connectionId,
+        "--confirm-production",
+        "--trigger",
+        "hourly",
+      ]),
+    ).toThrow("One or more command values were invalid or outside their bounds.");
 
     const openUrl = vi.fn<(url: URL) => Promise<void>>();
     const harness = createHarness(
@@ -492,6 +524,7 @@ describe("Crewhelm CLI", () => {
     const report = standingIntegrationSmokeReportSchema.parse(JSON.parse(harness.output.join("")));
     expect(report.public.ok).toBe(false);
     expect(report.connectionId).toBe(connectionId);
+    expect(report.trigger).toBe("manual");
     expect(report.checks.every((check) => check.status === "skip")).toBe(true);
     expect(openUrl).not.toHaveBeenCalled();
     expect(harness.errors).toEqual([]);
