@@ -36,6 +36,12 @@ const toolAnnotations = {
     openWorldHint: true,
     readOnlyHint: false,
   },
+  crewhelm_configure_agent_schedule: {
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+    readOnlyHint: false,
+  },
   crewhelm_create_agent: {
     destructiveHint: false,
     idempotentHint: true,
@@ -43,6 +49,18 @@ const toolAnnotations = {
     readOnlyHint: false,
   },
   crewhelm_get_agent: {
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+    readOnlyHint: true,
+  },
+  crewhelm_get_agent_schedule: {
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+    readOnlyHint: true,
+  },
+  crewhelm_get_config: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
@@ -173,6 +191,46 @@ function fleetStatus(active: number, unresolvedEffects = 0) {
   };
 }
 
+function fleetConfiguration(minimumIntervalSeconds = 60) {
+  return {
+    configuration: {
+      configuredAt: timestamp,
+      data: {
+        capacity: {
+          maxAgents: 100,
+          maxConcurrentRuns: 25,
+          maxConnections: 100,
+        },
+        execution: {
+          maxDurationSeconds: 300,
+          maxModelTokens: 16_384,
+          maxToolCalls: 8,
+          maxTurns: 8,
+        },
+        integrations: {
+          callsPerDay: 300,
+          callsPerThirtyDays: 8_000,
+          duplicateToolCallLimit: 2,
+          maxCallsPerRun: 8,
+          maxCallsPerToolPerRun: 2,
+          maxConcurrencyPerGrant: 1,
+        },
+        models: {
+          allowed: ["@cf/zai-org/glm-4.7-flash"],
+          default: "@cf/zai-org/glm-4.7-flash",
+        },
+        retention: {
+          inboxSeconds: 2_592_000,
+          runSeconds: 86_400,
+        },
+        schedules: { minimumIntervalSeconds },
+      },
+      revision: 1,
+    },
+    ok: true,
+  };
+}
+
 function inspectionMetadata(totalEvents: number) {
   return {
     diagnosis: null,
@@ -197,10 +255,17 @@ interface HarnessOptions {
   connectionIntegration?: "github";
   connectionStatus?: "active" | "initiated";
   failInspectAfterUnknown?: boolean;
+  authorityCleanupLatencyMs?: number;
   lostConfigureResponses?: number;
+  lostScheduleConfigureResponses?: number;
   loseFirstStartResponse?: boolean;
   mismatchFirstConfigureResponse?: boolean;
   terminalFailureAfterUnknown?: boolean;
+  scheduleDeferred?: boolean;
+  scheduleMinimumIntervalSeconds?: number;
+  scheduleNeverDispatch?: boolean;
+  schedulePauseTimeoutResponses?: number;
+  pendingRunInspections?: number;
   unknownEffect?: boolean;
   unknownEffectRunning?: boolean;
   unknownWithoutToolCallId?: boolean;
@@ -209,8 +274,10 @@ interface HarnessOptions {
 }
 
 interface Harness {
+  elapsedMilliseconds: () => number;
   fetch: typeof globalThis.fetch;
   openedUrls: URL[];
+  scheduledDispatches: () => number;
   toolCalls: Array<{ arguments: unknown; name: string }>;
 }
 
@@ -228,6 +295,15 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
   let fixtureName = "standing integration smoke fixture";
   let inspectCalls = 0;
   let runStarted = false;
+  let scheduleConfiguration: { intervalSeconds: number; prompt: string } | null = null;
+  let scheduleConfigureCalls = 0;
+  let scheduleDispatches = 0;
+  let scheduleElapsedMilliseconds = 0;
+  let schedulePauseCalls = 0;
+  let elapsedMilliseconds = 0;
+  let scheduleLastRunId: string | null = null;
+  let scheduleRevision = 0;
+  let scheduleStatus: "active" | "paused" = "paused";
   let startCalls = 0;
 
   const agent = () => ({
@@ -264,7 +340,36 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
     createdAt: timestamp,
     runId,
     status,
-    trigger: "manual",
+    trigger: scheduleRevision > 0 ? "schedule" : "manual",
+  });
+  const schedule = () => ({
+    agentId,
+    agentRevision: 2,
+    configuration: scheduleConfiguration,
+    createdAt: timestamp,
+    lastAttempt:
+      scheduleLastRunId === null
+        ? options.scheduleDeferred
+          ? {
+              occurredAt: timestamp,
+              outcome: "deferred",
+              reason: "active_run",
+              retryAt: timestamp,
+              runId: null,
+            }
+          : null
+        : {
+            occurredAt: timestamp,
+            outcome: "dispatched",
+            reason: null,
+            retryAt: null,
+            runId: scheduleLastRunId,
+          },
+    lastDispatchedAt: scheduleLastRunId === null ? null : timestamp,
+    lastRunId: scheduleLastRunId,
+    nextRunAt: scheduleStatus === "active" ? timestamp : null,
+    revision: scheduleRevision,
+    status: scheduleStatus,
   });
   const successfulTimeline = [
     { event: "run.admitted", occurredAt: timestamp },
@@ -288,6 +393,15 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
     },
     { event: "run.failed", occurredAt: timestamp },
   ];
+  const advanceTime = (milliseconds: number): void => {
+    elapsedMilliseconds += milliseconds;
+
+    if (scheduleStatus === "active" && configured) {
+      scheduleElapsedMilliseconds += milliseconds;
+      scheduleDispatches += Math.floor(scheduleElapsedMilliseconds / (60 * 1_000));
+      scheduleElapsedMilliseconds %= 60 * 1_000;
+    }
+  };
 
   const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input, init) => {
     const url = requestUrl(input);
@@ -379,6 +493,11 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
 
     if (params.name === "crewhelm_status") {
       payload = fleetStatus(activeAgents, options.unresolvedEffects);
+    } else if (params.name === "crewhelm_get_config") {
+      z.strictObject({ target: z.strictObject({ kind: z.literal("fleet") }) }).parse(
+        params.arguments,
+      );
+      payload = fleetConfiguration(options.scheduleMinimumIntervalSeconds);
     } else if (params.name === "crewhelm_list_unresolved_tool_effects") {
       payload = {
         effects:
@@ -508,6 +627,69 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
       if (configureCalls <= (options.lostConfigureResponses ?? 0)) {
         throw new Error("Injected post-commit configuration response loss.");
       }
+    } else if (params.name === "crewhelm_configure_agent_schedule") {
+      scheduleConfigureCalls += 1;
+      const scheduleArguments = z
+        .looseObject({
+          schedule: z
+            .strictObject({ intervalSeconds: z.literal(60), prompt: z.string() })
+            .nullable(),
+        })
+        .parse(params.arguments);
+
+      if (scheduleArguments.schedule === null) {
+        schedulePauseCalls += 1;
+      }
+
+      if (
+        scheduleArguments.schedule === null &&
+        schedulePauseCalls <= (options.schedulePauseTimeoutResponses ?? 0)
+      ) {
+        advanceTime(5_000);
+        throw new DOMException("Injected schedule pause timeout.", "TimeoutError");
+      }
+
+      if (scheduleArguments.schedule === null && agentStatus === "disabled") {
+        payload = {
+          error: {
+            code: "agent_unavailable",
+            message: "Agent schedule request denied.",
+          },
+          ok: false,
+        };
+      } else {
+        const configuredNow =
+          scheduleArguments.schedule === null
+            ? scheduleStatus !== "paused" || scheduleRevision === 1
+            : scheduleRevision === 0;
+
+        if (configuredNow) {
+          scheduleRevision += 1;
+          scheduleStatus = scheduleArguments.schedule === null ? "paused" : "active";
+          scheduleConfiguration = scheduleArguments.schedule;
+        }
+
+        payload = { configured: configuredNow, ok: true, schedule: schedule() };
+      }
+
+      if (scheduleConfigureCalls <= (options.lostScheduleConfigureResponses ?? 0)) {
+        throw new Error("Injected post-commit schedule configuration response loss.");
+      }
+    } else if (params.name === "crewhelm_get_agent_schedule") {
+      if (
+        scheduleStatus === "active" &&
+        !options.scheduleNeverDispatch &&
+        !options.scheduleDeferred
+      ) {
+        if (scheduleLastRunId === null) {
+          scheduleDispatches += 1;
+          scheduleElapsedMilliseconds = 0;
+          scheduleLastRunId = runId;
+          runStarted = true;
+        }
+      }
+
+      payload = { ok: true, schedule: schedule() };
     } else if (params.name === "crewhelm_start_run") {
       startCalls += 1;
       const created = !runStarted;
@@ -561,13 +743,21 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
                     ? unknownTimeline.slice(0, -1)
                     : unknownTimeline,
                 }
-              : {
-                  ...inspectionMetadata(7),
-                  ok: true,
-                  request: { prompt: "provider-prompt-secret" },
-                  run: run("completed"),
-                  timeline: successfulTimeline,
-                };
+              : inspectCalls <= (options.pendingRunInspections ?? 0)
+                ? {
+                    ...inspectionMetadata(2),
+                    ok: true,
+                    request: { prompt: "provider-prompt-secret" },
+                    run: run("running"),
+                    timeline: successfulTimeline.slice(0, 2),
+                  }
+                : {
+                    ...inspectionMetadata(7),
+                    ok: true,
+                    request: { prompt: "provider-prompt-secret" },
+                    run: run("completed"),
+                    timeline: successfulTimeline,
+                  };
     } else if (params.name === "crewhelm_agent_inbox") {
       payload = {
         action: "list",
@@ -577,7 +767,11 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
             agentId,
             agentName: fixtureName,
             approvalCount: 0,
-            configuration: { agentRevision: 2, fleetRevision: 1, scheduleRevision: null },
+            configuration: {
+              agentRevision: 2,
+              fleetRevision: 1,
+              scheduleRevision: scheduleLastRunId === null ? null : 1,
+            },
             itemId: `inbox_${runId}`,
             kind: "outcome",
             nextAction: "review_output",
@@ -595,12 +789,15 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
         ok: true,
       };
     } else if (params.name === "crewhelm_revoke_authority") {
+      advanceTime(options.authorityCleanupLatencyMs ?? 0);
+      configured = false;
       payload = {
         changed: true,
         ok: true,
         state: { grantId, status: "revoked", target: "capability" },
       };
     } else if (params.name === "crewhelm_batch_disable_agents") {
+      advanceTime(options.authorityCleanupLatencyMs ?? 0);
       agentStatus = "disabled";
       activeAgents -= 1;
       payload = {
@@ -623,7 +820,13 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
     });
   });
 
-  return { fetch, openedUrls, toolCalls };
+  return {
+    elapsedMilliseconds: () => elapsedMilliseconds,
+    fetch,
+    openedUrls,
+    scheduledDispatches: () => scheduleDispatches,
+    toolCalls,
+  };
 }
 
 function approveAuthorization(openedUrls: URL[]): (url: URL) => Promise<void> {
@@ -640,7 +843,11 @@ function approveAuthorization(openedUrls: URL[]): (url: URL) => Promise<void> {
 
 async function runSmoke(
   harness: Harness,
-  overrides: { now?: () => number; wait?: (milliseconds: number) => Promise<void> } = {},
+  overrides: {
+    now?: () => number;
+    trigger?: "manual" | "schedule";
+    wait?: (milliseconds: number) => Promise<void>;
+  } = {},
 ) {
   return runStandingIntegrationSmoke(
     {
@@ -648,6 +855,7 @@ async function runSmoke(
       origin: parseDeploymentOrigin(origin),
       runTimeoutMs: 3_000,
       timeoutMs: 1_000,
+      trigger: overrides.trigger ?? "manual",
     },
     {
       fetch: harness.fetch,
@@ -682,6 +890,7 @@ describe("standing integration action smoke", () => {
       runId,
       runStatus: "completed",
       toolCallId,
+      trigger: "manual",
     });
     expect(
       harness.toolCalls.find((call) => call.name === "crewhelm_create_agent")?.arguments,
@@ -711,12 +920,154 @@ describe("standing integration action smoke", () => {
       ],
     });
     expect(harness.toolCalls.filter((call) => call.name === "crewhelm_start_run")).toHaveLength(1);
+    expect(
+      harness.toolCalls.filter((call) => call.name === "crewhelm_configure_agent_schedule"),
+    ).toHaveLength(0);
     expect(serialized).not.toContain("provider-prompt-secret");
     expect(serialized).not.toContain("provider-output-secret");
     expect(serialized).not.toContain("provider-request-secret");
     expect(serialized).not.toContain("provider-result-secret");
     expect(serialized).not.toContain("provider-summary-secret");
     expect(serialized).not.toContain(accessToken);
+  });
+
+  it("waits for one scheduled dispatch, pauses it, verifies inbox evidence, and cleans up", async () => {
+    const harness = smokeHarness();
+    const report = await runSmoke(harness, { trigger: "schedule" });
+
+    expect(report.ok).toBe(true);
+    expect(report.checks.every((check) => check.status === "pass")).toBe(true);
+    expect(report).toMatchObject({
+      activeAgentsAfter: 3,
+      activeAgentsBefore: 3,
+      retainedDraft: true,
+      runId,
+      runStatus: "completed",
+      schedulePaused: true,
+      scheduleRevision: 1,
+      toolCallId,
+      trigger: "schedule",
+    });
+    expect(harness.toolCalls.filter((call) => call.name === "crewhelm_start_run")).toHaveLength(0);
+    expect(
+      harness.toolCalls.filter((call) => call.name === "crewhelm_get_agent_schedule"),
+    ).toHaveLength(1);
+    expect(
+      harness.toolCalls.filter((call) => call.name === "crewhelm_configure_agent_schedule"),
+    ).toHaveLength(2);
+    expect(
+      harness.toolCalls.find(
+        (call) =>
+          call.name === "crewhelm_configure_agent_schedule" &&
+          z.looseObject({ schedule: z.unknown() }).parse(call.arguments).schedule !== null,
+      )?.arguments,
+    ).toMatchObject({
+      agentId,
+      expectedAgentRevision: 2,
+      expectedScheduleRevision: null,
+      schedule: {
+        intervalSeconds: 60,
+      },
+    });
+    expect(report.checks[8]).toMatchObject({ code: "valid", name: "trigger-ready" });
+    expect(report.checks[11]).toMatchObject({ code: "valid", name: "trigger-cleanup" });
+  });
+
+  it("replays a committed schedule configuration without creating another scheduled run", async () => {
+    const harness = smokeHarness({ lostScheduleConfigureResponses: 1 });
+    const report = await runSmoke(harness, { trigger: "schedule" });
+
+    expect(report.ok).toBe(true);
+    expect(
+      harness.toolCalls.filter((call) => call.name === "crewhelm_configure_agent_schedule"),
+    ).toHaveLength(3);
+    expect(harness.toolCalls.filter((call) => call.name === "crewhelm_start_run")).toHaveLength(0);
+    expect(report).toMatchObject({
+      runId,
+      schedulePaused: true,
+      scheduleRevision: 1,
+      trigger: "schedule",
+    });
+  });
+
+  it("aborts inspection and preserves a pause failure before another schedule tick", async () => {
+    const harness = smokeHarness({
+      authorityCleanupLatencyMs: 5_000,
+      pendingRunInspections: 1,
+      schedulePauseTimeoutResponses: 1,
+    });
+    const report = await runSmoke(harness, {
+      trigger: "schedule",
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.runId).toBe(runId);
+    expect(report.runStatus).toBeUndefined();
+    expect(report.retainedDraft).toBeUndefined();
+    expect(report.schedulePaused).toBeUndefined();
+    expect(report.checks[11]).toMatchObject({
+      code: "invalid_payload",
+      message:
+        "Scheduled trigger pause could not be verified after its first dispatch; authority cleanup started immediately.",
+      status: "fail",
+    });
+    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[13]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[14]).toMatchObject({ code: "valid", status: "pass" });
+    expect(harness.elapsedMilliseconds()).toBe(15_000);
+    expect(harness.scheduledDispatches()).toBe(1);
+    expect(harness.toolCalls.some((call) => call.name === "crewhelm_inspect_run")).toBe(false);
+    expect(harness.toolCalls.some((call) => call.name === "crewhelm_agent_inbox")).toBe(false);
+    const firstPauseIndex = harness.toolCalls.findIndex(
+      (call) =>
+        call.name === "crewhelm_configure_agent_schedule" &&
+        z.looseObject({ schedule: z.null() }).safeParse(call.arguments).success,
+    );
+    expect(firstPauseIndex).toBeGreaterThan(-1);
+    expect(harness.toolCalls[firstPauseIndex + 1]?.name).toBe("crewhelm_revoke_authority");
+  });
+
+  it("times out a missing scheduled dispatch and still pauses, revokes, and disables", async () => {
+    const harness = smokeHarness({ scheduleNeverDispatch: true });
+    let time = Date.parse(timestamp);
+    const report = await runSmoke(harness, {
+      now: () => time,
+      trigger: "schedule",
+      wait: async (milliseconds) => {
+        time += milliseconds;
+      },
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.runId).toBeUndefined();
+    expect(report.retainedDraft).toBeUndefined();
+    expect(report.schedulePaused).toBe(true);
+    expect(report.checks[8]).toMatchObject({
+      code: "timeout",
+      message: "The scheduled trigger did not dispatch in time.",
+      status: "fail",
+    });
+    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[13]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[14]).toMatchObject({ code: "valid", status: "pass" });
+  });
+
+  it("surfaces a deferred scheduled trigger and still removes its authority", async () => {
+    const harness = smokeHarness({ scheduleDeferred: true });
+    const report = await runSmoke(harness, { trigger: "schedule" });
+
+    expect(report.ok).toBe(false);
+    expect(report.runId).toBeUndefined();
+    expect(report.schedulePaused).toBe(true);
+    expect(report.checks[8]).toMatchObject({
+      code: "invalid_payload",
+      message: "Scheduled trigger was deferred by Crewhelm policy.",
+      status: "fail",
+    });
+    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[13]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it("fails before mutation when the exact active Gmail connection is absent", async () => {
@@ -726,7 +1077,7 @@ describe("standing integration action smoke", () => {
     expect(report.ok).toBe(false);
     expect(report.checks[4]).toMatchObject({ code: "invalid_payload", status: "fail" });
     expect(harness.toolCalls.some((call) => call.name === "crewhelm_create_agent")).toBe(false);
-    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[14]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it("fails before mutation when the exact connection belongs to another integration", async () => {
@@ -736,7 +1087,7 @@ describe("standing integration action smoke", () => {
     expect(report.ok).toBe(false);
     expect(report.checks[4]).toMatchObject({ code: "invalid_payload", status: "fail" });
     expect(harness.toolCalls.some((call) => call.name === "crewhelm_create_agent")).toBe(false);
-    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[14]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it("fails before mutation when the fleet has an unresolved provider effect", async () => {
@@ -752,7 +1103,23 @@ describe("standing integration action smoke", () => {
     });
     expect(harness.toolCalls.some((call) => call.name === "crewhelm_list_connections")).toBe(false);
     expect(harness.toolCalls.some((call) => call.name === "crewhelm_create_agent")).toBe(false);
-    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[14]).toMatchObject({ code: "valid", status: "pass" });
+  });
+
+  it("fails before mutation when fleet policy requires a longer schedule interval", async () => {
+    const harness = smokeHarness({ scheduleMinimumIntervalSeconds: 120 });
+    const report = await runSmoke(harness, { trigger: "schedule" });
+
+    expect(report.ok).toBe(false);
+    expect(report.checks[3]).toMatchObject({
+      code: "invalid_payload",
+      message:
+        "Scheduled rehearsal requires a fleet minimum interval of 60 seconds or less; this fleet requires 120 seconds.",
+      status: "fail",
+    });
+    expect(harness.toolCalls.some((call) => call.name === "crewhelm_list_connections")).toBe(false);
+    expect(harness.toolCalls.some((call) => call.name === "crewhelm_create_agent")).toBe(false);
+    expect(report.checks[14]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it.each(["input", "scopes"] as const)(
@@ -764,7 +1131,7 @@ describe("standing integration action smoke", () => {
       expect(report.ok).toBe(false);
       expect(report.checks[5]).toMatchObject({ code: "invalid_payload", status: "fail" });
       expect(harness.toolCalls.some((call) => call.name === "crewhelm_create_agent")).toBe(false);
-      expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+      expect(report.checks[14]).toMatchObject({ code: "valid", status: "pass" });
     },
   );
 
@@ -804,8 +1171,8 @@ describe("standing integration action smoke", () => {
       grantId,
       runStatus: "completed",
     });
-    expect(report.checks[10]).toMatchObject({ code: "valid", status: "pass" });
-    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[13]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it("replays and captures cleanup state after a committed inconsistent configuration response", async () => {
@@ -822,8 +1189,8 @@ describe("standing integration action smoke", () => {
       grantId,
       runStatus: "completed",
     });
-    expect(report.checks[10]).toMatchObject({ code: "valid", status: "pass" });
-    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[13]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it("surfaces an unknown provider effect without reconciling it and still revokes authority", async () => {
@@ -834,13 +1201,13 @@ describe("standing integration action smoke", () => {
     expect(report.runStatus).toBe("failed");
     expect(report.toolCallId).toBe(toolCallId);
     expect(report.retainedDraft).toBeUndefined();
-    expect(report.checks[8]).toMatchObject({
+    expect(report.checks[9]).toMatchObject({
       code: "invalid_payload",
       message: "Provider effect is unknown; verify the draft account before reconciliation.",
       status: "fail",
     });
-    expect(report.checks[10]).toMatchObject({ code: "valid", status: "pass" });
-    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[13]).toMatchObject({ code: "valid", status: "pass" });
     expect(
       harness.toolCalls.some((call) => call.name === "crewhelm_reconcile_tool_execution"),
     ).toBe(false);
@@ -854,15 +1221,15 @@ describe("standing integration action smoke", () => {
     expect(report.runStatus).toBe("failed");
     expect(report.toolCallId).toBeUndefined();
     expect(report.retainedDraft).toBeUndefined();
-    expect(report.checks[8]).toMatchObject({
+    expect(report.checks[9]).toMatchObject({
       code: "invalid_payload",
       message:
         "The provider action was blocked before dispatch because an earlier unknown external effect requires reconciliation.",
       status: "fail",
     });
-    expect(report.checks[9]).toMatchObject({ code: "not_run", status: "skip" });
-    expect(report.checks[10]).toMatchObject({ code: "valid", status: "pass" });
-    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[10]).toMatchObject({ code: "not_run", status: "skip" });
+    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[13]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it("preserves the manual verification warning when an unknown effect later times out", async () => {
@@ -877,13 +1244,13 @@ describe("standing integration action smoke", () => {
 
     expect(report.ok).toBe(false);
     expect(report.toolCallId).toBe(toolCallId);
-    expect(report.checks[8]).toMatchObject({
+    expect(report.checks[9]).toMatchObject({
       code: "invalid_payload",
       message: "Provider effect is unknown; verify the draft account before reconciliation.",
       status: "fail",
     });
-    expect(report.checks[10]).toMatchObject({ code: "valid", status: "pass" });
-    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[13]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it("preserves the manual verification warning when inspection fails after an unknown effect", async () => {
@@ -895,13 +1262,13 @@ describe("standing integration action smoke", () => {
 
     expect(report.ok).toBe(false);
     expect(report.toolCallId).toBe(toolCallId);
-    expect(report.checks[8]).toMatchObject({
+    expect(report.checks[9]).toMatchObject({
       code: "invalid_payload",
       message: "Provider effect is unknown; verify the draft account before reconciliation.",
       status: "fail",
     });
-    expect(report.checks[10]).toMatchObject({ code: "valid", status: "pass" });
-    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[13]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it("preserves the warning for a contract-valid unknown event without a tool-call ID", async () => {
@@ -919,13 +1286,13 @@ describe("standing integration action smoke", () => {
 
     expect(report.ok).toBe(false);
     expect(report.toolCallId).toBeUndefined();
-    expect(report.checks[8]).toMatchObject({
+    expect(report.checks[9]).toMatchObject({
       code: "invalid_payload",
       message: "Provider effect is unknown; verify the draft account before reconciliation.",
       status: "fail",
     });
-    expect(report.checks[10]).toMatchObject({ code: "valid", status: "pass" });
-    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[13]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it("preserves a prior unknown effect when a later terminal read omits the event", async () => {
@@ -937,12 +1304,12 @@ describe("standing integration action smoke", () => {
 
     expect(report.ok).toBe(false);
     expect(report.toolCallId).toBe(toolCallId);
-    expect(report.checks[8]).toMatchObject({
+    expect(report.checks[9]).toMatchObject({
       code: "invalid_payload",
       message: "Provider effect is unknown; verify the draft account before reconciliation.",
       status: "fail",
     });
-    expect(report.checks[10]).toMatchObject({ code: "valid", status: "pass" });
-    expect(report.checks[11]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[12]).toMatchObject({ code: "valid", status: "pass" });
+    expect(report.checks[13]).toMatchObject({ code: "valid", status: "pass" });
   });
 });

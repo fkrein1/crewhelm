@@ -99,7 +99,7 @@ function formatStandingIntegrationSmokeReport(
     .join("");
   const fixture =
     report.agentId && report.runId
-      ? `Agent ${report.agentId}; run ${report.runId}; terminal status ${report.runStatus ?? "unknown"}.\n`
+      ? `Agent ${report.agentId}; ${report.trigger} run ${report.runId}; terminal status ${report.runStatus ?? "unknown"}.\n`
       : "";
   const connection = report.connection
     ? `Connection ${report.connection.accountLabel ?? report.connection.providerConnectionId} (${report.connection.integrationSlug ?? "unknown integration"}).\n`
@@ -112,8 +112,12 @@ function formatStandingIntegrationSmokeReport(
     report.activeAgentsBefore !== undefined && report.activeAgentsAfter !== undefined
       ? `Active Agents ${report.activeAgentsBefore} -> ${report.activeAgentsAfter} after cleanup.\n`
       : "";
+  const schedule =
+    report.scheduleRevision !== undefined
+      ? `Schedule revision ${report.scheduleRevision}; ${report.schedulePaused ? "paused after first dispatch" : "cleanup unverified"}.\n`
+      : "";
 
-  return `${formatDoctorReport(report.public, presentation)}${smokeChecks}${connection}${fixture}${draft}${cleanup}`;
+  return `${formatDoctorReport(report.public, presentation)}${smokeChecks}${connection}${fixture}${schedule}${draft}${cleanup}`;
 }
 
 function formatBootstrapReport(report: BootstrapReport, presentation: CliPresentation): string {
