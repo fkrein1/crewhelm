@@ -23,7 +23,7 @@ import {
 } from "./module.js";
 import { deriveOwnerKey } from "../../owner/identity.js";
 import { digestRunPrompt } from "./protocol.js";
-import { admittedTurnMetadataSchema } from "./schema.js";
+import { admittedRunRecordSchema, admittedTurnMetadataSchema } from "./schema.js";
 import {
   DEADLINE_TEST_PROMPT,
   LARGE_TEST_PROMPT,
@@ -2133,7 +2133,13 @@ describe("CrewAgent admitted execution", () => {
       }),
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    const deadlineAt = await runInDurableObject(deadlineStub, async (_agent, state) => {
+      const record = admittedRunRecordSchema.parse(
+        await state.storage.get(`crewhelm:run:${started.run.runId}`),
+      );
+      return record.deadlineAt;
+    });
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, deadlineAt - Date.now() + 25)));
     await expect(runDurableObjectAlarm(deadlineStub)).resolves.toBe(true);
 
     await vi.waitFor(

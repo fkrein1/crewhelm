@@ -1,4 +1,8 @@
-import { healthReportSchema, ownerAuthoritySchema } from "@crewhelm/contracts";
+import {
+  CREWHELM_DEPLOYMENT_PROTOCOL_VERSION,
+  healthReportSchema,
+  ownerAuthoritySchema,
+} from "@crewhelm/contracts";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { Hono, type Context } from "hono";
 import * as z from "zod";
@@ -15,11 +19,6 @@ import {
 import { registerOAuthUiRoutes } from "../oauth/ui.js";
 import { registerConnectionAuthorizationReturnRoutes } from "./connection-authorization-return.js";
 
-const HEALTH_REPORT = healthReportSchema.parse({
-  service: "crewhelm",
-  status: "ok",
-});
-const HEALTH_BODY = `${JSON.stringify(HEALTH_REPORT)}\n`;
 const METHOD_NOT_ALLOWED_BODY = `${JSON.stringify({
   error: {
     code: "method_not_allowed",
@@ -83,7 +82,6 @@ function byteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
 
-const HEALTH_BODY_LENGTH = byteLength(HEALTH_BODY);
 const METHOD_NOT_ALLOWED_BODY_LENGTH = byteLength(METHOD_NOT_ALLOWED_BODY);
 const NOT_FOUND_BODY_LENGTH = byteLength(NOT_FOUND_BODY);
 const INTERNAL_ERROR_BODY_LENGTH = byteLength(INTERNAL_ERROR_BODY);
@@ -93,6 +91,19 @@ const MISDIRECTED_BODY_LENGTH = byteLength(MISDIRECTED_BODY);
 
 function publicOrigin(env: Pick<WorkerEnv, "PUBLIC_ORIGIN">): string {
   return publicOriginSchema.parse(env.PUBLIC_ORIGIN);
+}
+
+function healthBody(env: Pick<WorkerEnv, "CREWHELM_DEPLOYMENT_FINGERPRINT">): string {
+  return `${JSON.stringify(
+    healthReportSchema.parse({
+      deployment: {
+        fingerprint: env.CREWHELM_DEPLOYMENT_FINGERPRINT,
+        protocolVersion: CREWHELM_DEPLOYMENT_PROTOCOL_VERSION,
+      },
+      service: "crewhelm",
+      status: "ok",
+    }),
+  )}\n`;
 }
 
 function resourceMetadataUrl(origin: string): string {
@@ -167,9 +178,10 @@ export function createWorker(): Hono<{ Bindings: WorkerEnv }> {
     ),
   );
 
-  worker.on(["GET", "HEAD"], "/health", (context) =>
-    jsonResponse(context.req.method === "HEAD" ? null : HEALTH_BODY, HEALTH_BODY_LENGTH, 200),
-  );
+  worker.on(["GET", "HEAD"], "/health", (context) => {
+    const body = healthBody(context.env);
+    return jsonResponse(context.req.method === "HEAD" ? null : body, byteLength(body), 200);
+  });
 
   worker.all("/health", () =>
     jsonResponse(METHOD_NOT_ALLOWED_BODY, METHOD_NOT_ALLOWED_BODY_LENGTH, 405, {

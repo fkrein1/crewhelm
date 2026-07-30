@@ -5,3 +5,5 @@
 *.jpeg binary
 *.gif binary
 *.webp binary
+
+apps/worker/control-plane-migrations/meta/*_snapshot.json linguist-generated=true

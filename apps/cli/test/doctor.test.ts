@@ -13,8 +13,17 @@ function jsonResponse(payload: unknown): Response {
   });
 }
 
-function healthyResponse(): Response {
-  return jsonResponse({ service: "crewhelm", status: "ok" });
+function healthyResponse(
+  deployment: { fingerprint: string; protocolVersion: number } = {
+    fingerprint: "a".repeat(64),
+    protocolVersion: 1,
+  },
+): Response {
+  return jsonResponse({
+    deployment,
+    service: "crewhelm",
+    status: "ok",
+  });
 }
 
 function protectedResourceResponse(): Response {
@@ -82,7 +91,7 @@ describe("deployment diagnosis", () => {
     );
 
     expect(report).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       ok: true,
       checks: [
         {
@@ -107,6 +116,13 @@ describe("deployment diagnosis", () => {
           status: "pass",
         },
       ],
+      deployment: {
+        alignment: "unverified",
+        worker: {
+          fingerprint: "a".repeat(64),
+          protocolVersion: 1,
+        },
+      },
     });
     expect(fetch).toHaveBeenCalledTimes(3);
 
@@ -122,6 +138,71 @@ describe("deployment diagnosis", () => {
         }),
       );
     }
+  });
+
+  it.each([
+    {
+      alignment: "aligned",
+      deployment: { fingerprint: "a".repeat(64), protocolVersion: 1 },
+      ok: true,
+    },
+    {
+      alignment: "different",
+      deployment: { fingerprint: "b".repeat(64), protocolVersion: 1 },
+      ok: false,
+    },
+    {
+      alignment: "cli_outdated",
+      deployment: { fingerprint: "b".repeat(64), protocolVersion: 2 },
+      ok: false,
+    },
+  ])("classifies a valid Worker build as $alignment", async ({ alignment, deployment, ok }) => {
+    const report = await diagnoseDeployment(
+      {
+        origin: parseDeploymentOrigin(origin),
+        timeoutMs: 1_000,
+      },
+      {
+        expectedDeploymentFingerprint: "a".repeat(64),
+        fetch: deploymentFetch((path) =>
+          path === "/health"
+            ? healthyResponse(deployment)
+            : path === "/.well-known/oauth-protected-resource"
+              ? protectedResourceResponse()
+              : authorizationServerResponse(),
+        ),
+      },
+    );
+
+    expect(report).toMatchObject({
+      deployment: { alignment, worker: deployment },
+      ok,
+    });
+  });
+
+  it("classifies a pre-fingerprint Worker as outdated without rejecting its liveness contract", async () => {
+    const report = await diagnoseDeployment(
+      {
+        origin: parseDeploymentOrigin(origin),
+        timeoutMs: 1_000,
+      },
+      {
+        expectedDeploymentFingerprint: "a".repeat(64),
+        fetch: deploymentFetch((path) =>
+          path === "/health"
+            ? jsonResponse({ service: "crewhelm", status: "ok" })
+            : path === "/.well-known/oauth-protected-resource"
+              ? protectedResourceResponse()
+              : authorizationServerResponse(),
+        ),
+      },
+    );
+
+    expect(report).toMatchObject({
+      deployment: { alignment: "worker_outdated", worker: null },
+      ok: false,
+    });
+    expect(report.checks[0]).toMatchObject({ code: "valid", status: "pass" });
   });
 
   it.each([

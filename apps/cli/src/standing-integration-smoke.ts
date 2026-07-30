@@ -775,7 +775,7 @@ export async function runStandingIntegrationSmoke(
     skippedCheck(checkDefinitions.oauthTokenRevocation.name, revokeEndpoint),
   ];
 
-  if (!publicReport.ok) {
+  if (!publicReport.ok || publicReport.deployment.alignment !== "aligned") {
     return standingIntegrationSmokeReportSchema.parse({
       schemaVersion: 2,
       ok: false,

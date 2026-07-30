@@ -7,6 +7,7 @@ import * as z from "zod";
 
 import {
   diagnoseDeployment,
+  diagnoseDeploymentAlignment,
   doctorReportSchema,
   type DoctorDependencies,
   type DoctorReport,
@@ -64,6 +65,7 @@ const DEPLOYMENT_DIGEST_HEX_LENGTH = 40;
 const WORKER_TEXT_MODULE_NAME = /^[0-9a-f]{40}-[0-9]{4}_[a-z0-9_]{1,128}\.sql$/u;
 const WORKER_TEXT_MODULE_IMPORT = /from "\.\/([^"]+\.sql)";/gu;
 const WORKER_NOT_FOUND_CODE = /\[code:\s*10007\]/u;
+const DEPLOYMENT_VERIFICATION_DELAYS_MS = [250, 500, 1_000, 2_000] as const;
 const TABLE_INVENTORY_SQL = "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name";
 const MIGRATION_INVENTORY_SQL = "SELECT name FROM d1_migrations ORDER BY id";
 const ALLOWED_AUTH_TABLES = new Set([
@@ -396,6 +398,7 @@ export interface BootstrapDependencies extends DoctorDependencies {
     persist: (installation: ExistingInstallationCoordinates) => Promise<void>;
   };
   runWrangler: RunWrangler;
+  wait?: (milliseconds: number) => Promise<void>;
 }
 
 export class BootstrapError extends Error {
@@ -419,6 +422,46 @@ function reportProgress(
   message: string,
 ): void {
   dependencies.reportProgress?.({ message, stage });
+}
+
+async function waitFor(
+  milliseconds: number,
+  dependencies: Pick<BootstrapDependencies, "wait">,
+): Promise<void> {
+  if (dependencies.wait) {
+    await dependencies.wait(milliseconds);
+    return;
+  }
+
+  await new Promise((complete) => setTimeout(complete, milliseconds));
+}
+
+async function verifyDeployedControlPlane(
+  options: BootstrapOptions,
+  expectedDeploymentFingerprint: string,
+  dependencies: BootstrapDependencies,
+): Promise<DoctorReport> {
+  for (const delay of [...DEPLOYMENT_VERIFICATION_DELAYS_MS, undefined]) {
+    const doctor = await diagnoseDeployment(options, {
+      expectedDeploymentFingerprint,
+      fetch: dependencies.fetch,
+    });
+
+    if (doctor.ok && doctor.deployment.alignment === "aligned") {
+      return doctor;
+    }
+
+    if (doctor.deployment.alignment === "cli_outdated" || delay === undefined) {
+      break;
+    }
+
+    await waitFor(delay, dependencies);
+  }
+
+  throw commandFailed(
+    "deployment",
+    "Worker deployment completed, but the packaged build fingerprint could not be verified.",
+  );
 }
 
 async function createPrivateWorkspace(): Promise<string> {
@@ -472,7 +515,7 @@ function requireCompleted(
 }
 
 async function loadDeploymentAssets(
-  dependencies: BootstrapDependencies,
+  dependencies: Pick<BootstrapDependencies, "deploymentAssetsDirectory">,
 ): Promise<DeploymentAssets> {
   try {
     const entries = await readdir(dependencies.deploymentAssetsDirectory, {
@@ -578,6 +621,12 @@ async function loadDeploymentAssets(
   } catch {
     throw commandFailed("assets", "Packaged deployment assets are invalid.");
   }
+}
+
+export async function readPackagedDeploymentFingerprint(
+  dependencies: Pick<BootstrapDependencies, "deploymentAssetsDirectory">,
+): Promise<string> {
+  return (await loadDeploymentAssets(dependencies)).digest;
 }
 
 async function authenticate(
@@ -1458,6 +1507,7 @@ async function stageDeployment(
       triggers: assets.template.triggers,
       vars: {
         ...(aiGateway === undefined ? {} : { AI_GATEWAY_ID: aiGateway.id }),
+        CREWHELM_DEPLOYMENT_FINGERPRINT: assets.digest,
         PUBLIC_ORIGIN: options.origin.origin,
       },
     };
@@ -1546,6 +1596,18 @@ export async function bootstrapDeployment(
 ): Promise<BootstrapReport> {
   reportProgress(dependencies, "assets", "Loading packaged deployment assets");
   const assets = await loadDeploymentAssets(dependencies);
+  const installed = await diagnoseDeploymentAlignment(options, {
+    expectedDeploymentFingerprint: assets.digest,
+    fetch: dependencies.fetch,
+  });
+
+  if (installed.alignment === "cli_outdated") {
+    throw commandFailed(
+      "deployment",
+      "The installed Worker requires a newer Crewhelm CLI. The Worker was not changed.",
+    );
+  }
+
   const cwd = await createPrivateWorkspace();
 
   try {
@@ -1783,7 +1845,7 @@ export async function bootstrapDeployment(
     }
 
     reportProgress(dependencies, "deployment", "Verifying the deployed control plane");
-    const doctor: DoctorReport = await diagnoseDeployment(deploymentOptions, dependencies);
+    const doctor = await verifyDeployedControlPlane(deploymentOptions, assets.digest, dependencies);
 
     return bootstrapReportSchema.parse({
       schemaVersion: 1,

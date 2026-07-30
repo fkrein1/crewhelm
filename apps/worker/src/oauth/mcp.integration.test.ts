@@ -105,6 +105,8 @@ function integrationEnv(
     BETTER_AUTH_SECRET: "test-better-auth-secret-that-is-at-least-32-bytes",
     COMPOSIO_API_KEY: "test-composio-api-key",
     CREW_AGENT: env.CREW_AGENT,
+    CREWHELM_DEPLOYMENT_FINGERPRINT:
+      "0000000000000000000000000000000000000000000000000000000000000000",
     GITHUB_CLIENT_ID: "github-client-id",
     GITHUB_CLIENT_SECRET: "github-client-secret",
     MCP_RATE_LIMIT: rateLimit,

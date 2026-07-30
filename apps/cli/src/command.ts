@@ -103,6 +103,7 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     confirmProduction: z.literal(true),
     connectionId: connectionIdSchema,
+    installationPath: z.string().min(1).max(4_096),
     json: z.boolean(),
     kind: z.literal("standing-integration-smoke"),
     origin: z.instanceof(URL).refine((origin) => origin.protocol === "https:"),
@@ -116,6 +117,7 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     confirmProduction: z.literal(true),
+    installationPath: z.string().min(1).max(4_096),
     json: z.boolean(),
     kind: z.literal("agent-smoke"),
     origin: z.instanceof(URL).refine((origin) => origin.protocol === "https:"),
@@ -153,6 +155,7 @@ interface DoctorCommandOptions {
 interface AgentSmokeCommandOptions {
   confirmProduction: boolean;
   endpoint: string;
+  installation: string;
   json?: boolean;
   runTimeoutMs: string;
   timeoutMs: string;
@@ -311,6 +314,7 @@ function createCliProgram(
     .description("Create, run, disable, and verify one zero-grant disposable Agent.")
     .requiredOption("--endpoint <origin>", "HTTPS Crewhelm deployment origin")
     .requiredOption("--confirm-production", "confirm the mutating production rehearsal")
+    .option("--installation <path>", "installation metadata path", "crewhelm.installation.json")
     .option("--run-timeout-ms <milliseconds>", "maximum Agent run duration", "120000")
     .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")
     .option("--json", "write one machine-readable JSON result")
@@ -319,6 +323,7 @@ function createCliProgram(
       onCommand?.(
         validatedCommand({
           confirmProduction: options.confirmProduction,
+          installationPath: options.installation,
           json: options.json === true,
           kind: "agent-smoke",
           origin: parseOrigin(options.endpoint, "agent-smoke"),
@@ -337,6 +342,7 @@ function createCliProgram(
     .requiredOption("--endpoint <origin>", "HTTPS Crewhelm deployment origin")
     .requiredOption("--connection-id <id>", "exact authorized Crewhelm Gmail connection")
     .requiredOption("--confirm-production", "confirm the mutating production rehearsal")
+    .option("--installation <path>", "installation metadata path", "crewhelm.installation.json")
     .option("--trigger <trigger>", "manual or schedule", "manual")
     .option("--run-timeout-ms <milliseconds>", "maximum trigger and Agent run duration", "180000")
     .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")
@@ -347,6 +353,7 @@ function createCliProgram(
         validatedCommand({
           confirmProduction: options.confirmProduction,
           connectionId: options.connectionId,
+          installationPath: options.installation,
           json: options.json === true,
           kind: "standing-integration-smoke",
           origin: parseOrigin(options.endpoint, "standing-integration-smoke"),

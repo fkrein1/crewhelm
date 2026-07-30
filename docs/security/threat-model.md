@@ -153,6 +153,13 @@ an allowlisted environment, explicit account and database identity, validated re
 and bounded output. Ambiguous remote mutations stop with resources preserved for inspection; they
 are not assumed successful or automatically repeated.
 
+The public health response exposes only a deployment-protocol version and SHA-256 fingerprint of
+the packaged Worker assets; it does not expose credentials, owner identity, configuration, or
+runtime state. The CLI compares that identity before production rehearsals and verifies it after
+deployment. Interactive rehearsal may offer the operator an explicit matching deployment, while
+non-interactive use fails with recovery guidance. A CLI never automatically replaces a Worker that
+advertises a newer deployment protocol.
+
 When local installation metadata is missing, bootstrap adopts an existing Worker only from one
 fully active version. It verifies the Worker shape, exact public origin, D1 binding, bounded D1
 inventory and Crewhelm schema provenance, plus the optional Gateway binding. It persists those

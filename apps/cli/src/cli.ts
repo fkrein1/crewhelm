@@ -8,6 +8,7 @@ import {
   BootstrapError,
   bootstrapOptionsSchema,
   createBootstrapFailure,
+  readPackagedDeploymentFingerprint,
   type BootstrapDependencies,
   type BootstrapFailure,
   type BootstrapOptions,
@@ -38,6 +39,7 @@ export { CLI_HELP, parseCli } from "./command.js";
 
 export interface CliDependencies extends BootstrapDependencies {
   color?: boolean;
+  deploymentFingerprint?: string;
   interactive?: boolean;
   openUrl?: (url: URL) => Promise<void>;
   promptText?: (message: string) => Promise<string>;
@@ -46,12 +48,28 @@ export interface CliDependencies extends BootstrapDependencies {
 }
 
 function formatDoctorReport(report: DoctorReport, presentation: CliPresentation): string {
-  return report.checks
+  const checks = report.checks
     .map((check) => {
       const prefix = presentation.status(check.status);
       return `${prefix} ${check.name} ${presentation.muted(check.endpoint)}\n${check.message}\n`;
     })
     .join("");
+  const deployment = report.deployment;
+  const deploymentStatus = deployment.alignment === "aligned" ? "pass" : "fail";
+  const deploymentMessage =
+    deployment.alignment === "aligned"
+      ? `Worker matches packaged build ${deployment.worker?.fingerprint.slice(0, 12)}.`
+      : deployment.alignment === "cli_outdated"
+        ? "Worker requires a newer Crewhelm CLI; refusing to replace it."
+        : deployment.alignment === "different"
+          ? "Worker runs a different compatible build. Run crewhelm up to align it explicitly."
+          : deployment.alignment === "worker_outdated"
+            ? "Worker predates this CLI deployment protocol. Run crewhelm up to upgrade it."
+            : deployment.alignment === "unverified"
+              ? "Packaged build identity was not provided for comparison."
+              : "Worker build identity could not be read.";
+
+  return `${checks}${presentation.status(deploymentStatus)} deployment-alignment\n${deploymentMessage}\n`;
 }
 
 function formatAuthenticatedDoctorReport(
@@ -262,6 +280,52 @@ async function saveInstallation(path: string, report: BootstrapReport): Promise<
   });
 }
 
+async function expectedDeploymentFingerprint(dependencies: CliDependencies): Promise<string> {
+  return (
+    dependencies.deploymentFingerprint ?? (await readPackagedDeploymentFingerprint(dependencies))
+  );
+}
+
+type SmokeCommand = Extract<CliCommand, { kind: "agent-smoke" | "standing-integration-smoke" }>;
+
+async function offerDeploymentAlignment(
+  command: SmokeCommand,
+  report: DoctorReport,
+  dependencies: CliDependencies,
+): Promise<"declined" | "failed" | "not_offered" | "updated"> {
+  if (
+    command.json ||
+    dependencies.interactive !== true ||
+    dependencies.promptText === undefined ||
+    !report.checks.every((check) => check.status === "pass") ||
+    !["different", "worker_outdated"].includes(report.deployment.alignment)
+  ) {
+    return "not_offered";
+  }
+
+  const prompt =
+    report.deployment.alignment === "worker_outdated"
+      ? "Worker is older than this CLI. Deploy the matching Worker now? [y/N]: "
+      : "Worker runs a different compatible build. Deploy this CLI's bundled Worker now? [y/N]: ";
+  let answer: string;
+
+  try {
+    answer = await dependencies.promptText(prompt);
+  } catch {
+    return "declined";
+  }
+
+  if (!/^(?:y|yes)$/iu.test(answer)) {
+    return "declined";
+  }
+
+  const result = await runCli(
+    ["up", "--endpoint", command.origin.origin, "--installation", command.installationPath],
+    dependencies,
+  );
+  return result === 0 ? "updated" : "failed";
+}
+
 export async function runCli(
   arguments_: readonly string[],
   dependencies: CliDependencies,
@@ -366,8 +430,10 @@ export async function runCli(
   }
 
   if (command.kind === "agent-smoke") {
-    const report = agentSmokeReportSchema.parse(
+    const deploymentFingerprint = await expectedDeploymentFingerprint(dependencies);
+    let report = agentSmokeReportSchema.parse(
       await runAgentSmoke(command, {
+        expectedDeploymentFingerprint: deploymentFingerprint,
         fetch: dependencies.fetch,
         openUrl:
           dependencies.openUrl ??
@@ -376,6 +442,25 @@ export async function runCli(
           }),
       }),
     );
+    const alignment = await offerDeploymentAlignment(command, report.public, dependencies);
+
+    if (alignment === "failed") {
+      return 1;
+    }
+
+    if (alignment === "updated") {
+      report = agentSmokeReportSchema.parse(
+        await runAgentSmoke(command, {
+          expectedDeploymentFingerprint: deploymentFingerprint,
+          fetch: dependencies.fetch,
+          openUrl:
+            dependencies.openUrl ??
+            (async () => {
+              throw new Error("Browser unavailable.");
+            }),
+        }),
+      );
+    }
     dependencies.writeOutput(
       command.json ? `${JSON.stringify(report)}\n` : formatAgentSmokeReport(report, presentation),
     );
@@ -383,8 +468,10 @@ export async function runCli(
   }
 
   if (command.kind === "standing-integration-smoke") {
-    const report = standingIntegrationSmokeReportSchema.parse(
+    const deploymentFingerprint = await expectedDeploymentFingerprint(dependencies);
+    let report = standingIntegrationSmokeReportSchema.parse(
       await runStandingIntegrationSmoke(command, {
+        expectedDeploymentFingerprint: deploymentFingerprint,
         fetch: dependencies.fetch,
         openUrl:
           dependencies.openUrl ??
@@ -393,6 +480,25 @@ export async function runCli(
           }),
       }),
     );
+    const alignment = await offerDeploymentAlignment(command, report.public, dependencies);
+
+    if (alignment === "failed") {
+      return 1;
+    }
+
+    if (alignment === "updated") {
+      report = standingIntegrationSmokeReportSchema.parse(
+        await runStandingIntegrationSmoke(command, {
+          expectedDeploymentFingerprint: deploymentFingerprint,
+          fetch: dependencies.fetch,
+          openUrl:
+            dependencies.openUrl ??
+            (async () => {
+              throw new Error("Browser unavailable.");
+            }),
+        }),
+      );
+    }
     dependencies.writeOutput(
       command.json
         ? `${JSON.stringify(report)}\n`
@@ -402,7 +508,9 @@ export async function runCli(
   }
 
   if (command.authenticated) {
+    const deploymentFingerprint = await expectedDeploymentFingerprint(dependencies);
     const report = await diagnoseAuthenticatedDeployment(command, {
+      expectedDeploymentFingerprint: deploymentFingerprint,
       fetch: dependencies.fetch,
       openUrl:
         dependencies.openUrl ??
@@ -418,7 +526,11 @@ export async function runCli(
     return report.ok ? 0 : 1;
   }
 
-  const report = await diagnoseDeployment(command, dependencies);
+  const deploymentFingerprint = await expectedDeploymentFingerprint(dependencies);
+  const report = await diagnoseDeployment(command, {
+    expectedDeploymentFingerprint: deploymentFingerprint,
+    fetch: dependencies.fetch,
+  });
   dependencies.writeOutput(
     command.json ? `${JSON.stringify(report)}\n` : formatDoctorReport(report, presentation),
   );

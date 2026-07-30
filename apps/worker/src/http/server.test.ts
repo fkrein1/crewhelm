@@ -19,7 +19,7 @@ const worker = createWorker();
 registerAuthTestDatabase();
 
 function request(path: string, init?: RequestInit): Promise<Response> | Response {
-  return worker.fetch(new Request(`${origin}${path}`, init));
+  return worker.fetch(new Request(`${origin}${path}`, init), env);
 }
 
 async function connectionAuthorizationFixture(subject: string) {
@@ -114,6 +114,10 @@ describe("Crewhelm Worker", () => {
     const payload: unknown = await response.json();
 
     expect(healthReportSchema.parse(payload)).toEqual({
+      deployment: {
+        fingerprint: "0000000000000000000000000000000000000000000000000000000000000000",
+        protocolVersion: 1,
+      },
       service: "crewhelm",
       status: "ok",
     });

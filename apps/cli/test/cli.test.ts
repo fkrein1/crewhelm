@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { authenticatedDoctorReportSchema } from "../src/authenticated-doctor.js";
 import { agentSmokeReportSchema } from "../src/agent-smoke.js";
+import { readPackagedDeploymentFingerprint } from "../src/bootstrap.js";
 import { CLI_HELP, parseCli, runCli, type CliDependencies } from "../src/cli.js";
 import { doctorReportSchema } from "../src/doctor.js";
 import { readInstallation } from "../src/installation.js";
@@ -14,6 +15,7 @@ import { standingIntegrationSmokeReportSchema } from "../src/standing-integratio
 
 const DATABASE_ID = "c58217fd-fe09-447b-b79c-5d63ed1cedc0";
 const DEPLOYMENT_VERSION_ID = "37bcd44d-e373-41a2-8a47-eb03cce01d32";
+const DEPLOYMENT_FINGERPRINT = "a".repeat(64);
 const EXPECTED_MIGRATIONS = [
   "0001_better_auth.sql",
   "0002_control_write_scope.sql",
@@ -56,13 +58,19 @@ function requestPath(input: RequestInfo | URL): string {
   return new URL(typeof input === "string" ? input : input.url).pathname;
 }
 
-function healthyDeploymentFetch(): typeof globalThis.fetch {
+function healthyDeploymentFetch(
+  deploymentFingerprint = DEPLOYMENT_FINGERPRINT,
+): typeof globalThis.fetch {
   return vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
     const path = requestPath(input);
     let payload: unknown;
 
     if (path === "/health") {
-      payload = { service: "crewhelm", status: "ok" };
+      payload = {
+        deployment: { fingerprint: deploymentFingerprint, protocolVersion: 1 },
+        service: "crewhelm",
+        status: "ok",
+      };
     } else if (path === "/.well-known/oauth-protected-resource") {
       payload = {
         authorization_servers: ["https://crewhelm.example/api/auth"],
@@ -110,6 +118,7 @@ function createHarness(
   const errors: string[] = [];
   const dependencies: CliDependencies = {
     deploymentAssetsDirectory: "/not-used-by-doctor",
+    deploymentFingerprint: DEPLOYMENT_FINGERPRINT,
     fetch,
     readEnvironment: () => undefined,
     runWrangler: vi.fn<CliDependencies["runWrangler"]>(),
@@ -424,6 +433,30 @@ describe("Crewhelm CLI", () => {
     expect(harness.errors).toEqual([]);
   });
 
+  it("offers an explicit matching deploy before an interactive smoke and respects decline", async () => {
+    const openUrl = vi.fn<(url: URL) => Promise<void>>();
+    const promptText = vi.fn<(message: string) => Promise<string>>(async () => "no");
+    const harness = createHarness(healthyDeploymentFetch("b".repeat(64)), {
+      interactive: true,
+      openUrl,
+      promptText,
+    });
+
+    await expect(
+      runCli(
+        ["smoke", "agent", "--endpoint", "https://crewhelm.example", "--confirm-production"],
+        harness.dependencies,
+      ),
+    ).resolves.toBe(1);
+
+    expect(promptText).toHaveBeenCalledWith(
+      "Worker runs a different compatible build. Deploy this CLI's bundled Worker now? [y/N]: ",
+    );
+    expect(openUrl).not.toHaveBeenCalled();
+    expect(harness.output.join("")).toContain("FAIL deployment-alignment");
+    expect(harness.errors).toEqual([]);
+  });
+
   it("requires an exact connection and explicit confirmation for the integration smoke", async () => {
     const connectionId = "connection_33333333-3333-4333-8333-333333333333";
 
@@ -577,6 +610,9 @@ describe("Crewhelm CLI", () => {
 
   it("recreates missing installation metadata before upgrading an existing Worker", async () => {
     const directory = await createDeploymentAssetsDirectory();
+    const deploymentFingerprint = await readPackagedDeploymentFingerprint({
+      deploymentAssetsDirectory: directory,
+    });
     const installationPath = resolve(directory, "installation.json");
     const databaseName = "crewhelm-development-auth";
     const events: string[] = [];
@@ -661,7 +697,7 @@ describe("Crewhelm CLI", () => {
 
       return completedWrangler();
     });
-    const harness = createHarness(healthyDeploymentFetch(), {
+    const harness = createHarness(healthyDeploymentFetch(deploymentFingerprint), {
       deploymentAssetsDirectory: directory,
       runWrangler,
     });
