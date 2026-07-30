@@ -96,6 +96,9 @@ export const listConnectionsInputSchema = z.strictObject({
     .optional()
     .describe("Return connections with this latest owner-local authorization outcome."),
   cursor: connectionIdSchema.optional(),
+  connectionId: connectionIdSchema
+    .optional()
+    .describe("Inspect one exact connection, including its bounded safe lifecycle timeline."),
   integration: z
     .string()
     .regex(/^[a-z0-9][a-z0-9_-]{0,127}$/, "Expected a Composio integration slug.")
@@ -103,6 +106,9 @@ export const listConnectionsInputSchema = z.strictObject({
     .describe("Return connections created for this enabled integration."),
   limit: z.number().int().min(1).max(MAXIMUM_CONNECTION_LIST_ITEMS).default(20),
   status: connectionStatusSchema.optional().describe("Return connections in this lifecycle state."),
+});
+export const inspectConnectionInputSchema = z.strictObject({
+  connectionId: connectionIdSchema,
 });
 
 const connectionLinkRequestErrorSchema = z.strictObject({
@@ -121,9 +127,17 @@ const connectionLinkRequestErrorSchema = z.strictObject({
     "owner_mismatch",
   ]),
   message: z.literal("Connection link request denied."),
+  operation: z
+    .strictObject({
+      nextAction: z.literal("retry_same_request"),
+      recoverAfter: z.iso.datetime(),
+      reservationId: connectionLinkReservationIdSchema,
+    })
+    .optional(),
 });
 const connectionReadRequestErrorSchema = z.strictObject({
   code: z.enum([
+    "connection_not_found",
     "incompatible_schema",
     "insufficient_scope",
     "invalid_authority",
@@ -155,6 +169,7 @@ export const reserveConnectionLinkResultSchema = z.union([
     authorizationExpiresAt: z.iso.datetime(),
     authorizationToken: connectionAuthorizationTokenSchema,
     ok: z.literal(true),
+    recoverAfter: z.iso.datetime(),
     reservationId: connectionLinkReservationIdSchema,
     state: z.literal("dispatch"),
   }),
@@ -194,8 +209,50 @@ export const recordConnectionAuthorizationReturnResultSchema = z.discriminatedUn
 export const listConnectionsResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     connections: z.array(connectionSummarySchema).max(MAXIMUM_CONNECTION_LIST_ITEMS),
+    detail: z
+      .strictObject({
+        nextAction: z.enum(["none", "reconnect", "review_authorization", "wait"]),
+        timeline: z
+          .array(
+            z.strictObject({
+              action: z
+                .string()
+                .min(1)
+                .max(120)
+                .regex(/^[a-z0-9._-]+$/),
+              eventId: z.number().int().positive().safe(),
+              occurredAt: z.iso.datetime(),
+            }),
+          )
+          .max(25),
+      })
+      .optional(),
     nextCursor: connectionIdSchema.nullable(),
     ok: z.literal(true),
+  }),
+  z.strictObject({
+    error: connectionReadRequestErrorSchema,
+    ok: z.literal(false),
+  }),
+]);
+export const inspectConnectionResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    connection: connectionSummarySchema,
+    nextAction: z.enum(["none", "reconnect", "review_authorization", "wait"]),
+    ok: z.literal(true),
+    timeline: z
+      .array(
+        z.strictObject({
+          action: z
+            .string()
+            .min(1)
+            .max(120)
+            .regex(/^[a-z0-9._-]+$/),
+          eventId: z.number().int().positive().safe(),
+          occurredAt: z.iso.datetime(),
+        }),
+      )
+      .max(25),
   }),
   z.strictObject({
     error: connectionReadRequestErrorSchema,
@@ -210,6 +267,7 @@ export type CreateConnectionLinkInput = z.infer<typeof createConnectionLinkInput
 export type CreateConnectionLinkResult = z.infer<typeof createConnectionLinkResultSchema>;
 export type ListConnectionsInput = z.infer<typeof listConnectionsInputSchema>;
 export type ListConnectionsResult = z.infer<typeof listConnectionsResultSchema>;
+export type InspectConnectionResult = z.infer<typeof inspectConnectionResultSchema>;
 export type RecordConnectionAuthorizationReturnInput = z.infer<
   typeof recordConnectionAuthorizationReturnInputSchema
 >;

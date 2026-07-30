@@ -1519,12 +1519,33 @@ describe("CrewAgent admitted execution", () => {
     });
 
     expect(inspected).toMatchObject({
+      diagnosis: {
+        nextAction: "list_unresolved_effects",
+        reason: "tool_effect_unknown",
+        toolCallId,
+      },
       ok: true,
       run: { runId: fixture.runId, status: "failed" },
       timeline: expect.arrayContaining([
         expect.objectContaining({ event: "tool.execution_unknown", toolCallId }),
         expect.objectContaining({ event: "run.failed" }),
       ]),
+    });
+    await expect(
+      fixture.controlPlane.reconcileToolExecution(fixture.authority, {
+        resolution: "not_applied",
+        toolCallId,
+      }),
+    ).resolves.toMatchObject({ ok: true, reconciled: true });
+    await expect(
+      fixture.controlPlane.inspectRun(fixture.authority, { runId: fixture.runId }),
+    ).resolves.toMatchObject({
+      diagnosis: {
+        nextAction: "start_new_run",
+        reason: "tool_effect_not_applied",
+        toolCallId,
+      },
+      ok: true,
     });
     await expect(
       fixture.controlPlane.agentInbox(fixture.authority, {

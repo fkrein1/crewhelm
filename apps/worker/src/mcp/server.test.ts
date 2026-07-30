@@ -1171,13 +1171,29 @@ describe("authenticated MCP handler", () => {
 
         expect(payload.isError).toBe(false);
         expect(result).toMatchObject({
+          diagnosis: null,
           ok: true,
           request: { prompt: runInput.prompt },
+          retention: {
+            availableUntil: expect.any(String),
+            output: {
+              retainedCharacters: TEST_REPLY.length,
+              truncated: false,
+            },
+          },
           run: {
             output: TEST_REPLY,
             outputTruncated: false,
             runId: started.run.runId,
             status: "completed",
+          },
+          timelinePage: {
+            nextCursor: null,
+            startSequence: 0,
+            totalEvents: expect.any(Number),
+          },
+          usage: {
+            modelCalls: { used: 1 },
           },
         });
 
@@ -2042,6 +2058,11 @@ describe("authenticated MCP handler", () => {
         error: {
           code: "connection_link_outcome_unknown",
           message: "Connection link request denied.",
+          operation: {
+            nextAction: "retry_same_request",
+            recoverAfter: expect.any(String),
+            reservationId: expect.stringMatching(/^connection_link_/),
+          },
         },
         ok: false,
       });
@@ -2087,6 +2108,7 @@ describe("authenticated MCP handler", () => {
             authorizationExpiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
             authorizationToken: "a".repeat(43),
             ok: true,
+            recoverAfter: new Date(Date.now() + 30 * 60 * 1_000).toISOString(),
             reservationId: "connection_link_00000000-0000-4000-8000-000000000000",
             state: "dispatch",
           }),
@@ -2143,6 +2165,11 @@ describe("authenticated MCP handler", () => {
       error: {
         code: "connection_link_outcome_unknown",
         message: "Connection link request denied.",
+        operation: {
+          nextAction: "retry_same_request",
+          recoverAfter: expect.any(String),
+          reservationId: "connection_link_00000000-0000-4000-8000-000000000000",
+        },
       },
       ok: false,
     });
@@ -2252,6 +2279,11 @@ describe("authenticated MCP handler", () => {
         error: {
           code: "connection_link_outcome_unknown",
           message: "Connection link request denied.",
+          operation: {
+            nextAction: "retry_same_request",
+            recoverAfter: expect.any(String),
+            reservationId: expect.stringMatching(/^connection_link_/),
+          },
         },
         ok: false,
       });

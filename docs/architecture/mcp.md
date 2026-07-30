@@ -12,11 +12,19 @@ retain authority.
 - Projections support discovery, not authority. Validate Agent updates against admitted runs.
 - Keep writes exact and replay-safe, limits bounded, and fleet capacity configurable. Test
   pagination, payload size, filters, fleet scale, and MCP schema size.
+- Treat errors as first-class results: stable codes; bounded diagnosis and recovery fields; opaque
+  log-correlation IDs for dependency failures.
+- Keep defaults compact. Put bounded recovery detail behind optional fields and exact reads.
 
 Growing fleet lists return at most 25 compact summaries and stay within a 16 KiB serialized
 response budget. Exact get and inspect tools retain detailed configuration, grants, prompts,
 outputs, and timelines. The authenticated MCP catalog is also held to explicit CI budgets for tool
 count and serialized input-schema size.
+
+Recovery detail is opt-in and bounded: run inspection pages its timeline and can include usage;
+exact connection reads include lifecycle events; status can include recent audit events. Ambiguous
+writes return `recoverAfter` and pin the idempotency key until the same request can safely renew
+the reservation. Existing tools carry this detail, preserving the 30-tool catalog limit.
 
 Fleet mutations remain explicit rather than selector-driven. Bounded Agent shutdown accepts at
 most 25 unique Agent IDs with exact expected revisions, applies owner-local changes in one durable

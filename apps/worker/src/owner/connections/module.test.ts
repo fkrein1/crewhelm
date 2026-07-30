@@ -103,6 +103,41 @@ describe("OwnerControlPlane connections", () => {
     ]);
   });
 
+  it("redispatches an ambiguous integration enablement only after recovery", async () => {
+    const authority = await authorityFor("111-enable-recovery", [CONNECTION_CONFIGS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const input = {
+      idempotencyKey: "enable-github-recovery",
+      integrationSlug: "github",
+    };
+    const reservation = await stub.reserveIntegrationEnablement(authority, input);
+
+    expect(reservation).toMatchObject({ ok: true, state: "dispatch" });
+    if (!reservation.ok || reservation.state !== "dispatch") {
+      throw new Error("Expected integration enablement dispatch reservation.");
+    }
+
+    await expect(stub.reserveIntegrationEnablement(authority, input)).resolves.toMatchObject({
+      error: { code: "integration_enablement_outcome_unknown" },
+      ok: false,
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE integration_enablement_requests SET recover_after = 1 WHERE reservation_id = ?",
+        reservation.reservationId,
+      );
+    });
+    await expect(stub.reserveIntegrationEnablement(authority, input)).resolves.toMatchObject({
+      ok: true,
+      reservationId: reservation.reservationId,
+      state: "dispatch",
+    });
+    await expect(stub.reserveIntegrationEnablement(authority, input)).resolves.toMatchObject({
+      error: { code: "integration_enablement_outcome_unknown" },
+      ok: false,
+    });
+  });
+
   it("filters owner-local connection summaries by integration, status, and authorization outcome", async () => {
     const authority = await authorityFor("connection-filters", [
       CONNECTION_CONFIGS_WRITE_SCOPE,
@@ -693,6 +728,24 @@ describe("OwnerControlPlane connections", () => {
       nextCursor: "connection_00000000-0000-4000-8000-000000000001",
       ok: true,
     });
+    await expect(
+      stub.listConnections(authority, {
+        connectionId: "connection_00000000-0000-4000-8000-000000000001",
+      }),
+    ).resolves.toMatchObject({
+      connections: [{ connectionId: "connection_00000000-0000-4000-8000-000000000001" }],
+      detail: {
+        nextAction: "none",
+        timeline: [],
+      },
+      nextCursor: null,
+      ok: true,
+    });
+    await expect(
+      stub.listConnections(authority, {
+        connectionId: "connection_00000000-0000-4000-8000-000000000099",
+      }),
+    ).resolves.toEqual(fixedConnectionReadFailure("connection_not_found"));
     await evictDurableObject(stub);
     await expect(
       stub.listConnections(authority, {
@@ -884,6 +937,9 @@ describe("OwnerControlPlane connections", () => {
     const reservation = await stub.reserveConnectionLink(authority, firstInput);
 
     expect(reservation).toMatchObject({ ok: true, state: "dispatch" });
+    if (!reservation.ok || reservation.state !== "dispatch") {
+      throw new Error("Expected connection-link dispatch reservation.");
+    }
     await expect(stub.reserveConnectionLink(authority, firstInput)).resolves.toEqual(
       fixedConnectionLinkFailure("connection_link_outcome_unknown"),
     );
@@ -897,12 +953,22 @@ describe("OwnerControlPlane connections", () => {
       );
     });
 
-    await expect(
-      stub.reserveConnectionLink(authority, connectionLinkInput("recovered-114")),
-    ).resolves.toMatchObject({ ok: true, state: "dispatch" });
+    const retried = await stub.reserveConnectionLink(authority, firstInput);
+
+    expect(retried).toMatchObject({
+      ok: true,
+      reservationId: reservation.reservationId,
+      state: "dispatch",
+    });
+    expect(retried.ok && retried.state === "dispatch" ? retried.authorizationToken : null).not.toBe(
+      reservation.authorizationToken,
+    );
     await expect(stub.reserveConnectionLink(authority, firstInput)).resolves.toEqual(
       fixedConnectionLinkFailure("connection_link_outcome_unknown"),
     );
+    await expect(
+      stub.reserveConnectionLink(authority, connectionLinkInput("recovered-114")),
+    ).resolves.toEqual(fixedConnectionLinkFailure("connection_link_in_progress"));
   });
 
   it("rejects malformed, unauthorized, cross-owner, and late connection completions safely", async () => {

@@ -116,6 +116,7 @@ function fleetStatus(active: number) {
       usage: {
         agents: { active, total: 9 },
         connections: { active: 0, pending: 0, total: 0 },
+        diagnostics: { expiredApprovals: 0, pendingAiUsage: 0 },
         inbox: {
           actionRequired: 0,
           deferred: 0,
@@ -343,10 +344,23 @@ function smokeHarness(options: SmokeHarnessOptions = {}): SmokeHarness {
     } else if (params.name === "crewhelm_inspect_run") {
       const status = inspectStatuses.shift() ?? inspectStatuses.at(-1) ?? "running";
       payload = {
+        diagnosis: null,
         ok: true,
         request: { prompt: "provider-prompt-secret" },
+        retention: {
+          availableUntil: timestamp,
+          output: { limitCharacters: 65_536, retainedCharacters: 0, truncated: false },
+        },
         run: run(status),
         timeline: [],
+        timelinePage: {
+          nextCursor: null,
+          omittedEvents: 0,
+          startSequence: 0,
+          totalEvents: 0,
+          truncated: false,
+        },
+        usage: null,
       };
     } else if (params.name === "crewhelm_batch_disable_agents") {
       if (options.disableFails) {

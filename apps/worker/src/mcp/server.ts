@@ -1,4 +1,5 @@
 import {
+  controlPlaneStatusInputSchema,
   controlPlaneStatusResultSchema,
   ownerAuthoritySchema,
   type OwnerAuthority,
@@ -202,12 +203,15 @@ function createMcpServer(
         readOnlyHint: true,
       },
       description:
-        "Return a cheap owner-local fleet dashboard with active usage, inbox and unresolved-effect counts, and configured capacity.",
-      inputSchema: z.strictObject({}),
+        "Return a cheap owner-local fleet dashboard with active usage, diagnostic counts, and optional recent safe audit events.",
+      inputSchema: controlPlaneStatusInputSchema,
       title: "Crewhelm status",
     },
-    async () =>
-      controlPlaneToolResult(() => controlPlane.status(authority), controlPlaneStatusResultSchema),
+    async (input) =>
+      controlPlaneToolResult(
+        () => controlPlane.status(authority, input),
+        controlPlaneStatusResultSchema,
+      ),
   );
 
   return server;

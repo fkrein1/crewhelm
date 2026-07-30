@@ -29,7 +29,7 @@ export interface OwnerControlPlaneClient {
   reconcileToolExecution(authorityInput: unknown, input: unknown): Promise<unknown>;
   resolveConnectionForAttachment(authorityInput: unknown, input: unknown): Promise<unknown>;
   startRun(authorityInput: unknown, input: unknown): Promise<unknown>;
-  status(authorityInput: unknown): Promise<unknown>;
+  status(authorityInput: unknown, input?: unknown): Promise<unknown>;
   updateAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
 }
 

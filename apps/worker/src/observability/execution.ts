@@ -151,12 +151,6 @@ const executionProviderResponseEventSchema = z.discriminatedUnion("operation", [
         "transport_error",
       ]),
       providerErrorCode: z.number().int().nonnegative().safe().optional(),
-      providerErrorSlug: z
-        .string()
-        .min(1)
-        .max(80)
-        .regex(/^[A-Za-z0-9._-]+$/)
-        .optional(),
       runId: runIdSchema,
       status: providerStatusSchema,
       toolCallId: toolCallIdSchema,

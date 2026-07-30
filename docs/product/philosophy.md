@@ -19,6 +19,9 @@ to reach.
   credentials, or private history.
 - **Safety is product quality.** Authority, secret isolation, data integrity, recovery, and clear
   failure behavior are never deferred polish.
+- **Errors are product state.** A failure must say what is known, whether retrying is safe, and
+  which bounded read or action can resolve it. Durable failures remain inspectable after the
+  original request ends; raw exceptions, credentials, and provider payloads do not.
 
 ## Choosing work
 
