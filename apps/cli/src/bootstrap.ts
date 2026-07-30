@@ -3,6 +3,7 @@ import { chmod, cp, lstat, mkdtemp, readFile, readdir, rm, writeFile } from "nod
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
+import { deploymentFingerprintSchema } from "@crewhelm/contracts";
 import * as z from "zod";
 
 import type { CloudflareGatewayAuthorization } from "./cloudflare-gateway-authorization.js";
@@ -31,6 +32,10 @@ const GITHUB_SECRET_ENVIRONMENT = {
   clientSecret: "CREWHELM_GITHUB_CLIENT_SECRET",
   ownerUserId: "CREWHELM_OWNER_GITHUB_USER_ID",
 } as const;
+const INSTALLATION_SECRET_ENVIRONMENTS = new Set([
+  COMPOSIO_API_KEY_ENVIRONMENT,
+  ...Object.values(GITHUB_SECRET_ENVIRONMENT),
+]);
 const SECRET_ENVIRONMENT_BY_NAME: Partial<Record<RequiredSecretName, string>> = {
   COMPOSIO_API_KEY: COMPOSIO_API_KEY_ENVIRONMENT,
   GITHUB_CLIENT_ID: GITHUB_SECRET_ENVIRONMENT.clientId,
@@ -149,6 +154,9 @@ const aiGatewaySchema = z.looseObject({
     enabled: z.literal(true),
     rules: z.tuple([aiGatewaySpendRuleSchema]),
   }),
+});
+const aiGatewayIdentitySchema = z.looseObject({
+  id: deploymentNameSchema,
 });
 const deploymentSchema = z.looseObject({
   annotations: z.record(z.string(), z.unknown()).optional(),
@@ -298,6 +306,7 @@ export const bootstrapOptionsSchema = z.strictObject({
   databaseId: databaseIdSchema.optional(),
   databaseName: deploymentNameSchema,
   origin: z.instanceof(URL).refine((origin) => origin.protocol === "https:"),
+  requireExisting: z.boolean().optional(),
   requireFresh: z.boolean().optional(),
   setupGitHub: z.boolean().optional(),
   timeoutMs: z.number().int().min(100).max(30_000),
@@ -371,6 +380,11 @@ export interface ExistingInstallationCoordinates {
   workerName: string;
 }
 
+export interface InstallationInfrastructureInventory {
+  appliedMigrations: readonly string[];
+  secretNames: readonly string[];
+}
+
 export interface BootstrapProgress {
   message: string;
   stage: BootstrapProgressStage;
@@ -421,8 +435,10 @@ export interface BootstrapDependencies extends DoctorDependencies {
   recordCreatedResource?: (resource: BootstrapCreatedResource) => Promise<void>;
   reportProgress?: (progress: BootstrapProgress) => void;
   recoverExistingInstallation?: {
+    expectedAiGatewayId?: string | null;
     expectedDatabaseId?: string;
     expectedDatabaseName?: string;
+    expectedDeploymentFingerprints?: readonly string[];
     persist: (installation: ExistingInstallationCoordinates) => Promise<void>;
   };
   runWrangler: RunWrangler;
@@ -684,6 +700,53 @@ export async function readPackagedDeploymentFingerprint(
   return (await loadDeploymentAssets(dependencies)).digest;
 }
 
+export async function readPackagedMigrationInventory(
+  dependencies: Pick<BootstrapDependencies, "deploymentAssetsDirectory">,
+): Promise<readonly string[]> {
+  return [...(await loadDeploymentAssets(dependencies)).migrations];
+}
+
+export async function inspectInstallationInfrastructure(
+  coordinates: Pick<ExistingInstallationCoordinates, "accountId" | "databaseId" | "workerName">,
+  dependencies: BootstrapDependencies,
+): Promise<InstallationInfrastructureInventory> {
+  const parsed = z
+    .strictObject({
+      accountId: accountIdSchema,
+      databaseId: databaseIdSchema,
+      workerName: deploymentNameSchema,
+    })
+    .parse(coordinates);
+  const cwd = await createPrivateWorkspace();
+
+  try {
+    const neutralConfigPath = await writeAccountConfig(cwd);
+    const account = await authenticate(
+      { accountId: parsed.accountId },
+      cwd,
+      neutralConfigPath,
+      dependencies,
+    );
+    const accountConfigPath = await writeAccountConfig(cwd, account.id);
+    const context = { accountId: account.id, accountConfigPath, cwd, dependencies };
+    const worker = await readWorkerInventory(parsed.workerName, context);
+
+    if (!worker.exists) {
+      throw commandFailed("worker", "Worker inventory could not be read.");
+    }
+
+    const appliedMigrations = await readAppliedMigrations(parsed.databaseId, context);
+    const secretNames = await readWorkerSecretNames(parsed.workerName, context);
+
+    return {
+      appliedMigrations: [...appliedMigrations],
+      secretNames: [...secretNames].toSorted(),
+    };
+  } finally {
+    await rm(cwd, { force: true, recursive: true });
+  }
+}
+
 async function authenticate(
   options: Pick<BootstrapOptions, "accountId">,
   cwd: string,
@@ -934,7 +997,22 @@ async function applyAiGatewayPlan(
 ): Promise<void> {
   const collectionUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-gateway/gateways`;
   const gatewayUrl = `${collectionUrl}/${plan.id}`;
-  let recoveredVerification: Awaited<ReturnType<typeof cloudflareApiRequest>> | undefined;
+  let configuredVerification: Awaited<ReturnType<typeof cloudflareApiRequest>> | undefined;
+  const recoverGateway = async (requireConfigured: boolean) => {
+    const verification = await cloudflareApiRequest(dependencies, credentials, gatewayUrl, {
+      method: "GET",
+    });
+    const identity = aiGatewayIdentitySchema.safeParse(verification.result);
+
+    if (!verification.success || !identity.success || identity.data.id !== plan.id) {
+      return undefined;
+    }
+
+    return !requireConfigured ||
+      parseConfiguredAiGateway(verification.result, plan.id, plan.dailySpendUsd) !== undefined
+      ? verification
+      : undefined;
+  };
 
   if (plan.needsMutation) {
     let response: Awaited<ReturnType<typeof cloudflareApiRequest>> | undefined;
@@ -964,38 +1042,41 @@ async function applyAiGatewayPlan(
       );
     } catch (error) {
       if (plan.exists) {
-        throw error;
-      }
+        configuredVerification = await recoverGateway(true);
 
-      recoveredVerification = await cloudflareApiRequest(dependencies, credentials, gatewayUrl, {
-        method: "GET",
-      });
+        if (configuredVerification === undefined) {
+          throw error;
+        }
+      } else {
+        const recoveredCreation = await recoverGateway(false);
 
-      if (
-        !recoveredVerification.success ||
-        parseConfiguredAiGateway(recoveredVerification.result, plan.id, plan.dailySpendUsd) ===
+        if (recoveredCreation === undefined) {
+          throw error;
+        }
+
+        configuredVerification =
+          parseConfiguredAiGateway(recoveredCreation.result, plan.id, plan.dailySpendUsd) ===
           undefined
-      ) {
-        throw error;
+            ? undefined
+            : recoveredCreation;
       }
     }
 
     if (response !== undefined && !response.success) {
-      if (plan.exists || response.status < 500) {
+      if (response.status < 500) {
         throw commandFailed("gateway", "Cloudflare AI Gateway could not be configured.");
       }
 
-      recoveredVerification = await cloudflareApiRequest(dependencies, credentials, gatewayUrl, {
-        method: "GET",
-      });
+      const recovered = await recoverGateway(plan.exists);
 
-      if (
-        !recoveredVerification.success ||
-        parseConfiguredAiGateway(recoveredVerification.result, plan.id, plan.dailySpendUsd) ===
-          undefined
-      ) {
+      if (recovered === undefined) {
         throw commandFailed("gateway", "Cloudflare AI Gateway could not be configured.");
       }
+
+      configuredVerification =
+        parseConfiguredAiGateway(recovered.result, plan.id, plan.dailySpendUsd) === undefined
+          ? undefined
+          : recovered;
     }
 
     if (!plan.exists) {
@@ -1004,11 +1085,40 @@ async function applyAiGatewayPlan(
         id: plan.id,
         kind: "gateway",
       });
+
+      if (configuredVerification === undefined) {
+        let update: Awaited<ReturnType<typeof cloudflareApiRequest>> | undefined;
+
+        try {
+          update = await cloudflareApiRequest(dependencies, credentials, gatewayUrl, {
+            body: aiGatewayBody(plan),
+            method: "PUT",
+          });
+        } catch (error) {
+          configuredVerification = await recoverGateway(true);
+
+          if (configuredVerification === undefined) {
+            throw error;
+          }
+        }
+
+        if (update !== undefined && !update.success) {
+          if (update.status < 500) {
+            throw commandFailed("gateway", "Cloudflare AI Gateway could not be configured.");
+          }
+
+          configuredVerification = await recoverGateway(true);
+
+          if (configuredVerification === undefined) {
+            throw commandFailed("gateway", "Cloudflare AI Gateway could not be configured.");
+          }
+        }
+      }
     }
   }
 
   const verified =
-    recoveredVerification ??
+    configuredVerification ??
     (await cloudflareApiRequest(dependencies, credentials, gatewayUrl, {
       method: "GET",
     }));
@@ -1341,6 +1451,18 @@ function readSingleActiveVersionId(inventory: WorkerInventory): string | undefin
     : undefined;
 }
 
+async function requireUnchangedWorkerVersion(
+  workerName: string,
+  expectedVersionId: string,
+  context: CloudflareContext,
+): Promise<void> {
+  const inventory = await readWorkerInventory(workerName, context);
+
+  if (readSingleActiveVersionId(inventory) !== expectedVersionId) {
+    throw commandFailed("worker", "Existing Worker changed before the upgrade could be applied.");
+  }
+}
+
 async function recoverExistingInstallation(
   options: BootstrapOptions,
   inventory: WorkerInventory,
@@ -1402,6 +1524,9 @@ async function recoverExistingInstallation(
   }
 
   const databaseBinding = bindings.find((binding) => binding.name === "AUTH_DB");
+  const fingerprintBinding = bindings.find(
+    (binding) => binding.name === "CREWHELM_DEPLOYMENT_FINGERPRINT",
+  );
   const originBinding = bindings.find((binding) => binding.name === "PUBLIC_ORIGIN");
   const gatewayBinding = bindings.find((binding) => binding.name === "AI_GATEWAY_ID");
 
@@ -1427,6 +1552,31 @@ async function recoverExistingInstallation(
       !deploymentNameSchema.safeParse(gatewayBinding.text).success)
   ) {
     throw commandFailed("worker", "Existing Worker has an invalid AI_GATEWAY_ID binding.");
+  }
+
+  if (
+    recovery.expectedDeploymentFingerprints !== undefined &&
+    (fingerprintBinding?.type !== "plain_text" ||
+      fingerprintBinding.text === undefined ||
+      !deploymentFingerprintSchema.safeParse(fingerprintBinding.text).success ||
+      !recovery.expectedDeploymentFingerprints.includes(fingerprintBinding.text))
+  ) {
+    throw commandFailed(
+      "configuration",
+      "Existing Worker fingerprint does not match the supported upgrade state.",
+    );
+  }
+
+  if (
+    recovery.expectedAiGatewayId !== undefined &&
+    (recovery.expectedAiGatewayId === null
+      ? gatewayBinding !== undefined
+      : gatewayBinding?.text !== recovery.expectedAiGatewayId)
+  ) {
+    throw commandFailed(
+      "configuration",
+      "The requested AI Gateway conflicts with the existing Worker binding.",
+    );
   }
 
   if (
@@ -1993,9 +2143,15 @@ export async function bootstrapDeployment(
 
     reportProgress(dependencies, "worker", "Inspecting the existing Worker");
     const workerInventory = await readWorkerInventory(options.workerName, context);
+    const requiredWorkerVersionId =
+      options.requireExisting === true ? readSingleActiveVersionId(workerInventory) : undefined;
 
     if (options.requireFresh === true && workerInventory.exists) {
       throw commandFailed("worker", "Fresh installation requires an unused Worker name.");
+    }
+
+    if (options.requireExisting === true && requiredWorkerVersionId === undefined) {
+      throw commandFailed("worker", "Upgrade requires one existing active Worker version.");
     }
 
     const deploymentOptions = await recoverExistingInstallation(
@@ -2117,6 +2273,13 @@ export async function bootstrapDeployment(
       assets,
       context,
     );
+    if (requiredWorkerVersionId !== undefined) {
+      await requireUnchangedWorkerVersion(
+        deploymentOptions.workerName,
+        requiredWorkerVersionId,
+        context,
+      );
+    }
     reportProgress(dependencies, "migrations", "Applying D1 migrations");
     const migration = await runCloudflare(
       context,
@@ -2181,6 +2344,14 @@ export async function bootstrapDeployment(
 
     const deploymentUnchanged =
       secretsPath === undefined && currentDeploymentHasMessage(workerInventory, deploymentMessage);
+
+    if (requiredWorkerVersionId !== undefined) {
+      await requireUnchangedWorkerVersion(
+        deploymentOptions.workerName,
+        requiredWorkerVersionId,
+        context,
+      );
+    }
 
     reportProgress(
       dependencies,
@@ -2263,4 +2434,37 @@ export async function bootstrapDeployment(
   } finally {
     await removePrivateWorkspace(cwd);
   }
+}
+
+export function bootstrapUpgradeDeployment(
+  options: BootstrapOptions,
+  dependencies: BootstrapDependencies,
+  expectedDeploymentFingerprints: readonly string[],
+): Promise<BootstrapReport> {
+  const parsedOptions = bootstrapOptionsSchema.parse({
+    ...options,
+    requireExisting: true,
+  });
+  const fingerprints = z
+    .array(deploymentFingerprintSchema)
+    .min(1)
+    .max(2)
+    .parse(expectedDeploymentFingerprints);
+
+  if (parsedOptions.databaseId === undefined) {
+    throw commandFailed("configuration", "Upgrade requires an exact D1 database ID.");
+  }
+
+  return bootstrapDeployment(parsedOptions, {
+    ...dependencies,
+    readEnvironment: (name) =>
+      INSTALLATION_SECRET_ENVIRONMENTS.has(name) ? undefined : dependencies.readEnvironment(name),
+    recoverExistingInstallation: {
+      expectedAiGatewayId: parsedOptions.aiGatewayId ?? null,
+      expectedDatabaseId: parsedOptions.databaseId,
+      expectedDatabaseName: parsedOptions.databaseName,
+      expectedDeploymentFingerprints: fingerprints,
+      persist: () => Promise.resolve(),
+    },
+  });
 }

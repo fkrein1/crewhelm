@@ -6,6 +6,7 @@ import { bootstrapOptionsSchema } from "./bootstrap.js";
 import { DoctorInputError, parseDeploymentOrigin } from "./doctor.js";
 import { installationSmokeOptionsSchema } from "./installation-smoke.js";
 import { createCliTextStyle, type CliTextStyle } from "./presentation.js";
+import { upgradeSmokeOptionsSchema } from "./upgrade-smoke.js";
 
 function formatRootHelp(style: CliTextStyle): string {
   return `
@@ -15,6 +16,7 @@ ${style.accentStrong("Examples:")}
   ${style.accent("$ crewhelm smoke agent --help")}
   ${style.accent("$ crewhelm smoke integration --help")}
   ${style.accent("$ crewhelm smoke installation --help")}
+  ${style.accent("$ crewhelm smoke upgrade --help")}
 
 ${style.muted("Run crewhelm <command> --help for command-specific options and safety notes.")}
 `;
@@ -88,6 +90,16 @@ ${style.warningStrong("Fresh-install rehearsal:")}
 `;
 }
 
+function formatUpgradeSmokeHelp(style: CliTextStyle): string {
+  return `
+${style.warningStrong("Supported-upgrade rehearsal:")}
+  Upgrades one existing pinned fixture to this CLI's packaged Worker.
+  Verifies owner access, Agents, connections, schedules, fleet policy, secrets, and migrations.
+  Repeats the upgrade to prove an idempotent no-op and retains exact recovery state on failure.
+  Requires ${style.warning("--confirm-production")}, the baseline fingerprint, and existing metadata.
+`;
+}
+
 const cliCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("help"),
@@ -155,6 +167,16 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
     timeoutMs: installationSmokeOptionsSchema.shape.timeoutMs,
     workerName: installationSmokeOptionsSchema.shape.workerName,
   }),
+  z.strictObject({
+    baselineFingerprint: upgradeSmokeOptionsSchema.shape.baselineFingerprint,
+    confirmProduction: z.literal(true),
+    installationPath: upgradeSmokeOptionsSchema.shape.installationPath,
+    json: z.boolean(),
+    kind: z.literal("upgrade-smoke"),
+    origin: upgradeSmokeOptionsSchema.shape.origin,
+    receiptPath: upgradeSmokeOptionsSchema.shape.receiptPath,
+    timeoutMs: upgradeSmokeOptionsSchema.shape.timeoutMs,
+  }),
 ]);
 
 export type CliCommand = z.infer<typeof cliCommandSchema>;
@@ -207,13 +229,29 @@ interface InstallationSmokeCommandOptions {
   workerName: string;
 }
 
+interface UpgradeSmokeCommandOptions {
+  confirmProduction: boolean;
+  endpoint: string;
+  fromFingerprint: string;
+  installation: string;
+  json?: boolean;
+  receipt: string;
+  timeoutMs: string;
+}
+
 export class CliUsageError extends Error {
   override readonly name = "CliUsageError";
 }
 
 function parseOrigin(
   endpoint: string | undefined,
-  kind: "up" | "doctor" | "agent-smoke" | "installation-smoke" | "standing-integration-smoke",
+  kind:
+    | "up"
+    | "doctor"
+    | "agent-smoke"
+    | "installation-smoke"
+    | "standing-integration-smoke"
+    | "upgrade-smoke",
 ) {
   if (endpoint === undefined) {
     return undefined;
@@ -235,7 +273,8 @@ function parseOrigin(
     (kind === "up" ||
       kind === "agent-smoke" ||
       kind === "installation-smoke" ||
-      kind === "standing-integration-smoke") &&
+      kind === "standing-integration-smoke" ||
+      kind === "upgrade-smoke") &&
     origin.protocol !== "https:"
   ) {
     throw new CliUsageError(
@@ -246,7 +285,9 @@ function parseOrigin(
             ? "smoke installation"
             : kind === "standing-integration-smoke"
               ? "smoke integration"
-              : kind
+              : kind === "upgrade-smoke"
+                ? "smoke upgrade"
+                : kind
       } requires an HTTPS endpoint.`,
     );
   }
@@ -374,6 +415,33 @@ function createCliProgram(
           kind: "agent-smoke",
           origin: parseOrigin(options.endpoint, "agent-smoke"),
           runTimeoutMs: Number(options.runTimeoutMs),
+          timeoutMs: Number(options.timeoutMs),
+        }),
+      );
+    });
+
+  smoke
+    .command("upgrade")
+    .summary("rehearse one supported installation upgrade")
+    .description("Upgrade and verify one existing pinned Crewhelm installation fixture.")
+    .requiredOption("--endpoint <origin>", "HTTPS origin for the fixture Worker")
+    .requiredOption("--from-fingerprint <sha256>", "exact pinned baseline build fingerprint")
+    .requiredOption("--confirm-production", "confirm the mutating production rehearsal")
+    .option("--installation <path>", "installation metadata path", "crewhelm.installation.json")
+    .option("--receipt <path>", "recovery receipt path", "crewhelm.upgrade-receipt.json")
+    .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")
+    .option("--json", "write one machine-readable JSON result")
+    .addHelpText("after", formatUpgradeSmokeHelp(style))
+    .action((options: UpgradeSmokeCommandOptions) => {
+      onCommand?.(
+        validatedCommand({
+          baselineFingerprint: options.fromFingerprint,
+          confirmProduction: options.confirmProduction,
+          installationPath: options.installation,
+          json: options.json === true,
+          kind: "upgrade-smoke",
+          origin: parseOrigin(options.endpoint, "upgrade-smoke"),
+          receiptPath: options.receipt,
           timeoutMs: Number(options.timeoutMs),
         }),
       );
@@ -509,10 +577,11 @@ export function parseCli(
   const agentSmoke = arguments_[0] === "smoke" && arguments_[1] === "agent";
   const integrationSmoke = arguments_[0] === "smoke" && arguments_[1] === "integration";
   const installationSmoke = arguments_[0] === "smoke" && arguments_[1] === "installation";
+  const upgradeSmoke = arguments_[0] === "smoke" && arguments_[1] === "upgrade";
 
   if (
     !helpRequested &&
-    (agentSmoke || integrationSmoke || installationSmoke) &&
+    (agentSmoke || integrationSmoke || installationSmoke || upgradeSmoke) &&
     !hasFlag(arguments_, "--confirm-production")
   ) {
     throw new CliUsageError(
@@ -521,14 +590,20 @@ export function parseCli(
           ? "smoke integration"
           : installationSmoke
             ? "smoke installation"
-            : "smoke agent"
+            : upgradeSmoke
+              ? "smoke upgrade"
+              : "smoke agent"
       } requires --confirm-production.`,
     );
   }
 
   if (
     !helpRequested &&
-    (arguments_[0] === "doctor" || agentSmoke || integrationSmoke || installationSmoke) &&
+    (arguments_[0] === "doctor" ||
+      agentSmoke ||
+      integrationSmoke ||
+      installationSmoke ||
+      upgradeSmoke) &&
     !hasFlag(arguments_, "--endpoint")
   ) {
     throw new CliUsageError(
@@ -539,7 +614,9 @@ export function parseCli(
             ? "standing-integration-smoke"
             : installationSmoke
               ? "installation-smoke"
-              : "doctor"
+              : upgradeSmoke
+                ? "upgrade-smoke"
+                : "doctor"
       } requires --endpoint.`,
     );
   }

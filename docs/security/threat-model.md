@@ -156,6 +156,12 @@ are not assumed successful or automatically repeated.
 Fresh-install rehearsal cleanup is limited to exact resources recorded after creation in a bounded
 local receipt. Occupied names are never adopted, and unverified deletion remains retryable.
 
+Supported-upgrade rehearsal accepts only an existing pinned fixture and the current packaged
+Worker. Before mutation, a private bounded receipt records exact coordinates and SHA-256 evidence
+for owner state, migrations, and secret names—not values. Retries accept only the recorded
+baseline or target build, preserve ambiguous fixtures, and require a second deployment to be a
+no-op.
+
 The public health response exposes only a deployment-protocol version and SHA-256 fingerprint of
 the packaged Worker assets; it does not expose credentials, owner identity, configuration, or
 runtime state. The CLI compares that identity before production rehearsals and verifies it after
