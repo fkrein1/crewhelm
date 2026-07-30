@@ -14,6 +14,7 @@ crewhelm.installation.json
 crewhelm.*.installation.json
 crewhelm.smoke-receipt.json
 crewhelm.upgrade-receipt.json
+.crewhelm-bugbash.md
 
 *.log
 pnpm-debug.log*
