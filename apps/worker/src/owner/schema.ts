@@ -358,6 +358,7 @@ export const runAdmissions = sqliteTable(
     agentRevision: integer("agent_revision").notNull(),
     prompt: text("prompt"),
     promptDigest: text("prompt_digest").notNull(),
+    scheduleRevision: integer("schedule_revision"),
     trigger: text("trigger", { enum: ["manual", "schedule"] })
       .notNull()
       .default("manual"),
@@ -394,6 +395,10 @@ export const runAdmissions = sqliteTable(
       sql`${table.prompt} IS NULL OR length(${table.prompt}) BETWEEN 1 AND 16384`,
     ),
     check("run_admissions_prompt_digest_length", sql`length(${table.promptDigest}) = 64`),
+    check(
+      "run_admissions_schedule_revision_positive",
+      sql`${table.scheduleRevision} IS NULL OR ${table.scheduleRevision} > 0`,
+    ),
     check("run_admissions_trigger", sql`${table.trigger} IN ('manual', 'schedule')`),
     check("run_admissions_nonce_digest_length", sql`length(${table.nonceDigest}) = 43`),
     check("run_admissions_status", sql`${table.status} IN ('issued', 'redeemed', 'expired')`),
@@ -789,7 +794,6 @@ export const agentInboxItems = sqliteTable(
           AND ${table.runId} IS NOT NULL
           AND ${table.trigger} IS NOT NULL
           AND ${table.runStatus} IS NOT NULL
-          AND ${table.scheduleRevision} IS NULL
           AND ${table.reason} IS NULL
           AND ${table.scheduledAt} IS NULL
           AND ${table.retryAt} IS NULL

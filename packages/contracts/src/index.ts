@@ -13,4 +13,5 @@ export * from "./health.js";
 export * from "./integrations.js";
 export * from "./recovery.js";
 export * from "./run-admission.js";
+export * from "./schedule-revision.js";
 export * from "./tool-execution.js";

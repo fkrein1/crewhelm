@@ -434,7 +434,7 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toMatchObject({
       ok: true,
       status: {
-        schemaVersion: 15,
+        schemaVersion: 17,
         status: "ready",
         usage: {
           recovery: { unresolvedEffects: 0 },

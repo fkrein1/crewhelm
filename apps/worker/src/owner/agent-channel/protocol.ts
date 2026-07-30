@@ -85,6 +85,7 @@ export class RunReceiverCapabilities {
       ownerKey: this.#objectName,
       promptDigest: admission.promptDigest,
       runId: admission.runId,
+      scheduleRevision: admission.scheduleRevision,
       target: "none",
       ...(["approve_tool", "reject_tool"].includes(action) ? { executionId } : {}),
     });

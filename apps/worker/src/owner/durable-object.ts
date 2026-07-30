@@ -879,6 +879,7 @@ export class OwnerControlPlane extends DurableObject {
         prompt: schedule.prompt,
       },
       "schedule",
+      schedule.scheduleRevision,
     );
 
     if (!started.ok) {

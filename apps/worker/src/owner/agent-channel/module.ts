@@ -686,6 +686,7 @@ export class AgentChannel {
     authority: OwnerAuthority,
     input: unknown,
     trigger: "manual" | "schedule" = "manual",
+    scheduleRevision: number | null = null,
   ): Promise<StartRunResult> {
     const request = startRunInputSchema.safeParse(input);
 
@@ -700,6 +701,7 @@ export class AgentChannel {
       prompt: request.data.prompt,
       promptCharacters: request.data.prompt.length,
       promptDigest: await digestRunPrompt(request.data.prompt),
+      scheduleRevision,
       trigger,
     });
 
@@ -1088,6 +1090,7 @@ export class AgentChannel {
         ownerKey: authority.ownerKey,
         promptDigest: admission.promptDigest,
         runId: admission.runId,
+        scheduleRevision: admission.scheduleRevision,
       },
     });
   }
