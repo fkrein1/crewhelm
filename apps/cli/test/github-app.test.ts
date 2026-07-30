@@ -80,6 +80,8 @@ describe("GitHub App setup", () => {
           );
           expect(body).toContain('href="/assets/crewhelm.css"');
           expect(body).not.toContain("<body style=");
+          expect(body).toContain('class="ch-brand" role="img" aria-label="Crewhelm"');
+          expect(body).toContain('data-tone="accent"');
           expect(stylesheet.headers.get("cache-control")).toBe("private, max-age=600");
           expect(stylesheet.headers.get("content-type")).toBe("text/css; charset=utf-8");
           expect(await stylesheet.text()).toContain("place-items: center");
@@ -91,14 +93,26 @@ describe("GitHub App setup", () => {
           manifest = manifestSchema.parse(JSON.parse(decodeAttribute(manifestAttribute)));
           const state = new URL(decodeAttribute(action)).searchParams.get("state");
           const redirectUrl = new URL(manifest.redirect_url);
+          const invalidCallbackUrl = new URL(redirectUrl);
+
+          invalidCallbackUrl.searchParams.set("code", "manifest-code");
+          invalidCallbackUrl.searchParams.set("state", "wrong-state");
+          const invalidCallback = await globalThis.fetch(invalidCallbackUrl);
+          const invalidCallbackBody = await invalidCallback.text();
+
+          expect(invalidCallback.status).toBe(400);
+          expect(invalidCallbackBody).toContain("GitHub App setup could not be verified");
+          expect(invalidCallbackBody).toContain('data-tone="negative"');
 
           redirectUrl.searchParams.set("code", "manifest-code");
           redirectUrl.searchParams.set("state", state ?? "");
           const callback = await globalThis.fetch(redirectUrl);
+          const callbackBody = await callback.text();
 
           expect(callback.status).toBe(200);
           expect(callback.headers.get("content-type")).toBe("text/html; charset=utf-8");
-          expect(await callback.text()).toContain("GitHub App connected");
+          expect(callbackBody).toContain("GitHub App connected");
+          expect(callbackBody).toContain('data-tone="positive"');
         },
         writeOutput: (text) => output.push(text),
       },

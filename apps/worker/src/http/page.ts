@@ -1,165 +1,18 @@
-export const WORKER_PAGE_STYLES = `
-:root {
-  color-scheme: light;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #18212f;
-  background: #f4f6f8;
-}
+import {
+  CREWHELM_COMPACT_BRAND_HTML,
+  CREWHELM_WEB_STYLES,
+  type CrewhelmPageTone,
+} from "@crewhelm/design/web";
 
-* {
-  box-sizing: border-box;
-}
-
-[hidden] {
-  display: none !important;
-}
-
-body {
-  min-height: 100vh;
-  margin: 0;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background:
-    radial-gradient(circle at top, #ffffff 0, #f4f6f8 52%),
-    #f4f6f8;
-}
-
-main {
-  width: min(100%, 560px);
-  padding: 36px;
-  border: 1px solid #dfe4ea;
-  border-radius: 16px;
-  background: #ffffff;
-  box-shadow: 0 18px 50px rgb(25 35 50 / 9%);
-}
-
-.eyebrow {
-  margin: 0 0 12px;
-  color: #526071;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-h1 {
-  margin: 0 0 12px;
-  color: #111827;
-  font-size: clamp(28px, 5vw, 36px);
-  line-height: 1.12;
-  letter-spacing: -0.025em;
-}
-
-p,
-li {
-  color: #526071;
-  line-height: 1.6;
-}
-
-ul {
-  margin: 20px 0;
-  padding: 18px 18px 18px 38px;
-  border-radius: 10px;
-  background: #f7f8fa;
-}
-
-li + li {
-  margin-top: 8px;
-}
-
-.meta {
-  padding-top: 16px;
-  border-top: 1px solid #e6e9ee;
-  font-size: 14px;
-}
-
-code {
-  overflow-wrap: anywhere;
-  color: #263244;
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 26px;
-}
-
-.actions form {
-  margin: 0;
-}
-
-button,
-.button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 44px;
-  padding: 0 18px;
-  border: 1px solid transparent;
-  border-radius: 9px;
-  text-decoration: none;
-  font: inherit;
-  font-weight: 650;
-  cursor: pointer;
-}
-
-button:hover,
-.button:hover {
-  transform: translateY(-1px);
-}
-
-button:focus-visible,
-.button:focus-visible {
-  outline: 3px solid rgb(37 99 235 / 28%);
-  outline-offset: 2px;
-}
-
-button:disabled,
-.button[aria-disabled="true"] {
-  cursor: wait;
-  opacity: 0.62;
-  transform: none;
-  box-shadow: none;
-}
-
-.primary {
-  color: #ffffff;
-  background: #18212f;
-  box-shadow: 0 6px 16px rgb(24 33 47 / 18%);
-}
-
-.secondary {
-  color: #344054;
-  border-color: #d0d5dd;
-  background: #ffffff;
-}
-
-@media (max-width: 520px) {
-  body {
-    padding: 14px;
-  }
-
-  main {
-    padding: 26px 22px;
-    border-radius: 13px;
-  }
-
-  .actions button,
-  .actions .button,
-  .actions form {
-    width: 100%;
-  }
-}
-`.trim();
+export const WORKER_PAGE_STYLES = CREWHELM_WEB_STYLES;
 
 interface WorkerPage {
   body: string;
+  context?: string;
   heading: string;
   scriptPath?: string;
   title: string;
+  tone?: CrewhelmPageTone;
 }
 
 interface WorkerPageResponseOptions {
@@ -184,18 +37,24 @@ export function renderWorkerPage(page: WorkerPage): string {
     page.scriptPath === undefined
       ? ""
       : `\n    <script src="${escapePageHtml(page.scriptPath)}" defer></script>`;
+  const context = escapePageHtml(page.context ?? "secure browser handoff");
+  const tone = page.tone ?? "accent";
 
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
     <title>${escapePageHtml(page.title)}</title>
     <link rel="stylesheet" href="/oauth/styles.css">${script}
   </head>
-  <body>
-    <main>
-      <p class="eyebrow">Crewhelm</p>
+  <body class="ch-page">
+    <main class="ch-panel" data-tone="${tone}">
+      <div class="ch-panel__bar">
+        <span class="ch-panel__context">${context}</span>
+        ${CREWHELM_COMPACT_BRAND_HTML}
+      </div>
       <h1>${escapePageHtml(page.heading)}</h1>
 ${page.body}
     </main>

@@ -136,6 +136,7 @@ export async function createGitHubApp(
             heading: "GitHub App setup could not be verified",
             paragraphs: ["Return to Crewhelm and start the setup again."],
             title: "GitHub App setup not verified",
+            tone: "negative",
           }),
         );
         return;
@@ -147,6 +148,7 @@ export async function createGitHubApp(
           heading: "GitHub App connected",
           paragraphs: ["Return to Crewhelm to finish the installation."],
           title: "GitHub App connected",
+          tone: "positive",
         }),
       );
       resolveCallback?.(returnedCode);

@@ -235,6 +235,8 @@ describe("Crewhelm Worker", () => {
     expect(response.headers.get("x-frame-options")).toBe("DENY");
     expect(body).toContain("Authorization returned to Crewhelm");
     expect(body).toContain('href="/oauth/styles.css"');
+    expect(body).toContain('data-tone="positive"');
+    expect(body).toContain('class="ch-brand" role="img" aria-label="Crewhelm"');
     expect(body).not.toMatch(/active|connected/i);
     expect(body).not.toContain(fixture.providerConnectionId);
     expect(body).not.toContain(fixture.reservation.authorizationToken);
@@ -276,6 +278,7 @@ describe("Crewhelm Worker", () => {
 
     expect(failedResponse.status).toBe(200);
     expect(failedBody).toContain("Authorization was not completed");
+    expect(failedBody).toContain('data-tone="warning"');
     expect(failedBody).not.toContain(fixture.reservation.authorizationToken);
     await expect(
       fixture.controlPlane.listConnections(fixture.authority, {}),
@@ -290,9 +293,11 @@ describe("Crewhelm Worker", () => {
     malformedUrl.searchParams.append("status", "success");
     malformedUrl.searchParams.append("connected_account_id", fixture.providerConnectionId);
     const malformedResponse = await worker.fetch(new Request(malformedUrl), env);
+    const malformedBody = await malformedResponse.text();
 
     expect(malformedResponse.status).toBe(400);
-    expect(await malformedResponse.text()).not.toContain(fixture.providerConnectionId);
+    expect(malformedBody).toContain('data-tone="negative"');
+    expect(malformedBody).not.toContain(fixture.providerConnectionId);
 
     const unknownParameterUrl = new URL(fixture.callbackUrl);
 

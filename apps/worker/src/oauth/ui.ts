@@ -252,10 +252,10 @@ async function navigationJsonResponse(response: Response, request: Request): Pro
 
 function loginPage(query: string): string {
   return renderWorkerPage({
-    body: `      <p>Continue with the GitHub account configured as this Crewhelm deployment's owner.</p>
+    body: `      <p class="ch-copy">Continue with the GitHub account configured as this Crewhelm deployment's owner.</p>
       <input type="hidden" name="oauth_query" value="${escapePageHtml(query)}">
-      <div class="actions">
-        <a class="button primary" href="/oauth/login/continue?${escapePageHtml(query)}" data-navigation-start data-pending-label="Opening GitHub…">Continue with GitHub</a>
+      <div class="ch-actions">
+        <a class="ch-button ch-button--primary" href="/oauth/login/continue?${escapePageHtml(query)}" data-navigation-start data-pending-label="Opening GitHub…">Continue with GitHub</a>
       </div>`,
     heading: "Sign in to Crewhelm",
     scriptPath: "/oauth/actions.js",
@@ -280,44 +280,45 @@ function consentPage(
       : VIEW_ACCESS_SCOPE;
   const permissions = [
     !usesAccessLevels
-      ? "<li><strong>Existing client access:</strong> keep the Crewhelm permissions granted to this client before the access-level upgrade.</li>"
+      ? '<li class="ch-permission"><strong>Existing client access:</strong> keep the Crewhelm permissions granted to this client before the access-level upgrade.</li>'
       : "",
     usesAccessLevels && requestedAccessLevel === VIEW_ACCESS_SCOPE
-      ? "<li><strong>View only:</strong> inspect Agent configuration, run history, connections, and integration metadata.</li>"
+      ? '<li class="ch-permission"><strong>View only:</strong> inspect Agent configuration, run history, connections, and integration metadata.</li>'
       : "",
     usesAccessLevels && requestedAccessLevel === USE_ACCESS_SCOPE
-      ? "<li><strong>Use agents:</strong> start and cancel runs, reconcile interrupted work, and decide tool approvals.</li>"
+      ? '<li class="ch-permission"><strong>Use agents:</strong> start and cancel runs, reconcile interrupted work, and decide tool approvals.</li>'
       : "",
     usesAccessLevels && requestedAccessLevel === FULL_ACCESS_SCOPE
-      ? "<li><strong>Full control:</strong> create and reconfigure Agents, integrations, schedules, standing authority, and fleet policy.</li>"
+      ? '<li class="ch-permission"><strong>Full control:</strong> create and reconfigure Agents, integrations, schedules, standing authority, and fleet policy.</li>'
       : "",
     requestedScopes.includes(OFFLINE_ACCESS_SCOPE)
-      ? "<li>Keep this MCP client signed in using a rotating, revocable refresh token.</li>"
+      ? '<li class="ch-permission">Keep this MCP client signed in using a rotating, revocable refresh token.</li>'
       : "",
   ].join("");
 
   return renderWorkerPage({
-    body: `      <p><strong>${escapePageHtml(client.name)}</strong> is requesting these permissions:</p>
-      <ul>${permissions}</ul>
-      <div class="meta">
+    body: `      <p class="ch-copy"><strong>${escapePageHtml(client.name)}</strong> is requesting these permissions:</p>
+      <ul class="ch-permissions">${permissions}</ul>
+      <div class="ch-meta">
         <p>Client: <code>${escapePageHtml(client.id)}</code></p>
         <p>After authorization, Crewhelm will return you to <code>${escapePageHtml(redirectOrigin)}</code>.</p>
       </div>
-      <div class="actions">
+      <div class="ch-actions">
         <form method="post" action="/oauth/consent" data-consent-form>
           <input type="hidden" name="oauth_query" value="${escapePageHtml(query)}">
           <input type="hidden" name="decision" value="approve">
-          <button class="primary" type="submit" data-pending-label="Authorizing…">Authorize</button>
+          <button class="ch-button ch-button--primary" type="submit" data-pending-label="Authorizing…">Authorize</button>
         </form>
         <form method="post" action="/oauth/consent" data-consent-form>
           <input type="hidden" name="oauth_query" value="${escapePageHtml(query)}">
           <input type="hidden" name="decision" value="deny">
-          <button class="secondary" type="submit" data-pending-label="Denying…">Deny</button>
+          <button class="ch-button ch-button--quiet" type="submit" data-pending-label="Denying…">Deny</button>
         </form>
       </div>`,
     heading: "Authorize Crewhelm",
     scriptPath: "/oauth/actions.js",
     title: "Authorize Crewhelm",
+    tone: "warning",
   });
 }
 

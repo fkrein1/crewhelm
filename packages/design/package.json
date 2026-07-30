@@ -1,0 +1,11 @@
+{
+  "name": "@crewhelm/design",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./terminal": "./src/terminal.ts",
+    "./web": "./src/web.ts"
+  }
+}
