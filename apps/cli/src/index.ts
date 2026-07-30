@@ -6,14 +6,19 @@ import { runCli } from "./cli.js";
 import { requestCloudflareGatewayAuthorization } from "./cloudflare-gateway-authorization.js";
 import { createGitHubApp } from "./github-app.js";
 import { openInDefaultBrowser, promptSecret, promptText } from "./interactive.js";
+import { createCliTextStyle } from "./presentation.js";
 import { createWranglerRunner } from "./wrangler.js";
 
+const cliArguments = process.argv.slice(2);
 const interactive = process.stdin.isTTY && process.stdout.isTTY;
+const color =
+  interactive && process.env.NO_COLOR === undefined && !cliArguments.includes("--no-color");
 const dependencies = {
-  color: interactive && process.env.NO_COLOR === undefined,
+  color,
   deploymentAssetsDirectory: fileURLToPath(new URL("./deployment", import.meta.url)),
   fetch: globalThis.fetch,
   interactive,
+  liveProgress: interactive && process.stderr.isTTY,
   openUrl: openInDefaultBrowser,
   ...(interactive ? { promptSecret, promptText } : {}),
   readEnvironment: (name: string) => process.env[name],
@@ -22,7 +27,7 @@ const dependencies = {
   writeOutput: (text: string) => process.stdout.write(text),
 };
 
-process.exitCode = await runCli(process.argv.slice(2), {
+process.exitCode = await runCli(cliArguments, {
   ...dependencies,
   ...(interactive
     ? {
@@ -35,12 +40,14 @@ process.exitCode = await runCli(process.argv.slice(2), {
         requestCloudflareGatewayAuthorization: (request: {
           accountId: string;
           canSkip: boolean;
+          dailySpendUsd: number;
           workerName: string;
         }) =>
           requestCloudflareGatewayAuthorization(request, {
             openUrl: openInDefaultBrowser,
             promptSecret,
             promptText,
+            style: createCliTextStyle(color),
             writeOutput: dependencies.writeOutput,
           }),
       }

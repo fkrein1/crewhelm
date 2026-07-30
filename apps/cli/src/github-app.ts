@@ -202,7 +202,7 @@ export async function createGitHubApp(
 
   expectedHost = `127.0.0.1:${address.port}`;
   const setupUrl = new URL(`http://${expectedHost}${setupPath}`);
-  dependencies.writeOutput(`Open this link to create the private GitHub App:\n${setupUrl.href}\n`);
+  dependencies.writeOutput(`Browser did not open? ${setupUrl.href}\n`);
   await dependencies.openUrl(setupUrl);
 
   let authorizationCode: string;

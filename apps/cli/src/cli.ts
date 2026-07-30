@@ -12,6 +12,7 @@ import {
   type BootstrapDependencies,
   type BootstrapFailure,
   type BootstrapOptions,
+  type BootstrapProgress,
   type BootstrapReport,
   type ExistingInstallationCoordinates,
 } from "./bootstrap.js";
@@ -47,11 +48,23 @@ export interface CliDependencies extends BootstrapDependencies {
   color?: boolean;
   deploymentFingerprint?: string;
   interactive?: boolean;
+  liveProgress?: boolean;
   openUrl?: (url: URL) => Promise<void>;
   promptText?: (message: string) => Promise<string>;
   writeError: (text: string) => void;
   writeOutput: (text: string) => void;
 }
+
+const BOOTSTRAP_ACTIVITY_LABELS = {
+  assets: "Preparation",
+  authentication: "Cloudflare",
+  configuration: "Configuration",
+  database: "Storage",
+  deployment: "Deployment",
+  gateway: "AI spending",
+  migrations: "Storage",
+  worker: "Worker",
+} as const satisfies Record<BootstrapProgress["stage"], string>;
 
 function formatDoctorReport(report: DoctorReport, presentation: CliPresentation): string {
   const checks = report.checks
@@ -174,32 +187,74 @@ function formatInstallationSmokeReport(
 }
 
 function formatBootstrapReport(report: BootstrapReport, presentation: CliPresentation): string {
-  const databaseVerb = report.database.action === "created" ? "Created" : "Reused";
-  const deploymentVerb =
+  const databaseState = report.database.action === "created" ? "Created" : "Reused";
+  const deploymentState =
     report.deployment.action === "created"
       ? "Created"
       : report.deployment.action === "updated"
         ? "Updated"
-        : "Verified";
+        : "Current";
 
   const gateway = report.aiGateway.enabled
-    ? `AI Gateway ${report.aiGateway.id} is the fleet's hard dollar limit.\n`
-    : "AI Gateway skipped; this installation has no hard dollar limit.\n";
+    ? report.aiGateway.id
+    : presentation.warning("Not configured — no hard dollar limit");
 
   const outcome = report.ok
-    ? presentation.accent("Crewhelm is ready.")
-    : `${presentation.status("fail")} Deployment checks failed.`;
+    ? `${presentation.status("pass")} ${presentation.strong("Crewhelm is ready")}`
+    : `${presentation.status("fail")} ${presentation.strong("Deployment checks failed")}`;
 
-  return `${outcome}\nUsing Cloudflare account ${report.account.id}.\n${databaseVerb} D1 database ${report.database.name} (${report.database.id}).\n${gateway}${deploymentVerb} Worker ${report.deployment.workerName} at ${report.deployment.origin}.\n${formatDoctorReport(report.doctor, presentation)}`;
+  return [
+    outcome,
+    "",
+    presentation.heading("Installation"),
+    `  Worker    ${report.deployment.workerName} ${presentation.muted(`(${deploymentState})`)}`,
+    `  Endpoint  ${report.deployment.origin}`,
+    `  Database  ${report.database.name} ${presentation.muted(`(${databaseState})`)}`,
+    `  Gateway   ${gateway}`,
+    `  Account   ${presentation.muted(report.account.id)}`,
+    "",
+    presentation.heading("Verification"),
+    formatDoctorReport(report.doctor, presentation).trimEnd(),
+    "",
+  ].join("\n");
 }
 
 function formatBootstrapFailure(failure: BootstrapFailure, presentation: CliPresentation): string {
-  return `${presentation.status("fail")} up-${failure.stage}\n${failure.message}\n`;
+  return [
+    `${presentation.status("fail")} ${presentation.strong("Setup stopped")}`,
+    `${presentation.muted("Stage")}  ${BOOTSTRAP_ACTIVITY_LABELS[failure.stage]}`,
+    "",
+    failure.message,
+    "",
+  ].join("\n");
+}
+
+function formatBootstrapTarget(
+  options: BootstrapOptions,
+  recoverExisting: boolean,
+  presentation: CliPresentation,
+): string {
+  const gateway =
+    options.aiDailySpendUsd === undefined
+      ? presentation.warning("No hard dollar limit")
+      : `$${options.aiDailySpendUsd} daily limit`;
+
+  return [
+    presentation.heading("Installation target"),
+    "",
+    `  Action    ${recoverExisting ? "Create or recover" : "Update existing"}`,
+    `  Worker    ${options.workerName}`,
+    `  Endpoint  ${options.origin.origin}`,
+    `  Database  ${options.databaseName}`,
+    `  Gateway   ${gateway}`,
+    "",
+  ].join("\n");
 }
 
 async function resolveUpOptions(
   command: Extract<CliCommand, { kind: "up" }>,
   dependencies: CliDependencies,
+  presentation: CliPresentation,
 ): Promise<{ options: BootstrapOptions; recoverExisting: boolean }> {
   let previous: Installation | undefined;
 
@@ -246,26 +301,36 @@ async function resolveUpOptions(
   if (previous === undefined && aiDailySpendUsd === undefined && dependencies.promptText) {
     let answer: string;
 
+    dependencies.writeOutput(
+      [
+        presentation.heading("AI spending protection"),
+        "",
+        "Set a hard daily model-spending limit through Cloudflare AI Gateway.",
+        "",
+        `${presentation.accent("1.")} Configure a spending limit ${presentation.muted("(recommended)")}`,
+        `${presentation.warning("2.")} Continue without a spending limit`,
+        "",
+      ].join("\n"),
+    );
+
     try {
-      answer = await dependencies.promptText(
-        "Enable a Cloudflare AI Gateway hard spend limit? Recommended [Y/n]: ",
-      );
+      answer = await dependencies.promptText(presentation.strong("Choose [1]: "));
     } catch {
       throw new CliUsageError("AI Gateway choice did not complete.");
     }
 
-    if (answer === "" || /^(?:y|yes)$/iu.test(answer)) {
+    if (answer === "" || /^(?:1|y|yes)$/iu.test(answer)) {
       let dailyLimit: string;
 
       try {
-        dailyLimit = await dependencies.promptText("Daily hard spend limit in USD: ");
+        dailyLimit = await dependencies.promptText(presentation.strong("Daily limit in USD: "));
       } catch {
         throw new CliUsageError("AI Gateway spend limit input did not complete.");
       }
 
       aiDailySpendUsd = Number(dailyLimit);
-    } else if (!/^(?:n|no|s|skip)$/iu.test(answer)) {
-      throw new CliUsageError("Choose yes to configure AI Gateway or no to skip it.");
+    } else if (!/^(?:2|n|no|s|skip)$/iu.test(answer)) {
+      throw new CliUsageError("Choose 1 to configure AI Gateway or 2 to skip it.");
     }
   }
 
@@ -369,6 +434,7 @@ export async function runCli(
   const presentation = createCliPresentation({
     color,
     interactive: dependencies.interactive === true,
+    ...(dependencies.liveProgress === undefined ? {} : { liveProgress: dependencies.liveProgress }),
     writeError: dependencies.writeError,
     writeOutput: dependencies.writeOutput,
   });
@@ -407,12 +473,74 @@ export async function runCli(
       const reportProgress = executionDependencies.reportProgress;
       executionDependencies.reportProgress = (progress) => {
         reportProgress?.(progress);
-        presentation.progress(progress.message);
+        presentation.progress({
+          label: BOOTSTRAP_ACTIVITY_LABELS[progress.stage],
+          message: progress.message,
+        });
       };
+
+      const createGitHubApp = executionDependencies.createGitHubApp;
+
+      if (createGitHubApp) {
+        executionDependencies.createGitHubApp = async (options) => {
+          presentation.waiting(
+            "GitHub identity",
+            "Complete the private GitHub App setup in your browser. Crewhelm will continue automatically.",
+          );
+          const credentials = await createGitHubApp(options);
+          presentation.result("pass", "GitHub App connected");
+          return credentials;
+        };
+      }
+
+      const requestGatewayAuthorization =
+        executionDependencies.requestCloudflareGatewayAuthorization;
+
+      if (requestGatewayAuthorization) {
+        executionDependencies.requestCloudflareGatewayAuthorization = async (request) => {
+          presentation.stopProgress();
+          const authorization = await requestGatewayAuthorization(request);
+
+          if (authorization.action === "token") {
+            presentation.progress({
+              label: "AI spending",
+              message: "Verifying AI Gateway access",
+            });
+          }
+
+          return authorization;
+        };
+      }
+
+      const promptSecret = executionDependencies.promptSecret;
+
+      if (promptSecret) {
+        executionDependencies.promptSecret = async (message) => {
+          presentation.stopProgress();
+
+          if (message.startsWith("Composio")) {
+            presentation.waiting(
+              "Integration access",
+              "Paste the Composio project API key. Input is hidden.",
+            );
+          }
+
+          return promptSecret(message);
+        };
+      }
     }
 
     try {
-      const { options, recoverExisting } = await resolveUpOptions(command, executionDependencies);
+      const { options, recoverExisting } = await resolveUpOptions(
+        command,
+        executionDependencies,
+        presentation,
+      );
+
+      if (!command.json) {
+        dependencies.writeOutput(formatBootstrapTarget(options, recoverExisting, presentation));
+      }
+
       const bootstrapDependencies: BootstrapDependencies = recoverExisting
         ? {
             ...executionDependencies,
@@ -440,11 +568,14 @@ export async function runCli(
           );
         }
       }
+      presentation.stopProgress();
       dependencies.writeOutput(
         command.json ? `${JSON.stringify(report)}\n` : formatBootstrapReport(report, presentation),
       );
       return report.ok ? 0 : 1;
     } catch (error) {
+      presentation.stopProgress();
+
       if (error instanceof CliUsageError) {
         dependencies.writeError(`Error: ${error.message}\n\n${CLI_HELP}`);
         return 2;
@@ -461,6 +592,8 @@ export async function runCli(
       }
 
       throw error;
+    } finally {
+      presentation.stopProgress();
     }
   }
 

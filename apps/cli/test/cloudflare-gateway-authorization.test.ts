@@ -8,11 +8,16 @@ describe("Cloudflare Gateway authorization", () => {
     const openUrl = vi.fn<(url: URL) => Promise<void>>(async () => {});
 
     const result = await requestCloudflareGatewayAuthorization(
-      { accountId: "account-123", canSkip: true, workerName: "crewhelm-testing" },
+      {
+        accountId: "account-123",
+        canSkip: true,
+        dailySpendUsd: 5,
+        workerName: "crewhelm-testing",
+      },
       {
         openUrl,
         promptSecret: async () => "scoped-token-value",
-        promptText: async () => "open",
+        promptText: async () => "1",
         writeOutput: (text) => output.push(text),
       },
     );
@@ -20,8 +25,14 @@ describe("Cloudflare Gateway authorization", () => {
     expect(result).toEqual({ action: "token", token: "scoped-token-value" });
     expect(openUrl).toHaveBeenCalledOnce();
     expect(openUrl.mock.calls[0]?.[0].href).toBe("https://dash.cloudflare.com/profile/api-tokens");
-    expect(output.join("")).toContain("Permission: Account > AI Gateway > Edit");
-    expect(output.join("")).toContain("Resource: Include > Specific account > account-123");
+    expect(output.join("")).toContain("AI spending protection");
+    expect(output.join("")).toContain("$5 daily limit");
+    expect(output.join("")).toContain("1. Set up the token (recommended)");
+    expect(output.join("")).toContain("2. Continue without a spending limit");
+    expect(output.join("")).toContain("Permission  Account · AI Gateway · Edit");
+    expect(output.join("")).toContain("Account     account-123");
+    expect(output.join("")).toContain("WAITING Finish token setup in your browser.");
+    expect(output.join("")).not.toContain("[O/s/q]");
     expect(output.join("")).not.toContain("scoped-token-value");
   });
 
@@ -30,13 +41,18 @@ describe("Cloudflare Gateway authorization", () => {
 
     await expect(
       requestCloudflareGatewayAuthorization(
-        { accountId: "account-123", canSkip: true, workerName: "crewhelm-testing" },
+        {
+          accountId: "account-123",
+          canSkip: true,
+          dailySpendUsd: 5,
+          workerName: "crewhelm-testing",
+        },
         {
           openUrl,
           promptSecret: async () => {
             throw new Error("Token input must not run.");
           },
-          promptText: async () => "skip",
+          promptText: async () => "2",
           writeOutput: () => {},
         },
       ),
@@ -50,7 +66,12 @@ describe("Cloudflare Gateway authorization", () => {
 
     await expect(
       requestCloudflareGatewayAuthorization(
-        { accountId: "account-123", canSkip: false, workerName: "crewhelm" },
+        {
+          accountId: "account-123",
+          canSkip: false,
+          dailySpendUsd: 5,
+          workerName: "crewhelm",
+        },
         {
           openUrl: async () => {},
           promptSecret: async () => "",
@@ -62,9 +83,6 @@ describe("Cloudflare Gateway authorization", () => {
         },
       ),
     ).resolves.toEqual({ action: "stop" });
-    expect(choices).toEqual([
-      "Open token setup or stop? [O/q]: ",
-      "Open token setup or stop? [O/q]: ",
-    ]);
+    expect(choices).toEqual(["Choose [1]: ", "Choose [1]: "]);
   });
 });
