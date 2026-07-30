@@ -1,4 +1,3 @@
-import { Chalk, type ChalkInstance } from "chalk";
 import { Command, CommanderError, type OutputConfiguration } from "commander";
 import { connectionIdSchema } from "@crewhelm/contracts";
 import * as z from "zod";
@@ -6,85 +5,86 @@ import * as z from "zod";
 import { bootstrapOptionsSchema } from "./bootstrap.js";
 import { DoctorInputError, parseDeploymentOrigin } from "./doctor.js";
 import { installationSmokeOptionsSchema } from "./installation-smoke.js";
+import { createCliTextStyle, type CliTextStyle } from "./presentation.js";
 
-function formatRootHelp(style: ChalkInstance): string {
+function formatRootHelp(style: CliTextStyle): string {
   return `
-${style.cyan.bold("Examples:")}
-  ${style.cyan("$ crewhelm up")}
-  ${style.cyan("$ crewhelm doctor --endpoint https://crewhelm.example")}
-  ${style.cyan("$ crewhelm smoke agent --help")}
-  ${style.cyan("$ crewhelm smoke integration --help")}
-  ${style.cyan("$ crewhelm smoke installation --help")}
+${style.accentStrong("Examples:")}
+  ${style.accent("$ crewhelm up")}
+  ${style.accent("$ crewhelm doctor --endpoint https://crewhelm.example")}
+  ${style.accent("$ crewhelm smoke agent --help")}
+  ${style.accent("$ crewhelm smoke integration --help")}
+  ${style.accent("$ crewhelm smoke installation --help")}
 
-${style.dim("Run crewhelm <command> --help for command-specific options and safety notes.")}
+${style.muted("Run crewhelm <command> --help for command-specific options and safety notes.")}
 `;
 }
 
-function formatUpHelp(style: ChalkInstance): string {
+function formatUpHelp(style: CliTextStyle): string {
   return `
-${style.cyan.bold("Examples:")}
-  ${style.cyan("$ crewhelm up")}
-  ${style.cyan("$ crewhelm up --endpoint https://crewhelm.example --ai-budget-usd 5")}
+${style.accentStrong("Examples:")}
+  ${style.accent("$ crewhelm up")}
+  ${style.accent("$ crewhelm up --endpoint https://crewhelm.example --ai-budget-usd 5")}
 
-${style.cyan.bold("Automation:")}
+${style.accentStrong("Automation:")}
   Set these variables to run without prompts:
-    ${style.yellow("CREWHELM_GITHUB_CLIENT_ID")}
-    ${style.yellow("CREWHELM_GITHUB_CLIENT_SECRET")}
-    ${style.yellow("CREWHELM_OWNER_GITHUB_USER_ID")}
-    ${style.yellow("CREWHELM_COMPOSIO_API_KEY")}
+    ${style.warning("CREWHELM_GITHUB_CLIENT_ID")}
+    ${style.warning("CREWHELM_GITHUB_CLIENT_SECRET")}
+    ${style.warning("CREWHELM_OWNER_GITHUB_USER_ID")}
+    ${style.warning("CREWHELM_COMPOSIO_API_KEY")}
 
   When Wrangler OAuth cannot manage AI Gateway, also set:
-    ${style.yellow("CREWHELM_CLOUDFLARE_API_TOKEN")}
+    ${style.warning("CREWHELM_CLOUDFLARE_API_TOKEN")}
 
-${style.cyan.bold("Safety:")}
+${style.accentStrong("Safety:")}
   Preserves deployed secrets and recovers missing installation metadata before mutation.
-  Requires an HTTPS endpoint. ${style.cyan("--json")} disables prompts and browser setup.
+  Requires an HTTPS endpoint. ${style.accent("--json")} disables prompts and browser setup.
 `;
 }
 
-function formatDoctorHelp(style: ChalkInstance): string {
+function formatDoctorHelp(style: CliTextStyle): string {
   return `
-${style.cyan.bold("Examples:")}
-  ${style.cyan("$ crewhelm doctor --endpoint https://crewhelm.example")}
-  ${style.cyan("$ crewhelm doctor --endpoint https://crewhelm.example --authenticated")}
+${style.accentStrong("Examples:")}
+  ${style.accent("$ crewhelm doctor --endpoint https://crewhelm.example")}
+  ${style.accent("$ crewhelm doctor --endpoint https://crewhelm.example --authenticated")}
 
-${style.cyan.bold("Access:")}
-  ${style.cyan("--authenticated")} opens the browser for temporary view-only owner access.
+${style.accentStrong("Access:")}
+  ${style.accent("--authenticated")} opens the browser for temporary view-only owner access.
   The temporary diagnostic token is revoked before exit.
 
-${style.cyan.bold("Network:")}
+${style.accentStrong("Network:")}
   HTTPS is required except for exact loopback hosts.
 `;
 }
 
-function formatAgentSmokeHelp(style: ChalkInstance): string {
+function formatAgentSmokeHelp(style: CliTextStyle): string {
   return `
-${style.yellow.bold("Production rehearsal:")}
+${style.warningStrong("Production rehearsal:")}
   Creates and runs one zero-grant disposable Agent, then disables it.
   Requests temporary Full control and verifies token revocation before exit.
-  Requires ${style.yellow("--confirm-production")} and an HTTPS endpoint.
+  Requires ${style.warning("--confirm-production")} and an HTTPS endpoint.
 `;
 }
 
-function formatStandingIntegrationSmokeHelp(style: ChalkInstance): string {
+function formatStandingIntegrationSmokeHelp(style: CliTextStyle): string {
   return `
-${style.yellow.bold("Production rehearsal:")}
+${style.warningStrong("Production rehearsal:")}
   Creates one draft to the reserved, non-deliverable example.invalid domain.
-  ${style.cyan("--trigger schedule")} waits for one autonomous scheduled dispatch; manual is default.
+  ${style.accent("--trigger schedule")} waits for one autonomous scheduled dispatch; manual is default.
   Requires an exact authorized Gmail connection and retains the draft for verification.
   Pauses any schedule, revokes the grant, disables the Agent, and revokes temporary Full control.
-  Requires ${style.yellow("--confirm-production")} and an HTTPS endpoint.
+  Requires ${style.warning("--confirm-production")} and an HTTPS endpoint.
 `;
 }
 
-function formatInstallationSmokeHelp(style: ChalkInstance): string {
+function formatInstallationSmokeHelp(style: CliTextStyle): string {
   return `
-${style.yellow.bold("Fresh-install rehearsal:")}
+${style.warningStrong("Fresh-install rehearsal:")}
   Creates an isolated Worker and D1 database, runs the Agent lifecycle smoke, then deletes them.
-  ${style.cyan("--ai-budget-usd")} also creates and deletes an isolated AI Gateway.
+  ${style.accent("--ai-budget-usd")} also creates and deletes an isolated AI Gateway.
   Existing resources are rejected; exact cleanup coordinates remain in the bounded receipt.
   Supplied GitHub App credentials must allow this Worker's callback origin.
-  Requires ${style.yellow("--confirm-production")} and crewhelm-smoke-* resource names.
+  Requires ${style.warning("--confirm-production")} and crewhelm-smoke-* resource names.
 `;
 }
 
@@ -269,23 +269,23 @@ function createCliProgram(
   output?: OutputConfiguration,
   color = false,
 ) {
-  const style = new Chalk({ level: color ? 1 : 0 });
+  const style = createCliTextStyle(color);
   const program = new Command()
     .name("crewhelm")
     .description("Deploy and diagnose a personal Crewhelm control plane.")
     .option("--no-color", "disable terminal colors")
     .helpCommand(true)
     .configureHelp({
-      styleArgumentTerm: style.yellow,
-      styleCommandDescription: style.dim,
-      styleCommandText: style.bold,
-      styleDescriptionText: style.dim,
-      styleOptionDescription: style.dim,
-      styleOptionTerm: style.cyan,
-      styleSubcommandDescription: style.dim,
-      styleSubcommandTerm: style.cyan,
-      styleTitle: style.cyan.bold,
-      styleUsage: style.bold,
+      styleArgumentTerm: style.warning,
+      styleCommandDescription: style.muted,
+      styleCommandText: style.strong,
+      styleDescriptionText: style.muted,
+      styleOptionDescription: style.muted,
+      styleOptionTerm: style.accent,
+      styleSubcommandDescription: style.muted,
+      styleSubcommandTerm: style.accent,
+      styleTitle: style.accentStrong,
+      styleUsage: style.strong,
     })
     .addHelpText("after", formatRootHelp(style));
 
@@ -450,7 +450,7 @@ function createCliProgram(
 }
 
 function rootHelpInformation(color: boolean): string {
-  const style = new Chalk({ level: color ? 1 : 0 });
+  const style = createCliTextStyle(color);
   return `${createCliProgram(undefined, undefined, color).helpInformation()}${formatRootHelp(style)}`;
 }
 

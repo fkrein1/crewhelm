@@ -1,30 +1,49 @@
+import {
+  CREWHELM_CLI_BANNER,
+  CREWHELM_LOGO_PROMPT,
+  CREWHELM_LOGO_WORDMARK,
+  crewhelmTerminalTheme,
+} from "@crewhelm/design/terminal";
 import { Chalk } from "chalk";
 
-export const CLI_BANNER = `  ________  _____      ____ ________   __  ___
- / ___/ _ \\/ __/ | /| / / // / __/ /  /  |/  /
-/ /__/ , _/ _/ | |/ |/ / _  / _// /__/ /|_/ /
-\\___/_/|_/___/ |__/|__/_//_/___/____/_/  /_/
-`;
+export const CLI_BANNER = CREWHELM_CLI_BANNER;
 
-const BANNER_GRADIENT = [
-  [34, 211, 238],
-  [45, 174, 240],
-  [79, 128, 242],
-  [99, 102, 241],
-] as const;
+type CliTextFormatter = (text: string) => string;
 
-function gradientBanner(color: boolean): string {
-  if (!color) {
-    return CLI_BANNER;
-  }
+export interface CliTextStyle {
+  accent: CliTextFormatter;
+  accentStrong: CliTextFormatter;
+  logoPrompt: CliTextFormatter;
+  logoWordmark: CliTextFormatter;
+  muted: CliTextFormatter;
+  negativeStrong: CliTextFormatter;
+  positiveStrong: CliTextFormatter;
+  strong: CliTextFormatter;
+  warning: CliTextFormatter;
+  warningStrong: CliTextFormatter;
+}
 
-  const style = new Chalk({ level: 3 });
-  return CLI_BANNER.split("\n")
-    .map((line, index) => {
-      const [red, green, blue] = BANNER_GRADIENT[index] ?? BANNER_GRADIENT.at(-1)!;
-      return style.rgb(red, green, blue)(line);
-    })
-    .join("\n");
+export function createCliTextStyle(color: boolean): CliTextStyle {
+  const style = new Chalk({ level: color ? 3 : 0 });
+  const accent = style.rgb(...crewhelmTerminalTheme.accent);
+  const warning = style.rgb(...crewhelmTerminalTheme.warning);
+
+  return {
+    accent,
+    accentStrong: accent.bold,
+    logoPrompt: style.rgb(...crewhelmTerminalTheme.logoPrompt),
+    logoWordmark: style.rgb(...crewhelmTerminalTheme.logoWordmark),
+    muted: style.dim,
+    negativeStrong: style.rgb(...crewhelmTerminalTheme.negative).bold,
+    positiveStrong: style.rgb(...crewhelmTerminalTheme.positive).bold,
+    strong: style.bold,
+    warning,
+    warningStrong: warning.bold,
+  };
+}
+
+function styledBanner(style: CliTextStyle): string {
+  return `${style.logoPrompt(CREWHELM_LOGO_PROMPT)} ${style.logoWordmark(CREWHELM_LOGO_WORDMARK)}\n`;
 }
 
 export interface CliPresentationOptions {
@@ -43,26 +62,26 @@ export interface CliPresentation {
 }
 
 export function createCliPresentation(options: CliPresentationOptions): CliPresentation {
-  const style = new Chalk({ level: options.color ? 1 : 0 });
+  const style = createCliTextStyle(options.color);
 
   return {
-    accent: style.cyan,
+    accent: style.accent,
     banner: () => {
       if (options.interactive) {
-        options.writeOutput(`${gradientBanner(options.color)}\n`);
+        options.writeOutput(`${styledBanner(style)}\n`);
       }
     },
-    muted: style.dim,
+    muted: style.muted,
     progress: (message) => {
       if (options.interactive) {
-        options.writeError(`${style.cyan("==>")} ${message}\n`);
+        options.writeError(`${style.accent("==>")} ${message}\n`);
       }
     },
     status: (status) =>
       status === "pass"
-        ? style.green.bold("PASS")
+        ? style.positiveStrong("PASS")
         : status === "fail"
-          ? style.red.bold("FAIL")
-          : style.yellow.bold("SKIP"),
+          ? style.negativeStrong("FAIL")
+          : style.warningStrong("SKIP"),
   };
 }

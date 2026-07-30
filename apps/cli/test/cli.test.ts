@@ -211,8 +211,10 @@ describe("Crewhelm CLI", () => {
     const harness = createHarness(undefined, { color: true, interactive: true });
 
     await expect(runCli([], harness.dependencies)).resolves.toBe(0);
-    expect(harness.output.join("")).toContain(CLI_BANNER.split("\n")[0]);
-    expect(harness.output.join("")).toContain("\u001B[");
+    expect(harness.output.join("")).toContain(">_");
+    expect(harness.output.join("")).toContain("CREWHELM");
+    expect(harness.output.join("")).toContain("\u001B[38;2;100;168;255m");
+    expect(harness.output.join("")).toContain("\u001B[38;2;10;132;255m");
     expect(harness.errors).toEqual([]);
   });
 
@@ -241,7 +243,8 @@ describe("Crewhelm CLI", () => {
     await expect(
       runCli(["up", "--endpoint", "https://crewhelm.example"], harness.dependencies),
     ).resolves.toBe(1);
-    expect(harness.output[0]).toContain(CLI_BANNER.split("\n")[0]);
+    expect(harness.output[0]).toContain(">_");
+    expect(harness.output[0]).toContain("CREWHELM");
     expect(harness.output[0]).toContain("\u001B[");
     expect(harness.errors.join("")).toContain("Loading packaged deployment assets");
     expect(harness.errors.join("")).toContain("\u001B[");

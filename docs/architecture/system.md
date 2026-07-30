@@ -58,9 +58,14 @@ cost-reconciliation controls.
 | MCP presentation                      | `mcp/*-tools.ts`          |
 | Public routing and bounded HTTP input | `http/`                   |
 | OAuth persistence and protocol        | `oauth/`                  |
+| Shared visual foundations             | `packages/design/`        |
 
 Entrypoints compose capability modules. Each module exposes its public API through `index.ts`;
 policy, persistence, transactions, and failure handling remain internal.
+
+Browser runtimes own their document shells, escaping, response headers, content security policy,
+forms, and interaction behavior. `packages/design/` supplies only dependency-free tokens,
+branding, stylesheet assets, and terminal color roles.
 
 ## Authority flow
 

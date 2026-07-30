@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@crewhelm/contracts": "workspace:*",
+    "@crewhelm/design": "workspace:*",
     "chalk": "6.0.0",
     "commander": "15.0.0",
     "wrangler": "4.114.0",

@@ -456,8 +456,11 @@ describe("public OAuth to MCP integration", () => {
 
     expect(stylesheetResponse.status).toBe(200);
     expect(stylesheetResponse.headers.get("content-type")).toBe("text/css; charset=utf-8");
-    expect(stylesheet).toContain(".primary");
-    expect(stylesheet).toContain('.button[aria-disabled="true"]');
+    expect(stylesheet).toContain(".ch-button--primary");
+    expect(stylesheet).toContain('.ch-button[aria-disabled="true"]');
+    expect(stylesheet).toContain("@media (prefers-color-scheme: light)");
+    expect(loginPage).toContain('class="ch-brand" role="img" aria-label="Crewhelm"');
+    expect(loginPage).toContain('data-tone="accent"');
     const continueResponse = await request(workerEnv, `/oauth/login/continue?${loginQuery}`);
     const continueLocation = new URL(responseLocation(continueResponse), origin);
 
@@ -582,11 +585,12 @@ describe("public OAuth to MCP integration", () => {
     expect(consentPage).toContain('<input type="hidden" name="decision" value="approve">');
     expect(consentPage).toContain('<input type="hidden" name="decision" value="deny">');
     expect(consentPage).toContain(
-      '<button class="primary" type="submit" data-pending-label="Authorizing…">Authorize</button>',
+      '<button class="ch-button ch-button--primary" type="submit" data-pending-label="Authorizing…">Authorize</button>',
     );
     expect(consentPage).toContain(
-      '<button class="secondary" type="submit" data-pending-label="Denying…">Deny</button>',
+      '<button class="ch-button ch-button--quiet" type="submit" data-pending-label="Denying…">Deny</button>',
     );
+    expect(consentPage).toContain('data-tone="warning"');
     expect(consentPage).not.toContain("Continue to client");
     expect(consentPage).not.toContain("data-navigation-link");
     expect(consentPage).toContain("&lt;script&gt;Integration MCP client&lt;/script&gt;");

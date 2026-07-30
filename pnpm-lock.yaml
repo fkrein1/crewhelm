@@ -40,6 +40,9 @@ importers:
       '@crewhelm/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@crewhelm/design':
+        specifier: workspace:*
+        version: link:../../packages/design
       chalk:
         specifier: 6.0.0
         version: 6.0.0
@@ -74,6 +77,9 @@ importers:
       '@crewhelm/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@crewhelm/design':
+        specifier: workspace:*
+        version: link:../../packages/design
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.4.3)
@@ -132,6 +138,8 @@ importers:
       zod:
         specifier: 4.4.3
         version: 4.4.3
+
+  packages/design: {}
 
 packages:
 
