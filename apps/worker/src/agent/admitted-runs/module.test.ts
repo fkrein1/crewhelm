@@ -2133,32 +2133,37 @@ describe("CrewAgent admitted execution", () => {
       }),
     );
 
-    const deadlineAt = await runInDurableObject(deadlineStub, async (_agent, state) => {
-      const record = admittedRunRecordSchema.parse(
-        await state.storage.get(`crewhelm:run:${started.run.runId}`),
+    await runInDurableObject(deadlineStub, async (_agent, state) => {
+      const key = `crewhelm:run:${started.run.runId}`;
+      const record = admittedRunRecordSchema.parse(await state.storage.get(key));
+
+      await state.storage.put(key, { ...record, deadlineAt: 1 });
+      state.storage.sql.exec(
+        "UPDATE cf_think_submissions SET status = 'running', started_at = ? WHERE submission_id = ?",
+        Date.now(),
+        started.run.runId,
       );
-      return record.deadlineAt;
+      state.storage.sql.exec(
+        "DELETE FROM cf_agents_schedules WHERE callback = '_drainThinkSubmissions'",
+      );
+      state.storage.sql.exec(
+        "UPDATE cf_agents_schedules SET time = 0 WHERE callback = 'expireAdmittedRun'",
+      );
     });
-    await new Promise((resolve) => setTimeout(resolve, Math.max(0, deadlineAt - Date.now() + 25)));
     await expect(runDurableObjectAlarm(deadlineStub)).resolves.toBe(true);
 
-    await vi.waitFor(
-      async () => {
-        const inspected = await controlPlane.inspectRun(authority, {
-          runId: started.run.runId,
-        });
+    const inspected = await controlPlane.inspectRun(authority, {
+      runId: started.run.runId,
+    });
 
-        expect(inspected).toMatchObject({
-          ok: true,
-          run: {
-            runId: started.run.runId,
-            status: "cancelled",
-          },
-        });
-        expect(inspected.ok ? inspected.run.output : undefined).toBeUndefined();
+    expect(inspected).toMatchObject({
+      ok: true,
+      run: {
+        runId: started.run.runId,
+        status: "cancelled",
       },
-      { interval: 50, timeout: 5_000 },
-    );
+    });
+    expect(inspected.ok ? inspected.run.output : undefined).toBeUndefined();
   });
 
   it("propagates deadline cancellation failures for durable schedule retry", async () => {
