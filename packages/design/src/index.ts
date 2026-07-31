@@ -8,6 +8,7 @@ export {
   CREWHELM_LOGO_WORDMARK,
 } from "./brand.js";
 export {
+  crewhelmColorScales,
   crewhelmColorThemes,
   crewhelmFoundationTokens,
   type CrewhelmColorTheme,

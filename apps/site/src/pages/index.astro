@@ -3,107 +3,126 @@ import { CREWHELM_BRAND_POSITIONING } from "@crewhelm/design";
 
 import AuthorityLedger from "../components/AuthorityLedger.astro";
 import Brand from "../components/Brand.astro";
+import ButtonLink from "../components/ButtonLink.astro";
 import CustodyFlow from "../components/CustodyFlow.astro";
 import InstallCommand from "../components/InstallCommand.astro";
 import SiteLayout from "../layouts/SiteLayout.astro";
 
 export const prerender = true;
+
+const textLink = "text-[.78rem] font-extrabold underline underline-offset-5";
+const principles = [
+  {
+    body: "Deploy Crewhelm to your Cloudflare account. Keep durable state, policy, and operational control in infrastructure you own.",
+    numeral: "I.",
+    title: "Own the control plane.",
+  },
+  {
+    body: "Connections and capability grants are explicit. Provider credentials remain in Composio; Agents receive bounded use, never the keys.",
+    numeral: "II.",
+    title: "Grant the minimum.",
+  },
+  {
+    body: "Schedules and manual runs dispatch once, observe budgets, and proceed within standing authority—without asking you about every harmless step.",
+    numeral: "III.",
+    title: "Let routine work run.",
+  },
+  {
+    body: "Approve, deny, disable, revoke, retry, and inspect. When judgment is required, work pauses with context instead of improvising permission.",
+    numeral: "IV.",
+    title: "Make every stop recoverable.",
+  },
+] as const;
 ---
 
 <SiteLayout description={CREWHELM_BRAND_POSITIONING}>
-  <header class="site-header wrap">
+  <header class="shell flex min-h-21 items-center justify-between border-b border-border-strong max-[620px]:min-h-17">
     <Brand />
-    <nav aria-label="Primary navigation">
-      <a href="#why">Why Crewhelm</a>
-      <a href="#system">Architecture</a>
-      <a class="nav-cta" href="https://github.com/fkrein1/crewhelm" rel="noreferrer">View on GitHub <span aria-hidden="true">↗</span></a>
+    <nav class="flex items-center gap-7.5 text-[.8rem] font-bold" aria-label="Primary navigation">
+      <a class="no-underline hover:text-primary max-[900px]:hidden" href="#why">Why Crewhelm</a>
+      <a class="no-underline hover:text-primary max-[900px]:hidden" href="#system">Architecture</a>
+      <a class="border-b border-current py-2 no-underline" href="https://github.com/fkrein1/crewhelm" rel="noreferrer"><span class="max-[620px]:hidden">View on </span>GitHub <span aria-hidden="true">↗</span></a>
     </nav>
   </header>
 
   <main id="main">
-    <section class="hero wrap" id="top" aria-labelledby="hero-title">
-      <div class="hero-kicker">
-        <p>Open-source control plane<br />for AI Agents</p>
-        <p class="issue">Issue 01<br />Owner edition</p>
+    <section class="shell relative pt-7.5 pb-28 max-[900px]:pb-25 max-[620px]:pt-5" id="top" aria-labelledby="hero-title">
+      <div class="grid grid-cols-[1fr_auto] font-mono text-kicker leading-[1.5] tracking-[.08em] uppercase max-[620px]:grid-cols-1">
+        <p class="m-0">Open-source control plane<br />for AI Agents</p>
+        <p class="m-0 text-right max-[620px]:hidden">Issue 01<br />Owner edition</p>
       </div>
-      <div class="hero-copy">
-        <h1 id="hero-title">Give Agents<br />a mandate.<br /><em>Not a master key.</em></h1>
-        <div class="hero-deck">
-          <p>Crewhelm creates and operates long-lived Agents on your Cloudflare account—with exact capability grants, immutable revisions, budgets, approvals, and a complete audit trail.</p>
-          <div class="hero-actions">
-            <a class="button button-primary" href="https://github.com/fkrein1/crewhelm" rel="noreferrer">Inspect the source <span aria-hidden="true">↗</span></a>
-            <a class="text-link" href="#artifact">See an authority decision <span aria-hidden="true">↓</span></a>
+      <div class="mt-14 grid grid-cols-[minmax(0,2.05fr)_minmax(280px,.7fr)] items-end gap-13.5 max-[900px]:grid-cols-1 max-[900px]:gap-10 max-[620px]:mt-11">
+        <h1 id="hero-title" class="m-0 max-w-[1050px] text-display leading-display font-extrabold tracking-display max-[620px]:text-[clamp(3.55rem,18vw,5rem)] max-[620px]:leading-[.84]">Give Agents<br />a mandate.<br /><em class="serif-emphasis">Not a master key.</em></h1>
+        <div class="pb-1 max-[900px]:ml-[18%] max-[900px]:max-w-130 max-[620px]:ml-[12%]">
+          <p class="m-0 text-[clamp(1rem,1.35vw,1.25rem)] leading-[1.48]">Crewhelm creates and operates long-lived Agents on your Cloudflare account—with exact capability grants, immutable revisions, budgets, approvals, and a complete audit trail.</p>
+          <div class="mt-8 flex flex-wrap items-center gap-6">
+            <ButtonLink href="https://github.com/fkrein1/crewhelm" rel="noreferrer">Inspect the source <span aria-hidden="true">↗</span></ButtonLink>
+            <a class={textLink} href="#artifact">See an authority decision <span aria-hidden="true">↓</span></a>
           </div>
         </div>
       </div>
-      <p class="margin-note">For people who want useful Agents<br />without becoming platform operators.</p>
+      <p class="eyebrow absolute bottom-6.5 left-0 m-0 max-[620px]:hidden">For people who want useful Agents<br />without becoming platform operators.</p>
     </section>
 
-    <section class="artifact-section wrap" id="artifact" aria-labelledby="artifact-title">
-      <header class="section-label">
-        <span>01 / A run, made legible</span>
-        <h2 id="artifact-title">Routine work moves.<br />Authority boundaries hold.</h2>
+    <section class="shell border-t border-border-strong pt-20.5 pb-29.5 max-[620px]:py-19.5" id="artifact" aria-labelledby="artifact-title">
+      <header class="mb-10.5 grid grid-cols-[1fr_2fr] max-[900px]:grid-cols-1 max-[900px]:gap-7">
+        <span class="eyebrow text-foreground">01 / A run, made legible</span>
+        <h2 id="artifact-title" class="m-0 text-[clamp(2.5rem,5vw,5rem)] leading-[.92] tracking-[-.055em] max-[620px]:text-[2.75rem]">Routine work moves.<br />Authority boundaries hold.</h2>
       </header>
       <AuthorityLedger />
-      <p class="artifact-caption">Tool visibility is not authority. Every action is checked against the exact Agent revision, grant, limits, and run context.</p>
+      <p class="mt-8.5 ml-auto w-[70%] text-[.76rem] leading-[1.55] text-muted-foreground max-[620px]:w-[88%]">Tool visibility is not authority. Every action is checked against the exact Agent revision, grant, limits, and run context.</p>
     </section>
 
-    <section class="manifesto wrap" id="why" aria-labelledby="why-title">
-      <div class="manifesto-intro">
-        <span class="section-index">02</span>
-        <h2 id="why-title">An Agent should<br />work for <em>you</em>.</h2>
+    <section class="shell grid grid-cols-[1fr_1.6fr] gap-[10%] border-t border-border-strong py-27.5 max-[900px]:grid-cols-1 max-[900px]:gap-16 max-[620px]:py-19.5" id="why" aria-labelledby="why-title">
+      <div>
+        <span class="section-number mb-7">02</span>
+        <h2 id="why-title" class="section-title max-[620px]:text-[3.35rem]">An Agent should<br />work for <em class="serif-emphasis">you</em>.</h2>
       </div>
-      <div class="principles">
-        <article>
-          <span class="number">I.</span>
-          <div><h3>Own the control plane.</h3><p>Deploy Crewhelm to your Cloudflare account. Keep durable state, policy, and operational control in infrastructure you own.</p></div>
-        </article>
-        <article>
-          <span class="number">II.</span>
-          <div><h3>Grant the minimum.</h3><p>Connections and capability grants are explicit. Provider credentials remain in Composio; Agents receive bounded use, never the keys.</p></div>
-        </article>
-        <article>
-          <span class="number">III.</span>
-          <div><h3>Let routine work run.</h3><p>Schedules and manual runs dispatch once, observe budgets, and proceed within standing authority—without asking you about every harmless step.</p></div>
-        </article>
-        <article>
-          <span class="number">IV.</span>
-          <div><h3>Make every stop recoverable.</h3><p>Approve, deny, disable, revoke, retry, and inspect. When judgment is required, work pauses with context instead of improvising permission.</p></div>
-        </article>
+      <div>
+        {principles.map((principle) => (
+          <article class="grid grid-cols-[68px_1fr] border-t border-border-strong pt-7 pb-8.5 max-[620px]:grid-cols-[42px_1fr]">
+            <span class="font-serif italic text-primary">{principle.numeral}</span>
+            <div>
+              <h3 class="m-0 text-[clamp(1.3rem,2.2vw,2rem)] tracking-[-.025em]">{principle.title}</h3>
+              <p class="mt-2.5 mb-0 max-w-147.5 text-[.92rem] leading-[1.55] text-muted-foreground">{principle.body}</p>
+            </div>
+          </article>
+        ))}
       </div>
     </section>
 
-    <section class="custody-section wrap" id="system" aria-labelledby="architecture-title">
-      <header class="custody-heading">
-        <span class="section-index">03</span>
-        <h2 id="architecture-title">Your infrastructure.<br />Clear lines of custody.</h2>
-        <p>Cloudflare owns durable execution. Composio holds provider credentials. Crewhelm owns the authority between intent and action.</p>
+    <section class="shell border-t border-border-strong pt-27.5 pb-29.5 max-[620px]:py-19.5" id="system" aria-labelledby="architecture-title">
+      <header class="mb-15 grid grid-cols-[.55fr_1.15fr_.75fr] items-start gap-11 max-[900px]:grid-cols-[1fr_1.7fr] max-[900px]:[&>h2]:col-start-2 max-[900px]:[&>p]:col-start-2 max-[620px]:mb-10 max-[620px]:block">
+        <span class="section-number mb-7">03</span>
+        <h2 id="architecture-title" class="section-title max-[620px]:text-[clamp(2.85rem,14vw,3.35rem)]">Your infrastructure.<br />Clear lines of custody.</h2>
+        <p class="m-0 text-[.9rem] leading-[1.65] text-muted-foreground max-[620px]:mt-6.5 max-[620px]:max-w-125">Cloudflare owns durable execution. Composio holds provider credentials. Crewhelm owns the authority between intent and action.</p>
       </header>
       <CustodyFlow />
     </section>
 
-    <section class="install wrap" aria-labelledby="install-title">
-      <div>
-        <span class="section-index">04</span>
-        <h2 id="install-title">Bring up<br />your helm.</h2>
-        <p>Run the guided installer from a terminal authenticated with Cloudflare. Crewhelm provisions the control plane, then verifies what came up.</p>
-        <a class="text-link" href="https://github.com/fkrein1/crewhelm#readme" rel="noreferrer">Read the documentation <span aria-hidden="true">↗</span></a>
+    <section class="shell grid grid-cols-[.75fr_1.25fr] items-center gap-[10%] py-29.5 max-[900px]:grid-cols-1 max-[900px]:gap-16 max-[620px]:py-19.5" aria-labelledby="install-title">
+      <div class="max-[900px]:grid max-[900px]:grid-cols-2 max-[900px]:gap-x-12 max-[620px]:block">
+        <span class="section-number mb-7">04</span>
+        <h2 id="install-title" class="section-title max-[620px]:text-[3.35rem]">Bring up<br />your helm.</h2>
+        <p class="my-7.5 max-w-97.5 text-[.9rem] leading-[1.55] text-muted-foreground max-[900px]:col-start-2 max-[900px]:row-[1/span_2] max-[900px]:self-end max-[620px]:mt-7">Run the guided installer from a terminal authenticated with Cloudflare. Crewhelm provisions the control plane, then verifies what came up.</p>
+        <a class:list={[textLink, "max-[900px]:col-start-2 max-[620px]:inline"]} href="https://github.com/fkrein1/crewhelm#readme" rel="noreferrer">Read the documentation <span aria-hidden="true">↗</span></a>
       </div>
       <InstallCommand />
     </section>
 
-    <section class="final-cta">
-      <div class="wrap">
-        <p>Stop renting trust.</p>
-        <h2>Run Agents<br />with boundaries.</h2>
-        <a class="button button-light" href="https://github.com/fkrein1/crewhelm" rel="noreferrer">Explore Crewhelm on GitHub <span aria-hidden="true">↗</span></a>
+    <section class="bg-foreground text-paper-50">
+      <div class="shell relative flex min-h-157.5 flex-col items-start justify-center py-22.5 max-[620px]:min-h-130">
+        <p class="z-1 m-0 mb-5.5 font-mono text-[.7rem] tracking-[.08em] text-ink-400 uppercase">Stop renting trust.</p>
+        <h2 class="z-1 m-0 mb-11 text-[clamp(4rem,9vw,9rem)] leading-display tracking-[-.07em] max-[620px]:text-[clamp(3.7rem,18vw,5.8rem)]">Run Agents<br />with boundaries.</h2>
+        <ButtonLink class="z-1" variant="light" href="https://github.com/fkrein1/crewhelm" rel="noreferrer">Explore Crewhelm on GitHub <span aria-hidden="true">↗</span></ButtonLink>
+        <span class="pointer-events-none absolute right-0 bottom-6 font-mono text-[clamp(8rem,22vw,23rem)] leading-[.8] font-extrabold tracking-[-.15em] text-primary opacity-20" aria-hidden="true">&gt;_</span>
       </div>
     </section>
   </main>
 
-  <footer class="site-footer wrap">
+  <footer class="shell grid min-h-27.5 grid-cols-[1fr_auto_1fr] items-center gap-7.5 font-mono text-[.6rem] uppercase max-[620px]:min-h-35 max-[620px]:grid-cols-[1fr_auto] max-[620px]:[&>p]:hidden max-[620px]:[&>p:last-child]:block">
     <Brand />
     <p>Open source · Cloudflare-native · MCP-first</p>
-    <p>Built for owner-controlled Agents.</p>
+    <p class="text-right">Built for owner-controlled Agents.</p>
   </footer>
 </SiteLayout>

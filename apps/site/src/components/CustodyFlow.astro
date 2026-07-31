@@ -1,13 +1,38 @@
-<div class="architecture-flow" aria-label="MCP client through Crewhelm and tool gate to external services">
-  <div class="arch-node"><span>01 · OPERATE</span><strong>Claude / Codex</strong><small>MCP client</small></div>
-  <div class="arch-arrow"><span>signed request</span><i aria-hidden="true">→</i></div>
-  <div class="arch-node primary-node"><span>02 · CONTROL</span><strong>Crewhelm</strong><small>your Cloudflare</small></div>
-  <div class="arch-arrow"><span>authorized dispatch</span><i aria-hidden="true">→</i></div>
-  <div class="arch-node"><span>03 · ACT</span><strong>Agent / Tool Gate</strong><small>bounded run</small></div>
-  <div class="arch-arrow"><span>scoped capability</span><i aria-hidden="true">→</i></div>
-  <div class="arch-node"><span>04 · CONNECT</span><strong>Composio</strong><small>credentials stay here</small></div>
+---
+const nodes = [
+  { eyebrow: "01 · OPERATE", label: "Claude / Codex", note: "MCP client" },
+  { eyebrow: "02 · CONTROL", label: "Crewhelm", note: "your Cloudflare", primary: true },
+  { eyebrow: "03 · ACT", label: "Agent / Tool Gate", note: "bounded run" },
+  { eyebrow: "04 · CONNECT", label: "Composio", note: "credentials stay here" },
+] as const;
+const handoffs = ["signed request", "authorized dispatch", "scoped capability"];
+---
+
+<div class="grid grid-cols-[1fr_.44fr_1fr_.44fr_1fr_.44fr_1fr] items-center max-[900px]:flex max-[900px]:flex-col" aria-label="MCP client through Crewhelm and tool gate to external services">
+  {nodes.map((node, index) => (
+    <>
+      <div
+        class:list={[
+          "flex min-h-44 flex-col justify-center border border-border-strong bg-card/40 p-5 max-[900px]:min-h-31 max-[900px]:w-full",
+          node.primary && "bg-foreground text-paper-50 shadow-signal-sm",
+        ]}
+      >
+        <span class:list={["font-mono text-[.57rem] tracking-[.08em] text-primary", node.primary && "text-signal-300"]}>{node.eyebrow}</span>
+        <strong class="mt-6 mb-1.5 text-base tracking-[-.02em]">{node.label}</strong>
+        <small class:list={["font-mono text-[.62rem] text-muted-foreground", node.primary && "text-ink-300"]}>{node.note}</small>
+      </div>
+      {index < handoffs.length && (
+        <div class="text-center text-muted-foreground max-[900px]:flex max-[900px]:h-14 max-[900px]:items-center max-[900px]:justify-center max-[900px]:gap-3">
+          <span class="mb-2.5 block font-mono text-[.48rem] leading-[1.3] max-[900px]:m-0">{handoffs[index]}</span>
+          <i class="font-mono text-base not-italic text-foreground max-[900px]:rotate-90" aria-hidden="true">→</i>
+        </div>
+      )}
+    </>
+  ))}
 </div>
 
-<div class="runtime-strip" aria-label="Cloudflare runtime services">
-  <span>Workers</span><span>Durable Objects</span><span>Think</span><span>Workflows</span><span>Storage</span>
+<div class="mt-6.5 flex justify-end gap-2 border-t border-ink-400 pt-4.5 max-[620px]:flex-wrap max-[620px]:justify-start" aria-label="Cloudflare runtime services">
+  {["Workers", "Durable Objects", "Think", "Workflows", "Storage"].map((service) => (
+    <span class="border border-ink-400 px-2 py-1.5 font-mono text-[.55rem] tracking-[.04em]">{service}</span>
+  ))}
 </div>
