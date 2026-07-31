@@ -19,18 +19,27 @@ in `src/styles/global.css` through Tailwind's CSS-first `@theme` interface.
 ## Delivery
 
 `wrangler.jsonc` is the source of truth for the `crewhelm-site` Worker, preview URLs, and the
-`crewhelm.app` Custom Domain. The secretless GitHub site workflow verifies the build only when
-`apps/site`, its shared design package, or their build inputs change.
+`crewhelm.app` Custom Domain. Delivery has two deliberately separate lanes:
 
-- Cloudflare Workers Builds watches the same paths in the monorepo.
-- Non-production branches run `pnpm --filter @crewhelm/site preview:upload` and receive an isolated
-  `workers.dev` preview URL without exposing credentials to pull-request workflows.
-- Changes merged to `main` run `pnpm --filter @crewhelm/site run deploy:production` and update
-  `crewhelm.app`.
+- The secretless GitHub Actions workflow verifies the site on every pull-request commit, including
+  forks. It never receives Cloudflare credentials.
+- Cloudflare Workers Builds owns uploads. Its GitHub App posts or updates the pull-request comment
+  with the versioned `workers.dev` preview URL and retains earlier build history in that comment.
+
+Keep the `crewhelm-site` Workers Build configured with:
+
+| Setting                       | Value                                |
+| ----------------------------- | ------------------------------------ |
+| Root directory                | `/apps/site`                         |
+| Production branch             | `main`                               |
+| Build command                 | `pnpm run build`                     |
+| Production deploy command     | `pnpm exec wrangler deploy`          |
+| Non-production deploy command | `pnpm exec wrangler versions upload` |
+| Non-production branch builds  | Enabled                              |
+| Build watch include paths     | `*`; every branch commit builds      |
 
 The Cloudflare Git integration owns its narrowly scoped build token; no Cloudflare secret is stored
-in GitHub Actions. Keep the production branch set to `main`, enable non-production branch builds,
-and include only the site and its direct build inputs in Build watch paths.
+in GitHub Actions. GitHub App repository access is limited to `fkrein1/crewhelm`.
 
 Do not add D1 until a server-rendered recipe slice defines its schema, ranking semantics, abuse
 bounds, migration/recovery path, and SEO contracts. When that slice exists, add the binding to the

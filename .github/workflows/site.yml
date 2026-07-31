@@ -2,14 +2,6 @@ name: Site build
 
 on:
   pull_request:
-    paths:
-      - .github/workflows/site.yml
-      - .nvmrc
-      - apps/site/**
-      - package.json
-      - packages/design/**
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
   push:
     branches:
       - main
@@ -31,7 +23,9 @@ permissions:
 
 jobs:
   build:
-    name: Build
+    # Cloudflare Workers Builds owns preview uploads and PR comments. This
+    # secretless check stays safe for forked pull requests.
+    name: Verify site
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
