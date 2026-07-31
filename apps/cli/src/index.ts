@@ -3,10 +3,8 @@
 import { fileURLToPath } from "node:url";
 
 import { runCli } from "./cli.js";
-import { requestCloudflareGatewayAuthorization } from "./cloudflare-gateway-authorization.js";
-import { createGitHubApp } from "./github-app.js";
+import { openInCodexBrowser } from "./codex-browser.js";
 import { openInDefaultBrowser, promptSecret, promptText } from "./interactive.js";
-import { createCliTextStyle } from "./presentation.js";
 import { createWranglerRunner } from "./wrangler.js";
 
 const cliArguments = process.argv.slice(2);
@@ -19,6 +17,8 @@ const dependencies = {
   fetch: globalThis.fetch,
   interactive,
   liveProgress: interactive && process.stderr.isTTY,
+  openCodexUrl: (url: URL) =>
+    openInCodexBrowser(url, { writeError: (text) => process.stderr.write(text) }),
   openUrl: openInDefaultBrowser,
   ...(interactive ? { promptSecret, promptText } : {}),
   readEnvironment: (name: string) => process.env[name],
@@ -27,29 +27,4 @@ const dependencies = {
   writeOutput: (text: string) => process.stdout.write(text),
 };
 
-process.exitCode = await runCli(cliArguments, {
-  ...dependencies,
-  ...(interactive
-    ? {
-        createGitHubApp: (options: { origin: URL; workerName: string }) =>
-          createGitHubApp(options, {
-            fetch: dependencies.fetch,
-            openUrl: dependencies.openUrl,
-            writeOutput: dependencies.writeOutput,
-          }),
-        requestCloudflareGatewayAuthorization: (request: {
-          accountId: string;
-          canSkip: boolean;
-          dailySpendUsd: number;
-          workerName: string;
-        }) =>
-          requestCloudflareGatewayAuthorization(request, {
-            openUrl: openInDefaultBrowser,
-            promptSecret,
-            promptText,
-            style: createCliTextStyle(color),
-            writeOutput: dependencies.writeOutput,
-          }),
-      }
-    : {}),
-});
+process.exitCode = await runCli(cliArguments, dependencies);

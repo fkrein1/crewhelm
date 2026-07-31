@@ -137,4 +137,31 @@ describe("GitHub App setup", () => {
     expect(output.join("")).not.toContain("github-app-client-secret");
     expect(output.join("")).not.toContain("private-key-that-must-be-discarded");
   });
+
+  it("closes the loopback setup listener when the selected browser is unavailable", async () => {
+    let setupUrl: URL | undefined;
+
+    await expect(
+      createGitHubApp(
+        {
+          origin: new URL("https://crewhelm.example"),
+          workerName: "crewhelm",
+        },
+        {
+          fetch: vi.fn<typeof globalThis.fetch>(),
+          openUrl: async (url) => {
+            setupUrl = url;
+            throw new Error("browser-provider-secret");
+          },
+          writeOutput: () => {},
+        },
+      ),
+    ).rejects.toThrow("browser-provider-secret");
+
+    if (!setupUrl) {
+      throw new Error("Expected the GitHub App setup URL.");
+    }
+
+    await expect(globalThis.fetch(setupUrl)).rejects.toThrow("fetch failed");
+  });
 });

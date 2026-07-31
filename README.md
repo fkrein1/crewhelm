@@ -70,6 +70,25 @@ Edit recipe, opens Cloudflare's token page, or lets the operator skip or stop. T
 and process-only. Environment variables remain available for unattended setup; see
 `crewhelm --help`.
 
+Use explicit installation metadata to keep a dedicated target authoritative:
+
+```sh
+node apps/cli/dist/crewhelm.js up \
+  --installation crewhelm.testing.installation.json \
+  --json
+node apps/cli/dist/crewhelm.js doctor \
+  --installation crewhelm.testing.installation.json
+```
+
+Installation-backed diagnosis and smoke commands derive their endpoint from the metadata. When
+both `--installation` and `--endpoint` are supplied, Crewhelm rejects a mismatch before making a
+network request.
+
+Interactive commands accept `--browser system`, `--browser codex`, or `--browser none`. Codex mode
+prints a capability-bearing `CODEX_BROWSER_HANDOFF` loopback URL to stderr. Open it in the Codex
+in-app browser, then choose **Continue to Crewhelm**. The continuation is single-use; the CLI never
+prints the signed authorization target or falls back to the system browser.
+
 Diagnose without deploying:
 
 ```sh

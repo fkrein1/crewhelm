@@ -1,6 +1,6 @@
 ---
 name: crewhelm-reliability-bugbash
-description: Run a bounded live Crewhelm reliability bug bash from a user-provided feature, journey, recent change, failure mode, or reliability concern. Use only when the user explicitly names crewhelm-reliability-bugbash or explicitly asks to run a live Crewhelm reliability bug bash against the repository's dedicated test installation. That request authorizes autonomous testing deployment, bounded test resources and provider effects, cleanup, and focused draft PRs. Do not infer this skill from generic debugging, E2E, soak, resilience, CI, monitoring, or production requests.
+description: Run a bounded live Crewhelm reliability bug bash from a user-provided feature, journey, recent change, failure mode, or reliability concern. Use only when the user explicitly names crewhelm-reliability-bugbash or explicitly asks to run a live Crewhelm reliability bug bash against the repository's dedicated test installation. That request authorizes the dedicated testing deployment, bounded test resources and provider effects, and cleanup. Do not infer this skill from generic debugging, E2E, soak, resilience, CI, monitoring, or production requests.
 ---
 
 # Crewhelm reliability bug bash
@@ -19,18 +19,23 @@ guided investigation, not a fixed test plan.
    Ask for one before live work when the request provides none.
 4. Treat the explicit request to run this skill as authorization to deploy to the repository's
    dedicated test installation; create, operate, and remove bounded session resources; use
-   owner-controlled test destinations and provider effects; and push focused draft PRs. Do not ask
-   for per-action approval.
+   owner-controlled test destinations and provider effects. Do not ask for per-action approval
+   inside those bounds. Pushing, opening a pull request, production access, and new external
+   resources require separate explicit authorization.
 5. Choose a conservative working envelope within existing fleet and AI Gateway policy. Keep spend
    and concurrency modest, reserve capacity for cleanup, and stop on unexpected usage or effects.
    The request does not authorize production, shared-resource destruction, budget or policy
    increases, third-party destinations, merging, or unrelated effects.
-6. Establish the exact stable fingerprint and capture fleet health, capacity, and unresolved
-   recovery state.
+6. Complete the black-box skill's standard-target preflight. Always build and run `crewhelm up`
+   against `crewhelm.testing.installation.json`, then establish the exact stable fingerprint and
+   capture fleet health, capacity, and unresolved recovery state.
 7. Create or update `.crewhelm-bugbash.md` in the repository root. Keep free-form notes on what was
    tried, observations, identifiers, hypotheses, fixes, cleanup, and promising next paths. Include
    the hint, target, fingerprint, current authority and bounds, session status, and pending cleanup
    or revocation. Never commit it or place secrets in it.
+8. Run only one live session against the installation. Record it as active before authorization,
+   reserve request and token-lifetime headroom for cleanup, and do not start a parallel rescue
+   session while it polls.
 
 ## Investigate
 
@@ -41,6 +46,8 @@ the next test.
 - Within the approved envelope, create real test infrastructure, Agents, runs, connections, and
   provider effects without per-action approval. Prefer economical models and operations when they
   preserve the test's validity; platform budgets are ceilings, not targets.
+- Use installation-backed CLI commands with `--installation crewhelm.testing.installation.json`
+  and `--browser codex`. Never substitute a hand-typed endpoint or the system browser.
 - Treat the user's hint as the first priority, not the session boundary. After exercising it, use
   the remaining appetite on adjacent and then other high-value behavior.
 - Prefer realistic cross-capability journeys over isolated calls.
@@ -55,6 +62,10 @@ failure or recovery path, and exact end state are understood. Then sample adjace
 produces useful evidence. Before each new path, confirm it fits the working envelope and leaves
 enough capacity for cleanup and revocation. Stop before the work becomes a separate investigation.
 
+For a light bug bash, target five minutes: complete preflight and public diagnosis, then exercise at
+most one bounded journey without provider effects unless the hint requires one. Light mode keeps all
+origin, authority, cleanup, and revocation requirements.
+
 ## Repair
 
 For a suspected product defect:
@@ -65,15 +76,13 @@ For a suspected product defect:
 3. Fix the root cause with `crewhelm-development`; do not weaken security or recovery.
 4. Verify the regression test passes, then run focused checks and the required repository
    verification.
-5. Deploy only with explicit authorization, confirm the stable fingerprint, and replay the live
-   failure before resuming exploration.
+5. Redeploy only to the already authorized dedicated testing installation, confirm the stable
+   fingerprint, and replay the live failure before resuming exploration.
 
 Keep unrelated defects as separate `crewhelm-development` slices. Finish or hand off one slice
-before starting another. Push and open one focused draft PR per coherent group of related fixes
-without pausing; never merge. Group fixes only when they share a root cause or must land together to
-restore one observable workflow. Add a fix to an existing PR only when it remains within that PR's
-objective and satisfies the same grouping rule; otherwise use an isolated branch or worktree from
-the appropriate base.
+before starting another. Keep each coherent group of related fixes local unless the user explicitly
+authorizes a push and draft pull request; never merge. Group fixes only when they share a root cause
+or must land together to restore one observable workflow.
 
 Do not classify an anomaly as a bug without a reproducible contract violation. Stop for new
 authority, production access, destructive or irreversible effects, unbounded cost, exposed secrets,
@@ -88,4 +97,6 @@ installation or connection without explicit authorization.
 
 Report the fingerprint, surfaces and journeys exercised, bugs fixed, draft PRs, unresolved
 reproducible findings, blocked paths, remaining confidence gaps, spend, and cleanup state. Leave
-`.crewhelm-bugbash.md` as a concise handoff for a fresh agent; create GitHub issues only when asked.
+`.crewhelm-bugbash.md` as a concise handoff for a fresh agent: current session state, target,
+fingerprint, authority, pending cleanup, reproducible findings, and next high-value paths. Replace
+stale narrative instead of appending history. Create GitHub issues only when asked.

@@ -203,12 +203,12 @@ export async function createGitHubApp(
   expectedHost = `127.0.0.1:${address.port}`;
   const setupUrl = new URL(`http://${expectedHost}${setupPath}`);
   dependencies.writeOutput(`Browser did not open? ${setupUrl.href}\n`);
-  await dependencies.openUrl(setupUrl);
 
   let authorizationCode: string;
   let timeout: ReturnType<typeof setTimeout> | undefined;
 
   try {
+    await dependencies.openUrl(setupUrl);
     authorizationCode = await Promise.race([
       code,
       new Promise<never>((_, reject) => {
