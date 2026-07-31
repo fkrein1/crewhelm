@@ -1,0 +1,22 @@
+{
+  "name": "@crewhelm/site",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "astro build",
+    "deploy:production": "astro build && wrangler deploy",
+    "dev": "astro dev",
+    "preview": "astro preview",
+    "preview:upload": "astro build && wrangler versions upload"
+  },
+  "dependencies": {
+    "@crewhelm/design": "workspace:*",
+    "astro": "7.1.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "tailwindcss": "4.3.3",
+    "wrangler": "4.115.0"
+  }
+}

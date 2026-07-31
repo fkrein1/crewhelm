@@ -252,8 +252,8 @@ describe("Crewhelm CLI", () => {
     await expect(runCli([], harness.dependencies)).resolves.toBe(0);
     expect(harness.output.join("")).toContain(">_");
     expect(harness.output.join("")).toContain("CREWHELM");
-    expect(harness.output.join("")).toContain("\u001B[38;2;100;168;255m");
-    expect(harness.output.join("")).toContain("\u001B[38;2;10;132;255m");
+    expect(harness.output.join("")).toContain("\u001B[38;2;48;126;224m");
+    expect(harness.output.join("")).toContain("\u001B[38;2;94;165;245m");
     expect(harness.errors).toEqual([]);
   });
 

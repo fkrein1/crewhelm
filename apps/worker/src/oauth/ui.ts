@@ -252,12 +252,12 @@ async function navigationJsonResponse(response: Response, request: Request): Pro
 
 function loginPage(query: string): string {
   return renderWorkerPage({
-    body: `      <p class="ch-copy">Continue with the GitHub account configured as this Crewhelm deployment's owner.</p>
+    body: `      <p class="ch-copy">Crewhelm uses the GitHub account configured for this deployment to verify owner authority.</p>
       <input type="hidden" name="oauth_query" value="${escapePageHtml(query)}">
       <div class="ch-actions">
         <a class="ch-button ch-button--primary" href="/oauth/login/continue?${escapePageHtml(query)}" data-navigation-start data-pending-label="Opening GitHub…">Continue with GitHub</a>
       </div>`,
-    heading: "Sign in to Crewhelm",
+    heading: "Continue as the owner.",
     scriptPath: "/oauth/actions.js",
     title: "Sign in to Crewhelm",
   });
@@ -265,8 +265,8 @@ function loginPage(query: string): string {
 
 function completionPage(): string {
   return renderWorkerPage({
-    body: '      <p class="ch-copy">Authorization response received. Return to your client.</p>',
-    heading: "Crewhelm authorization complete",
+    body: '      <p class="ch-copy">Crewhelm completed this handoff. You can close this window and return to your MCP client.</p>',
+    heading: "Authorization returned to your client.",
     title: "Crewhelm authorization complete",
   });
 }
@@ -305,7 +305,7 @@ function consentPage(
   ].join("");
 
   return renderWorkerPage({
-    body: `      <p class="ch-copy"><strong>${escapePageHtml(client.name)}</strong> is requesting these permissions:</p>
+    body: `      <p class="ch-copy"><strong>${escapePageHtml(client.name)}</strong> is requesting this authority:</p>
       <ul class="ch-permissions">${permissions}</ul>
       <div class="ch-meta">
         <p>Client: <code>${escapePageHtml(client.id)}</code></p>
@@ -315,7 +315,7 @@ function consentPage(
         <form method="post" action="/oauth/consent" data-consent-form>
           <input type="hidden" name="oauth_query" value="${escapePageHtml(query)}">
           <input type="hidden" name="decision" value="approve">
-          <button class="ch-button ch-button--primary" type="submit" data-pending-label="Authorizing…">Authorize</button>
+          <button class="ch-button ch-button--primary" type="submit" data-pending-label="Granting access…">Grant access</button>
         </form>
         <form method="post" action="/oauth/consent" data-consent-form>
           <input type="hidden" name="oauth_query" value="${escapePageHtml(query)}">
@@ -323,7 +323,7 @@ function consentPage(
           <button class="ch-button ch-button--quiet" type="submit" data-pending-label="Denying…">Deny</button>
         </form>
       </div>`,
-    heading: "Authorize Crewhelm",
+    heading: "Review requested authority.",
     scriptPath: "/oauth/actions.js",
     title: "Authorize Crewhelm",
     tone: "warning",

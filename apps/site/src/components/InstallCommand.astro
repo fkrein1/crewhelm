@@ -1,0 +1,29 @@
+<div class="terminal">
+  <div class="terminal-bar">
+    <span>~/crewhelm</span>
+    <button class="copy-button" type="button" data-copy aria-label="Copy install command">Copy</button>
+  </div>
+  <pre><code><span class="prompt">$</span> npx @crewhelm/cli@beta up</code></pre>
+  <p><span aria-hidden="true">●</span> You own what comes up.</p>
+</div>
+
+<script>
+  const button = document.querySelector<HTMLButtonElement>("[data-copy]");
+  const command = "npx @crewhelm/cli@beta up";
+
+  button?.addEventListener("click", async () => {
+    if (!navigator.clipboard) return;
+
+    try {
+      await navigator.clipboard.writeText(command);
+      button.textContent = "Copied";
+      button.setAttribute("aria-label", "Install command copied");
+      window.setTimeout(() => {
+        button.textContent = "Copy";
+        button.setAttribute("aria-label", "Copy install command");
+      }, 1800);
+    } catch {
+      button.textContent = "Select command";
+    }
+  });
+</script>

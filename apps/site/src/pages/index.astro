@@ -1,0 +1,109 @@
+---
+import { CREWHELM_BRAND_POSITIONING } from "@crewhelm/design";
+
+import AuthorityLedger from "../components/AuthorityLedger.astro";
+import Brand from "../components/Brand.astro";
+import CustodyFlow from "../components/CustodyFlow.astro";
+import InstallCommand from "../components/InstallCommand.astro";
+import SiteLayout from "../layouts/SiteLayout.astro";
+
+export const prerender = true;
+---
+
+<SiteLayout description={CREWHELM_BRAND_POSITIONING}>
+  <header class="site-header wrap">
+    <Brand />
+    <nav aria-label="Primary navigation">
+      <a href="#why">Why Crewhelm</a>
+      <a href="#system">Architecture</a>
+      <a class="nav-cta" href="https://github.com/fkrein1/crewhelm" rel="noreferrer">View on GitHub <span aria-hidden="true">↗</span></a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero wrap" id="top" aria-labelledby="hero-title">
+      <div class="hero-kicker">
+        <p>Open-source control plane<br />for AI Agents</p>
+        <p class="issue">Issue 01<br />Owner edition</p>
+      </div>
+      <div class="hero-copy">
+        <h1 id="hero-title">Give Agents<br />a mandate.<br /><em>Not a master key.</em></h1>
+        <div class="hero-deck">
+          <p>Crewhelm creates and operates long-lived Agents on your Cloudflare account—with exact capability grants, immutable revisions, budgets, approvals, and a complete audit trail.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/fkrein1/crewhelm" rel="noreferrer">Inspect the source <span aria-hidden="true">↗</span></a>
+            <a class="text-link" href="#artifact">See an authority decision <span aria-hidden="true">↓</span></a>
+          </div>
+        </div>
+      </div>
+      <p class="margin-note">For people who want useful Agents<br />without becoming platform operators.</p>
+    </section>
+
+    <section class="artifact-section wrap" id="artifact" aria-labelledby="artifact-title">
+      <header class="section-label">
+        <span>01 / A run, made legible</span>
+        <h2 id="artifact-title">Routine work moves.<br />Authority boundaries hold.</h2>
+      </header>
+      <AuthorityLedger />
+      <p class="artifact-caption">Tool visibility is not authority. Every action is checked against the exact Agent revision, grant, limits, and run context.</p>
+    </section>
+
+    <section class="manifesto wrap" id="why" aria-labelledby="why-title">
+      <div class="manifesto-intro">
+        <span class="section-index">02</span>
+        <h2 id="why-title">An Agent should<br />work for <em>you</em>.</h2>
+      </div>
+      <div class="principles">
+        <article>
+          <span class="number">I.</span>
+          <div><h3>Own the control plane.</h3><p>Deploy Crewhelm to your Cloudflare account. Keep durable state, policy, and operational control in infrastructure you own.</p></div>
+        </article>
+        <article>
+          <span class="number">II.</span>
+          <div><h3>Grant the minimum.</h3><p>Connections and capability grants are explicit. Provider credentials remain in Composio; Agents receive bounded use, never the keys.</p></div>
+        </article>
+        <article>
+          <span class="number">III.</span>
+          <div><h3>Let routine work run.</h3><p>Schedules and manual runs dispatch once, observe budgets, and proceed within standing authority—without asking you about every harmless step.</p></div>
+        </article>
+        <article>
+          <span class="number">IV.</span>
+          <div><h3>Make every stop recoverable.</h3><p>Approve, deny, disable, revoke, retry, and inspect. When judgment is required, work pauses with context instead of improvising permission.</p></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="custody-section wrap" id="system" aria-labelledby="architecture-title">
+      <header class="custody-heading">
+        <span class="section-index">03</span>
+        <h2 id="architecture-title">Your infrastructure.<br />Clear lines of custody.</h2>
+        <p>Cloudflare owns durable execution. Composio holds provider credentials. Crewhelm owns the authority between intent and action.</p>
+      </header>
+      <CustodyFlow />
+    </section>
+
+    <section class="install wrap" aria-labelledby="install-title">
+      <div>
+        <span class="section-index">04</span>
+        <h2 id="install-title">Bring up<br />your helm.</h2>
+        <p>Run the guided installer from a terminal authenticated with Cloudflare. Crewhelm provisions the control plane, then verifies what came up.</p>
+        <a class="text-link" href="https://github.com/fkrein1/crewhelm#readme" rel="noreferrer">Read the documentation <span aria-hidden="true">↗</span></a>
+      </div>
+      <InstallCommand />
+    </section>
+
+    <section class="final-cta">
+      <div class="wrap">
+        <p>Stop renting trust.</p>
+        <h2>Run Agents<br />with boundaries.</h2>
+        <a class="button button-light" href="https://github.com/fkrein1/crewhelm" rel="noreferrer">Explore Crewhelm on GitHub <span aria-hidden="true">↗</span></a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer wrap">
+    <Brand />
+    <p>Open source · Cloudflare-native · MCP-first</p>
+    <p>Built for owner-controlled Agents.</p>
+  </footer>
+</SiteLayout>

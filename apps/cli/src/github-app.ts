@@ -133,8 +133,10 @@ export async function createGitHubApp(
         response.writeHead(400, localPageHeaders());
         response.end(
           renderLocalPage({
-            heading: "GitHub App setup could not be verified",
-            paragraphs: ["Return to Crewhelm and start the setup again."],
+            heading: "GitHub App setup stopped.",
+            paragraphs: [
+              "Crewhelm could not verify this return. Go back to the terminal and start setup again.",
+            ],
             title: "GitHub App setup not verified",
             tone: "negative",
           }),
@@ -145,8 +147,8 @@ export async function createGitHubApp(
       response.writeHead(200, localPageHeaders());
       response.end(
         renderLocalPage({
-          heading: "GitHub App connected",
-          paragraphs: ["Return to Crewhelm to finish the installation."],
+          heading: "GitHub App connected.",
+          paragraphs: ["Return to the terminal. Crewhelm will finish the installation from there."],
           title: "GitHub App connected",
           tone: "positive",
         }),
@@ -179,9 +181,9 @@ export async function createGitHubApp(
           fields: { manifest },
           label: "Continue to GitHub",
         },
-        heading: "Create your Crewhelm GitHub App",
+        heading: "Create your private GitHub App.",
         paragraphs: [
-          "GitHub will create a private app with no repository permissions. Crewhelm uses it only to verify the fleet owner.",
+          "GitHub will create a private app with no repository permissions. Crewhelm uses it only to verify owner authority.",
         ],
         title: "Connect Crewhelm to GitHub",
       }),

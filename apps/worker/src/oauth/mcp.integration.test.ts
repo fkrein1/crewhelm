@@ -459,7 +459,7 @@ describe("public OAuth to MCP integration", () => {
     expect(stylesheetResponse.headers.get("content-type")).toBe("text/css; charset=utf-8");
     expect(stylesheet).toContain(".ch-button--primary");
     expect(stylesheet).toContain('.ch-button[aria-disabled="true"]');
-    expect(stylesheet).toContain("@media (prefers-color-scheme: light)");
+    expect(stylesheet).toContain("@media (prefers-color-scheme: dark)");
     expect(loginPage).toContain('class="ch-brand" role="img" aria-label="Crewhelm"');
     expect(loginPage).toContain('data-tone="accent"');
     const continueResponse = await request(workerEnv, `/oauth/login/continue?${loginQuery}`);
@@ -586,7 +586,7 @@ describe("public OAuth to MCP integration", () => {
     expect(consentPage).toContain('<input type="hidden" name="decision" value="approve">');
     expect(consentPage).toContain('<input type="hidden" name="decision" value="deny">');
     expect(consentPage).toContain(
-      '<button class="ch-button ch-button--primary" type="submit" data-pending-label="Authorizing…">Authorize</button>',
+      '<button class="ch-button ch-button--primary" type="submit" data-pending-label="Granting access…">Grant access</button>',
     );
     expect(consentPage).toContain(
       '<button class="ch-button ch-button--quiet" type="submit" data-pending-label="Denying…">Deny</button>',
@@ -618,8 +618,8 @@ describe("public OAuth to MCP integration", () => {
     expect(actionsScript).not.toContain("new FormData(consentForm)");
     expect(actionsScript).not.toContain("window.location.assign(result.redirectUrl)");
     expect(completionPageResponse.status).toBe(200);
-    expect(completionPage).toContain("Crewhelm authorization complete");
-    expect(completionPage).toContain("Authorization response received.");
+    expect(completionPage).toContain("Authorization returned to your client.");
+    expect(completionPage).toContain("Crewhelm completed this handoff.");
     const speculativeGetResponse = await request(workerEnv, "/oauth/consent/decision");
     const unauthenticatedApproveResponse = await request(workerEnv, "/oauth/consent", {
       body: new URLSearchParams({ decision: "approve", oauth_query: consentQuery }),

@@ -709,7 +709,10 @@ describe("repository foundation", () => {
     }
 
     expect(pullRequestAuthorityViolations).toEqual([]);
-    expect(pnpmSetupInputs).toEqual([{ run_install: false }, { run_install: false }]);
+    expect(pnpmSetupInputs.length).toBeGreaterThan(0);
+    for (const inputs of pnpmSetupInputs) {
+      expect(inputs).toEqual({ run_install: false });
+    }
 
     const workflowByName = Object.fromEntries(
       workflows.map(({ name, workflow }) => [name, workflow]),

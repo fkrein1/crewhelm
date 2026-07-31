@@ -101,7 +101,7 @@ describe("GitHub App setup", () => {
           const invalidCallbackBody = await invalidCallback.text();
 
           expect(invalidCallback.status).toBe(400);
-          expect(invalidCallbackBody).toContain("GitHub App setup could not be verified");
+          expect(invalidCallbackBody).toContain("GitHub App setup stopped.");
           expect(invalidCallbackBody).toContain('data-tone="negative"');
 
           redirectUrl.searchParams.set("code", "manifest-code");

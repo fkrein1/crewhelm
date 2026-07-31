@@ -233,7 +233,7 @@ describe("Crewhelm Worker", () => {
     expect(response.headers.get("referrer-policy")).toBe("no-referrer");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     expect(response.headers.get("x-frame-options")).toBe("DENY");
-    expect(body).toContain("Authorization returned to Crewhelm");
+    expect(body).toContain("Connection authorization returned.");
     expect(body).toContain('href="/oauth/styles.css"');
     expect(body).toContain('data-tone="positive"');
     expect(body).toContain('class="ch-brand" role="img" aria-label="Crewhelm"');
@@ -277,7 +277,7 @@ describe("Crewhelm Worker", () => {
     const failedBody = await failedResponse.text();
 
     expect(failedResponse.status).toBe(200);
-    expect(failedBody).toContain("Authorization was not completed");
+    expect(failedBody).toContain("Connection authorization stopped.");
     expect(failedBody).toContain('data-tone="warning"');
     expect(failedBody).not.toContain(fixture.reservation.authorizationToken);
     await expect(

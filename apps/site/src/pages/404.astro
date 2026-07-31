@@ -1,0 +1,16 @@
+---
+import Brand from "../components/Brand.astro";
+import SiteLayout from "../layouts/SiteLayout.astro";
+
+export const prerender = true;
+---
+
+<SiteLayout title="Page not found — Crewhelm" description="This Crewhelm page does not exist.">
+  <main class="not-found wrap">
+    <Brand href="/" />
+    <p class="section-index">404 / No route</p>
+    <h1>This page is<br />outside the chart.</h1>
+    <p>The requested page does not exist. Return to Crewhelm and continue from a known route.</p>
+    <a class="button button-primary" href="/">Return to Crewhelm <span aria-hidden="true">→</span></a>
+  </main>
+</SiteLayout>

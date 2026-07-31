@@ -1,0 +1,13 @@
+<div class="architecture-flow" aria-label="MCP client through Crewhelm and tool gate to external services">
+  <div class="arch-node"><span>01 · OPERATE</span><strong>Claude / Codex</strong><small>MCP client</small></div>
+  <div class="arch-arrow"><span>signed request</span><i aria-hidden="true">→</i></div>
+  <div class="arch-node primary-node"><span>02 · CONTROL</span><strong>Crewhelm</strong><small>your Cloudflare</small></div>
+  <div class="arch-arrow"><span>authorized dispatch</span><i aria-hidden="true">→</i></div>
+  <div class="arch-node"><span>03 · ACT</span><strong>Agent / Tool Gate</strong><small>bounded run</small></div>
+  <div class="arch-arrow"><span>scoped capability</span><i aria-hidden="true">→</i></div>
+  <div class="arch-node"><span>04 · CONNECT</span><strong>Composio</strong><small>credentials stay here</small></div>
+</div>
+
+<div class="runtime-strip" aria-label="Cloudflare runtime services">
+  <span>Workers</span><span>Durable Objects</span><span>Think</span><span>Workflows</span><span>Storage</span>
+</div>
