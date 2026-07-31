@@ -29,6 +29,20 @@ Color carries meaning. Blue is control. Green is allowed. Amber is approval. Red
 
 Use `@crewhelm/design/theme.css`. Extend tokens before inventing local values.
 
+### Logo
+
+The Crewhelm mark places the terminal prompt inside a square frame with one deliberate opening. The
+prompt is ready to act; the frame makes its boundary legible. Use the supplied signal-blue mark from
+`@crewhelm/design/assets/*`, preserve the square geometry, gradient, and open right edge, and never
+add a shield, lock, or rounded app tile.
+
+The 1024px PNG is the expressive high-resolution master and includes its original soft glow. Use the
+glow-free optimized SVG or its derived PNG sizes for favicons, navigation, authorization, and other
+small product UI. Do not downsample the glowing master for those surfaces.
+
+The wordmark remains `CREWHELM`. The CLI renders the same open frame with terminal characters. The
+browser favicon uses the same transparent mark in both color schemes.
+
 ## Surface test
 
 Every surface must answer:

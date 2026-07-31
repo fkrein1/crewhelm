@@ -81,6 +81,7 @@ describe("GitHub App setup", () => {
           expect(body).toContain('href="/assets/crewhelm.css"');
           expect(body).not.toContain("<body style=");
           expect(body).toContain('class="ch-brand" role="img" aria-label="Crewhelm"');
+          expect(body).toContain('class="ch-brand__mark"');
           expect(body).toContain('data-tone="accent"');
           expect(stylesheet.headers.get("cache-control")).toBe("private, max-age=600");
           expect(stylesheet.headers.get("content-type")).toBe("text/css; charset=utf-8");
