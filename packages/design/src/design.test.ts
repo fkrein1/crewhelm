@@ -57,7 +57,8 @@ describe("Crewhelm design foundation", () => {
     expect(theme).toContain("@theme inline");
     expect(theme).toContain("--color-background: var(--background)");
     expect(theme).toContain("--color-primary: var(--primary)");
-    expect(theme).toContain(':root[data-theme="dark"]');
+    expect(theme).toContain("@media (prefers-color-scheme: dark)");
+    expect(theme).not.toContain("data-theme");
     expect(theme).toContain("--color-inverse: var(--inverse)");
   });
 
@@ -89,8 +90,8 @@ describe("Crewhelm design foundation", () => {
     expect(CREWHELM_WEB_STYLES).toContain("--ch-color-accent-contrast: #fff");
     expect(CREWHELM_WEB_STYLES).toContain("--ch-color-text-muted: oklch(0.68 0.025 255)");
     expect(CREWHELM_WEB_STYLES).toContain("--ch-color-text-muted: oklch(0.45 0.032 255)");
-    expect(CREWHELM_WEB_STYLES).toContain(':root[data-theme="light"]');
     expect(CREWHELM_WEB_STYLES).toContain("@media (prefers-color-scheme: dark)");
+    expect(CREWHELM_WEB_STYLES).not.toContain("data-theme");
     expect(CREWHELM_WEB_STYLES).toContain("@media (prefers-reduced-motion: reduce)");
     expect(CREWHELM_WEB_STYLES).toContain('.ch-button[aria-disabled="true"]');
     expect(CREWHELM_WEB_STYLES).not.toContain("body.ch-page::before");

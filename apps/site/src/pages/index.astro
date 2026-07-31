@@ -6,7 +6,6 @@ import Brand from "../components/Brand.astro";
 import ButtonLink from "../components/ButtonLink.astro";
 import CustodyFlow from "../components/CustodyFlow.astro";
 import InstallCommand from "../components/InstallCommand.astro";
-import ThemeToggle from "../components/ThemeToggle.astro";
 import SiteLayout from "../layouts/SiteLayout.astro";
 import { homeStructuredData } from "../lib/seo";
 
@@ -43,7 +42,6 @@ const principles = [
     <nav class="flex items-center gap-7.5 text-[.8rem] font-bold" aria-label="Primary navigation">
       <a class="no-underline hover:text-primary max-[900px]:hidden" href="#why">Why Crewhelm</a>
       <a class="no-underline hover:text-primary max-[900px]:hidden" href="#system">Architecture</a>
-      <ThemeToggle />
       <a class="border-b border-current py-2 no-underline" href="https://github.com/fkrein1/crewhelm" rel="noreferrer"><span class="max-[620px]:hidden">View on </span>GitHub <span aria-hidden="true">↗</span></a>
     </nav>
   </header>

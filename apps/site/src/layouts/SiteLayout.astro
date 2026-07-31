@@ -2,7 +2,6 @@
 import Seo from "../components/Seo.astro";
 import type { JsonLd } from "../lib/seo";
 import { CREWHELM_SITE } from "../lib/seo";
-import { CREWHELM_THEME_STORAGE_KEY } from "../lib/theme";
 import globalStyles from "../styles/global.css?url";
 
 interface Props {
@@ -29,24 +28,6 @@ const {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <Seo {canonical} {description} {index} {structuredData} {title} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <script is:inline define:vars={{ storageKey: CREWHELM_THEME_STORAGE_KEY }}>
-      (() => {
-        let theme;
-
-        try {
-          const savedTheme = localStorage.getItem(storageKey);
-          if (savedTheme === "light" || savedTheme === "dark") theme = savedTheme;
-        } catch {
-          // Fall through to the system preference when storage is unavailable.
-        }
-
-        theme ??= window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-        document.documentElement.dataset.theme = theme;
-        document
-          .querySelector('meta[name="theme-color"]')
-          ?.setAttribute("content", theme === "dark" ? "#11151e" : "#f2f0e9");
-      })();
-    </script>
     <link rel="stylesheet" href={globalStyles} />
   </head>
   <body>

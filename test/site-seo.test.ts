@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -10,6 +12,22 @@ import {
 } from "../apps/site/src/lib/seo.js";
 
 describe("Crewhelm site discovery foundation", () => {
+  it("follows the system color scheme without a user override", async () => {
+    const [layout, page, seo] = await Promise.all([
+      readFile(new URL("../apps/site/src/layouts/SiteLayout.astro", import.meta.url), "utf8"),
+      readFile(new URL("../apps/site/src/pages/index.astro", import.meta.url), "utf8"),
+      readFile(new URL("../apps/site/src/components/Seo.astro", import.meta.url), "utf8"),
+    ]);
+
+    expect(`${layout}\n${page}`).not.toMatch(/ThemeToggle|localStorage|data-theme/);
+    expect(seo).toContain(
+      '<meta name="theme-color" content="#f2f0e9" media="(prefers-color-scheme: light)" />',
+    );
+    expect(seo).toContain(
+      '<meta name="theme-color" content="#11151e" media="(prefers-color-scheme: dark)" />',
+    );
+  });
+
   it("keeps canonical URLs on the production origin", () => {
     expect(absoluteSiteUrl("/")).toBe("https://crewhelm.app/");
     expect(absoluteSiteUrl("/recipes/example")).toBe("https://crewhelm.app/recipes/example");
