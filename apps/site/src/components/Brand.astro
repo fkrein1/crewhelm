@@ -6,7 +6,7 @@ interface Props {
 const { href = "#top" } = Astro.props;
 ---
 
-<a class="brand" href={href} aria-label="Crewhelm home">
-  <span aria-hidden="true">&gt;_</span>
+<a class="inline-flex gap-2 font-mono text-[.82rem] font-extrabold tracking-[.08em] no-underline" href={href} aria-label="Crewhelm home">
+  <span class="text-primary" aria-hidden="true">&gt;_</span>
   CREWHELM
 </a>

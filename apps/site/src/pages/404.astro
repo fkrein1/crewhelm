@@ -1,16 +1,17 @@
 ---
 import Brand from "../components/Brand.astro";
+import ButtonLink from "../components/ButtonLink.astro";
 import SiteLayout from "../layouts/SiteLayout.astro";
 
 export const prerender = true;
 ---
 
 <SiteLayout title="Page not found — Crewhelm" description="This Crewhelm page does not exist.">
-  <main class="not-found wrap">
+  <main class="shell flex min-h-screen flex-col items-start justify-center py-16">
     <Brand href="/" />
-    <p class="section-index">404 / No route</p>
-    <h1>This page is<br />outside the chart.</h1>
-    <p>The requested page does not exist. Return to Crewhelm and continue from a known route.</p>
-    <a class="button button-primary" href="/">Return to Crewhelm <span aria-hidden="true">→</span></a>
+    <p class="section-number mt-auto mb-7">404 / No route</p>
+    <h1 class="m-0 max-w-245 text-[clamp(4rem,10vw,9rem)] leading-display tracking-[-.07em]">This page is<br />outside the chart.</h1>
+    <p class="mt-10 mb-7.5 max-w-125 leading-[1.6] text-muted-foreground">The requested page does not exist. Return to Crewhelm and continue from a known route.</p>
+    <ButtonLink href="/">Return to Crewhelm <span aria-hidden="true">→</span></ButtonLink>
   </main>
 </SiteLayout>
