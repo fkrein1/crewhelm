@@ -6,10 +6,12 @@ import type {
   AgentInboxDeferredReason,
   AgentExecutionLimits,
   AgentScheduleConfiguration,
+  AgentWorkflowAggregateBudget,
   ComposioToolCapabilityGrant,
   ConnectionAuthorizationOutcome,
   FleetConfigurationData,
   RunBudgetReservation,
+  RunSession,
   SkillProvenance,
   SkillWarning,
 } from "@crewhelm/contracts";
@@ -447,6 +449,189 @@ export const agentScheduleUpdates = sqliteTable(
   ],
 );
 
+export const agentWorkflows = sqliteTable(
+  "agent_workflows",
+  {
+    workflowId: text("workflow_id").primaryKey(),
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    agentId: text("agent_id").notNull(),
+    agentRevision: integer("agent_revision").notNull(),
+    fleetRevision: integer("fleet_revision").notNull(),
+    objective: text("objective").notNull(),
+    budget: text("budget", { mode: "json" }).$type<AgentWorkflowAggregateBudget>().notNull(),
+    status: text("status", {
+      enum: ["queued", "running", "waiting", "cancelling", "completed", "failed", "cancelled"],
+    }).notNull(),
+    workflowRevision: integer("workflow_revision").notNull(),
+    stageCount: integer("stage_count").notNull(),
+    completedStages: integer("completed_stages").notNull().default(0),
+    currentStageIndex: integer("current_stage_index"),
+    currentRunId: text("current_run_id"),
+    session: text("session", { mode: "json" }).$type<RunSession | null>(),
+    failureCode: text("failure_code", {
+      enum: [
+        "agent_unavailable",
+        "budget_exhausted",
+        "capability_unavailable",
+        "coordinator_failed",
+        "model_unavailable",
+        "revision_conflict",
+        "run_failed",
+        "workflow_unavailable",
+      ],
+    }),
+    failureStageIndex: integer("failure_stage_index"),
+    cancellationRequestedAt: integer("cancellation_requested_at"),
+    deletingAt: integer("deleting_at"),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+    completedAt: integer("completed_at"),
+    cleanupAt: integer("cleanup_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("agent_workflows_client_idempotency").on(table.clientId, table.idempotencyKey),
+    index("agent_workflows_agent_created").on(table.agentId, table.workflowId),
+    index("agent_workflows_cleanup").on(table.cleanupAt),
+    index("agent_workflows_status_updated").on(table.status, table.updatedAt),
+    foreignKey({
+      columns: [table.agentId, table.agentRevision],
+      foreignColumns: [agentRevisions.agentId, agentRevisions.revision],
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.fleetRevision],
+      foreignColumns: [fleetConfigurationRevisions.revision],
+    }).onDelete("restrict"),
+    check("agent_workflows_request_digest_length", sql`length(${table.requestDigest}) = 43`),
+    check("agent_workflows_objective_length", sql`length(${table.objective}) BETWEEN 1 AND 4096`),
+    check("agent_workflows_budget_json", sql`json_valid(${table.budget})`),
+    check(
+      "agent_workflows_status",
+      sql`${table.status} IN ('queued', 'running', 'waiting', 'cancelling', 'completed', 'failed', 'cancelled')`,
+    ),
+    check("agent_workflows_revision_positive", sql`${table.workflowRevision} > 0`),
+    check("agent_workflows_stage_count", sql`${table.stageCount} BETWEEN 2 AND 8`),
+    check(
+      "agent_workflows_completed_stages",
+      sql`${table.completedStages} BETWEEN 0 AND ${table.stageCount}`,
+    ),
+    check(
+      "agent_workflows_current_stage",
+      sql`${table.currentStageIndex} IS NULL OR ${table.currentStageIndex} BETWEEN 0 AND ${table.stageCount} - 1`,
+    ),
+    check(
+      "agent_workflows_session_json",
+      sql`${table.session} IS NULL OR json_valid(${table.session})`,
+    ),
+    check(
+      "agent_workflows_failure",
+      sql`(${table.failureCode} IS NULL AND ${table.failureStageIndex} IS NULL)
+        OR (${table.failureCode} IN ('agent_unavailable', 'budget_exhausted', 'capability_unavailable', 'coordinator_failed', 'model_unavailable', 'revision_conflict', 'run_failed', 'workflow_unavailable')
+          AND ${table.failureStageIndex} BETWEEN 0 AND ${table.stageCount} - 1)`,
+    ),
+    check("agent_workflows_created_at_positive", sql`${table.createdAt} > 0`),
+    check("agent_workflows_updated_after_creation", sql`${table.updatedAt} >= ${table.createdAt}`),
+    check("agent_workflows_cleanup_after_creation", sql`${table.cleanupAt} > ${table.createdAt}`),
+    check(
+      "agent_workflows_terminal_state",
+      sql`((${table.status} IN ('completed', 'failed', 'cancelled')
+          AND ${table.completedAt} IS NOT NULL
+          AND ${table.completedAt} >= ${table.createdAt})
+        OR (${table.status} NOT IN ('completed', 'failed', 'cancelled')
+          AND ${table.completedAt} IS NULL))`,
+    ),
+  ],
+);
+
+export const agentWorkflowStages = sqliteTable(
+  "agent_workflow_stages",
+  {
+    workflowId: text("workflow_id").notNull(),
+    stageIndex: integer("stage_index").notNull(),
+    name: text("name").notNull(),
+    prompt: text("prompt").notNull(),
+    promptDigest: text("prompt_digest").notNull(),
+    status: text("status", {
+      enum: ["pending", "running", "waiting", "completed", "failed", "cancelled"],
+    }).notNull(),
+    runId: text("run_id"),
+    startedAt: integer("started_at"),
+    completedAt: integer("completed_at"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workflowId, table.stageIndex] }),
+    uniqueIndex("agent_workflow_stages_run").on(table.runId),
+    foreignKey({
+      columns: [table.workflowId],
+      foreignColumns: [agentWorkflows.workflowId],
+    }).onDelete("cascade"),
+    check("agent_workflow_stages_index", sql`${table.stageIndex} BETWEEN 0 AND 7`),
+    check("agent_workflow_stages_name_length", sql`length(${table.name}) BETWEEN 1 AND 80`),
+    check("agent_workflow_stages_prompt_length", sql`length(${table.prompt}) BETWEEN 1 AND 11264`),
+    check("agent_workflow_stages_prompt_digest_length", sql`length(${table.promptDigest}) = 64`),
+    check(
+      "agent_workflow_stages_status",
+      sql`${table.status} IN ('pending', 'running', 'waiting', 'completed', 'failed', 'cancelled')`,
+    ),
+    check(
+      "agent_workflow_stages_state",
+      sql`((${table.status} = 'pending'
+          AND ${table.runId} IS NULL
+          AND ${table.startedAt} IS NULL
+          AND ${table.completedAt} IS NULL)
+        OR (${table.status} IN ('running', 'waiting')
+          AND ${table.runId} IS NOT NULL
+          AND ${table.startedAt} IS NOT NULL
+          AND ${table.completedAt} IS NULL)
+        OR (${table.status} IN ('completed', 'cancelled')
+          AND ${table.runId} IS NOT NULL
+          AND ${table.startedAt} IS NOT NULL
+          AND ${table.completedAt} IS NOT NULL
+          AND ${table.completedAt} >= ${table.startedAt})
+        OR (${table.status} = 'failed'
+          AND ${table.completedAt} IS NOT NULL
+          AND ((${table.runId} IS NULL AND ${table.startedAt} IS NULL)
+            OR (${table.runId} IS NOT NULL
+              AND ${table.startedAt} IS NOT NULL
+              AND ${table.completedAt} >= ${table.startedAt}))))`,
+    ),
+  ],
+);
+
+export const agentWorkflowDeletions = sqliteTable(
+  "agent_workflow_deletions",
+  {
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    workflowId: text("workflow_id").notNull(),
+    expectedRevision: integer("expected_revision").notNull(),
+    startClientId: text("start_client_id").notNull(),
+    startIdempotencyKey: text("start_idempotency_key").notNull(),
+    startRequestDigest: text("start_request_digest").notNull(),
+    deletedAt: integer("deleted_at").notNull(),
+    cleanupAt: integer("cleanup_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.clientId, table.idempotencyKey] }),
+    uniqueIndex("agent_workflow_deletions_start_idempotency").on(
+      table.startClientId,
+      table.startIdempotencyKey,
+    ),
+    index("agent_workflow_deletions_cleanup").on(table.cleanupAt),
+    check("agent_workflow_deletions_revision_positive", sql`${table.expectedRevision} > 0`),
+    check(
+      "agent_workflow_deletions_start_request_digest_length",
+      sql`length(${table.startRequestDigest}) = 43`,
+    ),
+    check("agent_workflow_deletions_deleted_at_positive", sql`${table.deletedAt} > 0`),
+    check(
+      "agent_workflow_deletions_cleanup_after_deletion",
+      sql`${table.cleanupAt} > ${table.deletedAt}`,
+    ),
+  ],
+);
+
 export const skills = sqliteTable(
   "skills",
   {
@@ -576,7 +761,7 @@ export const runAdmissions = sqliteTable(
     prompt: text("prompt"),
     promptDigest: text("prompt_digest").notNull(),
     scheduleRevision: integer("schedule_revision"),
-    trigger: text("trigger", { enum: ["manual", "schedule"] })
+    trigger: text("trigger", { enum: ["manual", "schedule", "workflow"] })
       .notNull()
       .default("manual"),
     budgetReservation: text("budget_reservation", { mode: "json" })
@@ -617,7 +802,7 @@ export const runAdmissions = sqliteTable(
       "run_admissions_schedule_revision_positive",
       sql`${table.scheduleRevision} IS NULL OR ${table.scheduleRevision} > 0`,
     ),
-    check("run_admissions_trigger", sql`${table.trigger} IN ('manual', 'schedule')`),
+    check("run_admissions_trigger", sql`${table.trigger} IN ('manual', 'schedule', 'workflow')`),
     check("run_admissions_nonce_digest_length", sql`length(${table.nonceDigest}) = 43`),
     check("run_admissions_status", sql`${table.status} IN ('issued', 'redeemed', 'expired')`),
     check(
@@ -933,7 +1118,7 @@ export const agentInboxItems = sqliteTable(
     fleetRevision: integer("fleet_revision").notNull(),
     scheduleRevision: integer("schedule_revision"),
     runId: text("run_id"),
-    trigger: text("trigger", { enum: ["manual", "schedule"] }),
+    trigger: text("trigger", { enum: ["manual", "schedule", "workflow"] }),
     runStatus: text("run_status", {
       enum: ["cancelled", "completed", "failed", "running"],
     }),
@@ -1231,6 +1416,9 @@ export const controlPlaneSchema = {
   agentScheduleRevisions,
   agentSchedules,
   agentScheduleUpdates,
+  agentWorkflowDeletions,
+  agentWorkflowStages,
+  agentWorkflows,
   agentUpdates,
   agents,
   auditEvents,

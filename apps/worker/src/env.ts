@@ -1,11 +1,13 @@
 import type { CrewAgent, CrewSession } from "./agent/durable-object.js";
 import type { OwnerControlPlane } from "./owner/durable-object.js";
+import type { AgentTaskWorkflow } from "./agent-workflows/agent-task.js";
 
 declare global {
   namespace Cloudflare {
     interface Env {
       AI: Ai;
       AI_GATEWAY_ID?: string;
+      AGENT_TASK_WORKFLOW?: Workflow<AgentTaskWorkflow>;
       AUTH_DB: D1Database;
       BETTER_AUTH_SECRET: string;
       COMPOSIO_API_KEY?: string;

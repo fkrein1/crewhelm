@@ -28,9 +28,17 @@ the reservation. Existing tools carry this detail, preserving the explicit catal
 
 The MCP initialization response provides a compact operating model and identifies fleet status as
 the first read. Status derives at most three advisory next steps from counts already in its bounded
-projection. Guidance never grants authority or replaces validation, and clients may call exact
-tools directly. Primary workflow results return input-shaped handoffs, including a continuation
-object that can be passed unchanged into the next run.
+projection, including active durable Workflows. Guidance never grants authority or replaces
+validation, and clients may call exact tools directly. Primary operation results return
+input-shaped handoffs: a Run continuation can be passed unchanged into a manual follow-up, while a
+Workflow returns its stable ID and revision for compact list, exact inspection, cancellation, or
+terminal deletion.
+
+One `crewhelm_agent_workflows` tool groups the small Workflow lifecycle instead of exposing
+coordinator internals. Its start action accepts one objective and two to eight ordered bounded
+stages. List and default inspection omit frozen prompts; exact inspection includes them only when
+explicitly requested. This makes durable multi-step work discoverable without turning the MCP
+catalog into a graph-building API or forcing clients to fetch every Run transcript.
 
 The owner inbox is the polling surface for operational attention; Crewhelm neither broadcasts nor
 model-classifies its events. Fleet status exposes attention counts and age so clients can avoid

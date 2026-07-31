@@ -37,6 +37,7 @@ export class TestCrewAgent extends CrewAgent {
   readonly #toolExecutions: unknown[] = [];
   #durableSessions = false;
   #completeBeforeNextCancellation = false;
+  #delayNextAdmissionMs = 0;
   #rejectNextCancellation = false;
   readonly #model = new MockLanguageModelV4({
     doStream: async (options) => {
@@ -158,6 +159,17 @@ export class TestCrewAgent extends CrewAgent {
 
   inspectionCountForTest(): number {
     return this.#inspectionCount;
+  }
+
+  delayNextAdmissionForTest(delayMs = 50): void {
+    this.#delayNextAdmissionMs = delayMs;
+  }
+
+  override async acceptRunAdmission(input: unknown) {
+    const delayMs = this.#delayNextAdmissionMs;
+    this.#delayNextAdmissionMs = 0;
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return super.acceptRunAdmission(input);
   }
 
   failNextCancellationForTest(): void {

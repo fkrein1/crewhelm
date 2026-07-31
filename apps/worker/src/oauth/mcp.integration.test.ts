@@ -35,6 +35,7 @@ import {
 } from "../mcp/server.js";
 import { mcpControlPlaneStatusResultSchema } from "../mcp/guidance.js";
 import { deriveOwnerKey } from "../owner/identity.js";
+import { CONTROL_PLANE_SCHEMA_VERSION } from "../owner/migrations.js";
 import { digestRunPrompt } from "../agent/admitted-runs/index.js";
 import {
   createCrewhelmAuth,
@@ -806,7 +807,7 @@ describe("public OAuth to MCP integration", () => {
     ).toMatchObject({
       ok: true,
       status: {
-        schemaVersion: 22,
+        schemaVersion: CONTROL_PLANE_SCHEMA_VERSION,
         status: "ready",
       },
     });

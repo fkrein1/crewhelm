@@ -19,4 +19,13 @@ These constraints apply before a capability becomes reachable.
 8. **Verifiable supply chain.** Dependencies and automation are pinned, reviewed, minimally
    privileged, and released with provenance.
 
+A durable Workflow is coordination, not authority. Its owner record freezes a bounded ordered plan,
+exact Agent and fleet revisions, aggregate budget, and retention before execution. The Workflow
+runtime receives only opaque coordinates and cannot mint permits, add work, access provider
+adapters, or bypass the normal Run and ToolGate checks.
+
+Each stage rechecks the frozen fleet revision inside Run admission before a permit is issued. A
+Workflow-owned Session is not an ordinary continuation target: direct Runs and Session deletion
+cannot mutate it, and it is removed only through the Workflow deletion path.
+
 No prompt-level instruction is an acceptable substitute for one of these controls.

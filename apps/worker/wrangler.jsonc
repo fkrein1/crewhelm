@@ -63,6 +63,13 @@
       "storage": "sqlite",
     },
   },
+  "workflows": [
+    {
+      "binding": "AGENT_TASK_WORKFLOW",
+      "class_name": "AgentTaskWorkflow",
+      "name": "crewhelm-agent-task-workflow",
+    },
+  ],
   "ratelimits": [
     {
       "name": "AUTH_RATE_LIMIT",

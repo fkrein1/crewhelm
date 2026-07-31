@@ -25,6 +25,20 @@ small limits, and exact inspection over broad listing. Tool and transcript text 
 If a continuation handle was lost, list sessions for the Agent and inspect only the selected
 session. Exact session inspection returns a fresh, copy-ready continuation handle.
 
+### Durable multi-step work
+
+Use `crewhelm_start_run` for one bounded turn, including its internal model/tool loop. Use
+`crewhelm_agent_workflows` with `action: "start"` when the outcome already requires two to
+eight ordered Runs and should continue after the MCP conversation disconnects. Supply the exact
+Agent revision, one objective, and short named stages. Crewhelm executes them sequentially in one
+isolated durable Session; a later stage starts only after the prior Run succeeds.
+
+Retain the returned `workflowId` and `revision`. List with small limits for compact progress,
+then inspect only the selected Workflow. Inspection omits frozen prompts by default; set
+`includePrompts: true` only when the exact plan is needed. Cancel active work with its current
+Workflow revision. Delete only a terminal Workflow after owner confirmation; deletion also removes
+its Workflow-owned Session and retained correlated execution data.
+
 ### Connect an integration
 
 When the integration is known, skip catalog search. Enable it, pass the returned `authConfigId`
@@ -194,6 +208,136 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
   "required": [
     "action",
     "agentId"
+  ],
+  "additionalProperties": false
+}
+```
+
+</details>
+
+## `crewhelm_agent_workflows`
+
+**Manage Crewhelm Agent workflows**
+
+Coordinate a bounded multi-step objective as ordered durable Agent Runs. Start with an exact Agent revision, then use the returned workflowId for compact inspection or cancellation. List before inspecting when recovering context; request frozen prompts only when needed. Cancel stops future stages and safely cancels the active Run when possible. Delete is terminal-only and also removes the Workflow-owned Session transcript and retained prompts.
+
+Attributes: write, destructive, idempotent, closed-world.
+
+<details>
+<summary>Input schema</summary>
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "cancel",
+        "delete",
+        "inspect",
+        "list",
+        "start"
+      ],
+      "description": "Start an ordered durable objective, list compact projections, inspect one exact Workflow, cancel active work, or delete a terminal Workflow."
+    },
+    "agentId": {
+      "description": "Required for start; optional as an exact list filter.",
+      "type": "string",
+      "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "cursor": {
+      "description": "For list, continue after this workflowId.",
+      "type": "string",
+      "pattern": "^workflow_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "expectedRevision": {
+      "description": "Required: Agent revision for start; Workflow revision for cancel or delete.",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "idempotencyKey": {
+      "description": "Required for start and delete; reuse only for the exact same request.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "includePrompts": {
+      "description": "For inspect only. Defaults false to avoid fetching frozen prompts.",
+      "type": "boolean"
+    },
+    "limit": {
+      "description": "For list, bounded page size; defaults to 10.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25
+    },
+    "objective": {
+      "description": "Required for start: the durable outcome shared by every stage.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "stages": {
+      "description": "Required for start: two to eight ordered bounded Runs.",
+      "minItems": 2,
+      "maxItems": 8,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "Short progress label for one ordered stage."
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 11264,
+            "description": "One bounded Run instruction. Crewhelm admits it with the shared objective and exact durable Session produced by the prior stage."
+          }
+        },
+        "required": [
+          "name",
+          "prompt"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "status": {
+      "description": "For list, return one state or use \"active\" for unfinished workflows.",
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "queued",
+            "running",
+            "waiting",
+            "cancelling",
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "active"
+        }
+      ]
+    },
+    "workflowId": {
+      "description": "Required for inspect, cancel, and delete; use the exact returned workflowId.",
+      "type": "string",
+      "pattern": "^workflow_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    }
+  },
+  "required": [
+    "action"
   ],
   "additionalProperties": false
 }
@@ -2419,11 +2563,12 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
       ]
     },
     "trigger": {
-      "description": "Return manual or scheduled runs.",
+      "description": "Return manual, scheduled, or workflow runs.",
       "type": "string",
       "enum": [
         "manual",
-        "schedule"
+        "schedule",
+        "workflow"
       ]
     }
   },

@@ -326,6 +326,13 @@ const deploymentTemplateSchema = z.strictObject({
   vars: z.looseObject({
     PUBLIC_ORIGIN: z.url(),
   }),
+  workflows: z.tuple([
+    z.strictObject({
+      binding: z.literal("AGENT_TASK_WORKFLOW"),
+      class_name: z.literal("AgentTaskWorkflow"),
+      name: z.literal("crewhelm-agent-task-workflow"),
+    }),
+  ]),
 });
 
 export const bootstrapOptionsSchema = z.strictObject({
@@ -2014,6 +2021,7 @@ async function stageDeployment(
         CREWHELM_DEPLOYMENT_FINGERPRINT: assets.digest,
         PUBLIC_ORIGIN: options.origin.origin,
       },
+      workflows: assets.template.workflows,
     };
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
     return configPath;

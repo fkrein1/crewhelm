@@ -92,12 +92,13 @@ export const runStatusSchema = z.enum([
   "cancelled",
   "failed",
 ]);
-export const runTriggerSchema = z.enum(["manual", "schedule"]);
+export const runTriggerSchema = z.enum(["manual", "schedule", "workflow"]);
 
 export const createRunAdmissionInputSchema = z
   .strictObject({
     agentId: agentIdSchema,
     continuation: sessionContinuationSchema.optional(),
+    expectedFleetRevision: z.number().int().positive().safe().nullable().default(null),
     expectedRevision: agentRevisionNumberSchema,
     idempotencyKey: runAdmissionIdempotencyKeySchema,
     prompt: runPromptSchema.optional(),
@@ -116,13 +117,24 @@ export const createRunAdmissionInputSchema = z
     }
 
     if (
-      (input.trigger === "manual" && input.scheduleRevision !== null) ||
+      (input.trigger !== "schedule" && input.scheduleRevision !== null) ||
       (input.trigger === "schedule" && input.scheduleRevision === null)
     ) {
       context.addIssue({
         code: "custom",
         message: "Schedule revision must match the run trigger.",
         path: ["scheduleRevision"],
+      });
+    }
+
+    if (
+      (input.trigger === "workflow" && input.expectedFleetRevision === null) ||
+      (input.trigger !== "workflow" && input.expectedFleetRevision !== null)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Expected fleet revision must match the run trigger.",
+        path: ["expectedFleetRevision"],
       });
     }
   });
@@ -168,6 +180,7 @@ export const runAdmissionPermitSchema = z.strictObject({
   promptDigest: sha256DigestSchema,
   runId: runIdSchema,
   scheduleRevision: agentScheduleRevisionNumberSchema.nullable().default(null),
+  trigger: runTriggerSchema.default("manual"),
 });
 
 export const aiGatewayLogIdSchema = z.string().trim().min(1).max(255);
@@ -188,6 +201,7 @@ export const runAdmissionSummarySchema = runAdmissionPermitSchema
     nonce: true,
     ownerKey: true,
     promptDigest: true,
+    trigger: true,
   })
   .extend({
     status: z.enum(["expired", "redeemed"]),
@@ -452,7 +466,7 @@ export const listAgentRunsInputSchema = z
       .describe(
         'Return runs in one projected state, or use "active" for queued, running, and cancelling runs.',
       ),
-    trigger: runTriggerSchema.optional().describe("Return manual or scheduled runs."),
+    trigger: runTriggerSchema.optional().describe("Return manual, scheduled, or workflow runs."),
   })
   .refine(
     (input) =>

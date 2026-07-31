@@ -195,6 +195,13 @@ async function createDeploymentAssetsDirectory(): Promise<string> {
       vars: {
         PUBLIC_ORIGIN: "https://crewhelm.example",
       },
+      workflows: [
+        {
+          binding: "AGENT_TASK_WORKFLOW",
+          class_name: "AgentTaskWorkflow",
+          name: "crewhelm-agent-task-workflow",
+        },
+      ],
     }),
   );
 

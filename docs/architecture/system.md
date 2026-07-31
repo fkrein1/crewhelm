@@ -15,6 +15,8 @@ flowchart LR
     Worker --> Owner["OwnerControlPlane"]
     Owner --> Skills["Skill packages / R2"]
     Owner --> Agent["CrewAgent directory"]
+    Agent --> Workflow["AgentTaskWorkflow"]
+    Workflow --> Owner
     Agent --> Session["CrewSession / Think"]
     Session -. optional .-> Gateway["Dedicated AI Gateway"]
     Worker --> Catalog["Composio catalog and Connect Links"]
@@ -25,18 +27,21 @@ flowchart LR
 The Worker authenticates requests, derives owner and client authority, and creates a fresh MCP
 server per request. There is one SQLite-backed `OwnerControlPlane` per owner, one name-addressed
 `CrewAgent` directory per logical Agent, and one isolated `CrewSession` runtime per durable
-conversation. Retained pre-session runs remain readable through the Agent object during migration.
+conversation. A Cloudflare `AgentTaskWorkflow` may coordinate one frozen ordered plan by asking the
+owner control plane to admit each stage as a normal Run. Retained pre-session runs remain readable
+through the Agent object during migration.
 
-| State owner         | Authoritative facts                                                                                                    |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Worker              | Authenticated request context only                                                                                     |
-| Auth D1             | OAuth state, signing keys, rotating refresh tokens, and token revocation                                               |
-| `OwnerControlPlane` | Agent and connection lifecycle, grants, schedules, admission, owner inbox, approvals, effect reconciliation, and audit |
-| Skill package R2    | Immutable, content-addressed Skill files; owner-local SQLite holds metadata and lifecycle                              |
-| `CrewAgent`         | Session discovery, branch revisions, retention, deletion, and exact run-to-session routing                             |
-| `CrewSession`       | One conversation's Think transcript, submissions, output, deadlines, and approval waits                                |
-| AI Gateway          | Optional installation-wide hard spend ceiling and model-call cost metadata                                             |
-| Composio            | Connected-account credentials and refresh                                                                              |
+| State owner         | Authoritative facts                                                                                                                                        |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Worker              | Authenticated request context only                                                                                                                         |
+| Auth D1             | OAuth state, signing keys, rotating refresh tokens, and token revocation                                                                                   |
+| `OwnerControlPlane` | Agent and connection lifecycle, grants, schedules, Workflow plans and projections, Run admission, owner inbox, approvals, effect reconciliation, and audit |
+| Skill package R2    | Immutable, content-addressed Skill files; owner-local SQLite holds metadata and lifecycle                                                                  |
+| `CrewAgent`         | Workflow and Session discovery, branch revisions, retention, deletion, and exact event and Run routing                                                     |
+| `AgentTaskWorkflow` | Durable ordering of identifiers and stage events; no prompts, bearer authority, provider access, or policy decisions                                       |
+| `CrewSession`       | One conversation's Think transcript, submissions, output, deadlines, and approval waits                                                                    |
+| AI Gateway          | Optional installation-wide hard spend ceiling and model-call cost metadata                                                                                 |
+| Composio            | Connected-account credentials and refresh                                                                                                                  |
 
 The control plane owns admission and administration; the Agent directory owns conversation
 lifecycle; each session owns execution. Cross-object calls
@@ -46,6 +51,14 @@ authoritative store for control-plane or Agent domain state.
 Session deletion is revision-bound and idempotent. An ambiguous deletion remains sealed beyond
 ordinary session retention until the exact request retries, preserving owner redaction and audit
 recovery without reopening an empty conversation.
+
+Workflow start freezes the owner, Agent and fleet revisions, objective, ordered stages, aggregate
+budget, and retention in the owner control plane before coordination begins. The Workflow runtime
+receives only opaque owner, Agent, Workflow, and stage-count coordinates. It cannot mint Run
+permits, add stages, read prompts, call providers, or interpret model output as authority. Every
+stage returns through the existing admission path and executes in one exact Workflow-owned Session.
+That Session is hidden from ordinary discovery and rejects direct continuation or deletion, so only
+the owning Workflow can advance its branch until terminal cleanup.
 
 Runs and tool calls are bound to the admitted Agent and fleet-configuration revisions.
 Configuration changes invalidate unconsumed authority. The optional AI Gateway provides the
@@ -62,6 +75,8 @@ cost-reconciliation controls.
 | Agent capability registry and plans   | `agent-capabilities/`        |
 | Run admission, budgets, and execution | `owner/runs/`                |
 | Recurring Agent schedules             | `owner/schedules/`           |
+| Durable Workflow plans and projection | `owner/workflows/`           |
+| Cloudflare Workflow coordination      | `agent-workflows/`           |
 | Disablement, revocation, recovery     | `owner/recovery/`            |
 | Connection lifecycle                  | `owner/connections/`         |
 | Skill package lifecycle               | `owner/skills/`              |
@@ -91,8 +106,11 @@ branding, stylesheet assets, and terminal color roles.
    Discovery, session coordinates, and configuration grant no execution authority.
 4. `ToolGate` rechecks the grant, policy, connection, effect, approval, and budget before Composio
    dispatch. Ambiguous mutations remain blocked until reconciled.
-5. Schedules use the same admission path. Projections support discovery, never authority. Connect
-   Links record setup lifecycle but do not activate or authorize connections.
+5. Schedules and Workflow stages use the same admission path. A Workflow stage is admitted only
+   from its exact frozen owner record and continues the exact Workflow Session; duplicate terminal
+   events and retries cannot advance a different stage.
+6. Projections support discovery, never authority. Connect Links record setup lifecycle but do not
+   activate or authorize connections.
 
 Control-plane migrations are ordered and checksummed; incompatible state fails closed.
 
