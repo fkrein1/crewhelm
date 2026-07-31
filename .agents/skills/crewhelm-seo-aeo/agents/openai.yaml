@@ -1,0 +1,4 @@
+interface:
+  display_name: "Crewhelm SEO + AEO"
+  short_description: "Build and audit Astro discovery foundations"
+  default_prompt: "Use $crewhelm-seo-aeo to implement and validate SEO and agent discovery for the Crewhelm Astro site."
