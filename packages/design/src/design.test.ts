@@ -38,7 +38,7 @@ function contrastRatio(first: number, second: number): number {
 describe("Crewhelm design foundation", () => {
   it("defines one accessible compact brand for browser and terminal surfaces", () => {
     expect(CREWHELM_BRAND_PROMISE).toBe("Give Agents a mandate. Not a master key.");
-    expect(CREWHELM_CLI_BANNER).toBe("┌  ┐\n ■   CREWHELM\n└  ┘\n");
+    expect(CREWHELM_CLI_BANNER).toBe("  ■ CREWHELM\n");
     expect(CREWHELM_COMPACT_BRAND_HTML).toContain('role="img" aria-label="Crewhelm"');
     expect(CREWHELM_COMPACT_BRAND_HTML).toContain('class="ch-brand__mark"');
     expect(CREWHELM_COMPACT_BRAND_HTML).toContain('class="ch-brand__mark-frame"');
