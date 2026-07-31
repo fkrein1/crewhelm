@@ -252,10 +252,10 @@ describe("Crewhelm CLI", () => {
     const harness = createHarness(undefined, { color: true, interactive: true });
 
     await expect(runCli([], harness.dependencies)).resolves.toBe(0);
-    expect(harness.output.join("")).toContain(">_");
+    expect(harness.output.join("")).toContain("■");
     expect(harness.output.join("")).toContain("CREWHELM");
     expect(harness.output.join("")).toContain("\u001B[38;2;48;126;224m");
-    expect(harness.output.join("")).toContain("\u001B[38;2;94;165;245m");
+    expect(harness.output.join("")).toContain("\u001B[1mCREWHELM\u001B[22m");
     expect(harness.errors).toEqual([]);
   });
 
@@ -295,7 +295,7 @@ describe("Crewhelm CLI", () => {
           harness.dependencies,
         ),
       ).resolves.toBe(1);
-      expect(harness.output[0]).toContain(">_");
+      expect(harness.output[0]).toContain("■");
       expect(harness.output[0]).toContain("CREWHELM");
       expect(harness.output[0]).toContain("\u001B[");
       expect(harness.output.join("")).toContain("Installation target");

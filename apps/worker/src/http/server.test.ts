@@ -237,6 +237,7 @@ describe("Crewhelm Worker", () => {
     expect(body).toContain('href="/oauth/styles.css"');
     expect(body).toContain('data-tone="positive"');
     expect(body).toContain('class="ch-brand" role="img" aria-label="Crewhelm"');
+    expect(body).toContain('class="ch-brand__mark"');
     expect(body).not.toMatch(/active|connected/i);
     expect(body).not.toContain(fixture.providerConnectionId);
     expect(body).not.toContain(fixture.reservation.authorizationToken);
