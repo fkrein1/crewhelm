@@ -2,6 +2,14 @@ name: Site build
 
 on:
   pull_request:
+    paths:
+      - .github/workflows/site.yml
+      - .nvmrc
+      - apps/site/**
+      - package.json
+      - packages/design/**
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
   push:
     branches:
       - main

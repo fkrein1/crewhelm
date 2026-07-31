@@ -21,7 +21,7 @@ in `src/styles/global.css` through Tailwind's CSS-first `@theme` interface.
 `wrangler.jsonc` is the source of truth for the `crewhelm-site` Worker, preview URLs, and the
 `crewhelm.app` Custom Domain. Delivery has two deliberately separate lanes:
 
-- The secretless GitHub Actions workflow verifies the site on every pull-request commit, including
+- The secretless GitHub Actions workflow verifies site-impacting pull-request commits, including
   forks. It never receives Cloudflare credentials.
 - Cloudflare Workers Builds owns uploads. Its GitHub App posts or updates the pull-request comment
   with the versioned `workers.dev` preview URL and retains earlier build history in that comment.
@@ -37,7 +37,20 @@ Keep the `crewhelm-site` Workers Build configured with:
 | Non-production deploy command | `pnpm exec wrangler versions upload` |
 | Non-production branch builds  | Enabled                              |
 | Preview branch excludes       | `dependabot/*`                       |
-| Build watch include paths     | `*`; every branch commit builds      |
+| Build watch include paths     | See the list below                   |
+
+Set the build watch include paths to the repository-root patterns below and leave the exclude
+paths empty. Cloudflare applies the same watch paths to production and non-production branches, so
+irrelevant commits neither deploy production nor upload a preview version.
+
+```text
+.nvmrc
+apps/site/*
+package.json
+packages/design/*
+pnpm-lock.yaml
+pnpm-workspace.yaml
+```
 
 Do not leave Cloudflare's automatically generated Workers Builds token at its default scope. Edit
 it, or select a custom user token, so its resources are limited to the Crewhelm Cloudflare account
