@@ -28,6 +28,7 @@
   },
   "scripts": {
     "build": "node ./scripts/build.mjs",
+    "playground:authorization": "node ./scripts/authorization-playground.mjs",
     "release:lock": "node ./scripts/generate-runtime-lock.mjs",
     "release:pack": "node ./scripts/release-package.mjs"
   },

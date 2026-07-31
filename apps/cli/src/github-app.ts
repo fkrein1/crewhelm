@@ -93,6 +93,41 @@ function stateSuffix(redirectUrl: URL): string {
   return createHash("sha256").update(redirectUrl.href).digest("hex").slice(0, 8);
 }
 
+export function renderGitHubAppStoppedPage(): string {
+  return renderLocalPage({
+    heading: "GitHub App setup stopped.",
+    paragraphs: [
+      "Crewhelm could not verify this return. Go back to the terminal and start setup again.",
+    ],
+    title: "GitHub App setup not verified",
+    tone: "negative",
+  });
+}
+
+export function renderGitHubAppConnectedPage(): string {
+  return renderLocalPage({
+    heading: "GitHub App connected.",
+    paragraphs: ["Return to the terminal. Crewhelm will finish the installation from there."],
+    title: "GitHub App connected",
+    tone: "positive",
+  });
+}
+
+export function renderGitHubAppSetupPage(action: string, manifest: string): string {
+  return renderLocalPage({
+    form: {
+      action,
+      fields: { manifest },
+      label: "Continue to GitHub",
+    },
+    heading: "Create your private GitHub App.",
+    paragraphs: [
+      "GitHub will create a private app with no repository permissions. Crewhelm uses it only to verify owner authority.",
+    ],
+    title: "Connect Crewhelm to GitHub",
+  });
+}
+
 export async function createGitHubApp(
   options: CreateGitHubAppOptions,
   dependencies: CreateGitHubAppDependencies,
@@ -131,28 +166,12 @@ export async function createGitHubApp(
 
       if (returnedState !== state || !returnedCode || returnedCode.length > 1_024) {
         response.writeHead(400, localPageHeaders());
-        response.end(
-          renderLocalPage({
-            heading: "GitHub App setup stopped.",
-            paragraphs: [
-              "Crewhelm could not verify this return. Go back to the terminal and start setup again.",
-            ],
-            title: "GitHub App setup not verified",
-            tone: "negative",
-          }),
-        );
+        response.end(renderGitHubAppStoppedPage());
         return;
       }
 
       response.writeHead(200, localPageHeaders());
-      response.end(
-        renderLocalPage({
-          heading: "GitHub App connected.",
-          paragraphs: ["Return to the terminal. Crewhelm will finish the installation from there."],
-          title: "GitHub App connected",
-          tone: "positive",
-        }),
-      );
+      response.end(renderGitHubAppConnectedPage());
       resolveCallback?.(returnedCode);
       return;
     }
@@ -175,18 +194,10 @@ export async function createGitHubApp(
     const manifest = JSON.stringify(manifestFor(options, redirectUrl));
     response.writeHead(200, localPageHeaders("https://github.com"));
     response.end(
-      renderLocalPage({
-        form: {
-          action: `${GITHUB_APP_MANIFEST_URL}?state=${encodeURIComponent(state)}`,
-          fields: { manifest },
-          label: "Continue to GitHub",
-        },
-        heading: "Create your private GitHub App.",
-        paragraphs: [
-          "GitHub will create a private app with no repository permissions. Crewhelm uses it only to verify owner authority.",
-        ],
-        title: "Connect Crewhelm to GitHub",
-      }),
+      renderGitHubAppSetupPage(
+        `${GITHUB_APP_MANIFEST_URL}?state=${encodeURIComponent(state)}`,
+        manifest,
+      ),
     );
   });
 
