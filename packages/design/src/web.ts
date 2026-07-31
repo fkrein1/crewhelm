@@ -141,9 +141,10 @@ body.ch-page {
   letter-spacing: 0.08em;
 }
 
-.ch-brand__prompt {
-  color: var(--ch-color-accent);
-  letter-spacing: -0.12em;
+.ch-brand__mark {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
 }
 
 .ch-brand__wordmark {

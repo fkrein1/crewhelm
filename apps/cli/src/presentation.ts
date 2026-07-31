@@ -1,6 +1,8 @@
 import {
   CREWHELM_CLI_BANNER,
-  CREWHELM_LOGO_PROMPT,
+  CREWHELM_CLI_MARK_BOTTOM,
+  CREWHELM_CLI_MARK_MIDDLE,
+  CREWHELM_CLI_MARK_TOP,
   CREWHELM_LOGO_WORDMARK,
   crewhelmTerminalTheme,
 } from "@crewhelm/design/terminal";
@@ -43,7 +45,7 @@ export function createCliTextStyle(color: boolean): CliTextStyle {
 }
 
 function styledBanner(style: CliTextStyle): string {
-  return `${style.logoPrompt(CREWHELM_LOGO_PROMPT)} ${style.logoWordmark(CREWHELM_LOGO_WORDMARK)}\n`;
+  return `${style.logoPrompt(CREWHELM_CLI_MARK_TOP)}\n${style.logoPrompt(CREWHELM_CLI_MARK_MIDDLE)} ${style.logoWordmark(CREWHELM_LOGO_WORDMARK)}\n${style.logoPrompt(CREWHELM_CLI_MARK_BOTTOM)}\n`;
 }
 
 export interface CliPresentationOptions {

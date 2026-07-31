@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 
-import { CREWHELM_BRAND_PROMISE, CREWHELM_LOGO_TEXT } from "./brand.js";
+import { CREWHELM_BRAND_PROMISE, CREWHELM_LOGO_MARK_PATHS, CREWHELM_LOGO_TEXT } from "./brand.js";
 import { CREWHELM_CLI_BANNER, crewhelmTerminalTheme } from "./terminal.js";
 import { crewhelmColorScales } from "./tokens.js";
 import { CREWHELM_COMPACT_BRAND_HTML, CREWHELM_WEB_STYLES } from "./web.js";
@@ -38,11 +39,64 @@ describe("Crewhelm design foundation", () => {
   it("defines one accessible compact brand for browser and terminal surfaces", () => {
     expect(CREWHELM_LOGO_TEXT).toBe(">_ CREWHELM");
     expect(CREWHELM_BRAND_PROMISE).toBe("Give Agents a mandate. Not a master key.");
-    expect(CREWHELM_CLI_BANNER).toBe(">_ CREWHELM\n");
+    expect(CREWHELM_CLI_BANNER).toBe("┌────┐\n│ >_ CREWHELM\n└────┘\n");
     expect(CREWHELM_COMPACT_BRAND_HTML).toContain('role="img" aria-label="Crewhelm"');
-    expect(CREWHELM_COMPACT_BRAND_HTML).toContain("&gt;_");
+    expect(CREWHELM_COMPACT_BRAND_HTML).toContain('class="ch-brand__mark"');
+    for (const path of Object.values(CREWHELM_LOGO_MARK_PATHS)) {
+      expect(CREWHELM_COMPACT_BRAND_HTML).toContain(`d="${path}"`);
+    }
     expect(crewhelmTerminalTheme.logoPrompt).toEqual([48, 126, 224]);
     expect(crewhelmTerminalTheme.logoWordmark).toEqual([94, 165, 245]);
+  });
+
+  it("ships synchronized vector and raster brand assets", async () => {
+    const mark = await readFile(new URL("../assets/crewhelm-mark.svg", import.meta.url));
+    const favicon = await readFile(new URL("../assets/crewhelm-favicon.svg", import.meta.url));
+    const master = await readFile(new URL("../assets/crewhelm-logo-master.svg", import.meta.url));
+    const highResolutionPng = await readFile(
+      new URL("../assets/crewhelm-logo-1024.png", import.meta.url),
+    );
+    const siteFavicon = await readFile(
+      new URL("../../../apps/site/public/favicon.svg", import.meta.url),
+    );
+    const siteMark = await readFile(
+      new URL("../../../apps/site/public/crewhelm-mark.svg", import.meta.url),
+    );
+
+    for (const path of Object.values(CREWHELM_LOGO_MARK_PATHS)) {
+      expect(mark.toString()).toContain(`d="${path}"`);
+    }
+
+    expect(siteFavicon).toEqual(favicon);
+    expect(siteMark).toEqual(mark);
+    expect(favicon).toEqual(mark);
+    expect(createHash("sha256").update(master).digest("hex")).toBe(
+      "9db2e7fa7bfc82c7dfa2b0974988f61ad9076e6b7516945935c87e132c13e108",
+    );
+    expect(createHash("sha256").update(highResolutionPng).digest("hex")).toBe(
+      "6fe8e2441a7f6850d5be0de28844a6d07d3a352189663cc95449ae79fa792338",
+    );
+    expect(master.toString()).toContain('viewBox="0 0 1024 1024"');
+    expect(highResolutionPng.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+    expect(highResolutionPng.readUInt32BE(16)).toBe(1024);
+    expect(highResolutionPng.readUInt32BE(20)).toBe(1024);
+    expect(highResolutionPng[25]).toBe(6);
+
+    for (const [filename, size] of [
+      ["crewhelm-mark-32.png", 32],
+      ["crewhelm-mark-64.png", 64],
+      ["crewhelm-mark-128.png", 128],
+      ["crewhelm-mark-256.png", 256],
+      ["crewhelm-mark-512.png", 512],
+      ["crewhelm-favicon-32.png", 32],
+      ["crewhelm-favicon-180.png", 180],
+    ] as const) {
+      const png = await readFile(new URL(`../assets/${filename}`, import.meta.url));
+
+      expect(png.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+      expect(png.readUInt32BE(16)).toBe(size);
+      expect(png.readUInt32BE(20)).toBe(size);
+    }
   });
 
   it("keeps the Tailwind theme synchronized with renderer-neutral color scales", async () => {
