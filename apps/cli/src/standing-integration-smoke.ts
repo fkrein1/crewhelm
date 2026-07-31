@@ -24,6 +24,7 @@ import {
   type ConnectionSummary,
   type InspectRunResult,
   type Run,
+  type RunTimelineEvent,
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
@@ -66,6 +67,11 @@ const UNRECONCILED_EFFECT_MESSAGE =
   "The provider action was blocked before dispatch because an earlier unknown external effect requires reconciliation.";
 const TERMINAL_RUN_STATUSES = ["cancelled", "completed", "failed"] as const;
 type TerminalRunStatus = (typeof TERMINAL_RUN_STATUSES)[number];
+
+function timelineToolCallId(event: RunTimelineEvent | undefined): string | undefined {
+  return event !== undefined && "toolCallId" in event ? event.toolCallId : undefined;
+}
+
 const AGENT_LIMITS = {
   maxDurationSeconds: 60,
   maxModelTokens: 1_024,
@@ -728,7 +734,7 @@ function validateSingleDispatch(inspected: Extract<InspectRunResult, { ok: true 
   const completed = timeline.filter((event) => event.event === "tool.execution_completed");
   const allowed = timeline.filter((event) => event.event === "tool.authorization_allowed");
   const reserved = timeline.filter((event) => event.event === "tool.execution_reserved");
-  const toolCallId = dispatched[0]?.toolCallId;
+  const toolCallId = timelineToolCallId(dispatched[0]);
 
   if (
     eventNames.some((event) => deniedEvents.has(event)) ||
@@ -737,9 +743,9 @@ function validateSingleDispatch(inspected: Extract<InspectRunResult, { ok: true 
     allowed.length !== 1 ||
     reserved.length !== 1 ||
     toolCallId === undefined ||
-    completed[0]?.toolCallId !== toolCallId ||
-    allowed[0]?.toolCallId !== toolCallId ||
-    reserved[0]?.toolCallId !== toolCallId ||
+    timelineToolCallId(completed[0]) !== toolCallId ||
+    timelineToolCallId(allowed[0]) !== toolCallId ||
+    timelineToolCallId(reserved[0]) !== toolCallId ||
     eventNames.filter((event) => event === "run.completed").length !== 1
   ) {
     throw new TemporaryOwnerSessionError(
@@ -803,7 +809,7 @@ export async function runStandingIntegrationSmoke(
   const createInput = {
     capabilities: [
       {
-        configuration: { model: TOOL_CALLING_MODEL },
+        configuration: { fallbackModels: [], primaryModel: TOOL_CALLING_MODEL },
         id: WORKERS_AI_CAPABILITY_ID,
         schemaVersion: WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
       },
@@ -1565,7 +1571,7 @@ export async function runStandingIntegrationSmoke(
           if (unknown) {
             unknownProviderEffect = true;
 
-            if (unknown.toolCallId) {
+            if ("toolCallId" in unknown && unknown.toolCallId) {
               toolCallId = unknown.toolCallId;
             }
           }

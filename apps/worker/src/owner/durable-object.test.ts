@@ -96,7 +96,7 @@ describe("OwnerControlPlane", () => {
           },
         },
         configurationRevision: 1,
-        schemaVersion: 20,
+        schemaVersion: 21,
         status: "ready",
         usage: {
           agents: { active: 0, total: 0 },
@@ -234,6 +234,11 @@ describe("OwnerControlPlane", () => {
           checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
           name: "0019_dashing_dragon_lord",
           version: 20,
+        },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0020_expand_inference_profiles",
+          version: 21,
         },
       ],
       owner: { owner_key: authority.ownerKey },
@@ -1094,7 +1099,7 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 20, status: "ready" },
+      status: { schemaVersion: 21, status: "ready" },
     });
     await expect(
       runInDurableObject(stub, (_instance, state) =>
@@ -1155,12 +1160,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 20, status: "ready" },
+      status: { schemaVersion: 21, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 20, status: "ready" },
+      status: { schemaVersion: 21, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -1381,7 +1386,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 20, status: "ready" },
+      status: { schemaVersion: 21, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       const rows = [
@@ -1460,6 +1465,7 @@ describe("OwnerControlPlane", () => {
         { version: 18 },
         { version: 19 },
         { version: 20 },
+        { version: 21 },
       ]);
     });
   });
@@ -1595,7 +1601,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 20, status: "ready" },
+      status: { schemaVersion: 21, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       expect(
@@ -1691,7 +1697,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec(
         `INSERT INTO control_plane_migrations (version, name, checksum, applied_at)
          VALUES (?, ?, ?, ?)`,
-        21,
+        22,
         "future_migration",
         "f".repeat(64),
         Date.now(),

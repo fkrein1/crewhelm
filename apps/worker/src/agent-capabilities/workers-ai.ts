@@ -1,50 +1,54 @@
 import {
   agentCapabilityConfigurationSchema,
-  agentRuntimePlanSchema,
-  runnableAgentModelSchema,
+  WORKERS_AI_AGENT_MODELS,
   WORKERS_AI_CAPABILITY_ID,
   WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
   type AgentCapabilityConfiguration,
-  type AgentRuntimePlan,
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
 import type { AgentCapabilityModule } from "./kernel.js";
+import {
+  inferenceConfigurationFields,
+  inferenceProfileConfigurationSchema,
+  resolveInferenceProfile,
+  type InferenceProfileConfiguration,
+} from "./inference-profile.js";
 
 export const WORKERS_AI_BINDING_PREREQUISITE = "binding.ai";
 export { WORKERS_AI_CAPABILITY_ID, WORKERS_AI_CAPABILITY_SCHEMA_VERSION };
 
-export const workersAiCapabilityConfigurationSchema = z.strictObject({
-  model: runnableAgentModelSchema,
-});
+const WORKERS_AI_REASONING_MODELS = new Set([
+  "@cf/moonshotai/kimi-k2.6",
+  "@cf/moonshotai/kimi-k2.7-code",
+  "@cf/openai/gpt-oss-20b",
+  "@cf/openai/gpt-oss-120b",
+  "@cf/qwen/qwen3-30b-a3b-fp8",
+  "@cf/zai-org/glm-4.7-flash",
+  "@cf/zai-org/glm-5.2",
+]);
+
+export const workersAiCapabilityConfigurationSchema = inferenceProfileConfigurationSchema(
+  WORKERS_AI_AGENT_MODELS,
+  WORKERS_AI_REASONING_MODELS,
+);
 
 export function workersAiCapabilityConfiguration(
-  model: z.infer<typeof runnableAgentModelSchema>,
+  primaryModel: z.infer<typeof workersAiCapabilityConfigurationSchema>["primaryModel"],
+  options: Omit<InferenceProfileConfiguration, "primaryModel"> = { fallbackModels: [] },
 ): AgentCapabilityConfiguration {
   return agentCapabilityConfigurationSchema.parse({
-    configuration: { model },
+    configuration: {
+      fallbackModels: options.fallbackModels,
+      primaryModel,
+      ...(options.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: options.reasoningEffort }),
+      ...(options.temperature === undefined ? {} : { temperature: options.temperature }),
+      ...(options.topP === undefined ? {} : { topP: options.topP }),
+    },
     id: WORKERS_AI_CAPABILITY_ID,
     schemaVersion: WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
-  });
-}
-
-export function workersAiRuntimePlan(
-  model: z.infer<typeof runnableAgentModelSchema>,
-): AgentRuntimePlan {
-  return agentRuntimePlanSchema.parse({
-    inference: {
-      model,
-      moduleId: WORKERS_AI_CAPABILITY_ID,
-      schemaVersion: WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
-    },
-    modules: [
-      {
-        id: WORKERS_AI_CAPABILITY_ID,
-        schemaVersion: WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
-      },
-    ],
-    skillReferences: [],
-    systemContext: [],
   });
 }
 
@@ -52,20 +56,14 @@ export const workersAiCapabilityModule: AgentCapabilityModule<
   z.infer<typeof workersAiCapabilityConfigurationSchema>
 > = {
   configurationSchema: workersAiCapabilityConfigurationSchema,
-  defaultConfiguration: (fleetConfiguration) =>
-    workersAiCapabilityConfiguration(fleetConfiguration.models.default),
+  defaultConfiguration: (fleetConfiguration) => {
+    const model = z.enum(WORKERS_AI_AGENT_MODELS).safeParse(fleetConfiguration.models.default);
+    return model.success ? workersAiCapabilityConfiguration(model.data) : undefined;
+  },
   descriptor: {
-    configurationFields: [
-      {
-        description: "Supported Workers AI model; the fleet policy may narrow this list.",
-        enum: runnableAgentModelSchema.options,
-        name: "model",
-        required: true,
-        type: "string",
-      },
-    ],
+    configurationFields: inferenceConfigurationFields(WORKERS_AI_AGENT_MODELS),
     description:
-      "Selects the Cloudflare Workers AI model used for Agent reasoning and tool orchestration.",
+      "Selects an ordered Workers AI inference profile for Agent reasoning and tool orchestration.",
     id: WORKERS_AI_CAPABILITY_ID,
     prerequisites: [
       {
@@ -81,22 +79,17 @@ export const workersAiCapabilityModule: AgentCapabilityModule<
       runtimeContribution: "module-validated",
     },
   },
-  resolve: (configuration, context) => {
-    if (!context.fleetConfiguration.models.allowed.includes(configuration.model)) {
-      return {
-        code: "configuration_unavailable",
-        ok: false,
-      };
+  migrate: (configuration) => {
+    if (configuration.schemaVersion !== 1) {
+      return undefined;
     }
 
-    return {
-      contributions: [
-        {
-          kind: "inference",
-          model: configuration.model,
-        },
-      ],
-      ok: true,
-    };
+    const legacy = z
+      .strictObject({ model: z.enum(WORKERS_AI_AGENT_MODELS) })
+      .safeParse(configuration.configuration);
+
+    return legacy.success ? workersAiCapabilityConfiguration(legacy.data.model) : undefined;
   },
+  resolve: (configuration, context) =>
+    resolveInferenceProfile(configuration, context.fleetConfiguration),
 };

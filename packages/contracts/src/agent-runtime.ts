@@ -10,9 +10,11 @@ import {
   agentExecutionLimitsSchema,
   agentIdSchema,
   agentInstructionsSchema,
+  agentModelSchema,
   agentRevisionNumberSchema,
   ownerKeySchema,
 } from "./control-plane.js";
+import { inferenceReasoningEffortSchema, MAXIMUM_INFERENCE_FALLBACKS } from "./inference.js";
 import { skillIdSchema, skillNameSchema, skillVersionSchema } from "./skills.js";
 import { sha256DigestSchema } from "./capabilities.js";
 
@@ -41,11 +43,32 @@ export const admittedSkillProvenanceSchema = admittedSkillInstructionsSchema.omi
 });
 
 export const agentRuntimePlanSchema = z.strictObject({
-  inference: z.strictObject({
-    model: z.string().min(1).max(160),
-    moduleId: agentCapabilityModuleIdSchema,
-    schemaVersion: agentCapabilitySchemaVersionSchema,
-  }),
+  inference: z
+    .strictObject({
+      fallbackModels: z
+        .array(agentModelSchema)
+        .max(MAXIMUM_INFERENCE_FALLBACKS)
+        .default([])
+        .refine(
+          (models) => new Set(models).size === models.length,
+          "Fallback models must be unique.",
+        ),
+      model: agentModelSchema,
+      moduleId: agentCapabilityModuleIdSchema,
+      reasoningEffort: inferenceReasoningEffortSchema.optional(),
+      schemaVersion: agentCapabilitySchemaVersionSchema,
+      temperature: z.number().min(0).max(2).optional(),
+      topP: z.number().min(0).max(1).optional(),
+    })
+    .superRefine((inference, context) => {
+      if (inference.fallbackModels.includes(inference.model)) {
+        context.addIssue({
+          code: "custom",
+          message: "The primary model cannot also be a fallback.",
+          path: ["fallbackModels"],
+        });
+      }
+    }),
   modules: z
     .array(
       z.strictObject({

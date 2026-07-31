@@ -6,12 +6,8 @@ import {
 } from "./agent-schedules.js";
 import { agentExecutionLimitsSchema, agentMutationIdempotencyKeySchema } from "./control-plane.js";
 import { fleetCapacitySchema, fleetRetentionSchema } from "./fleet-capacity.js";
-import {
-  MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
-  RUNNABLE_AGENT_MODELS,
-  runIntegrationLimitsSchema,
-  runnableAgentModelSchema,
-} from "./run-admission.js";
+import { MAXIMUM_RUN_MODEL_OUTPUT_TOKENS, runIntegrationLimitsSchema } from "./run-admission.js";
+import { RUNNABLE_AGENT_MODELS, runnableAgentModelSchema } from "./inference.js";
 
 export const DEFAULT_FLEET_INTEGRATION_CALLS_PER_DAY = 300;
 export const DEFAULT_FLEET_INTEGRATION_CALLS_PER_THIRTY_DAYS = 8_000;
@@ -102,7 +98,7 @@ export const fleetConfigurationDataSchema = z
         "Supported models that Agents in this fleet may select.",
       ),
       default: runnableAgentModelSchema.describe(
-        "Workers AI model used when Agent creation omits capability configuration.",
+        "Inference model used when Agent creation omits capability configuration.",
       ),
     }),
     schedules: z.strictObject({
@@ -198,7 +194,7 @@ export const fleetConfigurationPatchSchema = z
       .strictObject({
         allowed: allowedFleetModelsSchema.optional(),
         default: runnableAgentModelSchema
-          .describe("New Workers AI model used when Agent creation omits capability configuration.")
+          .describe("New inference model used when Agent creation omits capability configuration.")
           .optional(),
       })
       .describe("Fleet model selection defaults and allowlist.")

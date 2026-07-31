@@ -336,16 +336,23 @@ Attributes: write, destructive, idempotent, closed-world.
           "properties": {
             "allowed": {
               "minItems": 1,
-              "maxItems": 5,
+              "maxItems": 12,
               "type": "array",
               "items": {
                 "type": "string",
                 "enum": [
                   "@cf/ibm-granite/granite-4.0-h-micro",
                   "@cf/meta/llama-4-scout-17b-16e-instruct",
+                  "@cf/moonshotai/kimi-k2.6",
+                  "@cf/moonshotai/kimi-k2.7-code",
                   "@cf/openai/gpt-oss-20b",
+                  "@cf/openai/gpt-oss-120b",
                   "@cf/qwen/qwen3-30b-a3b-fp8",
-                  "@cf/zai-org/glm-4.7-flash"
+                  "@cf/zai-org/glm-4.7-flash",
+                  "@cf/zai-org/glm-5.2",
+                  "openai/gpt-5.6-luna",
+                  "openai/gpt-5.6-sol",
+                  "openai/gpt-5.6-terra"
                 ]
               },
               "description": "Allowed supported model IDs, unique and sorted in ascending order."
@@ -355,11 +362,18 @@ Attributes: write, destructive, idempotent, closed-world.
               "enum": [
                 "@cf/ibm-granite/granite-4.0-h-micro",
                 "@cf/meta/llama-4-scout-17b-16e-instruct",
+                "@cf/moonshotai/kimi-k2.6",
+                "@cf/moonshotai/kimi-k2.7-code",
                 "@cf/openai/gpt-oss-20b",
+                "@cf/openai/gpt-oss-120b",
                 "@cf/qwen/qwen3-30b-a3b-fp8",
-                "@cf/zai-org/glm-4.7-flash"
+                "@cf/zai-org/glm-4.7-flash",
+                "@cf/zai-org/glm-5.2",
+                "openai/gpt-5.6-luna",
+                "openai/gpt-5.6-sol",
+                "openai/gpt-5.6-terra"
               ],
-              "description": "New Workers AI model used when Agent creation omits capability configuration."
+              "description": "New inference model used when Agent creation omits capability configuration."
             }
           },
           "additionalProperties": false,

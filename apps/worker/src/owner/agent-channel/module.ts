@@ -67,6 +67,8 @@ type CrewAgentStub = ReturnType<DurableObjectNamespace<CrewAgent>["getByName"]>;
 const TIMELINE_EVENT_ORDER = [
   "run.admitted",
   "run.started",
+  "inference.attempt_failed",
+  "inference.model_selected",
   "tool.authorization_allowed",
   "tool.authorization_approval_required",
   "tool.authorization_blocked",
@@ -88,6 +90,18 @@ const TIMELINE_EVENT_ORDER = [
   "run.failed",
 ] as const satisfies readonly RunTimelineEvent["event"][];
 const TIMELINE_EVENT_PRIORITY = new Map(TIMELINE_EVENT_ORDER.map((event, index) => [event, index]));
+
+function timelineToolCallId(event: RunTimelineEvent | undefined): string | undefined {
+  return event !== undefined && "toolCallId" in event ? event.toolCallId : undefined;
+}
+
+function timelineModelCall(event: RunTimelineEvent | undefined): number | undefined {
+  return event !== undefined && "modelCall" in event ? event.modelCall : undefined;
+}
+
+function timelineModel(event: RunTimelineEvent | undefined): string | undefined {
+  return event !== undefined && "model" in event ? event.model : undefined;
+}
 
 function alignRunCompletion(run: Run, timeline: RunTimelineEvent[]): Run {
   const terminalEvent =
@@ -344,7 +358,7 @@ export class AgentChannel {
           typeof occurredAt === "number" ? new Date(occurredAt).toISOString() : occurredAt,
         ...(toolCallId === undefined ? {} : { toolCallId }),
       });
-      const key = `${candidate.event}:${candidate.toolCallId ?? ""}`;
+      const key = `${candidate.event}:${timelineToolCallId(candidate) ?? ""}`;
       const existing = events.get(key);
 
       if (
@@ -363,7 +377,17 @@ export class AgentChannel {
 
     for (const traceEvent of authorizationTrace) {
       const event = runTimelineEventSchema.parse(traceEvent);
-      events.set(`trace:${event.event}:${event.toolCallId ?? ""}:${event.occurredAt}`, event);
+      events.set(
+        [
+          "trace",
+          event.event,
+          timelineToolCallId(event) ?? "",
+          timelineModelCall(event) ?? "",
+          timelineModel(event) ?? "",
+          event.occurredAt,
+        ].join(":"),
+        event,
+      );
     }
 
     for (const approval of this.#database
@@ -458,7 +482,9 @@ export class AgentChannel {
         Date.parse(left.occurredAt) - Date.parse(right.occurredAt) ||
         (TIMELINE_EVENT_PRIORITY.get(left.event) ?? Number.MAX_SAFE_INTEGER) -
           (TIMELINE_EVENT_PRIORITY.get(right.event) ?? Number.MAX_SAFE_INTEGER) ||
-        (left.toolCallId ?? "").localeCompare(right.toolCallId ?? ""),
+        (timelineToolCallId(left) ?? "").localeCompare(timelineToolCallId(right) ?? "") ||
+        (timelineModelCall(left) ?? 0) - (timelineModelCall(right) ?? 0) ||
+        (timelineModel(left) ?? "").localeCompare(timelineModel(right) ?? ""),
     );
   }
 
@@ -485,11 +511,12 @@ export class AgentChannel {
         .slice(index + 1)
         .some(
           (later) =>
-            later.toolCallId === event.toolCallId &&
+            timelineToolCallId(later) === timelineToolCallId(event) &&
             (later.event === "tool.execution_reconciled_applied" ||
               later.event === "tool.execution_reconciled_not_applied"),
         );
     });
+    const failureToolCallId = timelineToolCallId(failure);
 
     if (failure?.event === "tool.execution_unknown") {
       return {
@@ -498,7 +525,7 @@ export class AgentChannel {
         nextAction: "list_unresolved_effects",
         phase: "tool.execution",
         reason: "tool_effect_unknown",
-        ...(failure.toolCallId === undefined ? {} : { toolCallId: failure.toolCallId }),
+        ...(failureToolCallId === undefined ? {} : { toolCallId: failureToolCallId }),
       };
     }
 
@@ -509,7 +536,7 @@ export class AgentChannel {
         nextAction: "inspect_run",
         phase: "tool.execution",
         reason: "tool_provider_failed",
-        ...(failure.toolCallId === undefined ? {} : { toolCallId: failure.toolCallId }),
+        ...(failureToolCallId === undefined ? {} : { toolCallId: failureToolCallId }),
       };
     }
 
@@ -533,7 +560,7 @@ export class AgentChannel {
         nextAction: "inspect_run",
         phase: "tool.execution",
         reason: "tool_execution_failed",
-        ...(failure.toolCallId === undefined ? {} : { toolCallId: failure.toolCallId }),
+        ...(failureToolCallId === undefined ? {} : { toolCallId: failureToolCallId }),
       };
     }
 
@@ -545,6 +572,7 @@ export class AgentChannel {
 
     if (reconciliation !== undefined) {
       const applied = reconciliation.event === "tool.execution_reconciled_applied";
+      const reconciliationToolCallId = timelineToolCallId(reconciliation);
 
       return {
         certainty: "confirmed",
@@ -552,9 +580,7 @@ export class AgentChannel {
         nextAction: applied ? "inspect_run" : "start_new_run",
         phase: "tool.execution",
         reason: applied ? "tool_effect_applied" : "tool_effect_not_applied",
-        ...(reconciliation.toolCallId === undefined
-          ? {}
-          : { toolCallId: reconciliation.toolCallId }),
+        ...(reconciliationToolCallId === undefined ? {} : { toolCallId: reconciliationToolCallId }),
       };
     }
 

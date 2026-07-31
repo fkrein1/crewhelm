@@ -18,6 +18,7 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 
 import { digestRunPrompt } from "../../agent/admitted-runs/index.js";
+import { aiGatewayCapabilityConfiguration } from "../../agent-capabilities/ai-gateway.js";
 import { workersAiCapabilityConfiguration } from "../../agent-capabilities/workers-ai.js";
 import { skillsCapabilityConfiguration } from "../../agent-capabilities/skills.js";
 import type { OwnerControlPlane } from "../durable-object.js";
@@ -621,7 +622,7 @@ describe("OwnerControlPlane runs", () => {
             inference: {
               model: created.agent.model,
               moduleId: "inference.workers-ai",
-              schemaVersion: 1,
+              schemaVersion: 2,
             },
           },
         },
@@ -763,6 +764,7 @@ describe("OwnerControlPlane runs", () => {
     };
 
     await expect(stub.verifyActiveRunAdmission(activeVerification)).resolves.toEqual({
+      modelCall: 1,
       ok: true,
       runId: first.permit.runId,
     });
@@ -820,7 +822,7 @@ describe("OwnerControlPlane runs", () => {
     ]);
   });
 
-  it("admits explicitly supported models and rejects unlisted models", async () => {
+  it("admits supported models and enforces model and provider prerequisites", async () => {
     const authority = await authorityFor("236", [
       OWNER_WRITE_SCOPE,
       AGENTS_WRITE_SCOPE,
@@ -829,7 +831,11 @@ describe("OwnerControlPlane runs", () => {
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const supported = await stub.createAgent(authority, {
       ...agentInput("create-supported-model-agent-236"),
-      capabilities: [workersAiCapabilityConfiguration("@cf/zai-org/glm-4.7-flash")],
+      capabilities: [
+        workersAiCapabilityConfiguration("@cf/zai-org/glm-4.7-flash", {
+          fallbackModels: ["@cf/openai/gpt-oss-120b"],
+        }),
+      ],
     });
     const unlisted = await stub.createAgent(authority, {
       ...agentInput("create-unlisted-model-agent-236"),
@@ -841,9 +847,13 @@ describe("OwnerControlPlane runs", () => {
         },
       ],
     });
+    const gateway = await stub.createAgent(authority, {
+      ...agentInput("create-gateway-model-agent-236"),
+      capabilities: [aiGatewayCapabilityConfiguration("openai/gpt-5.6-luna")],
+    });
     const prompt = "Perform the exact admitted task.";
 
-    if (!supported.ok) {
+    if (!supported.ok || !gateway.ok) {
       throw new Error("Expected supported model-policy fixture Agent.");
     }
     expect(unlisted).toEqual({
@@ -863,14 +873,30 @@ describe("OwnerControlPlane runs", () => {
       ok: true,
       permit: {
         budgetReservation: {
+          maxModelCalls: 2,
           runtimePlan: {
             inference: {
+              fallbackModels: ["@cf/openai/gpt-oss-120b"],
               model: "@cf/zai-org/glm-4.7-flash",
             },
           },
         },
       },
       state: "issued",
+    });
+    await expect(
+      stub.createRunAdmission(authority, {
+        agentId: gateway.agent.id,
+        expectedRevision: gateway.agent.revision,
+        idempotencyKey: "admit-gateway-model-236",
+        promptCharacters: prompt.length,
+        promptDigest: await digestRunPrompt(prompt),
+      }),
+    ).resolves.toMatchObject({
+      error: {
+        code: "capability_unavailable",
+      },
+      ok: false,
     });
   });
 

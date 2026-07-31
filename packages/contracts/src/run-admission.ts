@@ -23,6 +23,7 @@ import {
 import {
   agentExecutionLimitsSchema,
   agentIdSchema,
+  agentModelSchema,
   agentRevisionNumberSchema,
   ownerClientIdSchema,
   ownerKeySchema,
@@ -34,6 +35,11 @@ import {
   diagnosticNextActionSchema,
   retryDispositionSchema,
 } from "./diagnostics.js";
+import {
+  DEFAULT_RUNNABLE_AGENT_MODEL,
+  RUNNABLE_AGENT_MODELS,
+  runnableAgentModelSchema,
+} from "./inference.js";
 
 export const RUN_ADMISSION_LIFETIME_MS = 30_000;
 export const RUN_ADMISSION_RETENTION_MS = DEFAULT_FLEET_RUN_RETENTION_SECONDS * 1_000;
@@ -44,17 +50,8 @@ export const MAXIMUM_RUN_INPUT_CHARACTERS = 24 * 1_024;
 export const MAXIMUM_RUN_MODEL_OUTPUT_TOKENS = 16 * 1_024;
 export const MAXIMUM_RUN_OUTPUT_CHARACTERS = 64 * 1_024;
 export const MAXIMUM_RUN_PROMPT_CHARACTERS = 16 * 1_024;
-export const MAXIMUM_RUN_TIMELINE_EVENTS = 512;
+export const MAXIMUM_RUN_TIMELINE_EVENTS = 1_024;
 export const MAXIMUM_RUN_TIMELINE_PAGE_ITEMS = 50;
-export const DEFAULT_RUNNABLE_AGENT_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
-export const RUNNABLE_AGENT_MODELS = [
-  "@cf/ibm-granite/granite-4.0-h-micro",
-  "@cf/meta/llama-4-scout-17b-16e-instruct",
-  "@cf/openai/gpt-oss-20b",
-  "@cf/qwen/qwen3-30b-a3b-fp8",
-  "@cf/zai-org/glm-4.7-flash",
-] as const;
-
 export const runAdmissionIdempotencyKeySchema = z
   .string()
   .min(1)
@@ -76,7 +73,7 @@ export const runBudgetReservationIdSchema = z
   );
 export const runPromptSchema = z.string().min(1).max(MAXIMUM_RUN_PROMPT_CHARACTERS);
 export const runOutputSchema = z.string().max(MAXIMUM_RUN_OUTPUT_CHARACTERS);
-export const runnableAgentModelSchema = z.enum(RUNNABLE_AGENT_MODELS);
+export { DEFAULT_RUNNABLE_AGENT_MODEL, RUNNABLE_AGENT_MODELS, runnableAgentModelSchema };
 export const runIntegrationLimitsSchema = z.strictObject({
   callsPerDay: z.number().int().min(1).max(1_000_000),
   callsPerThirtyDays: z.number().int().min(1).max(1_000_000),
@@ -387,7 +384,14 @@ export const verifyActiveRunAdmissionInputSchema = z.strictObject({
   scheduleRevision: agentScheduleRevisionNumberSchema.nullable().default(null),
 });
 
-export const verifyActiveRunAdmissionResultSchema = redeemRunReceiverCapabilityResultSchema;
+export const verifyActiveRunAdmissionResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    modelCall: z.number().int().min(1).max(100),
+    ok: z.literal(true),
+    runId: runIdSchema,
+  }),
+  invalidRunAdmissionSchema,
+]);
 
 export const runSchema = z.strictObject({
   agentId: agentIdSchema,
@@ -513,7 +517,29 @@ export const toolAuthorizationTimelineEventSchema = z.discriminatedUnion("event"
     toolCallId: toolCallIdSchema,
   }),
 ]);
+export const inferenceAvailabilityFailureSchema = z.enum([
+  "provider_unavailable",
+  "rate_limited",
+  "timeout",
+  "transport_unavailable",
+]);
+export const inferenceTimelineEventSchema = z.discriminatedUnion("event", [
+  z.strictObject({
+    event: z.literal("inference.attempt_failed"),
+    model: agentModelSchema,
+    modelCall: z.number().int().min(1).max(100),
+    occurredAt: z.iso.datetime(),
+    reason: inferenceAvailabilityFailureSchema,
+  }),
+  z.strictObject({
+    event: z.literal("inference.model_selected"),
+    model: agentModelSchema,
+    modelCall: z.number().int().min(1).max(100),
+    occurredAt: z.iso.datetime(),
+  }),
+]);
 export const runTimelineEventSchema = z.union([
+  inferenceTimelineEventSchema,
   runStateTimelineEventSchema,
   toolAuthorizationTimelineEventSchema,
 ]);

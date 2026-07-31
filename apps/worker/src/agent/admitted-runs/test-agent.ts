@@ -7,7 +7,7 @@ import {
   type ComposioToolCapabilityGrant,
 } from "@crewhelm/contracts";
 import type { ThinkModel } from "@cloudflare/think";
-import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
+import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import * as z from "zod";
 
 import { CrewAgent, type CrewAgentToolAdapter } from "./module.js";
@@ -35,7 +35,7 @@ export class TestCrewAgent extends CrewAgent {
   readonly #toolExecutions: unknown[] = [];
   #completeBeforeNextCancellation = false;
   #rejectNextCancellation = false;
-  readonly #model = new MockLanguageModelV3({
+  readonly #model = new MockLanguageModelV4({
     doStream: async (options) => {
       this.#modelCalls.push({
         maxOutputTokens: options.maxOutputTokens,

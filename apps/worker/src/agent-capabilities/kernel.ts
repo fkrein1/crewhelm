@@ -19,7 +19,7 @@ export type CapabilityCompilationContext = {
 export type CapabilityRuntimeContribution =
   | {
       kind: "inference";
-      model: string;
+      profile: Omit<AgentRuntimePlan["inference"], "moduleId" | "schemaVersion">;
     }
   | {
       kind: "system-context";
@@ -47,7 +47,9 @@ type CapabilityModuleDescriptor = Omit<AgentCapabilityDescriptor, "availability"
 
 export type AgentCapabilityModule<Configuration> = {
   configurationSchema: z.ZodType<Configuration>;
-  defaultConfiguration?(fleetConfiguration: FleetConfigurationData): AgentCapabilityConfiguration;
+  defaultConfiguration?(
+    fleetConfiguration: FleetConfigurationData,
+  ): AgentCapabilityConfiguration | undefined;
   descriptor: CapabilityModuleDescriptor;
   migrate?(configuration: AgentCapabilityConfiguration): AgentCapabilityConfiguration | undefined;
   resolve(
@@ -142,13 +144,7 @@ export class AgentCapabilityRegistry {
       return { code: "invalid_configuration", ok: false };
     }
 
-    let inference:
-      | {
-          model: string;
-          moduleId: string;
-          schemaVersion: number;
-        }
-      | undefined;
+    let inference: AgentRuntimePlan["inference"] | undefined;
     const modules: AgentRuntimePlan["modules"] = [];
     const skillReferences: AgentRuntimePlan["skillReferences"] = [];
     const systemContext: AgentRuntimePlan["systemContext"] = [];
@@ -206,7 +202,7 @@ export class AgentCapabilityRegistry {
           }
 
           inference = {
-            model: contribution.model,
+            ...contribution.profile,
             moduleId: capability.id,
             schemaVersion: capability.schemaVersion,
           };

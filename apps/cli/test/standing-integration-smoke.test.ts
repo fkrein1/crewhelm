@@ -920,9 +920,12 @@ describe("standing integration action smoke", () => {
     ).toMatchObject({
       capabilities: [
         {
-          configuration: { model: "@cf/zai-org/glm-4.7-flash" },
+          configuration: {
+            fallbackModels: [],
+            primaryModel: "@cf/zai-org/glm-4.7-flash",
+          },
           id: "inference.workers-ai",
-          schemaVersion: 1,
+          schemaVersion: 2,
         },
       ],
       executionLimits: {

@@ -88,6 +88,7 @@ import {
   recordExecutionEvent,
   recordExecutionProviderResponse,
 } from "../../observability/execution.js";
+import { createInferenceFallbackModel, type InferenceAttemptEvent } from "./inference-fallback.js";
 import { digestRunPrompt, digestToolInput } from "./protocol.js";
 import {
   agentInboxProjectionOutboxSchema,
@@ -281,6 +282,7 @@ function publicRunStatus(status: ThinkSubmissionInspection["status"]): Run["stat
 }
 
 export class CrewAgent extends Think {
+  #activeModelCall: number | undefined;
   #approvalTurnMetadata: AdmittedTurnMetadata | undefined;
   #gatewayAiBinding: Ai | undefined;
   #permittedApprovalContinuationRunId: string | undefined;
@@ -1471,7 +1473,45 @@ export class CrewAgent extends Think {
       throw runtimeAdmissionError();
     }
 
-    return super.resolveModel(selectedModel);
+    const attemptOrder = [
+      configuration.runtimePlan.inference.model,
+      ...configuration.runtimePlan.inference.fallbackModels,
+    ];
+    const attempts = attemptOrder.map((modelId, attemptIndex) => {
+      const resolvedModel = super.resolveModel(attemptIndex === 0 ? selectedModel : modelId);
+
+      if (typeof resolvedModel === "string" || resolvedModel.specificationVersion !== "v4") {
+        throw runtimeAdmissionError();
+      }
+
+      return {
+        model: resolvedModel,
+        modelId,
+      };
+    });
+    const primary = attempts[0];
+
+    if (primary === undefined) {
+      throw runtimeAdmissionError();
+    }
+
+    return createInferenceFallbackModel({
+      attempts: [primary, ...attempts.slice(1)],
+      beforeAttempt: async (attemptIndex) => {
+        if (attemptIndex === 0) {
+          if (this.#activeModelCall === undefined) {
+            throw runtimeAdmissionError();
+          }
+
+          return this.#activeModelCall;
+        }
+
+        const modelCall = await this.#claimModelCall();
+        this.#activeModelCall = modelCall;
+        return modelCall;
+      },
+      recordEvent: (event) => this.#recordInferenceEvent(event),
+    });
   }
 
   override getModel(): ThinkModel {
@@ -1541,7 +1581,25 @@ export class CrewAgent extends Think {
       maxRetries: 0,
       maxSteps: approvalContinuation ? 1 : metadata.budgetReservation.maxTurns,
       messages,
+      ...(configuration.runtimePlan.inference.reasoningEffort === undefined
+        ? {}
+        : {
+            providerOptions: {
+              openai: {
+                reasoningEffort: configuration.runtimePlan.inference.reasoningEffort,
+              },
+              "workers-ai": {
+                reasoning_effort: configuration.runtimePlan.inference.reasoningEffort,
+              },
+            },
+          }),
       sendReasoning: false,
+      ...(configuration.runtimePlan.inference.temperature === undefined
+        ? {}
+        : { temperature: configuration.runtimePlan.inference.temperature }),
+      ...(configuration.runtimePlan.inference.topP === undefined
+        ? {}
+        : { topP: configuration.runtimePlan.inference.topP }),
     };
   }
 
@@ -1563,6 +1621,10 @@ export class CrewAgent extends Think {
   }
 
   override async beforeStep(_context: PrepareStepContext): Promise<StepConfig | void> {
+    this.#activeModelCall = await this.#claimModelCall();
+  }
+
+  async #claimModelCall(): Promise<number> {
     const reference = await this.#activeRunReference();
 
     if (reference === undefined) {
@@ -1586,6 +1648,20 @@ export class CrewAgent extends Think {
     if (!verified.success || !verified.data.ok || verified.data.runId !== reference.runId) {
       throw new Error("CrewAgent active run admission is no longer valid.");
     }
+
+    return verified.data.modelCall;
+  }
+
+  async #recordInferenceEvent(event: InferenceAttemptEvent): Promise<void> {
+    const metadata = this.#activeTurnMetadata();
+
+    await this.#recordRunTraceEvent(
+      metadata.runId,
+      runTimelineEventSchema.parse({
+        ...event,
+        occurredAt: new Date().toISOString(),
+      }),
+    );
   }
 
   override async onChatResponse(result: ChatResponseResult): Promise<void> {
