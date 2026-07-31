@@ -6,7 +6,7 @@ import SiteLayout from "../layouts/SiteLayout.astro";
 export const prerender = true;
 ---
 
-<SiteLayout title="Page not found — Crewhelm" description="This Crewhelm page does not exist.">
+<SiteLayout title="Page not found — Crewhelm" description="This Crewhelm page does not exist." index={false}>
   <main class="shell flex min-h-screen flex-col items-start justify-center py-16">
     <Brand href="/" />
     <p class="section-number mt-auto mb-7">404 / No route</p>

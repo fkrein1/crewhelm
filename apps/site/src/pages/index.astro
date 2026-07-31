@@ -6,7 +6,9 @@ import Brand from "../components/Brand.astro";
 import ButtonLink from "../components/ButtonLink.astro";
 import CustodyFlow from "../components/CustodyFlow.astro";
 import InstallCommand from "../components/InstallCommand.astro";
+import ThemeToggle from "../components/ThemeToggle.astro";
 import SiteLayout from "../layouts/SiteLayout.astro";
+import { homeStructuredData } from "../lib/seo";
 
 export const prerender = true;
 
@@ -35,12 +37,13 @@ const principles = [
 ] as const;
 ---
 
-<SiteLayout description={CREWHELM_BRAND_POSITIONING}>
+<SiteLayout description={CREWHELM_BRAND_POSITIONING} structuredData={homeStructuredData()}>
   <header class="shell flex min-h-21 items-center justify-between border-b border-border-strong max-[620px]:min-h-17">
     <Brand />
     <nav class="flex items-center gap-7.5 text-[.8rem] font-bold" aria-label="Primary navigation">
       <a class="no-underline hover:text-primary max-[900px]:hidden" href="#why">Why Crewhelm</a>
       <a class="no-underline hover:text-primary max-[900px]:hidden" href="#system">Architecture</a>
+      <ThemeToggle />
       <a class="border-b border-current py-2 no-underline" href="https://github.com/fkrein1/crewhelm" rel="noreferrer"><span class="max-[620px]:hidden">View on </span>GitHub <span aria-hidden="true">↗</span></a>
     </nav>
   </header>
@@ -110,9 +113,9 @@ const principles = [
       <InstallCommand />
     </section>
 
-    <section class="bg-foreground text-paper-50">
+    <section class="bg-inverse text-inverse-foreground">
       <div class="shell relative flex min-h-157.5 flex-col items-start justify-center py-22.5 max-[620px]:min-h-130">
-        <p class="z-1 m-0 mb-5.5 font-mono text-[.7rem] tracking-[.08em] text-ink-400 uppercase">Stop renting trust.</p>
+        <p class="z-1 m-0 mb-5.5 font-mono text-[.7rem] tracking-[.08em] text-ink-300 uppercase">Stop renting trust.</p>
         <h2 class="z-1 m-0 mb-11 text-[clamp(4rem,9vw,9rem)] leading-display tracking-[-.07em] max-[620px]:text-[clamp(3.7rem,18vw,5.8rem)]">Run Agents<br />with boundaries.</h2>
         <ButtonLink class="z-1" variant="light" href="https://github.com/fkrein1/crewhelm" rel="noreferrer">Explore Crewhelm on GitHub <span aria-hidden="true">↗</span></ButtonLink>
         <span class="pointer-events-none absolute right-0 bottom-6 font-mono text-[clamp(8rem,22vw,23rem)] leading-[.8] font-extrabold tracking-[-.15em] text-primary opacity-20" aria-hidden="true">&gt;_</span>

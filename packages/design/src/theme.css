@@ -88,13 +88,10 @@
   --tracking-section: -0.06em;
   --leading-display: 0.82;
   --leading-section: 0.88;
-
-  --shadow-ledger: 10px 12px 0 color-mix(in oklch, var(--color-ink-950) 10%, transparent);
-  --shadow-signal: 10px 10px 0 var(--color-signal-600);
-  --shadow-signal-sm: 7px 7px 0 var(--color-signal-600);
 }
 
 :root {
+  color-scheme: light;
   --background: var(--color-paper-100);
   --foreground: var(--color-ink-950);
   --card: var(--color-paper-50);
@@ -114,7 +111,38 @@
   --warning-soft: var(--color-warning-100);
   --danger: var(--color-danger-700);
   --danger-soft: var(--color-danger-100);
+  --inverse: var(--color-ink-950);
+  --inverse-foreground: var(--color-paper-50);
+  --ledger-shadow: 10px 12px 0 color-mix(in oklch, var(--color-ink-950) 10%, transparent);
+  --signal-shadow: 10px 10px 0 var(--color-signal-600);
+  --signal-shadow-sm: 7px 7px 0 var(--color-signal-600);
   --radius: 0;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: var(--color-ink-950);
+  --foreground: var(--color-paper-100);
+  --card: var(--color-ink-900);
+  --card-foreground: var(--color-paper-100);
+  --primary: var(--color-signal-400);
+  --primary-foreground: var(--color-ink-950);
+  --secondary: var(--color-ink-800);
+  --secondary-foreground: var(--color-paper-100);
+  --muted: var(--color-ink-800);
+  --muted-foreground: var(--color-ink-300);
+  --border: var(--color-ink-700);
+  --border-strong: var(--color-ink-300);
+  --ring: var(--color-signal-400);
+  --success: var(--color-success-400);
+  --success-soft: var(--color-success-950);
+  --warning: var(--color-warning-400);
+  --warning-soft: var(--color-warning-950);
+  --danger: var(--color-danger-400);
+  --danger-soft: var(--color-danger-950);
+  --ledger-shadow: 10px 12px 0 color-mix(in oklch, var(--color-signal-400) 22%, transparent);
+  --signal-shadow: 10px 10px 0 var(--color-signal-400);
+  --signal-shadow-sm: 7px 7px 0 var(--color-signal-400);
 }
 
 @theme inline {
@@ -137,6 +165,11 @@
   --color-warning-soft: var(--warning-soft);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
+  --color-inverse: var(--inverse);
+  --color-inverse-foreground: var(--inverse-foreground);
+  --shadow-ledger: var(--ledger-shadow);
+  --shadow-signal: var(--signal-shadow);
+  --shadow-signal-sm: var(--signal-shadow-sm);
   --radius-sm: var(--radius);
   --radius-md: var(--radius);
   --radius-lg: var(--radius);

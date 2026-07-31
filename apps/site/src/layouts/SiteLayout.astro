@@ -1,34 +1,25 @@
 ---
-import {
-  CREWHELM_BRAND_POSITIONING,
-  CREWHELM_BRAND_PROMISE,
-} from "@crewhelm/design";
-
+import Seo from "../components/Seo.astro";
+import type { JsonLd } from "../lib/seo";
+import { CREWHELM_SITE } from "../lib/seo";
+import { CREWHELM_THEME_STORAGE_KEY } from "../lib/theme";
 import globalStyles from "../styles/global.css?url";
 
 interface Props {
+  canonical?: string | URL | null;
   description?: string;
+  index?: boolean;
+  structuredData?: JsonLd | JsonLd[] | null;
   title?: string;
 }
 
 const {
-  description = CREWHELM_BRAND_POSITIONING,
-  title = `${CREWHELM_BRAND_PROMISE} — Crewhelm`,
+  canonical,
+  description = CREWHELM_SITE.description,
+  index = true,
+  structuredData = null,
+  title = CREWHELM_SITE.title,
 } = Astro.props;
-
-const canonical = new URL(Astro.url.pathname, Astro.site);
-const structuredData = {
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  name: "Crewhelm",
-  applicationCategory: "DeveloperApplication",
-  description,
-  isAccessibleForFree: true,
-  license: "https://opensource.org/license/mit",
-  operatingSystem: "Cloudflare Workers",
-  url: canonical.toString(),
-  codeRepository: "https://github.com/fkrein1/crewhelm",
-};
 ---
 
 <!doctype html>
@@ -36,24 +27,30 @@ const structuredData = {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content={description} />
-    <meta name="theme-color" content="#f2f0e9" />
-    <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="Crewhelm" />
-    <meta property="og:title" content={title} />
-    <meta property="og:description" content={description} />
-    <meta property="og:url" content={canonical} />
-    <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content={title} />
-    <meta name="twitter:description" content={description} />
-    <link rel="canonical" href={canonical} />
+    <Seo {canonical} {description} {index} {structuredData} {title} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <script is:inline define:vars={{ storageKey: CREWHELM_THEME_STORAGE_KEY }}>
+      (() => {
+        let theme;
+
+        try {
+          const savedTheme = localStorage.getItem(storageKey);
+          if (savedTheme === "light" || savedTheme === "dark") theme = savedTheme;
+        } catch {
+          // Fall through to the system preference when storage is unavailable.
+        }
+
+        theme ??= window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        document.documentElement.dataset.theme = theme;
+        document
+          .querySelector('meta[name="theme-color"]')
+          ?.setAttribute("content", theme === "dark" ? "#11151e" : "#f2f0e9");
+      })();
+    </script>
     <link rel="stylesheet" href={globalStyles} />
-    <title>{title}</title>
-    <script type="application/ld+json" set:html={JSON.stringify(structuredData)} />
   </head>
   <body>
-    <a class="fixed top-3 left-4 z-20 -translate-y-[160%] bg-foreground px-3.5 py-2.5 text-paper-50 transition-transform duration-150 focus:translate-y-0" href="#main">Skip to content</a>
+    <a class="fixed top-3 left-4 z-20 -translate-y-[160%] bg-inverse px-3.5 py-2.5 text-inverse-foreground transition-transform duration-150 focus:translate-y-0" href="#main">Skip to content</a>
     <slot />
   </body>
 </html>
