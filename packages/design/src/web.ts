@@ -29,7 +29,6 @@ function themeVariables(theme: CrewhelmColorTheme, indentation = "  "): string {
     `--ch-color-text-secondary: ${theme.textSecondary};`,
     `--ch-color-warning: ${theme.warning};`,
     `--ch-color-warning-soft: ${theme.warningSoft};`,
-    `--ch-shadow-panel: ${theme.shadowPanel};`,
   ]
     .map((declaration) => `${indentation}${declaration}`)
     .join("\n");
@@ -96,23 +95,13 @@ body.ch-page {
   background: var(--ch-color-canvas-raised);
 }
 
-body.ch-page::before {
-  position: fixed;
-  inset: clamp(16px, 5vw, 72px) clamp(16px, 5vw, 72px) auto;
-  height: 1px;
-  background: var(--ch-color-border-strong);
-  content: "";
-}
-
 .ch-panel {
   --ch-page-accent: var(--ch-color-accent);
   width: min(100%, 720px);
   padding: clamp(30px, 6vw, 58px);
-  border: 1px solid var(--ch-color-border-strong);
   border-radius: var(--ch-radius-md);
   color: var(--ch-color-text);
   background: var(--ch-color-surface);
-  box-shadow: 10px 10px 0 var(--ch-page-accent);
 }
 
 .ch-panel[data-tone="positive"] {
@@ -317,7 +306,6 @@ body.ch-page::before {
 
   .ch-panel {
     padding: 28px 22px 26px;
-    box-shadow: 6px 6px 0 var(--ch-page-accent);
   }
 
   .ch-panel__bar {

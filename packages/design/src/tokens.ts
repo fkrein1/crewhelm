@@ -11,7 +11,6 @@ export interface CrewhelmColorTheme {
   readonly negativeSoft: string;
   readonly positive: string;
   readonly positiveSoft: string;
-  readonly shadowPanel: string;
   readonly surface: string;
   readonly surfaceRaised: string;
   readonly surfaceSubtle: string;
@@ -117,7 +116,6 @@ export const crewhelmColorThemes = {
     negativeSoft: crewhelmColorScales.danger[950],
     positive: crewhelmColorScales.success[400],
     positiveSoft: crewhelmColorScales.success[950],
-    shadowPanel: `10px 10px 0 ${crewhelmColorScales.signal[800]}`,
     surface: crewhelmColorScales.ink[900],
     surfaceRaised: crewhelmColorScales.ink[800],
     surfaceSubtle: crewhelmColorScales.ink[950],
@@ -140,7 +138,6 @@ export const crewhelmColorThemes = {
     negativeSoft: crewhelmColorScales.danger[100],
     positive: crewhelmColorScales.success[700],
     positiveSoft: crewhelmColorScales.success[100],
-    shadowPanel: `10px 10px 0 ${crewhelmColorScales.signal[200]}`,
     surface: crewhelmColorScales.paper[50],
     surfaceRaised: crewhelmColorScales.paper[100],
     surfaceSubtle: crewhelmColorScales.paper[200],
