@@ -37,12 +37,12 @@ function themeVariables(theme: CrewhelmColorTheme, indentation = "  "): string {
 
 const darkThemeVariables = themeVariables(crewhelmColorThemes.dark);
 const lightThemeVariables = themeVariables(crewhelmColorThemes.light);
-const nestedLightThemeVariables = themeVariables(crewhelmColorThemes.light, "    ");
+const nestedDarkThemeVariables = themeVariables(crewhelmColorThemes.dark, "    ");
 
 export const CREWHELM_WEB_STYLES = `
 :root {
-  color-scheme: dark light;
-${darkThemeVariables}
+  color-scheme: light dark;
+${lightThemeVariables}
   --ch-font-mono: ${crewhelmFoundationTokens.font.mono};
   --ch-font-sans: ${crewhelmFoundationTokens.font.sans};
   --ch-radius-lg: ${crewhelmFoundationTokens.radius.large};
@@ -68,12 +68,13 @@ ${lightThemeVariables}
 
 :root[data-theme="dark"] {
   color-scheme: dark;
+${darkThemeVariables}
 }
 
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    color-scheme: light;
-${nestedLightThemeVariables}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+${nestedDarkThemeVariables}
   }
 }
 
@@ -95,16 +96,23 @@ body.ch-page {
   background: var(--ch-color-canvas-raised);
 }
 
+body.ch-page::before {
+  position: fixed;
+  inset: clamp(16px, 5vw, 72px) clamp(16px, 5vw, 72px) auto;
+  height: 1px;
+  background: var(--ch-color-border-strong);
+  content: "";
+}
+
 .ch-panel {
   --ch-page-accent: var(--ch-color-accent);
-  width: min(100%, 650px);
-  overflow: hidden;
-  padding: clamp(28px, 5vw, 48px);
-  border: 1px solid var(--ch-color-border);
+  width: min(100%, 720px);
+  padding: clamp(30px, 6vw, 58px);
+  border: 1px solid var(--ch-color-border-strong);
   border-radius: var(--ch-radius-md);
   color: var(--ch-color-text);
   background: var(--ch-color-surface);
-  box-shadow: var(--ch-shadow-panel);
+  box-shadow: 10px 10px 0 var(--ch-page-accent);
 }
 
 .ch-panel[data-tone="positive"] {
@@ -124,7 +132,7 @@ body.ch-page {
   align-items: center;
   justify-content: space-between;
   gap: var(--ch-space-4);
-  margin: calc(var(--ch-space-2) * -1) 0 var(--ch-space-8);
+  margin: 0 0 clamp(42px, 8vw, 72px);
   color: var(--ch-color-text-muted);
   font: 700 9px/1 var(--ch-font-mono);
   letter-spacing: 0.07em;
@@ -138,10 +146,9 @@ body.ch-page {
 }
 
 .ch-panel__context::before {
-  width: 6px;
-  height: 6px;
+  width: 18px;
+  height: 1px;
   flex: 0 0 auto;
-  border-radius: 50%;
   background: var(--ch-page-accent);
   content: "";
 }
@@ -151,7 +158,7 @@ body.ch-page {
   align-items: center;
   gap: 7px;
   flex: 0 0 auto;
-  color: var(--ch-color-text-muted);
+  color: var(--ch-color-text);
   font: 800 9px/1 var(--ch-font-mono);
   letter-spacing: 0.08em;
 }
@@ -166,21 +173,25 @@ body.ch-page {
 }
 
 .ch-panel h1 {
-  max-width: 560px;
-  margin: 0 0 var(--ch-space-4);
+  max-width: 610px;
+  margin: 0 0 var(--ch-space-6);
   color: var(--ch-color-text);
-  font-size: clamp(28px, 6vw, 42px);
-  font-weight: 650;
-  line-height: 1.06;
-  letter-spacing: -0.038em;
+  font-size: clamp(38px, 8vw, 64px);
+  font-weight: 800;
+  line-height: .92;
+  letter-spacing: -.06em;
 }
 
 .ch-copy,
 .ch-panel > p {
   margin: 0;
   color: var(--ch-color-text-secondary);
-  font-size: 14px;
-  line-height: 1.65;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.ch-copy + .ch-copy {
+  margin-top: var(--ch-space-3);
 }
 
 .ch-panel strong {
@@ -193,7 +204,7 @@ body.ch-page {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--ch-space-3);
-  margin-top: var(--ch-space-8);
+  margin-top: clamp(30px, 6vw, 48px);
 }
 
 .ch-actions form {
@@ -202,29 +213,29 @@ body.ch-page {
 
 .ch-button {
   display: inline-flex;
-  min-height: 42px;
+  min-height: 50px;
   align-items: center;
   justify-content: center;
   gap: var(--ch-space-2);
-  padding: 0 var(--ch-space-4);
+  padding: 0 var(--ch-space-5);
   border: 1px solid var(--ch-color-border-strong);
   border-radius: var(--ch-radius-sm);
   color: var(--ch-color-text);
   background: var(--ch-color-surface-raised);
-  box-shadow: 0 7px 20px rgb(0 0 0 / 16%);
-  font: 650 11px/1 var(--ch-font-mono);
+  box-shadow: none;
+  font: 800 11px/1 var(--ch-font-mono);
+  letter-spacing: .02em;
   text-decoration: none;
   cursor: pointer;
   transition:
     border-color 140ms ease,
     transform 140ms ease,
-    box-shadow 140ms ease;
+    background 140ms ease;
 }
 
 .ch-button:hover {
   border-color: var(--ch-page-accent);
   transform: translateY(-1px);
-  box-shadow: 0 10px 24px rgb(0 0 0 / 22%);
 }
 
 .ch-button:focus-visible {
@@ -244,33 +255,39 @@ body.ch-page {
   border-color: var(--ch-color-accent);
   color: var(--ch-color-accent-contrast);
   background: var(--ch-color-accent);
-  box-shadow: 0 6px 16px rgb(0 0 0 / 18%);
+  box-shadow: 5px 5px 0 var(--ch-color-border-strong);
 }
 
 .ch-button--quiet {
   color: var(--ch-color-text-secondary);
   background: transparent;
-  box-shadow: none;
+  border-color: transparent;
+  text-decoration: underline;
+  text-underline-offset: 5px;
 }
 
 .ch-permissions {
   display: grid;
-  gap: 1px;
+  gap: 0;
   margin: var(--ch-space-6) 0 0;
   padding: 0;
-  overflow: hidden;
-  border: 1px solid var(--ch-color-border);
+  border: 1px solid var(--ch-color-border-strong);
   border-radius: var(--ch-radius-sm);
-  background: var(--ch-color-border);
+  background: transparent;
   list-style: none;
 }
 
 .ch-permission {
   padding: var(--ch-space-4);
   color: var(--ch-color-text-secondary);
+  border-bottom: 1px solid var(--ch-color-border);
   background: var(--ch-color-surface-subtle);
   font-size: 12px;
   line-height: 1.55;
+}
+
+.ch-permission:last-child {
+  border-bottom: 0;
 }
 
 .ch-meta {
@@ -278,7 +295,7 @@ body.ch-page {
   gap: var(--ch-space-2);
   margin-top: var(--ch-space-5);
   padding-top: var(--ch-space-5);
-  border-top: 1px solid var(--ch-color-border);
+  border-top: 1px solid var(--ch-color-border-strong);
 }
 
 .ch-meta p {
@@ -299,7 +316,8 @@ body.ch-page {
   }
 
   .ch-panel {
-    padding: 26px 22px 22px;
+    padding: 28px 22px 26px;
+    box-shadow: 6px 6px 0 var(--ch-page-accent);
   }
 
   .ch-panel__bar {

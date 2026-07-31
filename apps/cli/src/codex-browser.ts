@@ -93,11 +93,11 @@ export async function openInCodexBrowser(
           form: {
             action: continuePath,
             fields: {},
-            label: "Continue to Crewhelm",
+            label: "Open Crewhelm authorization",
           },
-          heading: "Continue in Codex Browser",
+          heading: "Continue in the Codex browser.",
           paragraphs: [
-            "Crewhelm will open the authorization page without exposing its signed URL in the terminal.",
+            "Crewhelm will open the signed authorization page without printing that capability-bearing URL in the terminal.",
           ],
           title: "Crewhelm browser handoff",
         }),

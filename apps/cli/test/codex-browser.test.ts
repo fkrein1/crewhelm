@@ -79,7 +79,7 @@ describe("Codex browser handoff", () => {
       },
       status: 200,
     });
-    expect(page.body).toContain("Continue in Codex Browser");
+    expect(page.body).toContain("Continue in the Codex browser.");
     expect(page.body).toContain('action="/codex/browser/');
     expect(page.body).not.toContain(target.origin);
     expect(page.body).not.toContain(target.search);

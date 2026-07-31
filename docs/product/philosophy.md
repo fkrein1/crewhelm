@@ -4,6 +4,9 @@ Crewhelm lets an individual safely own, launch, and share useful agents without 
 platform operator. Powerful behavior should be easy to understand; unsafe behavior should be hard
 to reach.
 
+The [Crewhelm brand guide](brand.md) translates this philosophy into the voice and visual language
+used across the public site, browser handoffs, CLI, and future product surfaces.
+
 ## Product bets
 
 - **MCP operates; the CLI bootstraps.** The CLI deploys and diagnoses. MCP manages Agents,

@@ -4,6 +4,7 @@
 !.env.example
 
 node_modules/
+.astro/
 coverage/
 dist/
 release/

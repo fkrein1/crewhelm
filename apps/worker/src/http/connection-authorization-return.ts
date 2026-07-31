@@ -16,20 +16,20 @@ const CONNECTION_AUTHORIZATION_RETURN_ROUTE =
 const providerStatusSchema = z.enum(["success", "failed"]);
 
 const RETURNED_BODY = renderWorkerPage({
-  body: '      <p class="ch-copy">You can close this window and return to your MCP client.</p>',
-  heading: "Authorization returned to Crewhelm",
+  body: '      <p class="ch-copy">Crewhelm recorded the provider response. You can close this window and return to your MCP client.</p>',
+  heading: "Connection authorization returned.",
   title: "Authorization returned",
   tone: "positive",
 });
 const FAILED_BODY = renderWorkerPage({
-  body: '      <p class="ch-copy">Return to your MCP client to try again.</p>',
-  heading: "Authorization was not completed",
+  body: '      <p class="ch-copy">The provider did not complete authorization. Return to your MCP client when you are ready to try again.</p>',
+  heading: "Connection authorization stopped.",
   title: "Authorization not completed",
   tone: "warning",
 });
 const DENIED_BODY = renderWorkerPage({
-  body: '      <p class="ch-copy">Return to your MCP client and request a new connection link.</p>',
-  heading: "Authorization return denied",
+  body: '      <p class="ch-copy">This return could not activate a connection. Request a new connection link from your MCP client.</p>',
+  heading: "Connection return denied.",
   title: "Authorization return denied",
   tone: "negative",
 });

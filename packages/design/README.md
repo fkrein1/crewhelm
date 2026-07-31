@@ -4,6 +4,8 @@
 It is dependency-free so Cloudflare Workers, the bootstrap CLI, and future MCP app resources can
 consume the same foundations without importing a rendering framework.
 
+Product meaning, voice, and application rules live in the [brand guide](../../docs/product/brand.md).
+
 ## Exports
 
 - `@crewhelm/design` provides renderer-neutral brand and token values.
