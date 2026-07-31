@@ -559,6 +559,16 @@ export class AgentChannel {
     }
 
     if (admission.status === "expired") {
+      if (admission.failureCode === "skill_unavailable") {
+        return {
+          certainty: "confirmed",
+          disposition: "inspect_first",
+          nextAction: "review_configuration",
+          phase: "run.admission",
+          reason: "skill_unavailable",
+        };
+      }
+
       return {
         certainty: "confirmed",
         disposition: "start_new_run",
@@ -615,6 +625,7 @@ export class AgentChannel {
         },
       },
       run,
+      skills: this.#admissions.skillProvenance(admission),
       timeline: page,
       timelinePage: {
         nextCursor,

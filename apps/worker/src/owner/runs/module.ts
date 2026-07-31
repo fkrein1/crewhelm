@@ -2,6 +2,7 @@ import {
   DEFAULT_FLEET_RUN_RETENTION_SECONDS,
   MAXIMUM_RUN_ADMISSIONS_PER_OWNER,
   MAXIMUM_RUN_INPUT_CHARACTERS,
+  MAXIMUM_AGENT_SKILL_CONTEXT_CHARACTERS,
   MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
   composioToolCapabilityGrantSchema,
   RUN_ADMISSION_LIFETIME_MS,
@@ -12,6 +13,7 @@ import {
   crewAgentSystemPrompt,
   redeemRunReceiverCapabilityResultSchema,
   runBudgetReservationSchema,
+  agentRuntimePlanSchema,
   runAdmissionNonceSchema,
   runAdmissionPermitSchema,
   runReceiverCapabilitySchema,
@@ -56,6 +58,7 @@ import {
 } from "../../agent-capabilities/registry.js";
 import { WORKERS_AI_CAPABILITY_ID } from "../../agent-capabilities/workers-ai.js";
 import { recordExecutionEvent } from "../../observability/execution.js";
+import type { Skills } from "../skills/index.js";
 import {
   agentRevisions,
   agents,
@@ -150,6 +153,17 @@ function sameBudgetReservation(left: unknown, right: unknown): boolean {
   );
 }
 
+function sameRuntimePlan(left: unknown, right: unknown): boolean {
+  const leftPlan = agentRuntimePlanSchema.safeParse(left);
+  const rightPlan = agentRuntimePlanSchema.safeParse(right);
+
+  return (
+    leftPlan.success &&
+    rightPlan.success &&
+    JSON.stringify(leftPlan.data) === JSON.stringify(rightPlan.data)
+  );
+}
+
 function createBudgetReservation(input: {
   configuration: FleetConfiguration;
   executionLimits: CrewAgentRuntimeConfig["executionLimits"];
@@ -229,17 +243,20 @@ export class RunAdmissions {
   readonly #database: ControlPlaneDatabase;
   readonly #objectName: string | undefined;
   readonly #storage: DurableObjectStorage;
+  readonly #skills: Skills;
 
   constructor(
     objectName: string | undefined,
     database: ControlPlaneDatabase,
     storage: DurableObjectStorage,
     currentFleetConfiguration: () => FleetConfiguration,
+    skills: Skills,
   ) {
     this.#currentFleetConfiguration = currentFleetConfiguration;
     this.#database = database;
     this.#objectName = objectName;
     this.#storage = storage;
+    this.#skills = skills;
   }
 
   async create(authority: OwnerAuthority, input: unknown): Promise<CreateRunAdmissionResult> {
@@ -292,7 +309,11 @@ export class RunAdmissions {
         }
 
         if (!this.#admissionConfigurationIsActive(transaction, existing)) {
-          this.#expire(transaction, existing.runId);
+          this.#expire(
+            transaction,
+            existing.runId,
+            this.#admissionSkillsAreActive(transaction, existing) ? null : "skill_unavailable",
+          );
           return this.#deniedRequest("agent_unavailable");
         }
 
@@ -375,6 +396,16 @@ export class RunAdmissions {
         );
       }
 
+      if (
+        this.#skills.runtimeProvenance(
+          compiledCapabilities.runtimePlan.skillReferences,
+          transaction,
+          true,
+        ) === undefined
+      ) {
+        return this.#deniedRequest("capability_unavailable");
+      }
+
       const toolGrants = this.#toolGrants(
         transaction,
         authority.ownerKey,
@@ -387,10 +418,14 @@ export class RunAdmissions {
         return this.#deniedRequest("capability_unavailable");
       }
 
-      const systemPromptCharacters = crewAgentSystemPrompt({
-        instructions: agent.instructions,
-        runtimePlan: compiledCapabilities.runtimePlan,
-      }).length;
+      const systemPromptCharacters =
+        crewAgentSystemPrompt({
+          instructions: agent.instructions,
+          runtimePlan: compiledCapabilities.runtimePlan,
+        }).length +
+        (compiledCapabilities.runtimePlan.skillReferences.length === 0
+          ? 0
+          : MAXIMUM_AGENT_SKILL_CONTEXT_CHARACTERS);
 
       if (systemPromptCharacters + request.data.promptCharacters > MAXIMUM_RUN_INPUT_CHARACTERS) {
         return this.#deniedRequest("capability_unavailable");
@@ -646,23 +681,20 @@ export class RunAdmissions {
     const nonceDigest = await digestBase64Url(permit.data.nonce);
     const currentTime = Date.now();
 
-    return this.#database.transaction((transaction) => {
+    const candidate = this.#database.transaction((transaction) => {
       this.#cleanup(transaction, currentTime);
       const row = this.#admission(transaction, permit.data.runId);
 
-      if (
-        row === undefined ||
-        row.status !== "issued" ||
-        row.cancellationRequestedAt !== null ||
-        row.nonceDigest !== nonceDigest ||
-        row.expiresAt <= currentTime ||
-        !this.#matchesPermit(row, permit.data)
-      ) {
+      if (!this.#matchesIssuedPermit(row, permit.data, nonceDigest, currentTime)) {
         return RUN_ADMISSION_ERROR;
       }
 
       if (!this.#admissionConfigurationIsActive(transaction, row)) {
-        this.#expire(transaction, permit.data.runId);
+        this.#expire(
+          transaction,
+          permit.data.runId,
+          this.#admissionSkillsAreActive(transaction, row) ? null : "skill_unavailable",
+        );
         return RUN_ADMISSION_ERROR;
       }
 
@@ -682,6 +714,57 @@ export class RunAdmissions {
         ok: true,
         runId: permit.data.runId,
       });
+    });
+
+    if (!candidate.ok || candidate.configuration.runtimePlan.skillReferences.length === 0) {
+      return candidate;
+    }
+
+    const loaded = await this.#skills.loadRuntimeInstructions(
+      candidate.configuration.runtimePlan.skillReferences,
+    );
+
+    if (!loaded.ok) {
+      this.#database.transaction((transaction) => {
+        const row = this.#admission(transaction, permit.data.runId);
+
+        if (this.#matchesIssuedPermit(row, permit.data, nonceDigest, Date.now())) {
+          this.#expire(transaction, permit.data.runId, "skill_unavailable");
+        }
+      });
+      return RUN_ADMISSION_ERROR;
+    }
+
+    const revalidated = this.#database.transaction((transaction) => {
+      const row = this.#admission(transaction, permit.data.runId);
+
+      if (!this.#matchesIssuedPermit(row, permit.data, nonceDigest, Date.now())) {
+        return false;
+      }
+
+      if (!this.#admissionConfigurationIsActive(transaction, row)) {
+        this.#expire(
+          transaction,
+          permit.data.runId,
+          this.#admissionSkillsAreActive(transaction, row) ? null : "skill_unavailable",
+        );
+        return false;
+      }
+
+      return true;
+    });
+
+    if (!revalidated) {
+      return RUN_ADMISSION_ERROR;
+    }
+
+    return verifyRunAdmissionResultSchema.parse({
+      configuration: {
+        ...candidate.configuration,
+        skillInstructions: loaded.instructions,
+      },
+      ok: true,
+      runId: permit.data.runId,
     });
   }
 
@@ -721,7 +804,11 @@ export class RunAdmissions {
       }
 
       if (!this.#admissionConfigurationIsActive(transaction, row)) {
-        this.#expire(transaction, permit.data.runId);
+        this.#expire(
+          transaction,
+          permit.data.runId,
+          this.#admissionSkillsAreActive(transaction, row) ? null : "skill_unavailable",
+        );
         return RUN_ADMISSION_ERROR;
       }
 
@@ -857,6 +944,12 @@ export class RunAdmissions {
 
   read(runId: string): StoredRunAdmission | undefined {
     return this.#database.select().from(runAdmissions).where(eq(runAdmissions.runId, runId)).get();
+  }
+
+  skillProvenance(admission: StoredRunAdmission) {
+    return (
+      this.#skills.runtimeProvenance(admission.budgetReservation.runtimePlan.skillReferences) ?? []
+    );
   }
 
   list(input: ListAgentRunsInput): { nextCursor: string | null; runs: RunSummary[] } | undefined {
@@ -1164,6 +1257,22 @@ export class RunAdmissions {
     );
   }
 
+  #matchesIssuedPermit(
+    row: StoredRunAdmission | undefined,
+    permit: RunAdmissionPermit,
+    nonceDigest: string,
+    currentTime: number,
+  ): row is StoredRunAdmission {
+    return (
+      row !== undefined &&
+      row.status === "issued" &&
+      row.cancellationRequestedAt === null &&
+      row.nonceDigest === nonceDigest &&
+      row.expiresAt > currentTime &&
+      this.#matchesPermit(row, permit)
+    );
+  }
+
   #permit(input: {
     agentId: string;
     agentRevision: number;
@@ -1202,7 +1311,7 @@ export class RunAdmissions {
   ): boolean {
     return (
       reservation.maxDurationSeconds <= configuration.executionLimits.maxDurationSeconds &&
-      JSON.stringify(reservation.runtimePlan) === JSON.stringify(configuration.runtimePlan) &&
+      sameRuntimePlan(reservation.runtimePlan, configuration.runtimePlan) &&
       reservation.maxOutputTokens <= configuration.executionLimits.maxModelTokens &&
       reservation.maxToolCalls <= configuration.executionLimits.maxToolCalls &&
       reservation.toolGrants.length === activeToolGrants.length &&
@@ -1236,6 +1345,10 @@ export class RunAdmissions {
       return false;
     }
 
+    if (admission.status === "issued" && !this.#admissionSkillsAreActive(database, admission)) {
+      return false;
+    }
+
     const activeToolGrants = this.#toolGrants(
       database,
       this.#objectName,
@@ -1254,10 +1367,26 @@ export class RunAdmissions {
     );
   }
 
-  #expire(database: RunAdmissionDatabase, runId: string): void {
+  #admissionSkillsAreActive(
+    database: RunAdmissionDatabase,
+    admission: StoredRunAdmission,
+  ): boolean {
+    const references = agentRuntimePlanSchema.safeParse(admission.budgetReservation.runtimePlan);
+
+    return (
+      references.success &&
+      this.#skills.runtimeProvenance(references.data.skillReferences, database, true) !== undefined
+    );
+  }
+
+  #expire(
+    database: RunAdmissionDatabase,
+    runId: string,
+    failureCode: StoredRunAdmission["failureCode"] = null,
+  ): void {
     database
       .update(runAdmissions)
-      .set({ status: "expired" })
+      .set({ failureCode, status: "expired" })
       .where(and(eq(runAdmissions.runId, runId), eq(runAdmissions.status, "issued")))
       .run();
   }

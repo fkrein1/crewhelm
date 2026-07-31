@@ -5,6 +5,8 @@ export const MAXIMUM_AGENT_CAPABILITY_CONFIGURATION_BYTES = 8 * 1_024;
 export const MAXIMUM_AGENT_CAPABILITY_CONFIGURATIONS_BYTES = 32 * 1_024;
 export const WORKERS_AI_CAPABILITY_ID = "inference.workers-ai";
 export const WORKERS_AI_CAPABILITY_SCHEMA_VERSION = 1;
+export const SKILLS_CAPABILITY_ID = "context.skills";
+export const SKILLS_CAPABILITY_SCHEMA_VERSION = 1;
 
 export const agentCapabilityModuleIdSchema = z
   .string()
@@ -27,13 +29,33 @@ const agentCapabilityConfigurationPrimitiveSchema = z.union([
   z.boolean(),
   z.null(),
 ]);
-const agentCapabilityConfigurationValueSchema = z.union([
-  agentCapabilityConfigurationPrimitiveSchema,
-  z.array(agentCapabilityConfigurationPrimitiveSchema).max(64),
-  z
-    .record(z.string().min(1).max(80), agentCapabilityConfigurationPrimitiveSchema)
-    .refine((value) => Object.keys(value).length <= 64, "Capability object has too many fields."),
-]);
+
+type AgentCapabilityConfigurationPrimitive = string | number | boolean | null;
+type AgentCapabilityConfigurationLevelOne =
+  | AgentCapabilityConfigurationPrimitive
+  | AgentCapabilityConfigurationPrimitive[]
+  | { [key: string]: AgentCapabilityConfigurationPrimitive };
+type AgentCapabilityConfigurationValue =
+  | AgentCapabilityConfigurationPrimitive
+  | AgentCapabilityConfigurationLevelOne[]
+  | { [key: string]: AgentCapabilityConfigurationLevelOne };
+
+const agentCapabilityConfigurationLevelOneSchema: z.ZodType<AgentCapabilityConfigurationLevelOne> =
+  z.union([
+    agentCapabilityConfigurationPrimitiveSchema,
+    z.array(agentCapabilityConfigurationPrimitiveSchema).max(64),
+    z
+      .record(z.string().min(1).max(80), agentCapabilityConfigurationPrimitiveSchema)
+      .refine((value) => Object.keys(value).length <= 64, "Capability object has too many fields."),
+  ]);
+const agentCapabilityConfigurationValueSchema: z.ZodType<AgentCapabilityConfigurationValue> =
+  z.union([
+    agentCapabilityConfigurationPrimitiveSchema,
+    z.array(agentCapabilityConfigurationLevelOneSchema).max(64),
+    z
+      .record(z.string().min(1).max(80), agentCapabilityConfigurationLevelOneSchema)
+      .refine((value) => Object.keys(value).length <= 64, "Capability object has too many fields."),
+  ]);
 
 export const agentCapabilityConfigurationDataSchema = z
   .record(z.string().min(1).max(80), agentCapabilityConfigurationValueSchema)

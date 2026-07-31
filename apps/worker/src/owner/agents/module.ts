@@ -64,6 +64,7 @@ import {
   connections,
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
+import type { Skills } from "../skills/index.js";
 
 type AgentRequestFailure = Extract<CreateAgentResult, { ok: false }>;
 type StoredAgentRow = {
@@ -183,13 +184,16 @@ export function deniedConnectionAttachment(
 export class AgentRegistry {
   readonly #currentFleetConfiguration: () => FleetConfigurationData;
   readonly #database: ControlPlaneDatabase;
+  readonly #skills: Skills;
 
   constructor(
     database: ControlPlaneDatabase,
     currentFleetConfiguration: () => FleetConfigurationData,
+    skills: Skills,
   ) {
     this.#database = database;
     this.#currentFleetConfiguration = currentFleetConfiguration;
+    this.#skills = skills;
   }
 
   resolveConnectionForAttachment(input: unknown): ResolvedConnectionForAttachment {
@@ -663,6 +667,13 @@ export class AgentRegistry {
       }
 
       const { capabilities, runtimePlan } = compiledCapabilities;
+
+      if (
+        this.#skills.runtimeProvenance(runtimePlan.skillReferences, transaction, true) === undefined
+      ) {
+        return deniedAgent("invalid_request");
+      }
+
       const model = runtimePlan.inference.model;
       const agentCount = transaction.select({ value: count() }).from(agents).get()?.value ?? 0;
 
@@ -870,6 +881,13 @@ export class AgentRegistry {
       }
 
       const { capabilities, runtimePlan } = compiledCapabilities;
+
+      if (
+        this.#skills.runtimeProvenance(runtimePlan.skillReferences, transaction, true) === undefined
+      ) {
+        return deniedAgent("invalid_request");
+      }
+
       const model = runtimePlan.inference.model;
       const currentRow = transaction
         .select({

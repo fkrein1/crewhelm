@@ -4,21 +4,360 @@ import {
   AUTONOMY_WRITE_SCOPE,
   MAXIMUM_RUN_ADMISSIONS_PER_OWNER,
   MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
+  MAXIMUM_AGENT_SKILL_CONTEXT_CHARACTERS,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   RUN_ADMISSION_LIFETIME_MS,
   RUNS_WRITE_SCOPE,
+  crewAgentSystemPrompt,
+  publishSkillResultSchema,
   DEFAULT_FLEET_RUN_RETENTION_SECONDS,
 } from "@crewhelm/contracts";
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { digestRunPrompt } from "../../agent/admitted-runs/index.js";
 import { workersAiCapabilityConfiguration } from "../../agent-capabilities/workers-ai.js";
+import { skillsCapabilityConfiguration } from "../../agent-capabilities/skills.js";
+import type { OwnerControlPlane } from "../durable-object.js";
+import { R2SkillPackageObjectStore } from "../skills/index.js";
 import { agentInput, agentUpdate, authorityFor, fixedRunAdmissionFailure } from "../testkit.js";
 
 describe("OwnerControlPlane runs", () => {
+  it("hydrates only exact SKILL.md instructions and snapshots compact provenance", async () => {
+    const authority = await authorityFor("run-skill-runtime", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const published = publishSkillResultSchema.parse(
+      await stub.publishSkill(authority, {
+        idempotencyKey: "run-skill-publish",
+        mode: "apply",
+        target: {
+          kind: "skill-package",
+          package: {
+            description: "Triage one inbox.",
+            files: [
+              { content: "Never load this reference.", path: "references/private.md" },
+              { content: "echo never-run", path: "scripts/unsafe.sh" },
+              {
+                content: "# Inbox triage\n\nReturn the three highest-priority items.",
+                path: "SKILL.md",
+              },
+            ],
+            name: "inbox-triage",
+            provenance: { kind: "authored" },
+          },
+        },
+      }),
+    );
+
+    if (!published.ok || published.skill === undefined) {
+      throw new Error("Expected Skill publication.");
+    }
+
+    const created = await stub.createAgent(authority, {
+      ...agentInput("run-skill-agent"),
+      capabilities: [
+        skillsCapabilityConfiguration([{ id: published.skill.id, version: 1 }]),
+        workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct"),
+      ],
+    });
+
+    if (!created.ok) {
+      throw new Error("Expected Skill-enabled Agent.");
+    }
+
+    expect(JSON.stringify(created.agent)).not.toContain("Return the three highest-priority");
+    const prompt = "Triage this inbox.";
+    const issued = await stub.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "run-skill-admission",
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
+    });
+
+    if (!issued.ok || issued.state !== "issued") {
+      throw new Error("Expected Skill-enabled run admission.");
+    }
+
+    expect(issued.permit.budgetReservation.runtimePlan.skillReferences).toEqual([
+      {
+        id: published.skill.id,
+        moduleId: "context.skills",
+        schemaVersion: 1,
+        version: 1,
+      },
+    ]);
+    await expect(stub.inspectRun(authority, { runId: issued.permit.runId })).resolves.toMatchObject(
+      {
+        ok: true,
+        skills: [
+          {
+            digest: published.package.digest,
+            id: published.skill.id,
+            name: "inbox-triage",
+            version: 1,
+          },
+        ],
+      },
+    );
+    const listed = await stub.listAgentRuns(authority, { agentId: created.agent.id });
+
+    expect(listed).toMatchObject({ ok: true, runs: [{ runId: issued.permit.runId }] });
+    expect(JSON.stringify(listed)).not.toContain("inbox-triage");
+    expect(JSON.stringify(listed)).not.toContain(published.package.digest);
+    const verified = await stub.verifyRunAdmission(issued.permit);
+
+    if (!verified.ok) {
+      throw new Error("Expected Skill hydration.");
+    }
+
+    expect(verified.configuration.skillInstructions).toEqual([
+      {
+        contentTrust: "untrusted",
+        digest: published.package.digest,
+        id: published.skill.id,
+        instructions: "# Inbox triage\n\nReturn the three highest-priority items.",
+        name: "inbox-triage",
+        version: 1,
+      },
+    ]);
+    const systemPrompt = crewAgentSystemPrompt(verified.configuration);
+
+    expect(systemPrompt).toContain("untrusted content");
+    expect(systemPrompt).toContain("Return the three highest-priority items.");
+    expect(systemPrompt).not.toContain("Never load this reference.");
+    expect(systemPrompt).not.toContain("echo never-run");
+    await expect(stub.confirmRunAdmission(issued.permit)).resolves.toMatchObject({
+      confirmed: true,
+      ok: true,
+    });
+    const racingInput = {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "run-skill-racing-admission",
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
+    };
+    const racing = await stub.createRunAdmission(authority, racingInput);
+
+    if (!racing.ok || racing.state !== "issued") {
+      throw new Error("Expected issued admission before concurrent hydration.");
+    }
+
+    let markHydrationStarted: (() => void) | undefined;
+    let releaseHydration: (() => void) | undefined;
+    const hydrationStarted = new Promise<void>((resolve) => {
+      markHydrationStarted = resolve;
+    });
+    const hydrationReleased = new Promise<void>((resolve) => {
+      releaseHydration = resolve;
+    });
+    const getSpy = vi
+      .spyOn(R2SkillPackageObjectStore.prototype, "get")
+      .mockImplementation(async () => {
+        markHydrationStarted?.();
+        await hydrationReleased;
+        return null;
+      });
+    let racingReplay: Awaited<ReturnType<typeof stub.createRunAdmission>> | undefined;
+    let staleVerification: Awaited<ReturnType<typeof stub.verifyRunAdmission>> | undefined;
+
+    try {
+      ({ racingReplay, staleVerification } = await runInDurableObject(stub, async (instance) => {
+        const pendingVerification = instance.verifyRunAdmission(racing.permit);
+
+        await hydrationStarted;
+        const replay = await instance.createRunAdmission(authority, racingInput);
+
+        releaseHydration?.();
+        return {
+          racingReplay: replay,
+          staleVerification: await pendingVerification,
+        };
+      }));
+    } finally {
+      releaseHydration?.();
+      getSpy.mockRestore();
+    }
+
+    expect(staleVerification).toEqual(fixedRunAdmissionFailure("invalid_admission"));
+
+    if (!racingReplay?.ok || racingReplay.state !== "issued") {
+      throw new Error("Expected a newer issued permit during stale hydration.");
+    }
+
+    await expect(stub.verifyRunAdmission(racingReplay.permit)).resolves.toMatchObject({
+      ok: true,
+      runId: racing.permit.runId,
+    });
+    const waitingInput = {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "run-skill-waiting-admission",
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
+    };
+    const waiting = await stub.createRunAdmission(authority, waitingInput);
+
+    if (!waiting.ok || waiting.state !== "issued") {
+      throw new Error("Expected issued admission before Skill retirement.");
+    }
+
+    await expect(
+      stub.retireSkill(authority, {
+        idempotencyKey: "run-skill-retire",
+        mode: "apply",
+        target: {
+          expectedVersion: 1,
+          id: published.skill.id,
+          kind: "skill-retirement",
+        },
+      }),
+    ).resolves.toMatchObject({ applied: true, ok: true });
+    await expect(stub.createRunAdmission(authority, waitingInput)).resolves.toEqual(
+      fixedRunAdmissionFailure("agent_unavailable"),
+    );
+    await expect(stub.verifyRunAdmission(waiting.permit)).resolves.toEqual(
+      fixedRunAdmissionFailure("invalid_admission"),
+    );
+    await expect(
+      stub.inspectRun(authority, { runId: waiting.permit.runId }),
+    ).resolves.toMatchObject({
+      diagnosis: {
+        nextAction: "review_configuration",
+        reason: "skill_unavailable",
+      },
+      ok: true,
+      run: { status: "failed" },
+    });
+    await expect(
+      stub.verifyActiveRunAdmission({
+        agentId: issued.permit.agentId,
+        agentRevision: issued.permit.agentRevision,
+        budgetReservation: issued.permit.budgetReservation,
+        clientId: issued.permit.clientId,
+        idempotencyKey: issued.permit.idempotencyKey,
+        ownerKey: issued.permit.ownerKey,
+        promptDigest: issued.permit.promptDigest,
+        runId: issued.permit.runId,
+      }),
+    ).resolves.toMatchObject({ ok: true, runId: issued.permit.runId });
+    await expect(
+      stub.createRunAdmission(authority, {
+        agentId: created.agent.id,
+        expectedRevision: created.agent.revision,
+        idempotencyKey: "run-skill-retired-admission",
+        promptCharacters: prompt.length,
+        promptDigest: await digestRunPrompt(prompt),
+      }),
+    ).resolves.toEqual(fixedRunAdmissionFailure("capability_unavailable"));
+  });
+
+  it.each([
+    {
+      label: "missing package",
+      skill: "# Missing package",
+      mutate: async (stub: DurableObjectStub<OwnerControlPlane>, skillId: string) => {
+        const objectKey = await runInDurableObject(stub, (_instance, state) =>
+          state.storage.sql
+            .exec<{ objectKey: string }>(
+              "SELECT object_key AS objectKey FROM skill_versions WHERE skill_id = ?",
+              skillId,
+            )
+            .one(),
+        );
+
+        await env.SKILL_PACKAGES.delete(objectKey.objectKey);
+      },
+    },
+    {
+      label: "oversized instructions",
+      skill: `# Oversized\n\n${"x".repeat(MAXIMUM_AGENT_SKILL_CONTEXT_CHARACTERS)}`,
+      mutate: async () => undefined,
+    },
+  ])("expires admission before execution for $label", async ({ label, mutate, skill }) => {
+    const slug = label.replaceAll(" ", "-");
+    const authority = await authorityFor(`run-skill-${label.replaceAll(" ", "-")}`, [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const published = publishSkillResultSchema.parse(
+      await stub.publishSkill(authority, {
+        idempotencyKey: `run-skill-${slug}-publish`,
+        mode: "apply",
+        target: {
+          kind: "skill-package",
+          package: {
+            description: `Exercise ${label}.`,
+            files: [{ content: skill, path: "SKILL.md" }],
+            name: `runtime-${slug}`,
+            provenance: { kind: "authored" },
+          },
+        },
+      }),
+    );
+
+    if (!published.ok || published.skill === undefined) {
+      throw new Error("Expected failure-path Skill publication.");
+    }
+
+    const created = await stub.createAgent(authority, {
+      ...agentInput(`run-skill-${slug}-agent`),
+      capabilities: [
+        skillsCapabilityConfiguration([{ id: published.skill.id, version: 1 }]),
+        workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct"),
+      ],
+    });
+
+    if (!created.ok) {
+      throw new Error("Expected failure-path Agent.");
+    }
+
+    const prompt = `Exercise ${label}.`;
+    const issued = await stub.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: `run-skill-${slug}-admission`,
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
+    });
+
+    if (!issued.ok || issued.state !== "issued") {
+      throw new Error("Expected failure-path admission.");
+    }
+
+    await mutate(stub, published.skill.id);
+    await expect(stub.verifyRunAdmission(issued.permit)).resolves.toEqual(
+      fixedRunAdmissionFailure("invalid_admission"),
+    );
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec<{ failureCode: string; status: string }>(
+            `SELECT failure_code AS failureCode, status
+             FROM run_admissions
+             WHERE run_id = ?`,
+            issued.permit.runId,
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({
+      failureCode: "skill_unavailable",
+      status: "expired",
+    });
+  });
+
   it("enforces revisioned concurrent-run capacity and snapshots configured retention", async () => {
     const authority = await authorityFor("run-configured-capacity", [
       OWNER_READ_SCOPE,

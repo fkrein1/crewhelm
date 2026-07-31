@@ -190,24 +190,32 @@ export class OwnerControlPlane extends DurableObject {
       environment.AI,
       environment.AI_GATEWAY_ID,
     );
-    this.#runAdmissions = new RunAdmissions(this.#objectName, this.#database, this.#storage, () =>
-      this.#fleetConfigurations.current(),
+    this.#skills = new Skills(
+      this.#database,
+      new R2SkillPackageObjectStore(environment.SKILL_PACKAGES),
+      this.#objectName,
+    );
+    this.#runAdmissions = new RunAdmissions(
+      this.#objectName,
+      this.#database,
+      this.#storage,
+      () => this.#fleetConfigurations.current(),
+      this.#skills,
     );
     this.#toolExecutions = new ToolExecutions(this.#objectName, this.#database, this.#storage, () =>
       this.#fleetConfigurations.current(),
     );
-    this.#agents = new AgentRegistry(this.#database, () => this.#fleetConfigurations.currentData());
+    this.#agents = new AgentRegistry(
+      this.#database,
+      () => this.#fleetConfigurations.currentData(),
+      this.#skills,
+    );
     this.#connections = new Connections(this.#database, this.#storage, () =>
       this.#fleetConfigurations.currentData(),
     );
     this.#authorityControls = new AuthorityControls(this.#database);
     this.#agentSchedules = new AgentSchedules(this.#database, this.#storage, () =>
       this.#fleetConfigurations.currentData(),
-    );
-    this.#skills = new Skills(
-      this.#database,
-      new R2SkillPackageObjectStore(environment.SKILL_PACKAGES),
-      this.#objectName,
     );
     this.#agentChannel = new AgentChannel(
       this.#objectName,

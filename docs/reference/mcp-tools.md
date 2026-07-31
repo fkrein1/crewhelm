@@ -862,17 +862,67 @@ Attributes: write, non-destructive, idempotent, closed-world.
                   "items": {
                     "anyOf": [
                       {
-                        "type": "string",
-                        "maxLength": 2048
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 2048
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       },
                       {
-                        "type": "number"
+                        "maxItems": 64,
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2048
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
                       },
                       {
-                        "type": "boolean"
-                      },
-                      {
-                        "type": "null"
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 80
+                        },
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2048
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
                       }
                     ]
                   }
@@ -887,17 +937,67 @@ Attributes: write, non-destructive, idempotent, closed-world.
                   "additionalProperties": {
                     "anyOf": [
                       {
-                        "type": "string",
-                        "maxLength": 2048
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 2048
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       },
                       {
-                        "type": "number"
+                        "maxItems": 64,
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2048
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
                       },
                       {
-                        "type": "boolean"
-                      },
-                      {
-                        "type": "null"
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 80
+                        },
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2048
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
                       }
                     ]
                   }
@@ -2047,17 +2147,67 @@ Attributes: write, destructive, idempotent, closed-world.
                   "items": {
                     "anyOf": [
                       {
-                        "type": "string",
-                        "maxLength": 2048
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 2048
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       },
                       {
-                        "type": "number"
+                        "maxItems": 64,
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2048
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
                       },
                       {
-                        "type": "boolean"
-                      },
-                      {
-                        "type": "null"
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 80
+                        },
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2048
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
                       }
                     ]
                   }
@@ -2072,17 +2222,67 @@ Attributes: write, destructive, idempotent, closed-world.
                   "additionalProperties": {
                     "anyOf": [
                       {
-                        "type": "string",
-                        "maxLength": 2048
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 2048
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       },
                       {
-                        "type": "number"
+                        "maxItems": 64,
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2048
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
                       },
                       {
-                        "type": "boolean"
-                      },
-                      {
-                        "type": "null"
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 80
+                        },
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 2048
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
                       }
                     ]
                   }
