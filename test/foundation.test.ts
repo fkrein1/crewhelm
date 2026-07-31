@@ -807,9 +807,7 @@ describe("repository foundation", () => {
         }),
         expect.objectContaining({
           name: "Publish npm package",
-          run: expect.stringContaining(
-            'npm publish "$package_path" --access public --tag beta --ignore-scripts',
-          ),
+          run: expect.stringContaining('package_path="./${package_files[0]}"'),
         }),
       ]),
     );
@@ -817,8 +815,13 @@ describe("repository foundation", () => {
     const publishCommand = publishSteps.find(
       (step) => isRecord(step) && step["name"] === "Publish npm package",
     );
-    expect(isRecord(publishCommand) ? publishCommand["run"] : undefined).toEqual(
-      expect.stringMatching(/"dist-tags"\.beta[\s\S]+published_beta/u),
+    const publishRun = isRecord(publishCommand) ? publishCommand["run"] : undefined;
+    expect(publishRun).toEqual(expect.stringContaining('."dist-tags".beta'));
+    expect(publishRun).toEqual(expect.stringContaining('published_beta="$(read_beta_version)"'));
+    expect(publishRun).toEqual(
+      expect.stringContaining(
+        'npm publish "$package_path" --access public --tag beta --ignore-scripts',
+      ),
     );
     expect(
       publishSteps.some(
