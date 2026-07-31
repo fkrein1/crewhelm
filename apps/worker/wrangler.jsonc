@@ -43,10 +43,18 @@
         "name": "CREW_AGENT",
         "class_name": "CrewAgent",
       },
+      {
+        "name": "CREW_SESSION",
+        "class_name": "CrewSession",
+      },
     ],
   },
   "exports": {
     "CrewAgent": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+    "CrewSession": {
       "type": "durable-object",
       "storage": "sqlite",
     },

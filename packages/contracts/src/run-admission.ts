@@ -35,6 +35,7 @@ import {
   diagnosticNextActionSchema,
   retryDispositionSchema,
 } from "./diagnostics.js";
+import { runSessionSchema, sessionContinuationSchema } from "./agent-sessions.js";
 import {
   DEFAULT_RUNNABLE_AGENT_MODEL,
   RUNNABLE_AGENT_MODELS,
@@ -96,6 +97,7 @@ export const runTriggerSchema = z.enum(["manual", "schedule"]);
 export const createRunAdmissionInputSchema = z
   .strictObject({
     agentId: agentIdSchema,
+    continuation: sessionContinuationSchema.optional(),
     expectedRevision: agentRevisionNumberSchema,
     idempotencyKey: runAdmissionIdempotencyKeySchema,
     prompt: runPromptSchema.optional(),
@@ -323,13 +325,17 @@ export const confirmRunAdmissionResultSchema = z.discriminatedUnion("ok", [
 ]);
 
 export const acceptRunAdmissionInputSchema = z.strictObject({
+  continuation: sessionContinuationSchema.optional(),
   permit: runAdmissionPermitSchema,
   prompt: runPromptSchema,
+  session: runSessionSchema.optional(),
 });
 
 export const resumeRunAdmissionInputSchema = z.strictObject({
   capability: resumeRunCapabilitySchema,
+  continuation: sessionContinuationSchema.optional(),
   prompt: runPromptSchema,
+  session: runSessionSchema.optional(),
 });
 
 export const acceptRunAdmissionResultSchema = z.discriminatedUnion("ok", [
@@ -339,12 +345,27 @@ export const acceptRunAdmissionResultSchema = z.discriminatedUnion("ok", [
     agentRevision: agentRevisionNumberSchema,
     ok: z.literal(true),
     runId: runIdSchema,
+    session: runSessionSchema.optional(),
   }),
-  invalidRunAdmissionSchema,
+  z.strictObject({
+    error: z.strictObject({
+      code: z.enum([
+        "branch_revision_conflict",
+        "invalid_admission",
+        "session_busy",
+        "session_not_found",
+      ]),
+      message: z.literal("Run admission denied."),
+    }),
+    ok: z.literal(false),
+  }),
 ]);
 
 export const startRunInputSchema = z.strictObject({
   agentId: agentIdSchema,
+  continuation: sessionContinuationSchema
+    .describe("Continue one exact durable Agent session. Omit to create a new session.")
+    .optional(),
   expectedRevision: agentRevisionNumberSchema,
   idempotencyKey: runAdmissionIdempotencyKeySchema,
   prompt: runPromptSchema,
@@ -401,6 +422,7 @@ export const runSchema = z.strictObject({
   output: runOutputSchema.optional(),
   outputTruncated: z.boolean().optional(),
   runId: runIdSchema,
+  session: runSessionSchema.optional(),
   startedAt: z.iso.datetime().optional(),
   status: runStatusSchema,
   trigger: runTriggerSchema.default("manual"),
@@ -608,6 +630,9 @@ const runRequestErrorSchema = z.strictObject({
     "model_unavailable",
     "owner_mismatch",
     "revision_conflict",
+    "branch_revision_conflict",
+    "session_busy",
+    "session_not_found",
     "run_unavailable",
   ]),
   message: z.literal("Run request denied."),

@@ -2,6 +2,7 @@ import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
   AUTONOMY_WRITE_SCOPE,
+  crewAgentObjectName,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   RUNS_WRITE_SCOPE,
@@ -11,6 +12,7 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 
 import { agentInput, authorityFor } from "../testkit.js";
+import { TestCrewAgent } from "../../agent/admitted-runs/test-agent.js";
 
 describe("OwnerControlPlane Agent schedules", () => {
   it("enforces the current fleet minimum when configuring a recurring schedule", async () => {
@@ -91,6 +93,19 @@ describe("OwnerControlPlane Agent schedules", () => {
       throw new Error("Expected scheduled Agent fixtures.");
     }
 
+    await runInDurableObject(
+      env.CREW_AGENT.getByName(
+        crewAgentObjectName({ agentId: first.agent.id, ownerKey: authority.ownerKey }),
+      ),
+      (instance) => {
+        if (!(instance instanceof TestCrewAgent)) {
+          throw new Error("Expected scheduled test Agent.");
+        }
+
+        instance.enableDurableSessionsForTest();
+      },
+    );
+
     const configured = await Promise.all([
       controlPlane.configureAgentSchedule(authority, {
         agentId: first.agent.id,
@@ -154,6 +169,9 @@ describe("OwnerControlPlane Agent schedules", () => {
     }
 
     expect(schedules[0].schedule.lastRunId).not.toBe(schedules[1].schedule.lastRunId);
+    await expect(
+      controlPlane.listAgentSessions(authority, { agentId: first.agent.id, limit: 10 }),
+    ).resolves.toEqual({ nextCursor: null, ok: true, sessions: [] });
 
     const histories = await Promise.all([
       controlPlane.listAgentRuns(authority, { agentId: first.agent.id, limit: 10 }),

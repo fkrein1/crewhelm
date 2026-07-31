@@ -12,6 +12,7 @@ export interface OwnerControlPlaneClient {
   completeIntegrationEnablement(authorityInput: unknown, input: unknown): Promise<unknown>;
   configureFleetConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
   decideRunToolApproval(authorityInput: unknown, input: unknown): Promise<unknown>;
+  deleteAgentSession?(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgentBlueprint(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgentRevision(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -19,9 +20,11 @@ export interface OwnerControlPlaneClient {
   getFleetConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
   getSkill(authorityInput: unknown, input: unknown): Promise<unknown>;
   inspectRun(authorityInput: unknown, input: unknown): Promise<unknown>;
+  inspectAgentSession?(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgentRevisions(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgentBlueprints(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgentRuns(authorityInput: unknown, input: unknown): Promise<unknown>;
+  listAgentSessions?(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgents(authorityInput: unknown, input: unknown): Promise<unknown>;
   listConnections(authorityInput: unknown, input: unknown): Promise<unknown>;
   listSkills(authorityInput: unknown, input: unknown): Promise<unknown>;

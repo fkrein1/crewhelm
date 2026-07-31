@@ -9,22 +9,31 @@ import {
   inspectAdmittedRunResultSchema,
   inspectRunInputSchema,
   inspectRunResultSchema,
+  inspectAgentSessionInputSchema,
+  inspectAgentSessionResultSchema,
   listAgentRunsInputSchema,
   listAgentRunsResultSchema,
+  listAgentSessionsInputSchema,
+  listAgentSessionsResultSchema,
   MAXIMUM_RUN_OUTPUT_CHARACTERS,
   listAdmittedRunToolApprovalsResultSchema,
   listRunToolApprovalsInputSchema,
   listRunToolApprovalsResultSchema,
   startRunInputSchema,
   startRunResultSchema,
+  deleteAgentSessionInputSchema,
+  deleteAgentSessionResultSchema,
   runTimelineEventSchema,
+  runIdSchema,
   type CancelRunResult,
   type AgentInboxDeferredReason,
   type AgentInboxResult,
   type DecideRunToolApprovalResult,
   type FleetConfigurationData,
   type InspectRunResult,
+  type InspectAgentSessionResult,
   type ListAgentRunsResult,
+  type ListAgentSessionsResult,
   type ListRunToolApprovalsResult,
   type OwnerAuthority,
   type PendingToolApproval,
@@ -34,18 +43,23 @@ import {
   type RunDiagnostic,
   type RunTimelineEvent,
   type StartRunResult,
+  type DeleteAgentSessionResult,
 } from "@crewhelm/contracts";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
+import * as z from "zod";
 
-import { digestRunPrompt, type CrewAgent } from "../../agent/admitted-runs/index.js";
+import { digestRunPrompt } from "../../agent/admitted-runs/index.js";
+import type { CrewAgent } from "../../agent/session-directory.js";
 import { recordExecutionEvent } from "../../observability/execution.js";
 import {
   aiGatewayCalls,
+  agentInboxItems,
   agents,
   auditEvents,
   capabilityGrants,
   connections,
+  runAdmissions,
   toolApprovals,
   toolExecutions,
   type ControlPlaneDatabaseSchema,
@@ -61,6 +75,11 @@ type ListAgentRunsFailure = Extract<ListAgentRunsResult, { ok: false }>;
 type CancelRunFailure = Extract<CancelRunResult, { ok: false }>;
 type ListApprovalsFailure = Extract<ListRunToolApprovalsResult, { ok: false }>;
 type DecideApprovalFailure = Extract<DecideRunToolApprovalResult, { ok: false }>;
+
+const sessionRunIdPageSchema = z.strictObject({
+  nextCursor: runIdSchema.nullable(),
+  runIds: z.array(runIdSchema).max(50),
+});
 type StoredRunAdmission = NonNullable<ReturnType<RunAdmissions["read"]>>;
 type CrewAgentStub = ReturnType<DurableObjectNamespace<CrewAgent>["getByName"]>;
 
@@ -240,6 +259,192 @@ export class AgentChannel {
         ownerKey: authority.ownerKey,
       }),
     );
+  }
+
+  #agentById(authority: OwnerAuthority, agentId: string) {
+    return this.#crewAgents.getByName(
+      crewAgentObjectName({ agentId, ownerKey: authority.ownerKey }),
+    );
+  }
+
+  #agentExists(agentId: string): boolean {
+    return (
+      this.#database
+        .select({ agentId: agents.agentId })
+        .from(agents)
+        .where(eq(agents.agentId, agentId))
+        .get() !== undefined
+    );
+  }
+
+  async listSessions(authority: OwnerAuthority, input: unknown): Promise<ListAgentSessionsResult> {
+    const request = listAgentSessionsInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return { error: { code: "invalid_request", message: "Session request denied." }, ok: false };
+    }
+
+    if (!this.#agentExists(request.data.agentId)) {
+      return { error: { code: "agent_not_found", message: "Session request denied." }, ok: false };
+    }
+
+    try {
+      const result = listAgentSessionsResultSchema.safeParse(
+        await this.#agentById(authority, request.data.agentId).listAgentSessions({
+          ...request.data,
+          ownerKey: authority.ownerKey,
+        }),
+      );
+      return result.success
+        ? result.data
+        : { error: { code: "session_unavailable", message: "Session request denied." }, ok: false };
+    } catch {
+      return {
+        error: { code: "session_unavailable", message: "Session request denied." },
+        ok: false,
+      };
+    }
+  }
+
+  async inspectSession(
+    authority: OwnerAuthority,
+    input: unknown,
+  ): Promise<InspectAgentSessionResult> {
+    const request = inspectAgentSessionInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return { error: { code: "invalid_request", message: "Session request denied." }, ok: false };
+    }
+
+    if (!this.#agentExists(request.data.agentId)) {
+      return { error: { code: "agent_not_found", message: "Session request denied." }, ok: false };
+    }
+
+    try {
+      const result = inspectAgentSessionResultSchema.safeParse(
+        await this.#agentById(authority, request.data.agentId).inspectAgentSession({
+          ...request.data,
+          ownerKey: authority.ownerKey,
+        }),
+      );
+      return result.success
+        ? result.data
+        : { error: { code: "session_unavailable", message: "Session request denied." }, ok: false };
+    } catch {
+      return {
+        error: { code: "session_unavailable", message: "Session request denied." },
+        ok: false,
+      };
+    }
+  }
+
+  async deleteSession(
+    authority: OwnerAuthority,
+    input: unknown,
+  ): Promise<DeleteAgentSessionResult> {
+    const request = deleteAgentSessionInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return {
+        error: { code: "invalid_request", message: "Session deletion denied." },
+        ok: false,
+      };
+    }
+
+    if (!this.#agentExists(request.data.agentId)) {
+      return {
+        error: { code: "agent_not_found", message: "Session deletion denied." },
+        ok: false,
+      };
+    }
+
+    try {
+      const agent = this.#agentById(authority, request.data.agentId);
+      const result = deleteAgentSessionResultSchema.safeParse(
+        await agent.deleteAgentSession({
+          ...request.data,
+          ownerKey: authority.ownerKey,
+        }),
+      );
+
+      if (!result.success) {
+        return {
+          error: { code: "session_unavailable", message: "Session deletion denied." },
+          ok: false,
+        };
+      }
+
+      if (result.data.ok) {
+        let cursor: string | undefined;
+
+        for (;;) {
+          const page = sessionRunIdPageSchema.safeParse(
+            await agent.listAgentSessionRunIds({
+              agentId: request.data.agentId,
+              ...(cursor === undefined ? {} : { cursor }),
+              ownerKey: authority.ownerKey,
+              sessionId: request.data.sessionId,
+            }),
+          );
+
+          if (!page.success) {
+            throw new Error("Session run index unavailable.");
+          }
+
+          this.#database.transaction((transaction) => {
+            if (page.data.runIds.length > 0) {
+              transaction
+                .update(runAdmissions)
+                .set({ prompt: null })
+                .where(inArray(runAdmissions.runId, page.data.runIds))
+                .run();
+              transaction
+                .delete(agentInboxItems)
+                .where(inArray(agentInboxItems.runId, page.data.runIds))
+                .run();
+            }
+
+            if (page.data.nextCursor === null) {
+              const priorAudit = transaction
+                .select({ eventId: auditEvents.eventId })
+                .from(auditEvents)
+                .where(
+                  and(
+                    eq(auditEvents.action, "session.deleted"),
+                    eq(auditEvents.subjectId, request.data.sessionId),
+                  ),
+                )
+                .get();
+
+              if (priorAudit === undefined) {
+                transaction
+                  .insert(auditEvents)
+                  .values({
+                    action: "session.deleted",
+                    clientId: authority.clientId,
+                    occurredAt: Date.now(),
+                    subjectId: request.data.sessionId,
+                  })
+                  .run();
+              }
+            }
+          });
+
+          if (page.data.nextCursor === null) {
+            break;
+          }
+
+          cursor = page.data.nextCursor;
+        }
+      }
+
+      return result.data;
+    } catch {
+      return {
+        error: { code: "session_unavailable", message: "Session deletion denied." },
+        ok: false,
+      };
+    }
   }
 
   async #inspectAdmittedRun(
@@ -733,6 +938,9 @@ export class AgentChannel {
 
     const admission = await this.#admissions.create(authority, {
       agentId: request.data.agentId,
+      ...(trigger === "manual" && request.data.continuation !== undefined
+        ? { continuation: request.data.continuation }
+        : {}),
       expectedRevision: request.data.expectedRevision,
       idempotencyKey: request.data.idempotencyKey,
       prompt: request.data.prompt,
@@ -794,6 +1002,9 @@ export class AgentChannel {
     try {
       if (admission.state === "issued") {
         accepted = await agent.acceptRunAdmission({
+          ...(trigger === "manual" && request.data.continuation !== undefined
+            ? { continuation: request.data.continuation }
+            : {}),
           permit: admission.permit,
           prompt: request.data.prompt,
         });
@@ -806,6 +1017,9 @@ export class AgentChannel {
 
         accepted = await agent.resumeRunAdmission({
           capability,
+          ...(trigger === "manual" && request.data.continuation !== undefined
+            ? { continuation: request.data.continuation }
+            : {}),
           prompt: request.data.prompt,
         });
       }
@@ -815,9 +1029,17 @@ export class AgentChannel {
 
     const acceptance = acceptRunAdmissionResultSchema.safeParse(accepted);
 
+    if (!acceptance.success) {
+      return deniedStartRun("run_unavailable");
+    }
+
+    if (!acceptance.data.ok) {
+      return acceptance.data.error.code === "invalid_admission"
+        ? deniedStartRun("run_unavailable")
+        : deniedStartRun(acceptance.data.error.code);
+    }
+
     if (
-      !acceptance.success ||
-      !acceptance.data.ok ||
       acceptance.data.runId !== runId ||
       acceptance.data.agentId !== agentId ||
       acceptance.data.agentRevision !== agentRevision

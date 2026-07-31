@@ -2,6 +2,7 @@ import {
   DEFAULT_FLEET_RUN_RETENTION_SECONDS,
   MAXIMUM_RUN_ADMISSIONS_PER_OWNER,
   MAXIMUM_RUN_INPUT_CHARACTERS,
+  MAXIMUM_SESSION_CONTEXT_CHARACTERS,
   MAXIMUM_AGENT_SKILL_CONTEXT_CHARACTERS,
   MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
   composioToolCapabilityGrantSchema,
@@ -207,7 +208,10 @@ function createBudgetReservation(input: {
     fleetConfigurationRevision: input.configuration.revision,
     integrationLimits: input.configuration.data.integrations,
     maxDurationSeconds: effectiveExecutionLimits.maxDurationSeconds,
-    maxInputCharacters: input.systemPromptCharacters + input.promptCharacters,
+    maxInputCharacters: Math.min(
+      MAXIMUM_RUN_INPUT_CHARACTERS,
+      input.systemPromptCharacters + input.promptCharacters + MAXIMUM_SESSION_CONTEXT_CHARACTERS,
+    ),
     maxModelCalls,
     maxOutputTokens: Math.min(
       effectiveExecutionLimits.maxModelTokens,
@@ -224,6 +228,9 @@ function createBudgetReservation(input: {
 
 function canonicalRequest(input: {
   agentId: string;
+  continuation?:
+    | { branchId: string; expectedBranchRevision: number; sessionId: string }
+    | undefined;
   expectedRevision: number;
   promptCharacters: number;
   promptDigest: string;
@@ -232,6 +239,7 @@ function canonicalRequest(input: {
 }): string {
   return JSON.stringify({
     agentId: input.agentId,
+    ...(input.continuation === undefined ? {} : { continuation: input.continuation }),
     expectedRevision: input.expectedRevision,
     promptCharacters: input.promptCharacters,
     promptDigest: input.promptDigest,

@@ -162,10 +162,12 @@ async function createDeploymentAssetsDirectory(): Promise<string> {
         bindings: [
           { class_name: "OwnerControlPlane", name: "OWNER_CONTROL_PLANE" },
           { class_name: "CrewAgent", name: "CREW_AGENT" },
+          { class_name: "CrewSession", name: "CREW_SESSION" },
         ],
       },
       exports: {
         CrewAgent: { storage: "sqlite", type: "durable-object" },
+        CrewSession: { storage: "sqlite", type: "durable-object" },
         OwnerControlPlane: { storage: "sqlite", type: "durable-object" },
       },
       main: "./index.js",
@@ -1068,6 +1070,7 @@ describe("Crewhelm CLI", () => {
               script_runtime: {
                 exports: {
                   CrewAgent: { storage: "sqlite", type: "durable-object" },
+                  CrewSession: { storage: "sqlite", type: "durable-object" },
                   OwnerControlPlane: { storage: "sqlite", type: "durable-object" },
                 },
               },

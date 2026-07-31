@@ -6,15 +6,20 @@ import {
   confirmRunAdmissionResultSchema,
   crewAgentObjectName,
   crewAgentSystemPrompt,
+  crewSessionObjectName,
   inspectAdmittedRunInputSchema,
   inspectAdmittedRunResultSchema,
   MAXIMUM_AGENT_INBOX_PREVIEW_CHARACTERS,
+  MAXIMUM_SESSION_CONTEXT_CHARACTERS,
+  MAXIMUM_SESSION_INSPECTION_MESSAGES,
+  MAXIMUM_SESSION_INSPECTION_TEXT_CHARACTERS,
   MAXIMUM_RUN_OUTPUT_CHARACTERS,
   recordAgentInboxRunInputSchema,
   recordAgentInboxRunResultSchema,
   redeemRunReceiverCapabilityResultSchema,
   resumeRunAdmissionInputSchema,
   runIdSchema,
+  runSessionSchema,
   runTimelineEventSchema,
   completeToolExecutionResultSchema,
   evaluateToolExecutionResultSchema,
@@ -105,6 +110,7 @@ import {
 const RUNTIME_ADMISSION_UNAVAILABLE = "CrewAgent runtime admission is not available.";
 const INBOX_PROJECTION_PREFIX = "crewhelm:inbox-projection:";
 const RUN_RECORD_PREFIX = "crewhelm:run:";
+const SESSION_RUN_TERMINAL_PREFIX = "crewhelm:session-run-terminal:";
 const RUN_TRACE_PREFIX = "crewhelm:run-trace:";
 const TOOL_APPROVAL_PREFIX = "crewhelm:tool-approval:";
 const INBOX_PROJECTION_MINIMUM_RETRY_MS = 60_000;
@@ -217,6 +223,10 @@ function runTraceKey(runId: string): string {
   return `${RUN_TRACE_PREFIX}${runId}`;
 }
 
+function sessionRunTerminalKey(runId: string): string {
+  return `${SESSION_RUN_TERMINAL_PREFIX}${runId}`;
+}
+
 function inboxProjectionKey(runId: string): string {
   return `${INBOX_PROJECTION_PREFIX}${runId}`;
 }
@@ -281,7 +291,7 @@ function publicRunStatus(status: ThinkSubmissionInspection["status"]): Run["stat
   }
 }
 
-export class CrewAgent extends Think {
+export class CrewSession extends Think {
   #activeModelCall: number | undefined;
   #approvalTurnMetadata: AdmittedTurnMetadata | undefined;
   #gatewayAiBinding: Ai | undefined;
@@ -407,6 +417,14 @@ export class CrewAgent extends Think {
         callbackName === "expireAdmittedRun" ? record?.deadlineAt : record?.cleanupAt;
 
       if (expectedAt === undefined || when.getTime() !== expectedAt) {
+        throw runtimeAdmissionError();
+      }
+    } else if (callbackName === "cleanupExpiredSessions") {
+      if (
+        !(when instanceof Date) ||
+        payload !== undefined ||
+        this.ctx.id.name?.startsWith("crew-agent:") !== true
+      ) {
         throw runtimeAdmissionError();
       }
     } else {
@@ -904,10 +922,17 @@ export class CrewAgent extends Think {
       return INVALID_RUN_ADMISSION;
     }
 
-    const { permit, prompt } = request.data;
+    const { permit, prompt, session } = request.data;
 
     if (
       !this.#objectMatches(permit.ownerKey, permit.agentId) ||
+      (session !== undefined &&
+        this.ctx.id.name !==
+          crewSessionObjectName({
+            agentId: permit.agentId,
+            ownerKey: permit.ownerKey,
+            sessionId: session.sessionId,
+          })) ||
       (await digestRunPrompt(prompt)) !== permit.promptDigest
     ) {
       return INVALID_RUN_ADMISSION;
@@ -961,11 +986,24 @@ export class CrewAgent extends Think {
         promptCharacters: prompt.length,
         promptDigest: permit.promptDigest,
         scheduleRevision: permit.scheduleRevision,
+        ...(session === undefined
+          ? {}
+          : {
+              session,
+              sessionContext: await this.#freezeSessionContext(
+                verified.data.configuration,
+                permit.budgetReservation,
+                prompt.length,
+              ),
+            }),
       });
 
       await this.ctx.storage.put(runRecordKey(permit.runId), record);
       await this.#scheduleRunLifecycle(permit.runId, record);
-    } else if (!this.#recordMatchesPermit(record, permit)) {
+    } else if (
+      !this.#recordMatchesPermit(record, permit) ||
+      JSON.stringify(record.session) !== JSON.stringify(session)
+    ) {
       return INVALID_RUN_ADMISSION;
     }
 
@@ -995,7 +1033,7 @@ export class CrewAgent extends Think {
       return INVALID_RUN_ADMISSION;
     }
 
-    const { capability, prompt } = request.data;
+    const { capability, prompt, session } = request.data;
     let record: AdmittedRunRecord;
 
     try {
@@ -1012,6 +1050,10 @@ export class CrewAgent extends Think {
       }
 
       record = stored;
+
+      if (JSON.stringify(record.session) !== JSON.stringify(session)) {
+        return INVALID_RUN_ADMISSION;
+      }
     } catch {
       return INVALID_RUN_ADMISSION;
     }
@@ -1089,6 +1131,7 @@ export class CrewAgent extends Think {
           agentRevision: record.configuration.revision,
           createdAt: new Date(record.createdAt).toISOString(),
           runId: capability.runId,
+          ...(record.session === undefined ? {} : { session: record.session }),
           status: Date.now() >= record.deadlineAt ? "failed" : "queued",
         },
         trace,
@@ -1119,6 +1162,7 @@ export class CrewAgent extends Think {
               outputTruncated: output.truncated,
             }),
         runId: capability.runId,
+        ...(record.session === undefined ? {} : { session: record.session }),
         startedAt: isoTimestamp(submission.startedAt),
         status,
       },
@@ -1134,6 +1178,7 @@ export class CrewAgent extends Think {
     }
 
     const runId = request.data.capability.runId;
+    const record = await this.#readRunRecord(runId);
     const submission = await super.inspectSubmission(runId);
     const approvalRecords = await this.ctx.storage.list({
       prefix: toolApprovalPrefix(runId),
@@ -1156,6 +1201,11 @@ export class CrewAgent extends Think {
     }
 
     await Promise.all([...approvalRecords.keys()].map((key) => this.ctx.storage.delete(key)));
+
+    if (record?.session !== undefined) {
+      await this.ctx.storage.put(sessionRunTerminalKey(runId), "cancelled");
+      await this.#completeSessionRun(record, runId);
+    }
 
     return cancelAdmittedRunResultSchema.parse({
       cancelled: true,
@@ -1343,12 +1393,14 @@ export class CrewAgent extends Think {
       await this.cancelAdmittedSubmission(request.data.runId, "Crewhelm run retention expired.");
     }
 
-    const branches = await Session.create(this).getBranches(runUserMessageId(request.data.runId));
+    if (record.session === undefined) {
+      const branches = await Session.create(this).getBranches(runUserMessageId(request.data.runId));
 
-    await Session.create(this).deleteMessages([
-      runUserMessageId(request.data.runId),
-      ...branches.map((message) => message.id),
-    ]);
+      await Session.create(this).deleteMessages([
+        runUserMessageId(request.data.runId),
+        ...branches.map((message) => message.id),
+      ]);
+    }
 
     if (submission !== null) {
       await super.deleteSubmission(request.data.runId);
@@ -1360,6 +1412,7 @@ export class CrewAgent extends Think {
     await Promise.all([...approvalRecords.keys()].map((key) => this.ctx.storage.delete(key)));
     await this.ctx.storage.delete(inboxProjectionKey(request.data.runId));
     await this.ctx.storage.delete(runTraceKey(request.data.runId));
+    await this.ctx.storage.delete(sessionRunTerminalKey(request.data.runId));
     await this.ctx.storage.delete(runRecordKey(request.data.runId));
   }
 
@@ -1554,10 +1607,16 @@ export class CrewAgent extends Think {
     const promptMessage = context?.messages.at(-1);
     const approvalContinuation =
       context?.continuation === true && this.#permittedApprovalContinuationRunId === metadata.runId;
+    const durableContinuation =
+      context?.continuation === true &&
+      metadata.session !== undefined &&
+      promptMessage?.role === "user";
 
     if (
       context === undefined ||
-      (!approvalContinuation && (context.continuation || promptMessage?.role !== "user"))
+      (!approvalContinuation &&
+        !durableContinuation &&
+        (context.continuation || promptMessage?.role !== "user"))
     ) {
       throw new Error("CrewAgent admitted model input is missing or invalid.");
     }
@@ -1566,7 +1625,7 @@ export class CrewAgent extends Think {
       ? context.messages.filter((message) => message.role !== "system")
       : promptMessage === undefined
         ? []
-        : [promptMessage];
+        : [...(metadata.sessionContext?.messages ?? []), promptMessage];
 
     if (approvalContinuation) {
       this.#permittedApprovalContinuationRunId = undefined;
@@ -1719,6 +1778,74 @@ export class CrewAgent extends Think {
         },
       }),
     );
+
+    if (record.session !== undefined && approvalCount === 0) {
+      const terminalStatus: Extract<Run["status"], "cancelled" | "completed" | "failed"> =
+        status === "completed" ? "completed" : status === "cancelled" ? "cancelled" : "failed";
+      await this.ctx.storage.put(sessionRunTerminalKey(runId), terminalStatus);
+      await this.#completeSessionRun(record, runId);
+    }
+  }
+
+  async #completeSessionRun(record: AdmittedRunRecord, runId: string): Promise<void> {
+    if (record.session === undefined) {
+      return;
+    }
+
+    try {
+      await this.env.CREW_AGENT.getByName(
+        crewAgentObjectName({
+          agentId: record.configuration.agentId,
+          ownerKey: record.configuration.ownerKey,
+        }),
+      ).completeSessionRun({ runId, session: record.session });
+    } catch {
+      // The Agent directory reconciles a missed completion before the next continuation.
+    }
+  }
+
+  async inspectSessionRunState(input: unknown): Promise<Run["status"] | null> {
+    if (typeof input !== "object" || input === null || Array.isArray(input)) {
+      return null;
+    }
+
+    const runId = runIdSchema.safeParse(Reflect.get(input, "runId"));
+
+    if (!runId.success) {
+      return null;
+    }
+
+    const record = await this.#readRunRecord(runId.data);
+
+    if (
+      record?.session === undefined ||
+      JSON.stringify(record.session) !== JSON.stringify(Reflect.get(input, "session"))
+    ) {
+      return null;
+    }
+
+    const terminalStatus = z
+      .enum(["cancelled", "completed", "failed"])
+      .safeParse(await this.ctx.storage.get(sessionRunTerminalKey(runId.data)));
+
+    if (terminalStatus.success) {
+      return terminalStatus.data;
+    }
+
+    const submission = await super.inspectSubmission(runId.data);
+
+    if (submission === null) {
+      return Date.now() >= record.deadlineAt ? "failed" : "queued";
+    }
+
+    const approvalRecords = await this.ctx.storage.list({
+      prefix: toolApprovalPrefix(runId.data),
+    });
+    const output = submission.status === "completed" ? this.#readRunOutput(runId.data) : undefined;
+
+    return approvalRecords.size > 0 || output?.state === "pending"
+      ? "running"
+      : publicRunStatus(submission.status);
   }
 
   override authorizeAction(
@@ -2083,6 +2210,8 @@ export class CrewAgent extends Think {
           promptCharacters: record.promptCharacters,
           promptDigest: record.promptDigest,
           runId,
+          ...(record.session === undefined ? {} : { session: record.session }),
+          ...(record.sessionContext === undefined ? {} : { sessionContext: record.sessionContext }),
         },
       });
       const message: UIMessage = {
@@ -2092,7 +2221,29 @@ export class CrewAgent extends Think {
         role: "user",
       };
 
-      await Session.create(this).appendMessage(message, null);
+      const session = Session.create(this);
+      const parentId =
+        record.session === undefined ? null : ((await session.getLatestLeaf())?.id ?? null);
+
+      await session.appendMessage(message, parentId);
+
+      if (this.rejectAdmittedSubmission(prompt)) {
+        recordExecutionEvent({
+          durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+          outcome: "rejected",
+          phase: "run.submission",
+          runId,
+        });
+        return acceptRunAdmissionResultSchema.parse({
+          accepted: false,
+          agentId: record.configuration.agentId,
+          agentRevision: record.configuration.revision,
+          ok: true,
+          runId,
+          ...(record.session === undefined ? {} : { session: record.session }),
+        });
+      }
+
       submission = await super.submitMessages([message], {
         idempotencyKey: runId,
         metadata: { crewhelmRunId: runId },
@@ -2121,7 +2272,103 @@ export class CrewAgent extends Think {
       agentRevision: record.configuration.revision,
       ok: true,
       runId,
+      ...(record.session === undefined ? {} : { session: record.session }),
     });
+  }
+
+  protected rejectAdmittedSubmission(_prompt: string): boolean {
+    return false;
+  }
+
+  async inspectSessionMessages(): Promise<{
+    messages: Array<{
+      createdAt: string | null;
+      messageId: string;
+      role: "assistant" | "user";
+      text: string;
+      truncated: boolean;
+    }>;
+    messagesTruncated: boolean;
+  }> {
+    const history = await Session.create(this).getRecentHistory(
+      MAXIMUM_SESSION_CONTEXT_CHARACTERS,
+      1,
+    );
+    const messages = history.messages
+      .filter(
+        (message): message is typeof message & { role: "assistant" | "user" } =>
+          message.role === "assistant" || message.role === "user",
+      )
+      .slice(-MAXIMUM_SESSION_INSPECTION_MESSAGES)
+      .map((message) => {
+        const text = message.parts
+          .flatMap((part) =>
+            part.type === "text" && typeof part.text === "string" ? [part.text] : [],
+          )
+          .join("\n");
+        const retained = text.slice(0, MAXIMUM_SESSION_INSPECTION_TEXT_CHARACTERS);
+
+        return {
+          createdAt: message.createdAt?.toISOString() ?? null,
+          messageId: message.id,
+          role: message.role,
+          text: retained,
+          truncated: retained.length < text.length,
+        };
+      });
+
+    return {
+      messages,
+      messagesTruncated: history.truncated || history.messages.length > messages.length,
+    };
+  }
+
+  async deleteSessionStorage(input: unknown): Promise<boolean> {
+    if (
+      typeof input !== "object" ||
+      input === null ||
+      Array.isArray(input) ||
+      Reflect.get(input, "objectName") !== this.ctx.id.name
+    ) {
+      return false;
+    }
+
+    await this.ctx.storage.deleteAll();
+    return true;
+  }
+
+  async discardRejectedSessionRun(input: unknown): Promise<boolean> {
+    const request = z
+      .strictObject({ runId: runIdSchema, session: runSessionSchema })
+      .safeParse(input);
+
+    if (!request.success) {
+      return false;
+    }
+
+    const record = await this.#readRunRecord(request.data.runId);
+
+    if (
+      record?.session === undefined ||
+      JSON.stringify(record.session) !== JSON.stringify(request.data.session) ||
+      (await super.inspectSubmission(request.data.runId)) !== null
+    ) {
+      return false;
+    }
+
+    const session = Session.create(this);
+    const branches = await session.getBranches(runUserMessageId(request.data.runId));
+    await session.deleteMessages([
+      runUserMessageId(request.data.runId),
+      ...branches.map((message) => message.id),
+    ]);
+    await this.ctx.storage.delete([
+      inboxProjectionKey(request.data.runId),
+      runRecordKey(request.data.runId),
+      runTraceKey(request.data.runId),
+      sessionRunTerminalKey(request.data.runId),
+    ]);
+    return true;
   }
 
   protected createToolAdapter(
@@ -2953,7 +3200,76 @@ export class CrewAgent extends Think {
   }
 
   #objectMatches(ownerKey: string, agentId: string): boolean {
-    return this.ctx.id.name === crewAgentObjectName({ agentId, ownerKey });
+    const objectName = this.ctx.id.name;
+
+    return (
+      objectName === crewAgentObjectName({ agentId, ownerKey }) ||
+      objectName?.startsWith(crewSessionObjectName({ agentId, ownerKey, sessionId: "" })) === true
+    );
+  }
+
+  async #freezeSessionContext(
+    configuration: CrewAgentRuntimeConfig,
+    reservation: RunBudgetReservation,
+    promptCharacters: number,
+  ): Promise<NonNullable<AdmittedRunRecord["sessionContext"]>> {
+    const characterLimit = Math.min(
+      MAXIMUM_SESSION_CONTEXT_CHARACTERS,
+      Math.max(
+        0,
+        reservation.maxInputCharacters -
+          crewAgentSystemPrompt(configuration).length -
+          promptCharacters,
+      ),
+    );
+    const history = await Session.create(this).getRecentHistory(Math.max(1, characterLimit), 0);
+    const candidates: Array<{ content: string; role: "assistant" | "user" }> =
+      history.messages.flatMap((message) => {
+        const role = message.role;
+
+        if (role !== "assistant" && role !== "user") {
+          return [];
+        }
+
+        const parts = message.parts.flatMap((part) =>
+          part.type === "text" && typeof part.text === "string"
+            ? [{ text: part.text, type: "text" as const }]
+            : [],
+        );
+
+        const content = parts.map((part) => part.text).join("\n");
+
+        return parts.length === 0
+          ? []
+          : [
+              {
+                content,
+                role,
+              },
+            ];
+      });
+    const messages: typeof candidates = [];
+    let characters = 0;
+
+    for (const message of candidates.toReversed()) {
+      const messageCharacters = message.content.length;
+
+      if (messageCharacters > characterLimit - characters) {
+        break;
+      }
+
+      messages.unshift(message);
+      characters += messageCharacters;
+    }
+
+    const serialized = JSON.stringify(messages);
+
+    return {
+      characters,
+      digest: await digestRunPrompt(serialized),
+      messages,
+      truncated: history.truncated || messages.length < candidates.length,
+    };
   }
 
   #recordMatchesPermit(record: AdmittedRunRecord, permit: RunAdmissionPermit): boolean {
@@ -3036,8 +3352,8 @@ export class CrewAgent extends Think {
 }
 
 for (const method of BLOCKED_CREW_AGENT_AUTHORITY_METHODS) {
-  if (!Object.hasOwn(CrewAgent.prototype, method)) {
-    Object.defineProperty(CrewAgent.prototype, method, {
+  if (!Object.hasOwn(CrewSession.prototype, method)) {
+    Object.defineProperty(CrewSession.prototype, method, {
       configurable: false,
       value: function blockedCrewAgentAuthority(): never {
         throw runtimeAdmissionError();
@@ -3046,3 +3362,7 @@ for (const method of BLOCKED_CREW_AGENT_AUTHORITY_METHODS) {
     });
   }
 }
+
+// Retained for focused legacy-runtime tests and migration coverage. New production runs enter
+// through the CrewAgent directory and execute in CrewSession objects.
+export { CrewSession as CrewAgent };

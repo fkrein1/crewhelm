@@ -31,6 +31,10 @@ export default defineConfig({
             className: "TestCrewAgent",
             useSQLite: true,
           },
+          CREW_SESSION: {
+            className: "TestCrewSession",
+            useSQLite: true,
+          },
           OWNER_CONTROL_PLANE: {
             className: "OwnerControlPlane",
             useSQLite: true,

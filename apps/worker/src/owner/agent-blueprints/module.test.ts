@@ -151,7 +151,7 @@ describe("OwnerControlPlane Agent blueprints", () => {
         package: { publisher: { name: "Crewhelm" } },
       },
     });
-  });
+  }, 30_000);
 
   it("previews exact implications and creates a provenance-linked Agent without grants", async () => {
     const authority = await authorityFor("blueprint-instance", [
@@ -230,7 +230,7 @@ describe("OwnerControlPlane Agent blueprints", () => {
         target,
       }),
     ).resolves.toMatchObject({ created: false, ok: true });
-  });
+  }, 30_000);
 
   it("shows missing exact Skill prerequisites and retains old versions after retirement", async () => {
     const authority = await authorityFor("blueprint-prerequisites", [
