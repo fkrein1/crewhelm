@@ -26,6 +26,7 @@ import {
   getAgentResultSchema,
   getAgentCapabilityCatalogResultSchema,
   getFleetConfigurationResultSchema,
+  getAgentBlueprintResultSchema,
   getSkillResultSchema,
   integrationAuthConfigListResultSchema,
   integrationCatalogSearchResultSchema,
@@ -36,10 +37,14 @@ import {
   listAgentsResultSchema,
   listConnectionsResultSchema,
   listSkillsResultSchema,
+  listAgentBlueprintsResultSchema,
   listUnresolvedToolEffectsResultSchema,
   ownerAuthoritySchema,
   publishSkillResultSchema,
+  publishAgentBlueprintResultSchema,
+  instantiateAgentBlueprintResultSchema,
   retireSkillResultSchema,
+  retireAgentBlueprintResultSchema,
   startRunResultSchema,
   updateAgentResultSchema,
   type OwnerScope,
@@ -403,6 +408,8 @@ describe("authenticated MCP handler", () => {
     expect(getConfigurationInputSchema).toContain('"agent-capability"');
     expect(getConfigurationInputSchema).toContain('"skill-catalog"');
     expect(getConfigurationInputSchema).toContain('"skill-package"');
+    expect(getConfigurationInputSchema).toContain('"agent-blueprint-catalog"');
+    expect(getConfigurationInputSchema).toContain('"agent-blueprint-package"');
     expect(getConfigurationInputSchema).toContain('"id"');
     expect(configureTool).toMatchObject({
       annotations: {
@@ -446,7 +453,7 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toMatchObject({
       ok: true,
       status: {
-        schemaVersion: 21,
+        schemaVersion: 22,
         status: "ready",
         usage: {
           recovery: { unresolvedEffects: 0 },
@@ -752,6 +759,149 @@ describe("authenticated MCP handler", () => {
     });
   });
 
+  it("publishes, previews, instantiates, and retires an Agent blueprint through MCP", async () => {
+    const authority = await ownerAuthority("mcp-agent-blueprint", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+    ]);
+    const agentBlueprint = {
+      agent: {
+        capabilities: [
+          {
+            configuration: {
+              fallbackModels: [],
+              primaryModel: "@cf/openai/gpt-oss-20b",
+            },
+            id: "inference.workers-ai",
+            schemaVersion: 2,
+          },
+        ],
+        instructions: "Help {{audience}} review a release.",
+        name: "{{audience}} reviewer",
+      },
+      description: "A portable release reviewer.",
+      name: "release-reviewer-blueprint",
+      parameters: [
+        {
+          description: "Audience name.",
+          name: "audience",
+          type: "string",
+        },
+      ],
+      provenance: { kind: "authored" },
+      publisher: { name: "Crewhelm" },
+      schemaVersion: 1,
+      tags: ["release"],
+    };
+    const call = async (name: string, arguments_: Record<string, unknown>) => {
+      const response = await handleAuthenticatedMcpRequest(
+        toolRequest(
+          JSON.stringify({
+            id: crypto.randomUUID(),
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: { arguments: arguments_, name },
+          }),
+        ),
+        env,
+        { authority },
+      );
+      const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+
+      return {
+        isError: payload.isError,
+        result: JSON.parse(payload.content[0]?.text ?? ""),
+      };
+    };
+
+    const publication = await call(MCP_CONFIGURE_TOOL_NAME, {
+      idempotencyKey: "mcp-blueprint-publish",
+      mode: "apply",
+      target: { kind: "agent-blueprint-package", package: agentBlueprint },
+    });
+    const published = publishAgentBlueprintResultSchema.parse(publication.result);
+
+    expect(publication.isError).toBe(false);
+    expect(published).toMatchObject({
+      applied: true,
+      blueprint: { name: "release-reviewer-blueprint" },
+      ok: true,
+    });
+    if (!published.ok || published.blueprint === undefined) {
+      throw new Error("Expected MCP Agent blueprint publication.");
+    }
+
+    const catalog = await call(MCP_GET_CONFIGURATION_TOOL_NAME, {
+      target: { kind: "agent-blueprint-catalog", limit: 25, tag: "release" },
+    });
+    expect(listAgentBlueprintsResultSchema.parse(catalog.result)).toMatchObject({
+      blueprints: [{ id: published.blueprint.id }],
+      ok: true,
+    });
+    expect(JSON.stringify(catalog.result)).not.toContain("review a release");
+
+    const exact = await call(MCP_GET_CONFIGURATION_TOOL_NAME, {
+      target: {
+        id: published.blueprint.id,
+        kind: "agent-blueprint-package",
+        version: 1,
+      },
+    });
+    expect(getAgentBlueprintResultSchema.parse(exact.result)).toMatchObject({
+      ok: true,
+      version: { metadataTrust: "unverified", package: agentBlueprint },
+    });
+
+    const target = {
+      id: published.blueprint.id,
+      kind: "agent-blueprint-instance",
+      parameters: { audience: "Operator" },
+      version: 1,
+    };
+    const preview = await call(MCP_CONFIGURE_TOOL_NAME, { mode: "preview", target });
+    expect(instantiateAgentBlueprintResultSchema.parse(preview.result)).toMatchObject({
+      created: false,
+      ok: true,
+      preview: {
+        agent: {
+          instructions: "Help Operator review a release.",
+          name: "Operator reviewer",
+        },
+        authority: { createsGrants: false, requestedGrants: [] },
+        ready: true,
+      },
+    });
+
+    const creation = await call(MCP_CONFIGURE_TOOL_NAME, {
+      idempotencyKey: "mcp-blueprint-instance",
+      mode: "apply",
+      target,
+    });
+    expect(instantiateAgentBlueprintResultSchema.parse(creation.result)).toMatchObject({
+      agent: {
+        blueprint: { id: published.blueprint.id, version: 1 },
+        capabilityGrants: [],
+      },
+      created: true,
+      ok: true,
+    });
+
+    const retirement = await call(MCP_CONFIGURE_TOOL_NAME, {
+      idempotencyKey: "mcp-blueprint-retire",
+      mode: "apply",
+      target: {
+        expectedVersion: 1,
+        id: published.blueprint.id,
+        kind: "agent-blueprint-retirement",
+      },
+    });
+    expect(retireAgentBlueprintResultSchema.parse(retirement.result)).toMatchObject({
+      applied: true,
+      blueprint: { status: "retired" },
+      ok: true,
+    });
+  });
+
   it("disables an Agent through the recovery MCP tool", async () => {
     const authority = await ownerAuthority("mcp-recovery-owner", [
       OWNER_WRITE_SCOPE,
@@ -964,6 +1114,9 @@ describe("authenticated MCP handler", () => {
           getAgent: async () => {
             throw new Error("do-not-reflect-this");
           },
+          getAgentBlueprint: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           getAgentRevision: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -991,6 +1144,9 @@ describe("authenticated MCP handler", () => {
           listAgents: async () => {
             throw new Error("do-not-reflect-this");
           },
+          listAgentBlueprints: async () => {
+            throw new Error("do-not-reflect-this");
+          },
           listConnections: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -1016,6 +1172,15 @@ describe("authenticated MCP handler", () => {
             throw new Error("do-not-reflect-this");
           },
           publishSkill: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          publishAgentBlueprint: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          instantiateAgentBlueprint: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          retireAgentBlueprint: async () => {
             throw new Error("do-not-reflect-this");
           },
           retireSkill: async () => {
@@ -2298,6 +2463,7 @@ describe("authenticated MCP handler", () => {
           getAgent: unavailableControlPlane,
           getAgentRevision: unavailableControlPlane,
           getAgentSchedule: unavailableControlPlane,
+          getAgentBlueprint: unavailableControlPlane,
           getFleetConfiguration: unavailableControlPlane,
           getSkill: unavailableControlPlane,
           inspectRun: unavailableControlPlane,
@@ -2305,6 +2471,7 @@ describe("authenticated MCP handler", () => {
           listAgentRevisions: unavailableControlPlane,
           listAgentRuns: unavailableControlPlane,
           listAgents: unavailableControlPlane,
+          listAgentBlueprints: unavailableControlPlane,
           listConnections: unavailableControlPlane,
           listSkills: unavailableControlPlane,
           listUnresolvedToolEffects: unavailableControlPlane,
@@ -2321,6 +2488,9 @@ describe("authenticated MCP handler", () => {
           reserveIntegrationEnablement: unavailableControlPlane,
           reconcileToolExecution: unavailableControlPlane,
           publishSkill: unavailableControlPlane,
+          publishAgentBlueprint: unavailableControlPlane,
+          instantiateAgentBlueprint: unavailableControlPlane,
+          retireAgentBlueprint: unavailableControlPlane,
           retireSkill: unavailableControlPlane,
           resolveConnectionForAttachment: unavailableControlPlane,
           status: unavailableControlPlane,
@@ -2419,6 +2589,7 @@ describe("authenticated MCP handler", () => {
           configureFleetConfiguration: unavailableControlPlane,
           createAgent: unavailableControlPlane,
           getAgent: unavailableControlPlane,
+          getAgentBlueprint: unavailableControlPlane,
           getAgentRevision: unavailableControlPlane,
           getAgentSchedule: unavailableControlPlane,
           getFleetConfiguration: unavailableControlPlane,
@@ -2428,6 +2599,7 @@ describe("authenticated MCP handler", () => {
           listAgentRevisions: unavailableControlPlane,
           listAgentRuns: unavailableControlPlane,
           listAgents: unavailableControlPlane,
+          listAgentBlueprints: unavailableControlPlane,
           listConnections: unavailableControlPlane,
           listSkills: unavailableControlPlane,
           listUnresolvedToolEffects: unavailableControlPlane,
@@ -2440,6 +2612,9 @@ describe("authenticated MCP handler", () => {
           reserveIntegrationEnablement: unavailableControlPlane,
           reconcileToolExecution: unavailableControlPlane,
           publishSkill: unavailableControlPlane,
+          publishAgentBlueprint: unavailableControlPlane,
+          instantiateAgentBlueprint: unavailableControlPlane,
+          retireAgentBlueprint: unavailableControlPlane,
           retireSkill: unavailableControlPlane,
           resolveConnectionForAttachment: unavailableControlPlane,
           status: unavailableControlPlane,

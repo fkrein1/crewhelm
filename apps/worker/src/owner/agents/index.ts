@@ -1,1 +1,6 @@
-export { AgentRegistry, deniedAgent, deniedConnectionAttachment } from "./module.js";
+export {
+  AgentRegistry,
+  deniedAgent,
+  deniedConnectionAttachment,
+  type ResolvedAgentDefinition,
+} from "./module.js";

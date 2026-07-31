@@ -7,6 +7,7 @@ import {
 } from "./fleet-capacity.js";
 import { auditEventSummarySchema } from "./audit.js";
 import { agentCapabilityConfigurationsSchema } from "./agent-capabilities.js";
+import { agentBlueprintProvenanceSchema } from "./agent-blueprint-identity.js";
 
 export const AGENTS_READ_SCOPE = "agents:read";
 export const AGENTS_WRITE_SCOPE = "agents:write";
@@ -208,6 +209,7 @@ export const agentSummarySchema = z.strictObject({
   status: agentStatusSchema,
 });
 export const agentSchema = agentSummarySchema.extend({
+  blueprint: agentBlueprintProvenanceSchema.nullable().default(null),
   capabilities: agentCapabilityConfigurationsSchema,
   capabilityGrants: agentCapabilityGrantsSchema,
   executionLimits: agentExecutionLimitsSchema,

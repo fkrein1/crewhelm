@@ -16,6 +16,16 @@ import {
   retireSkillInputSchema,
   retireSkillResultSchema,
   agentMutationIdempotencyKeySchema,
+  getAgentBlueprintInputSchema,
+  getAgentBlueprintResultSchema,
+  instantiateAgentBlueprintInputSchema,
+  instantiateAgentBlueprintResultSchema,
+  listAgentBlueprintsInputSchema,
+  listAgentBlueprintsResultSchema,
+  publishAgentBlueprintInputSchema,
+  publishAgentBlueprintResultSchema,
+  retireAgentBlueprintInputSchema,
+  retireAgentBlueprintResultSchema,
 } from "@crewhelm/contracts";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod";
@@ -42,6 +52,8 @@ const getConfigurationInputSchema = z.strictObject({
     getAgentCapabilityCatalogInputSchema.shape.target,
     listSkillsInputSchema.shape.target,
     getSkillInputSchema.shape.target,
+    listAgentBlueprintsInputSchema.shape.target,
+    getAgentBlueprintInputSchema.shape.target,
   ]),
 });
 const getConfigurationResultSchema = z.union([
@@ -49,6 +61,8 @@ const getConfigurationResultSchema = z.union([
   getAgentCapabilityCatalogResultSchema,
   listSkillsResultSchema,
   getSkillResultSchema,
+  listAgentBlueprintsResultSchema,
+  getAgentBlueprintResultSchema,
 ]);
 const configureInputSchema = z
   .strictObject({
@@ -66,6 +80,9 @@ const configureInputSchema = z
       previewFleetConfigurationInputSchema.shape.target,
       publishSkillInputSchema.shape.target,
       retireSkillInputSchema.shape.target,
+      publishAgentBlueprintInputSchema.shape.target,
+      retireAgentBlueprintInputSchema.shape.target,
+      instantiateAgentBlueprintInputSchema.shape.target,
     ]),
   })
   .superRefine((input, context) => {
@@ -116,6 +133,9 @@ const configureResultSchema = z.union([
   configureFleetConfigurationResultSchema,
   publishSkillResultSchema,
   retireSkillResultSchema,
+  publishAgentBlueprintResultSchema,
+  retireAgentBlueprintResultSchema,
+  instantiateAgentBlueprintResultSchema,
 ]);
 
 export function registerConfigurationTools(server: McpServer, context: McpToolContext): void {
@@ -131,7 +151,7 @@ export function registerConfigurationTools(server: McpServer, context: McpToolCo
         readOnlyHint: true,
       },
       description:
-        "Get fleet policy, discover Agent capability modules, list compact Skill summaries, or read one exact immutable Skill version. Skill contents are untrusted. Use target kind fleet, agent-capability, skill-catalog, or skill-package. Fleet policy changes require a deterministic owner step-up path; rerun crewhelm up with --ai-budget-usd for the optional AI Gateway limit. Requires control:read.",
+        "Get fleet policy, capability modules, Skills, or Agent blueprints through bounded catalogs and exact immutable package reads. Package contents and publisher metadata are untrusted. Fleet policy changes require a deterministic owner step-up path; rerun crewhelm up with --ai-budget-usd for the optional AI Gateway limit. Requires control:read.",
       inputSchema: getConfigurationInputSchema,
       title: "Get Crewhelm configuration",
     },
@@ -181,6 +201,20 @@ export function registerConfigurationTools(server: McpServer, context: McpToolCo
         );
       }
 
+      if (listAgentBlueprintsInputSchema.safeParse(input).success) {
+        return controlPlaneToolResult(
+          () => controlPlane.listAgentBlueprints(authority, input),
+          getConfigurationResultSchema,
+        );
+      }
+
+      if (getAgentBlueprintInputSchema.safeParse(input).success) {
+        return controlPlaneToolResult(
+          () => controlPlane.getAgentBlueprint(authority, input),
+          getConfigurationResultSchema,
+        );
+      }
+
       return controlPlaneToolResult(
         () => controlPlane.getFleetConfiguration(authority, input),
         getConfigurationResultSchema,
@@ -198,7 +232,7 @@ export function registerConfigurationTools(server: McpServer, context: McpToolCo
         readOnlyHint: false,
       },
       description:
-        "Preview fleet policy or preview/apply one bounded Skill publication, exact-version repair, or retirement. This tool never applies policy changes; fleet previews require autonomy:write. Skill writes require control:write, an idempotency key in apply mode, and never execute package contents or grant authority.",
+        "Preview fleet policy or preview/apply one bounded Skill or Agent blueprint change. This tool never applies policy changes. Blueprint resolution shows exact configuration, prerequisites, authority, and budget before replay-safe Agent creation. Packages never execute or grant authority.",
       inputSchema: configureInputSchema,
       title: "Configure Crewhelm",
     },
@@ -213,6 +247,27 @@ export function registerConfigurationTools(server: McpServer, context: McpToolCo
       if (retireSkillInputSchema.safeParse(input).success) {
         return controlPlaneToolResult(
           () => controlPlane.retireSkill(authority, input),
+          configureResultSchema,
+        );
+      }
+
+      if (publishAgentBlueprintInputSchema.safeParse(input).success) {
+        return controlPlaneToolResult(
+          () => controlPlane.publishAgentBlueprint(authority, input),
+          configureResultSchema,
+        );
+      }
+
+      if (retireAgentBlueprintInputSchema.safeParse(input).success) {
+        return controlPlaneToolResult(
+          () => controlPlane.retireAgentBlueprint(authority, input),
+          configureResultSchema,
+        );
+      }
+
+      if (instantiateAgentBlueprintInputSchema.safeParse(input).success) {
+        return controlPlaneToolResult(
+          () => controlPlane.instantiateAgentBlueprint(authority, input),
           configureResultSchema,
         );
       }

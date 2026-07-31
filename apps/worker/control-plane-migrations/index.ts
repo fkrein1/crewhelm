@@ -19,6 +19,7 @@ import migration17 from "./0017_messy_argent.sql";
 import migration18 from "./0018_clear_franklin_richards.sql";
 import migration19 from "./0019_dashing_dragon_lord.sql";
 import migration20 from "./0020_expand_inference_profiles.sql";
+import migration21 from "./0021_futuristic_adam_destine.sql";
 
 export const controlPlaneMigrations = [
   {
@@ -125,6 +126,11 @@ export const controlPlaneMigrations = [
     name: "0020_expand_inference_profiles",
     sql: migration20,
     version: 21,
+  },
+  {
+    name: "0021_futuristic_adam_destine",
+    sql: migration21,
+    version: 22,
   },
 ] as const;
 
