@@ -104,18 +104,14 @@ describe("CrewAgent durable session directory", () => {
       run: { session: { branchRevision: 1 } },
     });
 
-    if (!first.ok || first.run.session === undefined) {
+    if (!first.ok || first.run.session === undefined || first.continuation === undefined) {
       throw new Error("Expected first durable session run.");
     }
 
     await completedRun(controlPlane, authority, first.run.runId);
     const continued = await controlPlane.startRun(authority, {
       agentId: created.agent.id,
-      continuation: {
-        branchId: first.run.session.branchId,
-        expectedBranchRevision: first.run.session.branchRevision,
-        sessionId: first.run.session.sessionId,
-      },
+      continuation: first.continuation,
       expectedRevision: created.agent.revision,
       idempotencyKey: "session-run-801-second",
       prompt: "What codename did I give you?",

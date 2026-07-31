@@ -111,7 +111,7 @@ export function registerRecoveryTools(server: McpServer, context: McpToolContext
         readOnlyHint: false,
       },
       description:
-        "Resolve one unknown provider effect only after independently verifying whether it was applied. Only a not-applied resolution permits an equivalent mutating effect to be retried.",
+        "Resolve one unknown provider effect only after the owner verifies it in the provider's authoritative UI or API. If the outcome cannot be proven, do not reconcile or retry; contact an operator. Only not_applied permits an equivalent mutation to be retried.",
       inputSchema: reconcileToolExecutionInputSchema,
       title: "Reconcile unknown tool execution",
     },

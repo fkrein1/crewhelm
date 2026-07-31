@@ -979,7 +979,11 @@ export class RunAdmissions {
       input.createdBefore === undefined
         ? undefined
         : lte(runAdmissions.createdAt, Date.parse(input.createdBefore)),
-      input.status === undefined ? undefined : eq(projectedStatus, input.status),
+      input.status === undefined
+        ? undefined
+        : input.status === "active"
+          ? inArray(projectedStatus, ["queued", "running", "cancelling"])
+          : eq(projectedStatus, input.status),
       input.trigger === undefined ? undefined : eq(runAdmissions.trigger, input.trigger),
     );
     const cursorRow =

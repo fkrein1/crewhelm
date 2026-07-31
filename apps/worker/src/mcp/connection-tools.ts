@@ -160,7 +160,7 @@ export function registerConnectionTools(
         readOnlyHint: false,
       },
       description:
-        "Create a short-lived, owner-scoped Composio Connect Link for any exact auth configuration without exposing provider credentials.",
+        "Create a short-lived owner OAuth link from an exact authConfigId. Let the owner open connectionLink.url, retain connectionLink.connectionId, then inspect that exact connection after authorization; credentials are never exposed.",
       inputSchema: createConnectionLinkInputSchema,
       title: "Create integration connection link",
     },
@@ -177,7 +177,7 @@ export function registerConnectionTools(
         readOnlyHint: true,
       },
       description:
-        "List bounded owner-scoped connection summaries, or inspect one exact connection with its safe lifecycle timeline, but never credentials.",
+        "List bounded connection summaries, or set connectionId to inspect one exact connection and its safe lifecycle timeline after OAuth. Prefer the exact returned ID or an integration filter; credentials are never exposed.",
       inputSchema: listConnectionsInputSchema,
       title: "List integration connections",
     },

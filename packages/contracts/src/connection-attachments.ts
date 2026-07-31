@@ -22,16 +22,27 @@ import {
 export const MAXIMUM_CONNECTION_TOOLS_PER_AGENT = 20;
 
 export const configuredConnectionToolSchema = z.strictObject({
-  authorization: toolAuthorizationModeSchema,
-  slug: integrationToolSlugSchema,
-  version: integrationToolkitVersionSchema,
+  authorization: toolAuthorizationModeSchema.describe(
+    "Use approval_required unless the owner explicitly grants standing authority.",
+  ),
+  slug: integrationToolSlugSchema.describe("Exact slug returned by integration tool search."),
+  version: integrationToolkitVersionSchema.describe(
+    "Exact immutable version returned by integration tool search.",
+  ),
 });
 
 export const configureAgentConnectionInputSchema = z.strictObject({
-  agentId: agentIdSchema,
-  connectionId: connectionIdSchema,
-  expectedRevision: agentRevisionNumberSchema,
-  expiresAt: z.iso.datetime().nullable(),
+  agentId: agentIdSchema.describe("Exact id returned by Agent list or creation."),
+  connectionId: connectionIdSchema.describe(
+    "Exact connectionId returned by connection-link creation or connection inspection.",
+  ),
+  expectedRevision: agentRevisionNumberSchema.describe(
+    "Current Agent revision returned by Agent list, creation, or exact inspection.",
+  ),
+  expiresAt: z.iso
+    .datetime()
+    .nullable()
+    .describe("Owner-selected authority expiry, or null to retain it until explicit revocation."),
   idempotencyKey: agentMutationIdempotencyKeySchema,
   limits: composioToolLimitsSchema,
   tools: z
@@ -45,7 +56,10 @@ export const configureAgentConnectionInputSchema = z.strictObject({
             `${tools[index - 1]?.slug}:${tools[index - 1]?.version}` <
               `${tool.slug}:${tool.version}`,
         ),
-      "Expected unique tools in canonical slug and version order.",
+      "Sort unique tools ascending by slug:version.",
+    )
+    .describe(
+      "Selected integration-search results with owner-chosen authorization, sorted by slug:version.",
     ),
 });
 

@@ -3,6 +3,7 @@ import {
   cancelAdmittedRunResultSchema,
   cancelRunInputSchema,
   cancelRunResultSchema,
+  continuationFromRunSession,
   crewAgentObjectName,
   decideRunToolApprovalInputSchema,
   decideRunToolApprovalResultSchema,
@@ -844,6 +845,9 @@ export class AgentChannel {
     const output = run.output ?? "";
 
     return inspectRunResultSchema.options[0].parse({
+      ...(run.session === undefined
+        ? {}
+        : { continuation: continuationFromRunSession(run.session) }),
       diagnosis: this.#diagnosis(admission, run, timeline),
       ok: true,
       request: { prompt: admission.prompt },
@@ -1069,6 +1073,9 @@ export class AgentChannel {
     }
 
     return startRunResultSchema.parse({
+      ...(alignedRun.session === undefined
+        ? {}
+        : { continuation: continuationFromRunSession(alignedRun.session) }),
       created: admission.state === "issued" && admission.created,
       ok: true,
       run: alignedRun,

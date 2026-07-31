@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   browseAgentSessionsInputSchema,
+  continuationFromRunSession,
   manageAgentSessionsInputSchema,
   sessionContinuationSchema,
 } from "./agent-sessions.js";
@@ -24,6 +25,15 @@ describe("Agent session contracts", () => {
     expect(
       sessionContinuationSchema.safeParse({ branchId, expectedRevision: 3, sessionId }).success,
     ).toBe(false);
+  });
+
+  it("projects run coordinates into a copy-ready continuation", () => {
+    expect(continuationFromRunSession({ branchId, branchRevision: 3, sessionId })).toEqual({
+      branchId,
+      expectedBranchRevision: 3,
+      sessionId,
+    });
+    expect(continuationFromRunSession(undefined)).toBeUndefined();
   });
 
   it("keeps read actions compact and deletion fields exact", () => {

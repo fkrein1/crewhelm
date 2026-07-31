@@ -446,7 +446,12 @@ export const listAgentRunsInputSchema = z
       .describe("Return runs created at or before this time."),
     cursor: runIdSchema.optional(),
     limit: z.number().int().min(1).max(MAXIMUM_FLEET_LIST_ITEMS).default(10),
-    status: runStatusSchema.optional().describe("Return runs in this owner-local projected state."),
+    status: z
+      .union([runStatusSchema, z.literal("active")])
+      .optional()
+      .describe(
+        'Return runs in one projected state, or use "active" for queued, running, and cancelling runs.',
+      ),
     trigger: runTriggerSchema.optional().describe("Return manual or scheduled runs."),
   })
   .refine(
@@ -653,6 +658,9 @@ const runReadErrorSchema = z.strictObject({
 
 export const startRunResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
+    continuation: sessionContinuationSchema
+      .describe("Pass this object unchanged to crewhelm_start_run.continuation for the next turn.")
+      .optional(),
     created: z.boolean(),
     ok: z.literal(true),
     run: runSchema,
@@ -665,6 +673,9 @@ export const startRunResultSchema = z.discriminatedUnion("ok", [
 
 export const inspectRunResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
+    continuation: sessionContinuationSchema
+      .describe("Pass this object unchanged to crewhelm_start_run.continuation for the next turn.")
+      .optional(),
     diagnosis: runDiagnosticSchema.nullable(),
     ok: z.literal(true),
     request: z.strictObject({

@@ -24,7 +24,13 @@ count and serialized input-schema size.
 Recovery detail is opt-in and bounded: run inspection pages its timeline and can include usage;
 exact connection reads include lifecycle events; status can include recent audit events. Ambiguous
 writes return `recoverAfter` and pin the idempotency key until the same request can safely renew
-the reservation. Existing tools carry this detail, preserving the 30-tool catalog limit.
+the reservation. Existing tools carry this detail, preserving the explicit catalog limit.
+
+The MCP initialization response provides a compact operating model and identifies fleet status as
+the first read. Status derives at most three advisory next steps from counts already in its bounded
+projection. Guidance never grants authority or replaces validation, and clients may call exact
+tools directly. Primary workflow results return input-shaped handoffs, including a continuation
+object that can be passed unchanged into the next run.
 
 The owner inbox is the polling surface for operational attention; Crewhelm neither broadcasts nor
 model-classifies its events. Fleet status exposes attention counts and age so clients can avoid

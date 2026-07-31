@@ -27,6 +27,11 @@ import {
   registerConfigurationTools,
 } from "./configuration-tools.js";
 import type { McpEnvironment } from "./context.js";
+import {
+  MCP_SERVER_INSTRUCTIONS,
+  mcpControlPlaneStatusResultSchema,
+  statusGuidance,
+} from "./guidance.js";
 import { registerIntegrationTools } from "./integration-tools.js";
 import { registerRunTools } from "./run-tools.js";
 import {
@@ -160,7 +165,7 @@ function createMcpServer(
   authority: OwnerAuthority,
   signal: AbortSignal,
 ): McpServer {
-  const server = new McpServer(MCP_SERVER_INFO);
+  const server = new McpServer(MCP_SERVER_INFO, { instructions: MCP_SERVER_INSTRUCTIONS });
   const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
   const context = {
     authority,
@@ -215,15 +220,18 @@ function createMcpServer(
         readOnlyHint: true,
       },
       description:
-        "Return a cheap owner-local fleet dashboard with usage, inbox attention, diagnostics, and optional recent safe audit events.",
+        "Start here. Return a cheap owner-local fleet dashboard with usage, inbox attention, diagnostics, and at most three bounded next-step suggestions. Suggestions are advisory and never grant authority.",
       inputSchema: controlPlaneStatusInputSchema,
       title: "Crewhelm status",
     },
     async (input) =>
-      controlPlaneToolResult(
-        () => controlPlane.status(authority, input),
-        controlPlaneStatusResultSchema,
-      ),
+      controlPlaneToolResult(async () => {
+        const result = controlPlaneStatusResultSchema.parse(
+          await controlPlane.status(authority, input),
+        );
+
+        return result.ok ? { ...result, guidance: statusGuidance(result.status) } : result;
+      }, mcpControlPlaneStatusResultSchema),
   );
 
   return server;

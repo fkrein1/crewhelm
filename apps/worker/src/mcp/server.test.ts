@@ -19,7 +19,6 @@ import {
   createAgentResultSchema,
   createConnectionLinkResultSchema,
   configureAgentConnectionResultSchema,
-  controlPlaneStatusResultSchema,
   configureFleetConfigurationResultSchema,
   crewAgentObjectName,
   enableIntegrationResultSchema,
@@ -53,6 +52,8 @@ import {
 } from "@crewhelm/contracts";
 import { describe, expect, it, vi } from "vitest";
 import * as z from "zod";
+
+import { MCP_SERVER_INSTRUCTIONS, mcpControlPlaneStatusResultSchema } from "./guidance.js";
 
 import {
   MCP_AGENT_INBOX_TOOL_NAME,
@@ -191,6 +192,7 @@ describe("authenticated MCP handler", () => {
       id: 1,
       jsonrpc: "2.0",
       result: {
+        instructions: MCP_SERVER_INSTRUCTIONS,
         protocolVersion: "2025-11-25",
         serverInfo: {
           name: "crewhelm",
@@ -333,7 +335,7 @@ describe("authenticated MCP handler", () => {
         openWorldHint: false,
         readOnlyHint: true,
       },
-      description: expect.stringContaining("branchRevision"),
+      description: expect.stringContaining("copy-ready continuation"),
     });
     expect(JSON.stringify(sessionsTool?.inputSchema)).toContain('"action"');
     expect(deleteSessionTool).toMatchObject({
@@ -478,7 +480,14 @@ describe("authenticated MCP handler", () => {
     const text = result.content[0]?.text;
 
     expect(typeof text).toBe("string");
-    expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toMatchObject({
+    expect(mcpControlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toMatchObject({
+      guidance: [
+        {
+          kind: "user_decision",
+          reason: "empty_fleet",
+          tool: MCP_CREATE_AGENT_TOOL_NAME,
+        },
+      ],
       ok: true,
       status: {
         schemaVersion: 22,
@@ -1536,6 +1545,9 @@ describe("authenticated MCP handler", () => {
 
     expect(startPayload.isError).toBe(false);
     expect(started).toMatchObject({
+      continuation: {
+        expectedBranchRevision: 1,
+      },
       created: true,
       ok: true,
       run: {
@@ -1571,6 +1583,7 @@ describe("authenticated MCP handler", () => {
 
         expect(payload.isError).toBe(false);
         expect(result).toMatchObject({
+          continuation: started.ok ? started.continuation : undefined,
           diagnosis: null,
           ok: true,
           request: { prompt: runInput.prompt },
@@ -1626,6 +1639,45 @@ describe("authenticated MCP handler", () => {
       ok: true,
       sessions: [{ branchRevision: 1, sessionId: started.run.session?.sessionId }],
     });
+
+    if (
+      !sessions.ok ||
+      !("sessions" in sessions) ||
+      sessions.sessions[0] === undefined ||
+      started.continuation === undefined
+    ) {
+      throw new Error("Expected one discoverable session and continuation.");
+    }
+
+    const sessionInspectionResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 320,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              action: "inspect",
+              agentId: created.agent.id,
+              sessionId: sessions.sessions[0].sessionId,
+            },
+            name: MCP_AGENT_SESSIONS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const sessionInspectionPayload = jsonRpcToolResultSchema.parse(
+      await sessionInspectionResponse.json(),
+    ).result;
+
+    expect(
+      manageAgentSessionsResultSchema.parse(
+        JSON.parse(sessionInspectionPayload.content[0]?.text ?? ""),
+      ),
+    ).toMatchObject({ continuation: started.continuation, ok: true });
+
     const inboxResponse = await handleAuthenticatedMcpRequest(
       toolRequest(
         JSON.stringify({
@@ -1808,6 +1860,7 @@ describe("authenticated MCP handler", () => {
 
     expect(replayPayload.isError).toBe(false);
     expect(replay).toEqual({
+      continuation: inspected.ok ? inspected.continuation : undefined,
       created: false,
       ok: true,
       run: inspected.ok ? inspected.run : undefined,
