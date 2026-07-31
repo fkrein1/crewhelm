@@ -7,7 +7,11 @@ import {
   MINIMUM_FLEET_RETENTION_SECONDS,
 } from "./fleet-capacity.js";
 
-import { agentRuntimePlanSchema, crewAgentRuntimeConfigSchema } from "./agent-runtime.js";
+import {
+  admittedSkillProvenanceSchema,
+  agentRuntimePlanSchema,
+  crewAgentRuntimeConfigSchema,
+} from "./agent-runtime.js";
 import {
   composioToolCapabilityGrantSchema,
   runIdSchema,
@@ -519,6 +523,7 @@ export const runFailureReasonSchema = z.enum([
   "authorization_blocked",
   "deadline_exceeded",
   "runtime_failed",
+  "skill_unavailable",
   "tool_effect_applied",
   "tool_effect_not_applied",
   "tool_effect_unknown",
@@ -616,6 +621,7 @@ export const inspectRunResultSchema = z.discriminatedUnion("ok", [
     }),
     retention: runRetentionSchema,
     run: runSchema,
+    skills: z.array(admittedSkillProvenanceSchema).max(8).default([]),
     timeline: z.array(runTimelineEventSchema).max(MAXIMUM_RUN_TIMELINE_PAGE_ITEMS),
     timelinePage: z.strictObject({
       nextCursor: z.number().int().nonnegative().safe().nullable(),

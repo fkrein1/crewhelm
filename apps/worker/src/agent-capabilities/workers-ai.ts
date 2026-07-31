@@ -43,6 +43,7 @@ export function workersAiRuntimePlan(
         schemaVersion: WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
       },
     ],
+    skillReferences: [],
     systemContext: [],
   });
 }

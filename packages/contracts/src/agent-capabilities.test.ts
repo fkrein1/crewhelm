@@ -21,6 +21,25 @@ describe("Agent capability contracts", () => {
     ).toHaveLength(1);
   });
 
+  it("accepts bounded nested configuration for resource references", () => {
+    expect(
+      agentCapabilityConfigurationsSchema.parse([
+        {
+          configuration: {
+            skills: [
+              {
+                id: "skill_00000000-0000-4000-8000-000000000001",
+                version: 1,
+              },
+            ],
+          },
+          id: "context.skills",
+          schemaVersion: 1,
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
   it.each([
     [
       "duplicate or unordered IDs",
@@ -47,6 +66,16 @@ describe("Agent capability contracts", () => {
             value: "x".repeat(MAXIMUM_AGENT_CAPABILITY_CONFIGURATION_BYTES),
           },
           id: "module.large",
+          schemaVersion: 1,
+        },
+      ],
+    ],
+    [
+      "deeply nested module configuration",
+      [
+        {
+          configuration: { first: { second: { third: { fourth: true } } } },
+          id: "module.deep",
           schemaVersion: 1,
         },
       ],

@@ -2,6 +2,8 @@ import {
   MAXIMUM_SKILL_LIBRARY_BYTES,
   MAXIMUM_SKILLS,
   MAXIMUM_SKILL_VERSIONS,
+  MAXIMUM_AGENT_SKILL_CONTEXT_CHARACTERS,
+  crewAgentSkillContext,
   getSkillInputSchema,
   getSkillResultSchema,
   listSkillsInputSchema,
@@ -11,6 +13,7 @@ import {
   retireSkillInputSchema,
   retireSkillResultSchema,
   skillPackageSchema,
+  admittedSkillProvenanceSchema,
   skillSummarySchema,
   skillVersionRecordSchema,
   type GetSkillResult,
@@ -24,6 +27,9 @@ import {
   type SkillPackageDescriptor,
   type SkillSummary,
   type SkillWarning,
+  type AdmittedSkillInstructions,
+  type AdmittedSkillProvenance,
+  type AgentRuntimePlan,
 } from "@crewhelm/contracts";
 import { and, asc, count, eq, gt, sql, sum } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
@@ -71,6 +77,20 @@ export interface SkillPackageObjectStore {
   get(key: string): Promise<StoredSkillPackage | null>;
   put(key: string, bytes: Uint8Array, digest: string): Promise<"created" | "existing" | "conflict">;
 }
+
+export type SkillRuntimeLoadResult =
+  | {
+      instructions: AdmittedSkillInstructions[];
+      ok: true;
+    }
+  | {
+      code:
+        | "instructions_oversized"
+        | "reference_unavailable"
+        | "storage_corrupt"
+        | "storage_unavailable";
+      ok: false;
+    };
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
@@ -593,6 +613,98 @@ export class Skills {
         version: row.version,
       }),
     });
+  }
+
+  runtimeProvenance(
+    references: AgentRuntimePlan["skillReferences"],
+    database: Database = this.#database,
+    requireActive = false,
+  ): AdmittedSkillProvenance[] | undefined {
+    const provenance: AdmittedSkillProvenance[] = [];
+
+    for (const reference of references) {
+      const row = database
+        .select({
+          digest: skillVersions.packageDigest,
+          id: skillVersions.skillId,
+          name: skillVersions.name,
+          status: skills.status,
+          version: skillVersions.version,
+        })
+        .from(skillVersions)
+        .innerJoin(skills, eq(skills.skillId, skillVersions.skillId))
+        .where(
+          and(
+            eq(skillVersions.skillId, reference.id),
+            eq(skillVersions.version, reference.version),
+          ),
+        )
+        .get();
+
+      if (row === undefined || (requireActive && row.status !== "active")) {
+        return undefined;
+      }
+
+      provenance.push(
+        admittedSkillProvenanceSchema.parse({
+          digest: row.digest,
+          id: row.id,
+          name: row.name,
+          version: row.version,
+        }),
+      );
+    }
+
+    return provenance;
+  }
+
+  async loadRuntimeInstructions(
+    references: AgentRuntimePlan["skillReferences"],
+  ): Promise<SkillRuntimeLoadResult> {
+    const instructions: AdmittedSkillInstructions[] = [];
+
+    for (const reference of references) {
+      const result = await this.get({
+        target: {
+          id: reference.id,
+          kind: "skill-package",
+          version: reference.version,
+        },
+      });
+
+      if (!result.ok) {
+        return {
+          code:
+            result.error.code === "skill_storage_unavailable"
+              ? "storage_unavailable"
+              : result.error.code === "skill_storage_corrupt"
+                ? "storage_corrupt"
+                : "reference_unavailable",
+          ok: false,
+        };
+      }
+
+      const skillFile = result.version.files.find(({ path }) => path === "SKILL.md");
+
+      if (skillFile === undefined) {
+        return { code: "storage_corrupt", ok: false };
+      }
+
+      instructions.push({
+        contentTrust: "untrusted",
+        digest: result.version.package.digest,
+        id: result.version.id,
+        instructions: skillFile.content,
+        name: result.version.name,
+        version: result.version.version,
+      });
+    }
+
+    if (crewAgentSkillContext(instructions).length > MAXIMUM_AGENT_SKILL_CONTEXT_CHARACTERS) {
+      return { code: "instructions_oversized", ok: false };
+    }
+
+    return { instructions, ok: true };
   }
 
   async retire(authority: OwnerAuthority, input: unknown): Promise<RetireSkillResult> {

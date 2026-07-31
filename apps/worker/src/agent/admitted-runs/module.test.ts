@@ -6,7 +6,9 @@ import {
   OWNER_WRITE_SCOPE,
   RUNS_WRITE_SCOPE,
   crewAgentObjectName,
+  crewAgentSystemPrompt,
   ownerAuthoritySchema,
+  publishSkillResultSchema,
   type CreateAgentInput,
   type CrewAgentRuntimeConfig,
   type InspectRunResult,
@@ -24,7 +26,9 @@ import {
   isToolExecutionPermitFresh,
 } from "./module.js";
 import { deriveOwnerKey } from "../../owner/identity.js";
+import { skillsCapabilityConfiguration } from "../../agent-capabilities/skills.js";
 import { workersAiCapabilityConfiguration } from "../../agent-capabilities/workers-ai.js";
+import { OwnerControlPlane } from "../../owner/durable-object.js";
 import { digestRunPrompt } from "./protocol.js";
 import { admittedRunRecordSchema, admittedTurnMetadataSchema } from "./schema.js";
 import {
@@ -674,6 +678,139 @@ describe("CrewAgent admitted execution", () => {
     await expect(controlPlane.inspectRun(authority, { runId: started.run.runId })).resolves.toEqual(
       finished,
     );
+  });
+
+  it("runs with hydrated Skill instructions inside the reserved input ceiling", async () => {
+    const authority = await authorityFor("crew-agent-skill-runtime");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const published = publishSkillResultSchema.parse(
+      await controlPlane.publishSkill(authority, {
+        idempotencyKey: "crew-agent-skill-publish",
+        mode: "apply",
+        target: {
+          kind: "skill-package",
+          package: {
+            description: "Proves Skill instructions reach the admitted runtime.",
+            files: [
+              { content: "Never load this reference.", path: "references/private.md" },
+              { content: "echo never-run", path: "scripts/unsafe.sh" },
+              { content: "# Runtime marker\n\nReturn SKILL_RUNTIME_OK.", path: "SKILL.md" },
+            ],
+            name: "crew-agent-runtime-marker",
+            provenance: { kind: "authored" },
+          },
+        },
+      }),
+    );
+
+    if (!published.ok || published.skill === undefined) {
+      throw new Error("Expected runtime Skill publication.");
+    }
+
+    const created = await controlPlane.createAgent(authority, {
+      ...agentInput("crew-agent-skill-create"),
+      capabilities: [
+        skillsCapabilityConfiguration([{ id: published.skill.id, version: 1 }]),
+        workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct"),
+      ],
+    });
+
+    if (!created.ok) {
+      throw new Error("Expected Skill-enabled Agent.");
+    }
+
+    const prompt = "Return the Skill runtime marker.";
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-skill-run",
+      prompt,
+    });
+
+    expect(started).toMatchObject({ created: true, ok: true });
+
+    if (!started.ok) {
+      throw new Error("Expected Skill-enabled admitted run.");
+    }
+
+    const stub = crewAgentNamespace().getByName(
+      crewAgentObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+      }),
+    );
+
+    await completedRun(controlPlane, authority, started.run.runId);
+    await runInDurableObject(stub, async (agent, state) => {
+      const record = admittedRunRecordSchema.parse(
+        await state.storage.get(`crewhelm:run:${started.run.runId}`),
+      );
+      const renderedPrompt = JSON.stringify(asTestCrewAgent(agent).modelCallsForTest()[0]?.prompt);
+
+      expect(record.budgetReservation.maxInputCharacters).toBeGreaterThan(
+        crewAgentSystemPrompt(record.configuration).length + prompt.length,
+      );
+      expect(renderedPrompt).toContain("Return SKILL_RUNTIME_OK.");
+      expect(renderedPrompt).not.toContain("Never load this reference.");
+      expect(renderedPrompt).not.toContain("echo never-run");
+    });
+
+    const malformedPrompt = "Reject incomplete Skill hydration.";
+    const malformedAdmission = await controlPlane.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-skill-malformed-admission",
+      promptCharacters: malformedPrompt.length,
+      promptDigest: await digestRunPrompt(malformedPrompt),
+    });
+
+    if (!malformedAdmission.ok || malformedAdmission.state !== "issued") {
+      throw new Error("Expected malformed-hydration rejection permit.");
+    }
+
+    const verified = await controlPlane.verifyRunAdmission(malformedAdmission.permit);
+
+    if (!verified.ok || verified.configuration.skillInstructions === undefined) {
+      throw new Error("Expected complete Skill hydration fixture.");
+    }
+
+    const [instruction] = verified.configuration.skillInstructions;
+
+    if (instruction === undefined) {
+      throw new Error("Expected one hydrated Skill instruction.");
+    }
+
+    const { skillInstructions: _skillInstructions, ...withoutInstructions } =
+      verified.configuration;
+    const malformedConfigurations: CrewAgentRuntimeConfig[] = [
+      withoutInstructions,
+      { ...verified.configuration, skillInstructions: [] },
+      {
+        ...verified.configuration,
+        skillInstructions: [instruction, instruction],
+      },
+    ];
+
+    for (const configuration of malformedConfigurations) {
+      const verificationSpy = vi
+        .spyOn(OwnerControlPlane.prototype, "verifyRunAdmission")
+        .mockResolvedValue({
+          configuration,
+          ok: true,
+          runId: malformedAdmission.permit.runId,
+        });
+
+      try {
+        await expect(
+          stub.acceptRunAdmission({
+            permit: malformedAdmission.permit,
+            prompt: malformedPrompt,
+          }),
+        ).resolves.toEqual(invalidRunAdmission());
+      } finally {
+        verificationSpy.mockRestore();
+      }
+    }
   });
 
   it("lists compact owner-local run summaries without inspecting the Agent Durable Object", async () => {

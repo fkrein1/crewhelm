@@ -24,6 +24,13 @@ export type CapabilityRuntimeContribution =
   | {
       kind: "system-context";
       text: string;
+    }
+  | {
+      kind: "skill-reference";
+      skill: {
+        id: string;
+        version: number;
+      };
     };
 
 export type CapabilityModuleResolution =
@@ -143,6 +150,7 @@ export class AgentCapabilityRegistry {
         }
       | undefined;
     const modules: AgentRuntimePlan["modules"] = [];
+    const skillReferences: AgentRuntimePlan["skillReferences"] = [];
     const systemContext: AgentRuntimePlan["systemContext"] = [];
     const canonicalCapabilities: AgentCapabilityConfiguration[] = [];
 
@@ -202,11 +210,17 @@ export class AgentCapabilityRegistry {
             moduleId: capability.id,
             schemaVersion: capability.schemaVersion,
           };
-        } else {
+        } else if (contribution.kind === "system-context") {
           systemContext.push({
             moduleId: capability.id,
             schemaVersion: capability.schemaVersion,
             text: contribution.text,
+          });
+        } else {
+          skillReferences.push({
+            ...contribution.skill,
+            moduleId: capability.id,
+            schemaVersion: capability.schemaVersion,
           });
         }
       }
@@ -225,7 +239,12 @@ export class AgentCapabilityRegistry {
     return {
       capabilities: agentCapabilityConfigurationsSchema.parse(canonicalCapabilities),
       ok: true,
-      runtimePlan: agentRuntimePlanSchema.parse({ inference, modules, systemContext }),
+      runtimePlan: agentRuntimePlanSchema.parse({
+        inference,
+        modules,
+        skillReferences,
+        systemContext,
+      }),
     };
   }
 }

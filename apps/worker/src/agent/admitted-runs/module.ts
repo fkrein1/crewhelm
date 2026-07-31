@@ -1536,7 +1536,7 @@ export class CrewAgent extends Think {
       activeTools: approvalContinuation
         ? []
         : this.#activeToolAdapters().map((adapter) => adapter.name),
-      instructions: configuration.instructions,
+      instructions: crewAgentSystemPrompt(configuration),
       maxOutputTokens: metadata.budgetReservation.maxOutputTokens,
       maxRetries: 0,
       maxSteps: approvalContinuation ? 1 : metadata.budgetReservation.maxTurns,
@@ -2938,8 +2938,23 @@ export class CrewAgent extends Think {
     promptCharacters: number,
   ): boolean {
     return (
-      reservation.maxInputCharacters ===
-      crewAgentSystemPrompt(configuration).length + promptCharacters
+      this.#skillInstructionsMatchReferences(configuration) &&
+      crewAgentSystemPrompt(configuration).length + promptCharacters <=
+        reservation.maxInputCharacters
+    );
+  }
+
+  #skillInstructionsMatchReferences(configuration: CrewAgentRuntimeConfig): boolean {
+    const references = configuration.runtimePlan.skillReferences;
+    const instructions = configuration.skillInstructions ?? [];
+
+    return (
+      references.length === instructions.length &&
+      references.every(
+        (reference, index) =>
+          reference.id === instructions[index]?.id &&
+          reference.version === instructions[index]?.version,
+      )
     );
   }
 }

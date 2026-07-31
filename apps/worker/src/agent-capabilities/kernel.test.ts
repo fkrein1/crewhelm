@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import * as z from "zod";
 
 import { AgentCapabilityRegistry, type AgentCapabilityModule } from "./kernel.js";
+import { skillsCapabilityConfiguration, skillsCapabilityModule } from "./skills.js";
 import {
   WORKERS_AI_BINDING_PREREQUISITE,
   workersAiCapabilityConfiguration,
@@ -95,6 +96,7 @@ describe("Agent capability registry", () => {
           schemaVersion: 1,
         },
         modules: [{ id: "inference.workers-ai", schemaVersion: 1 }],
+        skillReferences: [],
         systemContext: [],
       },
     });
@@ -135,6 +137,46 @@ describe("Agent capability registry", () => {
         runtimePlan: result.runtimePlan,
       }),
     ).toBe("Base Agent instructions.\n\nOwner-authored operating context.");
+  });
+
+  it("compiles exact Skill references without loading package contents", () => {
+    const registry = new AgentCapabilityRegistry([
+      skillsCapabilityModule,
+      workersAiCapabilityModule,
+    ]);
+    const reference = {
+      id: "skill_00000000-0000-4000-8000-000000000001",
+      version: 2,
+    };
+    const result = registry.compile(
+      [
+        skillsCapabilityConfiguration([reference]),
+        workersAiCapabilityConfiguration("@cf/zai-org/glm-4.7-flash"),
+      ],
+      { availablePrerequisites, checkPrerequisites: true, fleetConfiguration },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      runtimePlan: {
+        skillReferences: [
+          {
+            ...reference,
+            moduleId: "context.skills",
+            schemaVersion: 1,
+          },
+        ],
+      },
+    });
+    if (!result.ok) {
+      throw new Error("Expected Skill capability compilation.");
+    }
+    expect(result.capabilities[0]).toEqual({
+      configuration: { skills: [reference] },
+      id: "context.skills",
+      schemaVersion: 1,
+    });
+    expect(JSON.stringify(result)).not.toContain("SKILL.md");
   });
 
   it("stores valid configuration before runtime prerequisites become available", () => {

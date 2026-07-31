@@ -491,6 +491,7 @@ export const runAdmissions = sqliteTable(
       .notNull(),
     nonceDigest: text("nonce_digest").notNull(),
     status: text("status", { enum: ["issued", "redeemed", "expired"] }).notNull(),
+    failureCode: text("failure_code", { enum: ["skill_unavailable"] }),
     expiresAt: integer("expires_at").notNull(),
     cleanupAt: integer("cleanup_at").notNull(),
     createdAt: integer("created_at").notNull(),
@@ -526,6 +527,10 @@ export const runAdmissions = sqliteTable(
     check("run_admissions_trigger", sql`${table.trigger} IN ('manual', 'schedule')`),
     check("run_admissions_nonce_digest_length", sql`length(${table.nonceDigest}) = 43`),
     check("run_admissions_status", sql`${table.status} IN ('issued', 'redeemed', 'expired')`),
+    check(
+      "run_admissions_failure_code",
+      sql`${table.failureCode} IS NULL OR ${table.failureCode} = 'skill_unavailable'`,
+    ),
     check("run_admissions_expires_at_positive", sql`${table.expiresAt} > 0`),
     check("run_admissions_cleanup_after_expiry", sql`${table.cleanupAt} > ${table.expiresAt}`),
     check("run_admissions_created_at_positive", sql`${table.createdAt} > 0`),
@@ -557,10 +562,12 @@ export const runAdmissions = sqliteTable(
       "run_admissions_state",
       sql`(
         (${table.status} = 'issued'
+          AND ${table.failureCode} IS NULL
           AND ${table.redeemedAt} IS NULL
           AND ${table.modelCallConsumedAt} IS NULL
           AND ${table.modelCallsConsumed} = 0)
         OR (${table.status} = 'redeemed'
+          AND ${table.failureCode} IS NULL
           AND ${table.redeemedAt} IS NOT NULL
           AND ${table.modelCallsConsumed} <= json_extract(
             ${table.budgetReservation},
