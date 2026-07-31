@@ -161,7 +161,7 @@ export function registerIntegrationTools(
         readOnlyHint: false,
       },
       description:
-        "Enable Composio-managed authentication for one integration and return an opaque auth configuration ID for creating a connection link.",
+        "Enable managed authentication for a chosen integration. Pass the returned authConfigId directly to crewhelm_create_connection_link; do not list auth configurations after a successful enablement.",
       inputSchema: enableIntegrationInputSchema,
       title: "Enable integration",
     },
@@ -178,7 +178,7 @@ export function registerIntegrationTools(
         readOnlyHint: true,
       },
       description:
-        "List bounded enabled Composio auth configurations for one integration before creating a connection link.",
+        "List bounded pre-existing auth configurations for an integration. This recovery or selection read is unnecessary immediately after crewhelm_enable_integration returns authConfigId.",
       inputSchema: integrationAuthConfigListInputSchema,
       title: "List integration auth configurations",
     },
@@ -200,7 +200,7 @@ export function registerIntegrationTools(
         readOnlyHint: true,
       },
       description:
-        "Inspect bounded input and output parameter schemas for one exact Composio tool version.",
+        "Inspect bounded parameter schemas for one exact integration tool version. This is optional for review or runtime argument planning, not a prerequisite to attach a search result.",
       inputSchema: inspectIntegrationToolInputSchema,
       title: "Inspect integration tool",
     },
@@ -222,7 +222,7 @@ export function registerIntegrationTools(
         readOnlyHint: true,
       },
       description:
-        "Search the complete Composio integration catalog without a Crewhelm-maintained toolkit allowlist.",
+        "Choose an integration provider from the complete catalog. Skip this call when its slug is already known; use crewhelm_search_integration_tools later to choose provider actions.",
       inputSchema: integrationCatalogSearchInputSchema,
       title: "Search integrations",
     },
@@ -244,7 +244,7 @@ export function registerIntegrationTools(
         readOnlyHint: true,
       },
       description:
-        "Search exact tools and resolved versions across the complete Composio integration catalog.",
+        "Choose exact provider actions, normally filtered by an already selected integrationSlug. Returned slug and version pairs can be attached directly; inspect only tools whose parameter schemas need review.",
       inputSchema: integrationToolSearchInputSchema,
       title: "Search integration tools",
     },

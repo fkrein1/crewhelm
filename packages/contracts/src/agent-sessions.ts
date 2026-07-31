@@ -37,6 +37,18 @@ export const runSessionSchema = z.strictObject({
   sessionId: sessionIdSchema,
 });
 
+export function continuationFromRunSession(
+  session: RunSession | undefined,
+): SessionContinuation | undefined {
+  return session === undefined
+    ? undefined
+    : sessionContinuationSchema.parse({
+        branchId: session.branchId,
+        expectedBranchRevision: session.branchRevision,
+        sessionId: session.sessionId,
+      });
+}
+
 export const sessionMessageSchema = z.strictObject({
   createdAt: z.iso.datetime().nullable(),
   messageId: z.string().min(1).max(256),
@@ -179,6 +191,9 @@ export const listAgentSessionsResultSchema = z.discriminatedUnion("ok", [
 
 export const inspectAgentSessionResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
+    continuation: sessionContinuationSchema.describe(
+      "Pass this object unchanged to crewhelm_start_run.continuation when the session is idle.",
+    ),
     messages: z.array(sessionMessageSchema).max(MAXIMUM_SESSION_INSPECTION_MESSAGES),
     messagesTruncated: z.boolean(),
     ok: z.literal(true),

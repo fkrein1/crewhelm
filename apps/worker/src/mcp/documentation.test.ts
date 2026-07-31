@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import * as z from "zod";
 
 import { deriveOwnerKey } from "../owner/identity.js";
+import { MCP_GETTING_STARTED_REFERENCE } from "./guidance.js";
 import { handleAuthenticatedMcpRequest } from "./server.js";
 
 const origin = "https://crewhelm.test";
@@ -88,6 +89,8 @@ function renderReference(tools: McpTool[]): string {
     "This reference is generated from Crewhelm's authenticated MCP `tools/list` response.",
     "Tool availability does not grant authority; every call is subject to the authenticated",
     "owner, approved OAuth scopes, and current control-plane policy.",
+    "",
+    MCP_GETTING_STARTED_REFERENCE,
     "",
     ...sections.flatMap((section) => [section, ""]),
   ].join("\n");

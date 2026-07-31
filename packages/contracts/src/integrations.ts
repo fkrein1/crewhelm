@@ -294,7 +294,9 @@ export const completeIntegrationEnablementInputSchema = z.strictObject({
 });
 export const integrationToolSearchInputSchema = z.strictObject({
   cursor: integrationCatalogCursorSchema.optional(),
-  integrationSlug: integrationSlugSchema.optional(),
+  integrationSlug: integrationSlugSchema
+    .optional()
+    .describe("Limit action discovery to an already selected or connected integration."),
   limit: z.number().int().min(1).max(20).default(10),
   query: z.string().trim().min(3).max(160).optional(),
 });

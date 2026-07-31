@@ -2,6 +2,7 @@ import {
   acceptRunAdmissionInputSchema,
   acceptRunAdmissionResultSchema,
   branchIdSchema,
+  continuationFromRunSession,
   crewAgentObjectName,
   crewSessionObjectName,
   DEFAULT_AGENT_SESSION_RETENTION_SECONDS,
@@ -386,6 +387,7 @@ export class CrewAgent extends CrewSession {
 
       return inspectAgentSessionResultSchema.parse({
         ...inspection,
+        continuation: continuationFromRunSession(sessionProjection(record)),
         ok: true,
         session: sessionProjection(record),
       });

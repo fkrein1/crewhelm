@@ -201,11 +201,37 @@ const composioToolBindingSchema = z.strictObject({
   toolSlug: integrationToolSlugSchema,
 });
 export const composioToolLimitsSchema = z.strictObject({
-  maxCallsPerRun: z.number().int().min(1).max(100),
-  maxConcurrency: z.number().int().min(1).max(16),
-  maxCostMicrousdPerCall: z.number().int().min(0).max(MAXIMUM_COST_MICROUSD).safe(),
-  maxDurationMs: z.number().int().min(1).max(MAXIMUM_TOOL_DURATION_MS),
-  maxOutputBytes: z.number().int().min(1).max(MAXIMUM_TOOL_OUTPUT_BYTES),
+  maxCallsPerRun: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .describe("Owner-selected per-run call ceiling; choose the smallest useful value."),
+  maxConcurrency: z
+    .number()
+    .int()
+    .min(1)
+    .max(16)
+    .describe("Owner-selected concurrent-call ceiling; use 1 unless parallel calls are required."),
+  maxCostMicrousdPerCall: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAXIMUM_COST_MICROUSD)
+    .safe()
+    .describe("Owner-selected per-call cost ceiling in millionths of one US dollar."),
+  maxDurationMs: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAXIMUM_TOOL_DURATION_MS)
+    .describe("Owner-selected per-call wall-clock ceiling in milliseconds."),
+  maxOutputBytes: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAXIMUM_TOOL_OUTPUT_BYTES)
+    .describe("Owner-selected per-call output ceiling in bytes."),
 });
 export const composioToolCapabilityGrantSchema = composioToolBindingSchema.extend({
   authorization: toolAuthorizationModeSchema,

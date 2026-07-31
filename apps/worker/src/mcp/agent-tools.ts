@@ -37,7 +37,7 @@ export function registerAgentTools(server: McpServer, context: McpToolContext): 
         readOnlyHint: false,
       },
       description:
-        "Create an owner-scoped Crewhelm Agent with validated capability modules, an immutable initial revision, and no grants.",
+        "Create an owner-scoped Crewhelm Agent after confirming the owner's durable intent. The result returns agent.id and agent.revision for crewhelm_start_run; creation grants no external authority.",
       inputSchema: createAgentInputSchema,
       title: "Create Crewhelm agent",
     },
@@ -97,7 +97,7 @@ export function registerAgentTools(server: McpServer, context: McpToolContext): 
         readOnlyHint: true,
       },
       description:
-        "List bounded summaries of the authenticated owner's Crewhelm Agents in stable opaque-ID order.",
+        "List bounded Agent summaries for selection. Filter by name or status and use the returned id and revision directly as crewhelm_start_run.agentId and expectedRevision; inspect only a selected Agent when configuration detail is needed.",
       inputSchema: listAgentsInputSchema,
       title: "List Crewhelm agents",
     },

@@ -474,6 +474,11 @@ describe("OwnerControlPlane runs", () => {
         },
       ],
     });
+    await expect(stub.listAgentRuns(authority, { status: "active" })).resolves.toMatchObject({
+      nextCursor: null,
+      ok: true,
+      runs: [{ status: "queued" }, { status: "queued" }],
+    });
     const firstPage = await stub.listAgentRuns(authority, { limit: 1 });
 
     if (!firstPage.ok || firstPage.nextCursor === null) {

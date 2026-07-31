@@ -12,7 +12,6 @@ import {
   OWNER_WRITE_SCOPE,
   RUNS_WRITE_SCOPE,
   createAgentResultSchema,
-  controlPlaneStatusResultSchema,
   getAgentRevisionResultSchema,
   getAgentResultSchema,
   listAgentRevisionsResultSchema,
@@ -34,6 +33,7 @@ import {
   MCP_STATUS_TOOL_NAME,
   MCP_UPDATE_AGENT_TOOL_NAME,
 } from "../mcp/server.js";
+import { mcpControlPlaneStatusResultSchema } from "../mcp/guidance.js";
 import { deriveOwnerKey } from "../owner/identity.js";
 import { digestRunPrompt } from "../agent/admitted-runs/index.js";
 import {
@@ -802,7 +802,7 @@ describe("public OAuth to MCP integration", () => {
     expect(mcpResponse.status).toBe(200);
     expect(toolResult.isError).toBe(false);
     expect(
-      controlPlaneStatusResultSchema.parse(JSON.parse(toolResult.content[0].text)),
+      mcpControlPlaneStatusResultSchema.parse(JSON.parse(toolResult.content[0].text)),
     ).toMatchObject({
       ok: true,
       status: {

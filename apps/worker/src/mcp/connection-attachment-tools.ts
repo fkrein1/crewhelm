@@ -42,7 +42,7 @@ export function registerConnectionAttachmentTools(
         readOnlyHint: false,
       },
       description:
-        "Replace the Composio tools exposed from one authorized connection on an Agent. Crewhelm snapshots public, version-pinned tool definitions; Composio remains the authorization source.",
+        "Replace the exact integration tools exposed from one authorized connection on an Agent. Use Agent id/revision plus sorted search-result slug/version pairs; choose approval_required unless the owner explicitly grants standing authority. Crewhelm independently revalidates every selected definition.",
       inputSchema: configureAgentConnectionInputSchema,
       title: "Configure Agent connection tools",
     },
