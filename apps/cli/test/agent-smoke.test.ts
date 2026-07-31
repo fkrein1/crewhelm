@@ -3,6 +3,7 @@ import * as z from "zod";
 
 import { agentSmokeReportSchema, runAgentSmoke } from "../src/agent-smoke.js";
 import { parseDeploymentOrigin } from "../src/doctor.js";
+import { toolListResponseSchema } from "../src/temporary-owner-session.js";
 
 const origin = "https://crewhelm.example";
 const clientId = "smoke-client";
@@ -450,6 +451,32 @@ async function runSmoke(
 }
 
 describe("disposable Agent lifecycle smoke", () => {
+  it("accepts the complete bounded Worker tool catalog", () => {
+    const tool = {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: true,
+      },
+      inputSchema: { additionalProperties: false, properties: {}, type: "object" },
+      name: "bounded_tool",
+    };
+    const response = (count: number) => ({
+      id: 1,
+      jsonrpc: "2.0",
+      result: {
+        tools: Array.from({ length: count }, (_, index) => ({
+          ...tool,
+          name: `${tool.name}_${index}`,
+        })),
+      },
+    });
+
+    expect(toolListResponseSchema.safeParse(response(32)).success).toBe(true);
+    expect(toolListResponseSchema.safeParse(response(33)).success).toBe(false);
+  });
+
   it("waits for browser-edge propagation before opening authorization", async () => {
     const harness = smokeHarness();
     const events: string[] = [];
