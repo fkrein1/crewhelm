@@ -17,9 +17,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
-      attestations: write
+      attestations: write # Publish provenance for the exact CLI tarball built by this job.
       contents: read
-      id-token: write
+      id-token: write # Authenticate the attestation through GitHub OIDC without a stored secret.
     env:
       RELEASE_TAG: ${{ github.ref_name }}
     steps:
@@ -65,7 +65,7 @@ jobs:
     timeout-minutes: 10
     environment: cli-release
     permissions:
-      contents: write
+      contents: write # Create the protected GitHub prerelease and attach its verified assets.
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ github.ref_name }}
