@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { parseDocument } from "yaml";
 
 import { workspaceBuildArguments } from "../scripts/build.mjs";
+import { normalizeSourceMapText } from "../scripts/normalize-source-map.mjs";
 import { validateToolchain } from "../scripts/toolchain-policy.mjs";
 import { verificationChecks } from "../scripts/verify.mjs";
 
@@ -143,7 +144,9 @@ function workflowPolicyErrors(name: string, workflow: Record<string, unknown>): 
             }
           : name === "release-cli.yml" && jobName === "release"
             ? { contents: "write" as const }
-            : undefined;
+            : name === "release-cli.yml" && jobName === "publish"
+              ? { "id-token": "write" as const }
+              : undefined;
 
     if (
       expectedJobPermissions
@@ -236,6 +239,24 @@ describe("repository foundation", () => {
     });
     expect(workspace).not.toHaveProperty("dangerouslyAllowAllBuilds");
     expect(workspace).not.toHaveProperty("trustLockfile");
+  });
+
+  it("normalizes packaged Worker source maps across build roots", () => {
+    const sourceMap = {
+      version: 3,
+      sources: ["../../src/index.ts"],
+      sourcesContent: ["export {};"],
+    };
+    const first = normalizeSourceMapText(
+      JSON.stringify({ ...sourceMap, sourceRoot: "/home/runner/work/crewhelm" }),
+    );
+    const second = normalizeSourceMapText(
+      JSON.stringify({ ...sourceMap, sourceRoot: "/Users/example/crewhelm" }),
+    );
+
+    expect(first).toBe(second);
+    expect(JSON.parse(first)).toMatchObject({ sourceRoot: "." });
+    expect(() => normalizeSourceMapText("[]")).toThrow("Source map must be a JSON object.");
   });
 
   it("keeps the verification gate complete and Vitest resource-bounded", async () => {
@@ -427,7 +448,7 @@ describe("repository foundation", () => {
 
     expect(cliManifest).toMatchObject({
       name: "@crewhelm/cli",
-      version: "0.1.0-beta.1",
+      version: "0.1.0-beta.2",
       bin: {
         crewhelm: "dist/crewhelm.js",
       },
@@ -459,6 +480,23 @@ describe("repository foundation", () => {
       },
     });
     expect(cliManifest).not.toHaveProperty("private");
+    expect(cliManifest).not.toHaveProperty("optionalDependencies");
+    const cliScripts = cliManifest["scripts"];
+    expect(isRecord(cliScripts)).toBe(true);
+    if (!isRecord(cliScripts)) {
+      throw new TypeError("Expected CLI scripts.");
+    }
+    for (const lifecycle of [
+      "preinstall",
+      "install",
+      "postinstall",
+      "prepare",
+      "prepublish",
+      "prepublishOnly",
+      "postpublish",
+    ]) {
+      expect(cliScripts).not.toHaveProperty(lifecycle);
+    }
     expect(composioManifest).toMatchObject({
       name: "@crewhelm/composio",
       private: true,
@@ -705,11 +743,109 @@ describe("repository foundation", () => {
     if (!isRecord(releaseJobs)) {
       throw new TypeError("Expected release workflow jobs.");
     }
-    expect(releaseJobs["release"]).toMatchObject({
+    const packageJob = releaseJobs["package"];
+    expect(isRecord(packageJob)).toBe(true);
+    if (!isRecord(packageJob)) {
+      throw new TypeError("Expected package job.");
+    }
+    const packageSteps = Array.isArray(packageJob["steps"]) ? packageJob["steps"] : [];
+    const packageStepNames = packageSteps.map((step) =>
+      isRecord(step) && typeof step["name"] === "string" ? step["name"] : "",
+    );
+    expect(packageStepNames.indexOf("Require a release commit from main")).toBeLessThan(
+      packageStepNames.indexOf("Install pnpm"),
+    );
+    expect(packageSteps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Install Node.js",
+          with: {
+            "node-version-file": ".nvmrc",
+            "package-manager-cache": false,
+          },
+        }),
+        expect.objectContaining({
+          name: "Install dependencies",
+          run: "pnpm install --frozen-lockfile --ignore-scripts",
+        }),
+      ]),
+    );
+    expect(releaseJobs["publish"]).toMatchObject({
       environment: "cli-release",
       needs: "package",
+      permissions: { "id-token": "write" },
+    });
+    expect(releaseJobs["release"]).toMatchObject({
+      needs: ["package", "publish"],
       permissions: { contents: "write" },
     });
+
+    const publishJob = releaseJobs["publish"];
+    const releaseJob = releaseJobs["release"];
+    expect(isRecord(publishJob)).toBe(true);
+    expect(isRecord(releaseJob)).toBe(true);
+    if (!isRecord(publishJob) || !isRecord(releaseJob)) {
+      throw new TypeError("Expected publish and release jobs.");
+    }
+
+    expect(publishJob["steps"]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Install Node.js",
+          with: {
+            "node-version": "24.18.0",
+            "package-manager-cache": false,
+            "registry-url": "https://registry.npmjs.org",
+          },
+        }),
+        expect.objectContaining({
+          name: "Verify release artifact shape",
+          run: expect.stringContaining("Release artifact contains an unexpected file set."),
+        }),
+        expect.objectContaining({
+          name: "Publish npm package",
+          run: expect.stringContaining(
+            'npm publish "$package_path" --access public --tag beta --ignore-scripts',
+          ),
+        }),
+      ]),
+    );
+    const publishSteps = Array.isArray(publishJob["steps"]) ? publishJob["steps"] : [];
+    const publishCommand = publishSteps.find(
+      (step) => isRecord(step) && step["name"] === "Publish npm package",
+    );
+    expect(isRecord(publishCommand) ? publishCommand["run"] : undefined).toEqual(
+      expect.stringMatching(/"dist-tags"\.beta[\s\S]+published_beta/u),
+    );
+    expect(
+      publishSteps.some(
+        (step) =>
+          isRecord(step) &&
+          typeof step["uses"] === "string" &&
+          step["uses"].startsWith("actions/checkout@"),
+      ),
+    ).toBe(false);
+    expect(releaseJob["env"]).toMatchObject({
+      GH_REPO: "${{ github.repository }}",
+    });
+    const releaseCommands = Array.isArray(releaseJob["steps"])
+      ? releaseJob["steps"].flatMap((step) =>
+          isRecord(step) && typeof step["run"] === "string" ? [step["run"]] : [],
+        )
+      : [];
+    expect(releaseCommands.filter((command) => command.includes("gh release"))).not.toHaveLength(0);
+    expect(
+      releaseCommands
+        .filter((command) => command.includes("gh release"))
+        .every((command) => command.includes('--repo "$GH_REPO"')),
+    ).toBe(true);
+    expect(releaseCommands).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Release artifact contains an unexpected file set."),
+        expect.stringContaining('gh release delete "$RELEASE_TAG"'),
+        expect.stringContaining('find "$published_release"'),
+      ]),
+    );
 
     const baseWorkflow = {
       jobs: { verify: { "runs-on": "ubuntu-24.04", steps: [] } },
@@ -901,10 +1037,32 @@ describe("repository foundation", () => {
     });
   });
 
-  it("versions immutable CLI release tags", async () => {
-    const ruleset = parseJsonObject(await read(".github/rulesets/cli-releases.json"));
+  it("versions restricted and immutable CLI release tags", async () => {
+    const creationRuleset = parseJsonObject(
+      await read(".github/rulesets/cli-release-creators.json"),
+    );
+    const immutabilityRuleset = parseJsonObject(await read(".github/rulesets/cli-releases.json"));
 
-    expect(ruleset).toEqual({
+    expect(creationRuleset).toEqual({
+      bypass_actors: [
+        {
+          actor_id: 22371297,
+          actor_type: "User",
+          bypass_mode: "always",
+        },
+      ],
+      conditions: {
+        ref_name: {
+          exclude: [],
+          include: ["refs/tags/cli-v*"],
+        },
+      },
+      enforcement: "active",
+      name: "Restricted CLI release tag creation",
+      rules: [{ type: "creation" }],
+      target: "tag",
+    });
+    expect(immutabilityRuleset).toEqual({
       bypass_actors: [],
       conditions: {
         ref_name: {

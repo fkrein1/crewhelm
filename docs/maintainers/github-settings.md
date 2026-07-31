@@ -26,8 +26,12 @@ These controls live in GitHub. Keep them aligned with the versioned workflows an
 
 ## CLI releases
 
-- Keep the CLI tag ruleset aligned with `.github/rulesets/cli-releases.json`.
-- Protect the `cli-release` environment with a required reviewer and restrict it to `cli-v*` tags.
+- Keep the CLI tag rulesets aligned with `.github/rulesets/cli-release-creators.json` and
+  `.github/rulesets/cli-releases.json`.
+- Restrict the `cli-release` environment to `cli-v*` tags; creating the protected tag is release
+  approval.
+- Trust `fkrein1/crewhelm` and `release-cli.yml` in npm for `@crewhelm/cli`, scoped to the
+  `cli-release` environment and `npm publish` only. Disallow token publishing.
 - Allow `actions/attest`, `actions/upload-artifact`, and `actions/download-artifact`.
-- Enable immutable releases. A matching tag packages and attests the CLI before the environment
-  gate creates a prerelease.
+- Enable immutable releases. A matching tag packages, attests, and publishes the CLI before
+  creating the GitHub prerelease.

@@ -1,11 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { cp, mkdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { build } from "esbuild";
 import { experimental_readRawConfig } from "wrangler";
+
+import { normalizeSourceMapText } from "../../../scripts/normalize-source-map.mjs";
 
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryDirectory = resolve(packageDirectory, "../..");
@@ -52,6 +54,11 @@ if (workerBuild.status !== 0) {
 }
 
 await rm(resolve(deploymentDirectory, "README.md"), { force: true });
+
+const sourceMapPath = resolve(deploymentDirectory, "index.js.map");
+await writeFile(sourceMapPath, normalizeSourceMapText(await readFile(sourceMapPath, "utf8")), {
+  mode: 0o644,
+});
 
 const { rawConfig } = experimental_readRawConfig({ config: workerConfigPath });
 delete rawConfig.$schema;

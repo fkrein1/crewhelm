@@ -1,6 +1,6 @@
 {
   "name": "@crewhelm/cli",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "description": "Bootstrap and diagnose a personal Crewhelm control plane.",
   "homepage": "https://github.com/fkrein1/crewhelm#readme",
   "bugs": {

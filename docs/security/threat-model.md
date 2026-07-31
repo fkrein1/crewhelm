@@ -196,10 +196,15 @@ non-secret coordinates before migrations, Gateway updates, or deployment; split 
 conflicting flags, duplicate bindings, unknown databases, and malformed inventory fail closed.
 
 Public pull-request code runs only on disposable, read-only runners after external-contributor
-approval. Privileged workflows never execute pull-request artifacts or restore their caches. A
-release tag builds one allowlisted CLI tarball with an integrity-locked runtime graph, verifies an
-isolated installation and packaged identity, and attests it before a protected environment creates
-a GitHub prerelease. npm publishing remains a separate stage with independent npm approval.
+approval. Privileged triggers and shell interpolation of event data are forbidden; actions are
+allowlisted and commit-pinned. Dependency resolution uses scoped names, frozen integrity locks, a
+minimum release age, registry-only sources, and explicit lifecycle-script policy. Release jobs
+restore no caches. A release tag from main builds one allowlisted CLI tarball without install
+scripts, verifies its isolated installation and packaged identity, and attests it. A separate
+publisher job checks out no code, installs no dependencies, runs no artifact code, and receives
+only a workflow- and environment-bound npm OIDC identity. It publishes the verified tarball before
+a separate GitHub-write job creates the immutable prerelease; retries require the existing npm and
+GitHub artifacts to match exactly.
 
 AI Gateway management may use a process-scoped `CREWHELM_CLOUDFLARE_API_TOKEN` limited to
 account-level AI Gateway Edit. Interactive recovery prints a scoped token recipe and never stores
