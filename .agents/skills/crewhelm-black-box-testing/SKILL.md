@@ -42,13 +42,9 @@ Before any OAuth, MCP, or mutating call:
   target. Production requires separate explicit authorization.
 - Load secrets only through the repository's ignored environment file. Never print values, OAuth
   codes, signed URLs, tokens, or provider payloads.
-- Use `--browser codex` for every interactive CLI authorization. Open only the emitted
-  `CODEX_BROWSER_HANDOFF` loopback URL through the Codex app's native browser-tab open surface, then
-  claim that in-app tab. Direct Browser navigation may reject loopback before it reaches the CLI.
-  Verify the scoped local handoff text, then activate the unique **Continue to Crewhelm** button.
-  The continuation is one-time and must never expose the signed target in terminal output. Never
-  fall back to the system browser. Treat an in-app-browser navigation block as a harness failure and
-  stop that path.
+- Use `--browser codex` for installation-backed CLI authorization. Custom harnesses write the
+  short-lived HTTPS authorization target to a unique mode-0600 temporary file, open it in a new
+  in-app tab, and delete the file immediately. Never print the target or use the system browser.
 - On authorization pages, inspect only scoped visible text and controls. Do not capture a full DOM
   snapshot containing signed links.
 - Automate OAuth only after the user approves the exact deployment, account, client, and scopes;
