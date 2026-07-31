@@ -28,6 +28,8 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Require a release commit from main
+        run: git merge-base --is-ancestor HEAD origin/main
       - name: Install pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         with:
@@ -35,12 +37,10 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          cache: pnpm
           node-version-file: .nvmrc
+          package-manager-cache: false
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Require a release commit from main
-        run: git merge-base --is-ancestor HEAD origin/main
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Verify repository
         run: pnpm verify
       - name: Bind package to release tag
@@ -58,15 +58,134 @@ jobs:
           path: apps/cli/release/
           retention-days: 7
 
-  release:
-    name: Create GitHub prerelease
+  publish:
+    name: Publish npm beta
     needs: package
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: cli-release
     permissions:
-      contents: write # Create the protected GitHub prerelease and attach its verified assets.
+      id-token: write # Exchange GitHub OIDC identity for a short-lived npm publish credential.
     env:
+      NPM_PACKAGE: "@crewhelm/cli"
+      NPM_REGISTRY_DOCUMENT: https://registry.npmjs.org/@crewhelm%2fcli
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Download release package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: crewhelm-cli-release
+          path: release
+      - name: Install Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.18.0
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+      - name: Verify release artifact shape
+        run: |
+          mapfile -t package_files < <(find release -maxdepth 1 -type f -name '*.tgz' -printf '%f\n')
+          if [[ "${#package_files[@]}" -ne 1 ]]; then
+            echo "Release artifact must contain exactly one package." >&2
+            exit 1
+          fi
+          expected_files="$(printf '%s\n' SHA256SUMS release.json "${package_files[0]}" | sort)"
+          actual_files="$(find release -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)"
+          if [[ "$actual_files" != "$expected_files" ]]; then
+            echo "Release artifact contains an unexpected file set." >&2
+            exit 1
+          fi
+      - name: Verify release checksums
+        run: cd release && sha256sum --check SHA256SUMS
+      - name: Publish npm package
+        run: |
+          shopt -s nullglob
+          package_files=(release/*.tgz)
+          if [[ "${#package_files[@]}" -ne 1 ]]; then
+            echo "Release artifact must contain exactly one package." >&2
+            exit 1
+          fi
+
+          package_path="${package_files[0]}"
+          release_version="$(
+            jq -er --arg release_tag "$RELEASE_TAG" \
+              '.cliVersion as $version | select(.releaseTag == $release_tag) | $version | select(type == "string" and length > 0)' \
+              release/release.json
+          )"
+          expected_integrity="sha512-$(openssl dgst -sha512 -binary "$package_path" | openssl base64 -A)"
+          registry_document="$(mktemp)"
+
+          read_registry() {
+            registry_code="$(
+              curl --silent --show-error --output "$registry_document" --write-out '%{http_code}' \
+                "$NPM_REGISTRY_DOCUMENT"
+            )"
+            if [[ "$registry_code" != "200" && "$registry_code" != "404" ]]; then
+              echo "npm registry returned HTTP $registry_code." >&2
+              exit 1
+            fi
+          }
+
+          read_integrity() {
+            if [[ "$registry_code" == "404" ]]; then
+              return
+            fi
+            jq -er --arg version "$release_version" '.versions[$version].dist.integrity // empty' \
+              "$registry_document" 2>/dev/null || true
+          }
+
+          read_beta_version() {
+            if [[ "$registry_code" == "404" ]]; then
+              return
+            fi
+            jq -er '."dist-tags".beta // empty' "$registry_document" 2>/dev/null || true
+          }
+
+          read_registry
+          published_integrity="$(read_integrity)"
+          if [[ -n "$published_integrity" && "$published_integrity" != "$expected_integrity" ]]; then
+            echo "Published npm package integrity does not match the release artifact." >&2
+            exit 1
+          fi
+          if [[ -n "$published_integrity" && "$(read_beta_version)" != "$release_version" ]]; then
+            echo "The npm beta tag does not resolve to the release version." >&2
+            exit 1
+          fi
+          if [[ -z "$published_integrity" ]]; then
+            npm publish "$package_path" --access public --tag beta --ignore-scripts
+          fi
+
+          for attempt in {1..12}; do
+            read_registry
+            published_integrity="$(read_integrity)"
+            published_beta="$(read_beta_version)"
+            if [[
+              "$published_integrity" == "$expected_integrity" &&
+              "$published_beta" == "$release_version"
+            ]]; then
+              exit 0
+            fi
+            if [[ -n "$published_integrity" ]]; then
+              echo "Published npm package integrity does not match the release artifact." >&2
+              exit 1
+            fi
+            if [[ "$attempt" -lt 12 ]]; then
+              sleep 10
+            fi
+          done
+
+          echo "Published npm package did not become publicly readable." >&2
+          exit 1
+
+  release:
+    name: Create GitHub prerelease
+    needs: [package, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # Create the GitHub prerelease and attach its verified assets.
+    env:
+      GH_REPO: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ github.ref_name }}
     steps:
@@ -75,19 +194,58 @@ jobs:
         with:
           name: crewhelm-cli-release
           path: release
+      - name: Verify release artifact shape
+        run: |
+          mapfile -t package_files < <(find release -maxdepth 1 -type f -name '*.tgz' -printf '%f\n')
+          if [[ "${#package_files[@]}" -ne 1 ]]; then
+            echo "Release artifact must contain exactly one package." >&2
+            exit 1
+          fi
+          expected_files="$(printf '%s\n' SHA256SUMS release.json "${package_files[0]}" | sort)"
+          actual_files="$(find release -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)"
+          if [[ "$actual_files" != "$expected_files" ]]; then
+            echo "Release artifact contains an unexpected file set." >&2
+            exit 1
+          fi
       - name: Verify release checksums
         run: cd release && sha256sum --check SHA256SUMS
       - name: Prepare GitHub draft
+        id: github-release
         run: |
-          release_state="$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null || true)"
-          if [[ "$release_state" == "false" ]]; then
-            echo "Release already exists and is not a draft." >&2
-            exit 1
+          release_state="$(
+            gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json isDraft,isPrerelease \
+              --jq '[.isDraft, .isPrerelease] | @tsv' 2>/dev/null || true
+          )"
+          if [[ "$release_state" == $'true\tfalse' ]]; then
+            gh release delete "$RELEASE_TAG" --repo "$GH_REPO" --yes
+            release_state=""
           fi
           if [[ -z "$release_state" ]]; then
-            gh release create "$RELEASE_TAG" --draft --generate-notes --title "Crewhelm CLI $RELEASE_TAG" --verify-tag
+            gh release create "$RELEASE_TAG" --repo "$GH_REPO" --draft --generate-notes \
+              --title "Crewhelm CLI $RELEASE_TAG" --verify-tag
+            release_state=$'true\tfalse'
+          fi
+          if [[ "$release_state" == $'true\tfalse' ]]; then
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$release_state" == $'false\ttrue' ]]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Existing GitHub release is neither a draft nor a prerelease." >&2
+            exit 1
           fi
       - name: Upload release assets
-        run: gh release upload "$RELEASE_TAG" release/* --clobber
+        if: steps.github-release.outputs.published == 'false'
+        run: gh release upload "$RELEASE_TAG" release/* --repo "$GH_REPO" --clobber
       - name: Publish GitHub prerelease
-        run: gh release edit "$RELEASE_TAG" --draft=false --prerelease
+        if: steps.github-release.outputs.published == 'false'
+        run: gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --draft=false --prerelease
+      - name: Verify existing GitHub prerelease
+        if: steps.github-release.outputs.published == 'true'
+        run: |
+          published_release="$(mktemp -d)"
+          gh release download "$RELEASE_TAG" --repo "$GH_REPO" --dir "$published_release"
+          diff \
+            <(find release -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort) \
+            <(find "$published_release" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)
+          cmp release/SHA256SUMS "$published_release/SHA256SUMS"
+          (cd "$published_release" && sha256sum --check SHA256SUMS)
