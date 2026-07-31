@@ -75,6 +75,13 @@ import {
   type PublishAgentBlueprintResult,
   type RetireAgentBlueprintResult,
   type DeleteAgentSessionResult,
+  type CancelAgentWorkflowResult,
+  type CompleteAgentWorkflowStageResult,
+  type DeleteAgentWorkflowResult,
+  type DispatchAgentWorkflowStageResult,
+  type InspectAgentWorkflowResult,
+  type ListAgentWorkflowsResult,
+  type StartAgentWorkflowResult,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
 import { and, count, desc, eq, gte, isNull, lt, lte } from "drizzle-orm";
@@ -127,6 +134,7 @@ import { recordScheduleEvent } from "../observability/schedules.js";
 import { AgentSchedules, deniedAgentSchedule, type DueAgentSchedule } from "./schedules/index.js";
 import { AiGatewayUsage } from "./usage/index.js";
 import { R2SkillPackageObjectStore, Skills, deniedSkill } from "./skills/index.js";
+import { AgentWorkflows } from "./workflows/index.js";
 
 const INVALID_RUN_ADMISSION = {
   error: {
@@ -185,6 +193,7 @@ export class OwnerControlPlane extends DurableObject {
   readonly #fleetConfigurations: FleetConfigurations;
   readonly #aiGatewayUsage: AiGatewayUsage;
   readonly #skills: Skills;
+  readonly #workflows: AgentWorkflows;
 
   constructor(state: DurableObjectState, environment: Cloudflare.Env) {
     super(state, environment);
@@ -241,6 +250,14 @@ export class OwnerControlPlane extends DurableObject {
       this.#runAdmissions,
       this.#toolExecutions,
       () => this.#fleetConfigurations.currentData(),
+    );
+    this.#workflows = new AgentWorkflows(
+      this.#objectName,
+      this.#database,
+      this.#storage,
+      environment.CREW_AGENT,
+      this.#agentChannel,
+      () => this.#fleetConfigurations.current(),
     );
     this.#storage.sql.exec("PRAGMA foreign_keys = ON");
     void this.ctx.blockConcurrencyWhile(async () => {
@@ -302,6 +319,7 @@ export class OwnerControlPlane extends DurableObject {
             unresolvedEffects: this.#toolExecutions.unresolvedCount(),
           },
           skills: this.#skills.usage(),
+          workflows: this.#workflows.usage(),
           ...this.#agentChannel.usage(),
         },
       },
@@ -623,6 +641,100 @@ export class OwnerControlPlane extends DurableObject {
       : deniedStartRun(authorization.code);
   }
 
+  async startAgentWorkflow(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<StartAgentWorkflowResult> {
+    const authorization = this.#authorize(authorityInput, RUNS_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#workflows.start(authorization.authority, input)
+      : {
+          error: { code: authorization.code, message: "Agent workflow request denied." },
+          ok: false,
+        };
+  }
+
+  listAgentWorkflows(authorityInput: unknown, input: unknown): ListAgentWorkflowsResult {
+    const authorization = this.#authorize(authorityInput, AGENTS_READ_SCOPE);
+
+    return authorization.ok
+      ? this.#workflows.list(input)
+      : {
+          error: { code: authorization.code, message: "Agent workflow request denied." },
+          ok: false,
+        };
+  }
+
+  inspectAgentWorkflow(authorityInput: unknown, input: unknown): InspectAgentWorkflowResult {
+    const authorization = this.#authorize(authorityInput, AGENTS_READ_SCOPE);
+
+    return authorization.ok
+      ? this.#workflows.inspect(input)
+      : {
+          error: { code: authorization.code, message: "Agent workflow request denied." },
+          ok: false,
+        };
+  }
+
+  async cancelAgentWorkflow(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<CancelAgentWorkflowResult> {
+    const authorization = this.#authorize(authorityInput, RUNS_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#workflows.cancel(authorization.authority, input)
+      : {
+          error: { code: authorization.code, message: "Agent workflow request denied." },
+          ok: false,
+        };
+  }
+
+  async deleteAgentWorkflow(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<DeleteAgentWorkflowResult> {
+    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#workflows.delete(authorization.authority, input)
+      : {
+          error: { code: authorization.code, message: "Agent workflow request denied." },
+          ok: false,
+        };
+  }
+
+  dispatchAgentWorkflowStage(input: unknown): Promise<DispatchAgentWorkflowStageResult> {
+    return this.#migrationReady
+      ? this.#workflows.dispatch(input)
+      : Promise.resolve({
+          error: { code: "incompatible_schema", message: "Agent workflow request denied." },
+          ok: false,
+        });
+  }
+
+  completeAgentWorkflowStage(input: unknown): Promise<CompleteAgentWorkflowStageResult> {
+    return this.#migrationReady
+      ? this.#workflows.complete(input)
+      : Promise.resolve({
+          error: { code: "incompatible_schema", message: "Agent workflow request denied." },
+          ok: false,
+        });
+  }
+
+  markAgentWorkflowStageWaiting(input: unknown): boolean {
+    return this.#migrationReady && this.#workflows.markWaiting(input);
+  }
+
+  verifyAgentWorkflowRuntime(input: unknown): boolean {
+    return this.#migrationReady && this.#workflows.verifyRuntime(input);
+  }
+
+  async failAgentWorkflowRuntime(input: unknown): Promise<boolean> {
+    return this.#migrationReady ? this.#workflows.failRuntime(input) : false;
+  }
+
   async cancelRun(authorityInput: unknown, input: unknown): Promise<CancelRunResult> {
     const authorization = this.#authorize(authorityInput, RUNS_WRITE_SCOPE);
 
@@ -831,6 +943,8 @@ export class OwnerControlPlane extends DurableObject {
       this.#agentChannel.repairFailedRun(runId);
     }
     this.#runAdmissions.cleanup(currentTime);
+    await this.#workflows.cleanup(currentTime);
+    await this.#workflows.recoverQueued();
     const dueSchedules = this.#agentSchedules.claimDue(currentTime);
     const dispatches = await Promise.allSettled(
       dueSchedules.map((schedule) => this.#dispatchScheduledRun(schedule, currentTime)),
@@ -854,6 +968,7 @@ export class OwnerControlPlane extends DurableObject {
     const nextRunCleanup = this.#runAdmissions.nextCleanupAt();
     const nextScheduledRun = this.#agentSchedules.nextAlarmAt();
     const nextToolReconciliation = this.#toolExecutions.nextReconciliationAt();
+    const nextWorkflowAction = this.#workflows.nextAlarmAt();
     const nextAiUsageReconciliation = this.#aiGatewayUsage.nextReconciliationAt();
     const nextAlarm =
       [
@@ -862,6 +977,7 @@ export class OwnerControlPlane extends DurableObject {
         nextRunCleanup,
         nextScheduledRun,
         nextToolReconciliation,
+        nextWorkflowAction,
       ]
         .filter((candidate): candidate is number => candidate !== null)
         .toSorted((left, right) => left - right)[0] ?? null;

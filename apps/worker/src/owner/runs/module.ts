@@ -232,15 +232,19 @@ function canonicalRequest(input: {
     | { branchId: string; expectedBranchRevision: number; sessionId: string }
     | undefined;
   expectedRevision: number;
+  expectedFleetRevision: number | null;
   promptCharacters: number;
   promptDigest: string;
   scheduleRevision: number | null;
-  trigger: "manual" | "schedule";
+  trigger: "manual" | "schedule" | "workflow";
 }): string {
   return JSON.stringify({
     agentId: input.agentId,
     ...(input.continuation === undefined ? {} : { continuation: input.continuation }),
     expectedRevision: input.expectedRevision,
+    ...(input.expectedFleetRevision === null
+      ? {}
+      : { expectedFleetRevision: input.expectedFleetRevision }),
     promptCharacters: input.promptCharacters,
     promptDigest: input.promptDigest,
     ...(input.scheduleRevision === null ? {} : { scheduleRevision: input.scheduleRevision }),
@@ -280,12 +284,19 @@ export class RunAdmissions {
     }
 
     const requestDigest = await digestBase64Url(canonicalRequest(request.data));
-    const fleetConfiguration = this.#currentFleetConfiguration();
     const currentTime = Date.now();
-    const expiresAt = currentTime + RUN_ADMISSION_LIFETIME_MS;
-    const cleanupAt = currentTime + fleetConfiguration.data.retention.runSeconds * 1_000;
     const nonce = createNonce();
     const nonceDigest = await digestBase64Url(nonce);
+    const fleetConfiguration = this.#currentFleetConfiguration();
+    const expiresAt = currentTime + RUN_ADMISSION_LIFETIME_MS;
+    const cleanupAt = currentTime + fleetConfiguration.data.retention.runSeconds * 1_000;
+
+    if (
+      request.data.expectedFleetRevision !== null &&
+      request.data.expectedFleetRevision !== fleetConfiguration.revision
+    ) {
+      return this.#deniedRequest("revision_conflict");
+    }
 
     const result = this.#database.transaction((transaction) => {
       this.#cleanup(transaction, currentTime);
@@ -357,6 +368,7 @@ export class RunAdmissions {
             promptDigest: existing.promptDigest,
             runId: existing.runId,
             scheduleRevision: existing.scheduleRevision,
+            trigger: existing.trigger,
           }),
           state: "issued",
         });
@@ -511,6 +523,7 @@ export class RunAdmissions {
           promptDigest: request.data.promptDigest,
           runId,
           scheduleRevision: request.data.scheduleRevision,
+          trigger: request.data.trigger,
         }),
         state: "issued",
       });
@@ -1271,6 +1284,7 @@ export class RunAdmissions {
       row.agentRevision === permit.agentRevision &&
       row.promptDigest === permit.promptDigest &&
       row.scheduleRevision === permit.scheduleRevision &&
+      row.trigger === permit.trigger &&
       sameBudgetReservation(row.budgetReservation, permit.budgetReservation) &&
       row.expiresAt === Date.parse(permit.expiresAt)
     );
@@ -1304,6 +1318,7 @@ export class RunAdmissions {
     promptDigest: string;
     runId: string;
     scheduleRevision: number | null;
+    trigger: RunAdmissionPermit["trigger"];
   }): RunAdmissionPermit {
     return runAdmissionPermitSchema.parse({
       agentId: input.agentId,
@@ -1320,6 +1335,7 @@ export class RunAdmissions {
       promptDigest: input.promptDigest,
       runId: input.runId,
       scheduleRevision: input.scheduleRevision,
+      trigger: input.trigger,
     });
   }
 

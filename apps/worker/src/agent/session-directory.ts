@@ -1,6 +1,9 @@
 import {
   acceptRunAdmissionInputSchema,
   acceptRunAdmissionResultSchema,
+  agentTaskWorkflowParamsSchema,
+  agentWorkflowIdSchema,
+  agentWorkflowRunEventSchema,
   branchIdSchema,
   continuationFromRunSession,
   crewAgentObjectName,
@@ -9,6 +12,7 @@ import {
   deleteAgentSessionResultSchema,
   inspectAgentSessionResultSchema,
   listAgentSessionsResultSchema,
+  MAXIMUM_ACTIVE_AGENT_WORKFLOWS_PER_OWNER,
   MAXIMUM_AGENT_SESSIONS,
   runIdSchema,
   runSessionSchema,
@@ -23,8 +27,14 @@ import {
   type SessionContinuation,
   type SessionSummary,
 } from "@crewhelm/contracts";
+import { Agent } from "agents";
 import * as z from "zod";
 
+import {
+  AGENT_TASK_WORKFLOW_AGENT_BINDING,
+  AGENT_TASK_WORKFLOW_BINDING,
+  agentWorkflowStageEventType,
+} from "../agent-workflows/index.js";
 import { CrewSession } from "./admitted-runs/index.js";
 
 const SESSION_RECORD_PREFIX = "crewhelm:session:";
@@ -33,6 +43,33 @@ const SESSION_RUN_INDEX_PREFIX = "crewhelm:session-run:";
 const SESSION_DELETE_PREFIX = "crewhelm:session-delete:";
 const SESSION_DELETE_INTENT_PREFIX = "crewhelm:session-deletion-intent:";
 const SESSION_RUN_PAGE_SIZE = 50;
+const AGENT_WORKFLOW_RECORD_PREFIX = "crewhelm:agent-workflow:";
+const AGENT_WORKFLOW_RUN_PREFIX = "crewhelm:agent-workflow-run:";
+const AGENT_WORKFLOW_RUN_INDEX_PREFIX = "crewhelm:agent-workflow-run-index:";
+const AGENT_WORKFLOW_PENDING_PREFIX = "crewhelm:agent-workflow-pending:";
+const AGENT_WORKFLOW_CLIENT_PREFIX = "crewhelm:workflow:";
+
+const agentWorkflowDirectoryRecordSchema = agentTaskWorkflowParamsSchema.extend({
+  startedAt: z.number().int().positive(),
+});
+
+const agentWorkflowRunDirectoryRecordSchema = z.strictObject({
+  delivered: z.boolean(),
+  runId: runIdSchema,
+  session: runSessionSchema,
+  stageIndex: z.number().int().min(0).max(7),
+  terminalStatus: z.enum(["cancelled", "completed", "failed"]).nullable(),
+  workflowId: agentWorkflowIdSchema,
+});
+
+const attachAgentWorkflowRunSchema = agentWorkflowRunDirectoryRecordSchema
+  .omit({ delivered: true, terminalStatus: true })
+  .extend({ agentId: z.string().min(1), ownerKey: z.string().min(1) });
+
+const workflowCallbackSchema = z.looseObject({
+  workflowId: agentWorkflowIdSchema,
+  workflowName: z.literal(AGENT_TASK_WORKFLOW_BINDING),
+});
 
 const sessionDirectoryRecordSchema = z.strictObject({
   activeRunId: runIdSchema.nullable(),
@@ -46,6 +83,7 @@ const sessionDirectoryRecordSchema = z.strictObject({
   sessionId: sessionIdSchema,
   updatedAt: z.number().int().positive(),
   visible: z.boolean(),
+  workflowId: agentWorkflowIdSchema.nullable().default(null),
 });
 
 const runSessionDirectoryRecordSchema = z.strictObject({
@@ -76,6 +114,7 @@ const listSessionRunIdsRequestSchema = inspectSessionRequestSchema.extend({
 const deleteSessionRequestSchema = inspectSessionRequestSchema.extend({
   expectedBranchRevision: z.number().int().positive().safe(),
   idempotencyKey: z.string().min(1).max(128),
+  workflowId: agentWorkflowIdSchema.nullable().default(null),
 });
 
 const sessionDeleteReceiptSchema = z.strictObject({
@@ -117,12 +156,38 @@ function sessionDeleteIntentKey(idempotencyKey: string): string {
   return `${SESSION_DELETE_INTENT_PREFIX}${idempotencyKey}`;
 }
 
+function agentWorkflowRecordKey(workflowId: string): string {
+  return `${AGENT_WORKFLOW_RECORD_PREFIX}${workflowId}`;
+}
+
+function agentWorkflowRunKey(runId: string): string {
+  return `${AGENT_WORKFLOW_RUN_PREFIX}${runId}`;
+}
+
+function agentWorkflowRunIndexKey(workflowId: string, runId: string): string {
+  return `${AGENT_WORKFLOW_RUN_INDEX_PREFIX}${workflowId}:${runId}`;
+}
+
+function agentWorkflowPendingKey(runId: string): string {
+  return `${AGENT_WORKFLOW_PENDING_PREFIX}${runId}`;
+}
+
 function newSessionId(): string {
   return `session_${crypto.randomUUID()}`;
 }
 
 function newBranchId(): string {
   return `branch_${crypto.randomUUID()}`;
+}
+
+function workflowIdFromPermit(trigger: string, clientId: string): string | null | undefined {
+  if (trigger !== "workflow") return null;
+  if (!clientId.startsWith(AGENT_WORKFLOW_CLIENT_PREFIX)) return undefined;
+
+  const parsed = agentWorkflowIdSchema.safeParse(
+    clientId.slice(AGENT_WORKFLOW_CLIENT_PREFIX.length),
+  );
+  return parsed.success ? parsed.data : undefined;
 }
 
 function sessionProjection(record: SessionDirectoryRecord): SessionSummary {
@@ -144,12 +209,289 @@ const invalidAdmission = {
 } as const;
 
 export class CrewAgent extends CrewSession {
+  override async onStart(): Promise<void> {
+    await super.onStart();
+
+    if (!this.durableSessionsEnabled() || !this.ctx.id.name?.startsWith("crew-agent:")) {
+      return;
+    }
+
+    await this.#recoverAgentWorkflowRunEvents();
+  }
+
   protected durableSessionsEnabled(): boolean {
     return true;
   }
 
   protected sessionNamespace(): DurableObjectNamespace<CrewSession> {
     return this.env.CREW_SESSION;
+  }
+
+  async ensureAgentTaskWorkflow(input: unknown): Promise<boolean> {
+    const request = agentTaskWorkflowParamsSchema.safeParse(input);
+
+    if (!request.success || !this.#directoryMatches(request.data)) {
+      return false;
+    }
+
+    const verified = await this.env.OWNER_CONTROL_PLANE.getByName(
+      request.data.ownerKey,
+    ).verifyAgentWorkflowRuntime({
+      agentId: request.data.agentId,
+      stageCount: request.data.stageCount,
+      workflowId: request.data.workflowId,
+    });
+
+    if (!verified) {
+      return false;
+    }
+
+    const key = agentWorkflowRecordKey(request.data.workflowId);
+    const stored = agentWorkflowDirectoryRecordSchema.safeParse(await this.ctx.storage.get(key));
+
+    if (stored.success) {
+      if (
+        stored.data.agentId !== request.data.agentId ||
+        stored.data.ownerKey !== request.data.ownerKey ||
+        stored.data.stageCount !== request.data.stageCount
+      ) {
+        return false;
+      }
+    } else {
+      await this.ctx.storage.put(key, {
+        ...request.data,
+        startedAt: Date.now(),
+      });
+    }
+
+    if (Agent.prototype.getWorkflow.call(this, request.data.workflowId) !== undefined) {
+      return true;
+    }
+
+    if (this.env.AGENT_TASK_WORKFLOW === undefined) {
+      return false;
+    }
+
+    const instanceId = z.string().parse(
+      await Reflect.apply(Reflect.get(Agent.prototype, "runWorkflow"), this, [
+        AGENT_TASK_WORKFLOW_BINDING,
+        request.data,
+        {
+          agentBinding: AGENT_TASK_WORKFLOW_AGENT_BINDING,
+          id: request.data.workflowId,
+          metadata: {
+            agentId: request.data.agentId,
+            stageCount: request.data.stageCount,
+          },
+        },
+      ]),
+    );
+    return instanceId === request.data.workflowId;
+  }
+
+  async attachAgentTaskWorkflowRun(input: unknown): Promise<boolean> {
+    const request = attachAgentWorkflowRunSchema.safeParse(input);
+
+    if (!request.success || !this.#directoryMatches(request.data)) {
+      return false;
+    }
+
+    const workflow = agentWorkflowDirectoryRecordSchema.safeParse(
+      await this.ctx.storage.get(agentWorkflowRecordKey(request.data.workflowId)),
+    );
+
+    if (!workflow.success || request.data.stageIndex >= workflow.data.stageCount) {
+      return false;
+    }
+
+    const key = agentWorkflowRunKey(request.data.runId);
+    const existing = agentWorkflowRunDirectoryRecordSchema.safeParse(
+      await this.ctx.storage.get(key),
+    );
+    const mapping = agentWorkflowRunDirectoryRecordSchema.parse({
+      delivered: false,
+      runId: request.data.runId,
+      session: request.data.session,
+      stageIndex: request.data.stageIndex,
+      terminalStatus: null,
+      workflowId: request.data.workflowId,
+    });
+
+    if (existing.success && JSON.stringify(existing.data) !== JSON.stringify(mapping)) {
+      if (
+        existing.data.runId !== mapping.runId ||
+        existing.data.workflowId !== mapping.workflowId ||
+        existing.data.stageIndex !== mapping.stageIndex ||
+        JSON.stringify(existing.data.session) !== JSON.stringify(mapping.session)
+      ) {
+        return false;
+      }
+    } else if (!existing.success) {
+      await this.ctx.storage.put({
+        [agentWorkflowRunIndexKey(mapping.workflowId, mapping.runId)]: true,
+        [agentWorkflowPendingKey(mapping.runId)]: true,
+        [key]: mapping,
+      });
+    }
+
+    await this.#deliverAgentWorkflowRunEvent(request.data.runId);
+    return true;
+  }
+
+  async markSessionRunWaiting(input: unknown): Promise<boolean> {
+    const request = z.strictObject({ runId: runIdSchema }).safeParse(input);
+
+    if (!request.success) {
+      return false;
+    }
+
+    const mapping = agentWorkflowRunDirectoryRecordSchema.safeParse(
+      await this.ctx.storage.get(agentWorkflowRunKey(request.data.runId)),
+    );
+
+    if (!mapping.success) {
+      return false;
+    }
+
+    const identity = this.#agentIdentity();
+    return this.env.OWNER_CONTROL_PLANE.getByName(identity.ownerKey).markAgentWorkflowStageWaiting({
+      agentId: identity.agentId,
+      runId: mapping.data.runId,
+      stageIndex: mapping.data.stageIndex,
+      workflowId: mapping.data.workflowId,
+    });
+  }
+
+  async deliverAgentWorkflowRunEvent(input: unknown): Promise<void> {
+    const request = z.strictObject({ runId: runIdSchema }).safeParse(input);
+
+    if (request.success) {
+      await this.#deliverAgentWorkflowRunEvent(request.data.runId);
+    }
+  }
+
+  async #recoverAgentWorkflowRunEvents(): Promise<void> {
+    if (!this.ctx.id.name?.startsWith("crew-agent:")) {
+      return;
+    }
+
+    const pending = await this.ctx.storage.list<boolean>({
+      limit: MAXIMUM_ACTIVE_AGENT_WORKFLOWS_PER_OWNER,
+      prefix: AGENT_WORKFLOW_PENDING_PREFIX,
+    });
+
+    for (const key of pending.keys()) {
+      await this.#deliverAgentWorkflowRunEvent(key.slice(AGENT_WORKFLOW_PENDING_PREFIX.length));
+    }
+  }
+
+  async cancelAgentTaskWorkflow(input: unknown): Promise<boolean> {
+    const request = z
+      .strictObject({ ownerKey: z.string().min(1), workflowId: agentWorkflowIdSchema })
+      .safeParse(input);
+
+    if (!request.success || this.#agentIdentity().ownerKey !== request.data.ownerKey) {
+      return false;
+    }
+
+    const workflow = agentWorkflowDirectoryRecordSchema.safeParse(
+      await this.ctx.storage.get(agentWorkflowRecordKey(request.data.workflowId)),
+    );
+
+    if (!workflow.success) {
+      return false;
+    }
+
+    const tracked = Agent.prototype.getWorkflow.call(this, request.data.workflowId);
+
+    if (tracked !== undefined && !["complete", "errored", "terminated"].includes(tracked.status)) {
+      try {
+        await Agent.prototype.terminateWorkflow.call(this, request.data.workflowId);
+      } catch {
+        return false;
+      }
+    }
+
+    await this.#sealAgentWorkflowRunDeliveries(request.data.workflowId);
+
+    return true;
+  }
+
+  async deleteAgentTaskWorkflow(input: unknown): Promise<boolean> {
+    const request = z
+      .strictObject({ ownerKey: z.string().min(1), workflowId: agentWorkflowIdSchema })
+      .safeParse(input);
+
+    if (!request.success || this.#agentIdentity().ownerKey !== request.data.ownerKey) {
+      return false;
+    }
+
+    const workflowKey = agentWorkflowRecordKey(request.data.workflowId);
+    const workflow = agentWorkflowDirectoryRecordSchema.safeParse(
+      await this.ctx.storage.get(workflowKey),
+    );
+
+    if (!workflow.success) {
+      return true;
+    }
+
+    const tracked = Agent.prototype.getWorkflow.call(this, request.data.workflowId);
+
+    if (tracked !== undefined && !["complete", "errored", "terminated"].includes(tracked.status)) {
+      try {
+        await Agent.prototype.terminateWorkflow.call(this, request.data.workflowId);
+      } catch {
+        return false;
+      }
+    }
+
+    Agent.prototype.deleteWorkflow.call(this, request.data.workflowId);
+    const indexes = await this.ctx.storage.list({
+      prefix: `${AGENT_WORKFLOW_RUN_INDEX_PREFIX}${request.data.workflowId}:`,
+    });
+    const keys = [workflowKey, ...indexes.keys()];
+
+    for (const key of indexes.keys()) {
+      const runId = key.slice(key.lastIndexOf(":") + 1);
+      keys.push(agentWorkflowPendingKey(runId), agentWorkflowRunKey(runId));
+    }
+
+    await this.ctx.storage.delete(keys);
+    return true;
+  }
+
+  override async _workflow_handleCallback(...args: unknown[]): Promise<void> {
+    const callback = args[0];
+    const request = workflowCallbackSchema.safeParse(callback);
+
+    if (
+      !request.success ||
+      !agentWorkflowDirectoryRecordSchema.safeParse(
+        await this.ctx.storage.get(agentWorkflowRecordKey(request.data.workflowId)),
+      ).success
+    ) {
+      throw new Error("CrewAgent workflow callback denied.");
+    }
+
+    await Reflect.apply(Reflect.get(Agent.prototype, "_workflow_handleCallback"), this, [callback]);
+
+    if (request.data.type === "error") {
+      const workflow = agentWorkflowDirectoryRecordSchema.parse(
+        await this.ctx.storage.get(agentWorkflowRecordKey(request.data.workflowId)),
+      );
+      const failed = await this.env.OWNER_CONTROL_PLANE.getByName(
+        workflow.ownerKey,
+      ).failAgentWorkflowRuntime({
+        agentId: workflow.agentId,
+        workflowId: workflow.workflowId,
+      });
+
+      if (!failed) {
+        throw new Error("CrewAgent workflow failure projection is unavailable.");
+      }
+
+      await this.#sealAgentWorkflowRunDeliveries(workflow.workflowId);
+    }
   }
 
   override async acceptRunAdmission(input: unknown): Promise<AcceptRunAdmissionResult> {
@@ -169,6 +511,15 @@ export class CrewAgent extends CrewSession {
         : invalidAdmission;
     }
 
+    const workflowId = workflowIdFromPermit(
+      request.data.permit.trigger,
+      request.data.permit.clientId,
+    );
+
+    if (workflowId === undefined) {
+      return invalidAdmission;
+    }
+
     const prepared = await this.#prepareSession(
       request.data.permit.ownerKey,
       request.data.permit.agentId,
@@ -180,8 +531,9 @@ export class CrewAgent extends CrewSession {
           request.data.permit.budgetReservation.retentionSeconds,
         ) *
           1_000,
-      true,
+      workflowId === null,
       request.data.continuation,
+      workflowId,
     );
 
     if (!prepared.ok) {
@@ -337,6 +689,7 @@ export class CrewAgent extends CrewSession {
       updatedAt: Date.now(),
     });
     await this.#scheduleSessionCleanup();
+    await this.#deliverAgentWorkflowRunEvent(request.data.runId);
     return true;
   }
 
@@ -425,7 +778,11 @@ export class CrewAgent extends CrewSession {
 
     const record = await this.#readAvailableSession(request.data.sessionId);
 
-    if (record === undefined || !record.visible) {
+    if (
+      record === undefined ||
+      record.workflowId !== request.data.workflowId ||
+      (request.data.workflowId === null && !record.visible)
+    ) {
       return {
         error: { code: "session_not_found", message: "Session deletion denied." },
         ok: false,
@@ -462,7 +819,11 @@ export class CrewAgent extends CrewSession {
         return { code: "invalid_request", ok: false } as const;
       }
 
-      if (!current.success || current.data.branchRevision !== request.data.expectedBranchRevision) {
+      if (!current.success || current.data.workflowId !== request.data.workflowId) {
+        return { code: "session_not_found", ok: false } as const;
+      }
+
+      if (current.data.branchRevision !== request.data.expectedBranchRevision) {
         return { code: "revision_conflict", ok: false } as const;
       }
 
@@ -603,6 +964,103 @@ export class CrewAgent extends CrewSession {
     };
   }
 
+  async #deliverAgentWorkflowRunEvent(runId: string): Promise<void> {
+    const key = agentWorkflowRunKey(runId);
+    const parsed = agentWorkflowRunDirectoryRecordSchema.safeParse(await this.ctx.storage.get(key));
+
+    if (!parsed.success || parsed.data.delivered) {
+      await this.ctx.storage.delete(agentWorkflowPendingKey(runId));
+      return;
+    }
+    let mapping = parsed.data;
+
+    if (mapping.terminalStatus === null) {
+      let status: unknown;
+
+      try {
+        status = await this.#session(mapping.session).inspectSessionRunState({
+          runId,
+          session: mapping.session,
+        });
+      } catch {
+        await this.#scheduleAgentWorkflowRunDelivery(runId);
+        return;
+      }
+
+      const terminal = z.enum(["cancelled", "completed", "failed"]).safeParse(status);
+
+      if (!terminal.success) {
+        await this.#scheduleAgentWorkflowRunDelivery(runId);
+        return;
+      }
+
+      const updated = agentWorkflowRunDirectoryRecordSchema.parse({
+        ...mapping,
+        terminalStatus: terminal.data,
+      });
+      await this.ctx.storage.put(key, updated);
+      mapping = updated;
+    }
+
+    try {
+      await Reflect.apply(Reflect.get(Agent.prototype, "sendWorkflowEvent"), this, [
+        AGENT_TASK_WORKFLOW_BINDING,
+        mapping.workflowId,
+        {
+          payload: agentWorkflowRunEventSchema.parse({
+            runId: mapping.runId,
+            stageIndex: mapping.stageIndex,
+            status: mapping.terminalStatus,
+            workflowId: mapping.workflowId,
+          }),
+          type: agentWorkflowStageEventType(mapping.stageIndex),
+        },
+      ]);
+      const current = agentWorkflowRunDirectoryRecordSchema.safeParse(
+        await this.ctx.storage.get(key),
+      );
+
+      if (
+        current.success &&
+        !current.data.delivered &&
+        JSON.stringify(current.data) === JSON.stringify(mapping)
+      ) {
+        await this.ctx.storage.put(key, { ...current.data, delivered: true });
+        await this.ctx.storage.delete(agentWorkflowPendingKey(runId));
+      }
+    } catch {
+      await this.#scheduleAgentWorkflowRunDelivery(runId);
+    }
+  }
+
+  async #scheduleAgentWorkflowRunDelivery(runId: string): Promise<void> {
+    await this.schedule(
+      new Date(Date.now() + 5_000),
+      "deliverAgentWorkflowRunEvent",
+      { runId },
+      { idempotent: true, retry: { maxAttempts: 5 } },
+    );
+  }
+
+  async #sealAgentWorkflowRunDeliveries(workflowId: string): Promise<void> {
+    const indexes = await this.ctx.storage.list({
+      prefix: `${AGENT_WORKFLOW_RUN_INDEX_PREFIX}${workflowId}:`,
+    });
+
+    for (const key of indexes.keys()) {
+      const runId = key.slice(key.lastIndexOf(":") + 1);
+      const mappingKey = agentWorkflowRunKey(runId);
+      const mapping = agentWorkflowRunDirectoryRecordSchema.safeParse(
+        await this.ctx.storage.get(mappingKey),
+      );
+
+      if (mapping.success && !mapping.data.delivered) {
+        await this.ctx.storage.put(mappingKey, { ...mapping.data, delivered: true });
+      }
+      await this.ctx.storage.delete(agentWorkflowPendingKey(runId));
+    }
+  }
+
   async #prepareSession(
     ownerKey: string,
     agentId: string,
@@ -611,6 +1069,7 @@ export class CrewAgent extends CrewSession {
     availableUntil: number,
     visible: boolean,
     continuation: SessionContinuation | undefined,
+    workflowId: string | null,
   ): Promise<
     | { mapping: RunSessionDirectoryRecord; ok: true }
     | { ok: false; result: AcceptRunAdmissionResult }
@@ -654,11 +1113,16 @@ export class CrewAgent extends CrewSession {
         sessionId: newSessionId(),
         updatedAt: currentTime,
         visible,
+        workflowId,
       });
     } else {
       const current = await this.#readAvailableSession(continuation.sessionId);
 
-      if (current === undefined || !current.visible) {
+      if (
+        current === undefined ||
+        current.workflowId !== workflowId ||
+        (workflowId === null && !current.visible)
+      ) {
         return {
           ok: false,
           result: {
@@ -695,7 +1159,8 @@ export class CrewAgent extends CrewSession {
 
         if (
           !refreshed.success ||
-          !refreshed.data.visible ||
+          refreshed.data.workflowId !== workflowId ||
+          (workflowId === null && !refreshed.data.visible) ||
           refreshed.data.availableUntil <= Date.now()
         ) {
           return { error: "session_not_found" as const };

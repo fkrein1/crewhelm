@@ -35,6 +35,7 @@ import {
   integrationToolSearchResultSchema,
   listAgentRevisionsResultSchema,
   manageAgentSessionsResultSchema,
+  manageAgentWorkflowsResultSchema,
   listAgentsResultSchema,
   listConnectionsResultSchema,
   listSkillsResultSchema,
@@ -57,6 +58,7 @@ import { MCP_SERVER_INSTRUCTIONS, mcpControlPlaneStatusResultSchema } from "./gu
 
 import {
   MCP_AGENT_INBOX_TOOL_NAME,
+  MCP_AGENT_WORKFLOWS_TOOL_NAME,
   MCP_AGENT_SESSIONS_TOOL_NAME,
   MCP_DELETE_AGENT_SESSION_TOOL_NAME,
   MCP_BATCH_DISABLE_AGENTS_TOOL_NAME,
@@ -94,6 +96,7 @@ import {
 } from "./server.js";
 import { TEST_REPLY, TestCrewAgent } from "../agent/admitted-runs/test-agent.js";
 import { deriveOwnerKey } from "../owner/identity.js";
+import { CONTROL_PLANE_SCHEMA_VERSION } from "../owner/migrations.js";
 
 const origin = "https://crewhelm.test";
 const signingSecret = "test-better-auth-secret-that-is-at-least-32-bytes";
@@ -266,6 +269,9 @@ describe("authenticated MCP handler", () => {
     const deleteSessionTool = payload.result.tools.find(
       (tool) => tool.name === MCP_DELETE_AGENT_SESSION_TOOL_NAME,
     );
+    const workflowsTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_AGENT_WORKFLOWS_TOOL_NAME,
+    );
     const configureScheduleTool = payload.result.tools.find(
       (tool) => tool.name === MCP_CONFIGURE_AGENT_SCHEDULE_TOOL_NAME,
     );
@@ -346,6 +352,16 @@ describe("authenticated MCP handler", () => {
         readOnlyHint: false,
       },
     });
+    expect(workflowsTool).toMatchObject({
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: false,
+      },
+      description: expect.stringContaining("ordered durable Agent Runs"),
+    });
+    expect(JSON.stringify(workflowsTool?.inputSchema)).toContain('"stages"');
     expect(scheduleReadTools).toHaveLength(2);
     expect(scheduleReadTools.every((tool) => tool.annotations.readOnlyHint)).toBe(true);
     expect(connectionLinkTool?.annotations).toMatchObject({
@@ -490,7 +506,7 @@ describe("authenticated MCP handler", () => {
       ],
       ok: true,
       status: {
-        schemaVersion: 22,
+        schemaVersion: CONTROL_PLANE_SCHEMA_VERSION,
         status: "ready",
         usage: {
           recovery: { unresolvedEffects: 0 },
@@ -1865,6 +1881,97 @@ describe("authenticated MCP handler", () => {
       ok: true,
       run: inspected.ok ? inspected.run : undefined,
     });
+  });
+
+  it("starts and compactly inspects a durable Agent workflow through one discoverable tool", async () => {
+    const authority = await ownerAuthority("mcp-workflow-owner", [
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(authority, {
+      executionLimits: {
+        maxDurationSeconds: 45,
+        maxModelTokens: 2_000,
+        maxToolCalls: 0,
+        maxTurns: 4,
+      },
+      idempotencyKey: "mcp-workflow-agent",
+      instructions: "Complete exact workflow stages concisely.",
+      name: "MCP workflow Agent",
+    });
+
+    if (!created.ok) {
+      throw new Error("Expected MCP workflow fixture Agent.");
+    }
+
+    const startResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 30,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              action: "start",
+              agentId: created.agent.id,
+              expectedRevision: created.agent.revision,
+              idempotencyKey: "mcp-workflow-1",
+              objective: "Gather the facts, then produce a recommendation.",
+              stages: [
+                { name: "Gather", prompt: "Gather the relevant facts." },
+                { name: "Recommend", prompt: "Recommend an action using the gathered context." },
+              ],
+            },
+            name: MCP_AGENT_WORKFLOWS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const startPayload: unknown = await startResponse.json();
+    const startToolResult = jsonRpcToolResultSchema.parse(startPayload).result;
+    const started = manageAgentWorkflowsResultSchema.parse(
+      JSON.parse(startToolResult.content[0]?.text ?? ""),
+    );
+
+    expect(startToolResult.isError).toBe(false);
+    expect(started).toMatchObject({ created: true, ok: true, workflow: { stageCount: 2 } });
+    if (!("workflow" in started)) {
+      throw new Error("Expected started workflow projection.");
+    }
+
+    const inspectResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 31,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { action: "inspect", workflowId: started.workflow.workflowId },
+            name: MCP_AGENT_WORKFLOWS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const inspectPayload: unknown = await inspectResponse.json();
+    const inspectToolResult = jsonRpcToolResultSchema.parse(inspectPayload).result;
+    const inspectedText = inspectToolResult.content[0]?.text ?? "";
+
+    expect(inspectToolResult.isError).toBe(false);
+    expect(manageAgentWorkflowsResultSchema.parse(JSON.parse(inspectedText))).toMatchObject({
+      ok: true,
+      workflow: {
+        objective: "Gather the facts, then produce a recommendation.",
+        stages: [{ name: "Gather" }, { name: "Recommend" }],
+      },
+    });
+    expect(inspectedText).not.toContain("Gather the relevant facts.");
   });
 
   it("returns a fixed insufficient-scope result for read-only Agent creation", async () => {

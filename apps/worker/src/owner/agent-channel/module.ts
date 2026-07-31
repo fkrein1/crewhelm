@@ -342,6 +342,7 @@ export class AgentChannel {
   async deleteSession(
     authority: OwnerAuthority,
     input: unknown,
+    workflowId: string | null = null,
   ): Promise<DeleteAgentSessionResult> {
     const request = deleteAgentSessionInputSchema.safeParse(input);
 
@@ -365,6 +366,7 @@ export class AgentChannel {
         await agent.deleteAgentSession({
           ...request.data,
           ownerKey: authority.ownerKey,
+          workflowId,
         }),
       );
 
@@ -931,8 +933,9 @@ export class AgentChannel {
   async start(
     authority: OwnerAuthority,
     input: unknown,
-    trigger: "manual" | "schedule" = "manual",
+    trigger: "manual" | "schedule" | "workflow" = "manual",
     scheduleRevision: number | null = null,
+    expectedFleetRevision: number | null = null,
   ): Promise<StartRunResult> {
     const request = startRunInputSchema.safeParse(input);
 
@@ -942,9 +945,10 @@ export class AgentChannel {
 
     const admission = await this.#admissions.create(authority, {
       agentId: request.data.agentId,
-      ...(trigger === "manual" && request.data.continuation !== undefined
+      ...(trigger !== "schedule" && request.data.continuation !== undefined
         ? { continuation: request.data.continuation }
         : {}),
+      expectedFleetRevision,
       expectedRevision: request.data.expectedRevision,
       idempotencyKey: request.data.idempotencyKey,
       prompt: request.data.prompt,
@@ -1006,7 +1010,7 @@ export class AgentChannel {
     try {
       if (admission.state === "issued") {
         accepted = await agent.acceptRunAdmission({
-          ...(trigger === "manual" && request.data.continuation !== undefined
+          ...(trigger !== "schedule" && request.data.continuation !== undefined
             ? { continuation: request.data.continuation }
             : {}),
           permit: admission.permit,
@@ -1021,7 +1025,7 @@ export class AgentChannel {
 
         accepted = await agent.resumeRunAdmission({
           capability,
-          ...(trigger === "manual" && request.data.continuation !== undefined
+          ...(trigger !== "schedule" && request.data.continuation !== undefined
             ? { continuation: request.data.continuation }
             : {}),
           prompt: request.data.prompt,

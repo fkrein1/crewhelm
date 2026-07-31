@@ -8,7 +8,8 @@ Website: [crewhelm.app](https://crewhelm.app)
 
 The current implementation provides an authenticated, owner-scoped Agent registry; immutable
 Agent revisions; bounded manual and scheduled runs on Cloudflare Think; deterministic capability,
-approval, budget, and recovery controls; and version-pinned Composio tool discovery and execution.
+approval, budget, and recovery controls; durable ordered Agent workflows that survive MCP
+disconnects; and version-pinned Composio tool discovery and execution.
 Declarative, shareable Agent recipes are part of the longer-term product vision, not the current
 surface.
 

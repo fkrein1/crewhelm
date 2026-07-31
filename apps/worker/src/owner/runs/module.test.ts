@@ -1203,4 +1203,46 @@ describe("OwnerControlPlane runs", () => {
       fixedRunAdmissionFailure("invalid_admission"),
     );
   });
+
+  it("denies Workflow admission against a fleet revision that changed before issuance", async () => {
+    const authority = await authorityFor("236", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("create-run-agent-236"));
+    const current = await stub.getFleetConfiguration(authority, { target: { kind: "fleet" } });
+
+    if (!created.ok || !current.ok) {
+      throw new Error("Expected exact fleet-revision Workflow fixture.");
+    }
+
+    const changed = await stub.configureFleetConfiguration(authority, {
+      expectedRevision: current.configuration.revision,
+      idempotencyKey: "advance-workflow-fleet-revision-236",
+      mode: "apply",
+      patch: { schedules: { minimumIntervalSeconds: 120 } },
+      target: { kind: "fleet" },
+    });
+
+    if (!changed.ok || !changed.applied) {
+      throw new Error("Expected fleet policy revision change.");
+    }
+
+    const prompt = "Never admit this stage against a later fleet policy.";
+    await expect(
+      stub.createRunAdmission(authority, {
+        agentId: created.agent.id,
+        expectedFleetRevision: current.configuration.revision,
+        expectedRevision: created.agent.revision,
+        idempotencyKey: "stale-workflow-fleet-revision-236",
+        promptCharacters: prompt.length,
+        promptDigest: await digestRunPrompt(prompt),
+        trigger: "workflow",
+      }),
+    ).resolves.toEqual(fixedRunAdmissionFailure("revision_conflict"));
+  });
 });

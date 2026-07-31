@@ -419,6 +419,14 @@ export class CrewSession extends Think {
       if (expectedAt === undefined || when.getTime() !== expectedAt) {
         throw runtimeAdmissionError();
       }
+    } else if (callbackName === "deliverAgentWorkflowRunEvent") {
+      if (
+        !(when instanceof Date) ||
+        !z.strictObject({ runId: runIdSchema }).safeParse(payload).success ||
+        this.ctx.id.name?.startsWith("crew-agent:") !== true
+      ) {
+        throw runtimeAdmissionError();
+      }
     } else if (callbackName === "cleanupExpiredSessions") {
       if (
         !(when instanceof Date) ||
@@ -986,6 +994,7 @@ export class CrewSession extends Think {
         promptCharacters: prompt.length,
         promptDigest: permit.promptDigest,
         scheduleRevision: permit.scheduleRevision,
+        trigger: permit.trigger,
         ...(session === undefined
           ? {}
           : {
@@ -1778,6 +1787,19 @@ export class CrewSession extends Think {
         },
       }),
     );
+
+    if (record.session !== undefined && approvalCount > 0) {
+      try {
+        await this.env.CREW_AGENT.getByName(
+          crewAgentObjectName({
+            agentId: record.configuration.agentId,
+            ownerKey: record.configuration.ownerKey,
+          }),
+        ).markSessionRunWaiting({ runId });
+      } catch {
+        // Workflow inspection can reconcile the active Run even if this hint is delayed.
+      }
+    }
 
     if (record.session !== undefined && approvalCount === 0) {
       const terminalStatus: Extract<Run["status"], "cancelled" | "completed" | "failed"> =
@@ -3278,6 +3300,7 @@ export class CrewSession extends Think {
       record.clientId === permit.clientId &&
       record.idempotencyKey === permit.idempotencyKey &&
       record.scheduleRevision === permit.scheduleRevision &&
+      record.trigger === permit.trigger &&
       JSON.stringify(record.budgetReservation) === JSON.stringify(permit.budgetReservation) &&
       this.#reservationMatchesPrompt(
         record.budgetReservation,

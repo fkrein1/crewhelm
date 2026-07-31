@@ -882,4 +882,48 @@ describe("CrewAgent durable session directory", () => {
       }),
     ).resolves.toMatchObject({ error: { code: "session_not_found" }, ok: false });
   });
+
+  it("denies untracked or cross-directory Workflow entrypoints", async () => {
+    const authority = await authorityFor("crew-workflow-boundary-806");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("workflow-boundary-agent"),
+    );
+
+    if (!created.ok) {
+      throw new Error("Expected Workflow boundary Agent fixture.");
+    }
+
+    await enableSessions(authority.ownerKey, created.agent.id);
+    const parent = env.CREW_AGENT.getByName(
+      crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
+    );
+    const workflowId = "workflow_00000000-0000-4000-8000-000000000806";
+
+    await runInDurableObject(parent, async (instance) => {
+      if (!(instance instanceof TestCrewAgent)) {
+        throw new Error("Expected Workflow boundary CrewAgent.");
+      }
+
+      await expect(
+        instance.ensureAgentTaskWorkflow({
+          agentId: created.agent.id,
+          ownerKey: `${authority.ownerKey}-other`,
+          stageCount: 2,
+          workflowId,
+        }),
+      ).resolves.toBe(false);
+      const callback = Reflect.get(instance, "_workflow_handleCallback");
+      await expect(
+        Reflect.apply(callback, instance, [
+          {
+            type: "complete",
+            workflowId,
+            workflowName: "AGENT_TASK_WORKFLOW",
+          },
+        ]),
+      ).rejects.toThrow("CrewAgent workflow callback denied.");
+    });
+  });
 });

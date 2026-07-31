@@ -8,6 +8,7 @@ import {
   runBudgetReservationSchema,
   runIdSchema,
   runSessionSchema,
+  runTriggerSchema,
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
@@ -209,6 +210,7 @@ export const admittedRunRecordSchema = z.strictObject({
   promptCharacters: z.number().int().positive(),
   promptDigest: z.string().regex(/^[0-9a-f]{64}$/),
   scheduleRevision: z.number().int().positive().nullable().default(null),
+  trigger: runTriggerSchema.default("manual"),
   session: runSessionSchema.optional(),
   sessionContext: z
     .strictObject({

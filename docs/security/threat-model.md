@@ -27,21 +27,22 @@ Trust changes at:
 
 ## Threats and controls
 
-| Threat                                                 | Required control                                                                                                                                                              |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Token theft, confused identity, or cross-owner access  | Audience-bound short-lived tokens, exact owner and scope checks at ingress and execution, owner-named objects, explicit revocation                                            |
-| Malicious OAuth clients, replay, or storage exhaustion | S256 PKCE, HTTPS or exact-loopback redirects, protected state, bounded bodies and sessions, rate limits, expiring registrations, hashed rotating refresh tokens               |
-| Prompt injection or hostile provider data              | Treat all model, recipe, MCP, retrieved, and provider content as inert input; trusted code classifies authority, effects, targets, and cost                                   |
-| Malicious Skill packages                               | Validate bounded UTF-8 files and safe paths, reject suspected credentials, store immutable content-addressed objects, and never execute scripts or derive authority           |
-| Credential disclosure                                  | Keep provider credentials outside models and Crewhelm state; bound and normalize responses; exclude secrets from results, errors, telemetry, URLs, and backups                |
-| SSRF or redirected egress                              | Use fixed HTTPS provider endpoints, manual redirect handling, bounded response size and time, and no model-selected network destination                                       |
-| Stale, replayed, or amplified authority                | Bind permits and approvals to owner, client, Agent revision, action digest, budget, nonce, and short expiry; recheck current policy immediately before execution              |
-| Duplicate or partial external effects                  | Reserve idempotency before dispatch, use single-use permits, make cancellation and dispatch mutually exclusive, and block equivalent writes while outcomes are unknown        |
-| Runaway execution or cost                              | Bound models, turns, tools, schedules, concurrency, payloads, output, duration, and cost before work starts                                                                   |
-| Model-driven policy escalation                         | Expose fleet mutation as preview-only to MCP; require a deterministic owner step-up path to apply a revision                                                                  |
-| Unsafe persistence or recovery                         | Apply ordered checksummed migrations before admission; preserve revocation during backup, restore, deletion, and recovery                                                     |
-| Diagnostic disclosure or error amplification           | Return allowlisted compact error facts, opaque correlation IDs, bounded pages, and opt-in detail; never reflect exceptions, request bodies, provider payloads, or credentials |
-| Supply-chain or deployment compromise                  | Pin dependencies and automation, minimize CI permissions, validate release artifacts, and require explicit deployment authority                                               |
+| Threat                                                 | Required control                                                                                                                                                                           |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Token theft, confused identity, or cross-owner access  | Audience-bound short-lived tokens, exact owner and scope checks at ingress and execution, owner-named objects, explicit revocation                                                         |
+| Malicious OAuth clients, replay, or storage exhaustion | S256 PKCE, HTTPS or exact-loopback redirects, protected state, bounded bodies and sessions, rate limits, expiring registrations, hashed rotating refresh tokens                            |
+| Prompt injection or hostile provider data              | Treat all model, recipe, MCP, retrieved, and provider content as inert input; trusted code classifies authority, effects, targets, and cost                                                |
+| Malicious Skill packages                               | Validate bounded UTF-8 files and safe paths, reject suspected credentials, store immutable content-addressed objects, and never execute scripts or derive authority                        |
+| Credential disclosure                                  | Keep provider credentials outside models and Crewhelm state; bound and normalize responses; exclude secrets from results, errors, telemetry, URLs, and backups                             |
+| SSRF or redirected egress                              | Use fixed HTTPS provider endpoints, manual redirect handling, bounded response size and time, and no model-selected network destination                                                    |
+| Stale, replayed, or amplified authority                | Bind permits and approvals to owner, client, Agent revision, action digest, budget, nonce, and short expiry; recheck current policy immediately before execution                           |
+| Duplicate or partial external effects                  | Reserve idempotency before dispatch, use single-use permits, make cancellation and dispatch mutually exclusive, and block equivalent writes while outcomes are unknown                     |
+| Runaway execution or cost                              | Bound models, turns, tools, Workflow stages and aggregate budget, schedules, concurrency, payloads, output, duration, and cost before work starts                                          |
+| Workflow replay, callback injection, or stage skipping | Freeze plans and revisions owner-side; route only exact Workflow-to-Run mappings; use stage-specific terminal events and idempotent admission; never give the coordinator bearer authority |
+| Model-driven policy escalation                         | Expose fleet mutation as preview-only to MCP; require a deterministic owner step-up path to apply a revision                                                                               |
+| Unsafe persistence or recovery                         | Apply ordered checksummed migrations before admission; preserve revocation during backup, restore, deletion, and recovery                                                                  |
+| Diagnostic disclosure or error amplification           | Return allowlisted compact error facts, opaque correlation IDs, bounded pages, and opt-in detail; never reflect exceptions, request bodies, provider payloads, or credentials              |
+| Supply-chain or deployment compromise                  | Pin dependencies and automation, minimize CI permissions, validate release artifacts, and require explicit deployment authority                                                            |
 
 Tool discovery never grants execution authority. Model output never grants permission or approves
 an action. Routine writes may run only under an exact, versioned standing-authority grant created
@@ -102,6 +103,17 @@ or retiring a Skill grants no runtime capability, and `scripts/` remains inert.
 Run and tool authority is also bound to the exact fleet-configuration revision admitted. Any later
 configuration revision invalidates unconsumed admission, approval, and dispatch authority; the
 owner starts a new run under the new policy.
+
+Durable Agent Workflows freeze objectives and stage prompts in the owner control plane. The
+Cloudflare Workflow receives opaque coordinates, advances a fixed two-to-eight-stage sequence, and
+must ask the control plane to admit every Run against the frozen Agent and fleet revisions. Only
+that admitted Run path passes a canonical objective-and-stage envelope into the isolated Session.
+The `CrewAgent` accepts callbacks and terminal events only for its exact stored Workflow and Run
+mapping. Stage-specific event types and idempotent completion make duplicate or late delivery inert.
+Coordinator failure marks the owner projection failed and prevents later stages; an already
+admitted bounded Run may finish, but cannot authorize another stage. Cancellation is revision-bound
+and propagates to the active Run. Terminal deletion removes the isolated Session and retained
+correlated execution data before the Workflow projection disappears.
 
 Tool execution rechecks the Agent lifecycle, current immutable grant, connection, effect, target,
 approval, and budget before issuing a single-use adapter permit. Disabling an Agent or revoking a

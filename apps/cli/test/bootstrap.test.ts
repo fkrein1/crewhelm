@@ -118,6 +118,13 @@ const stagedConfigSchema = z.looseObject({
     }),
   ]),
   secrets: z.looseObject({ required: z.array(z.string()) }),
+  workflows: z.tuple([
+    z.looseObject({
+      binding: z.literal("AGENT_TASK_WORKFLOW"),
+      class_name: z.literal("AgentTaskWorkflow"),
+      name: z.literal("crewhelm-agent-task-workflow"),
+    }),
+  ]),
   vars: z.looseObject({
     CREWHELM_DEPLOYMENT_FINGERPRINT: z.string().regex(/^[a-f0-9]{64}$/),
     PUBLIC_ORIGIN: z.url(),
@@ -311,6 +318,13 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
       rules: [{ fallthrough: true, globs: ["**/*.sql"], type: "Text" }],
       triggers: { crons: ["17 * * * *"] },
       vars: { PUBLIC_ORIGIN: "https://template.example" },
+      workflows: [
+        {
+          binding: "AGENT_TASK_WORKFLOW",
+          class_name: "AgentTaskWorkflow",
+          name: "crewhelm-agent-task-workflow",
+        },
+      ],
     }),
   );
   deploymentFingerprints.set(
@@ -1723,6 +1737,13 @@ describe("Cloudflare bootstrap", () => {
         { class_name: "OwnerControlPlane", name: "OWNER_CONTROL_PLANE" },
         { class_name: "CrewAgent", name: "CREW_AGENT" },
         { class_name: "CrewSession", name: "CREW_SESSION" },
+      ]);
+      expect(stagedConfig?.workflows).toEqual([
+        {
+          binding: "AGENT_TASK_WORKFLOW",
+          class_name: "AgentTaskWorkflow",
+          name: "crewhelm-agent-task-workflow",
+        },
       ]);
       expect(stagedConfig?.observability.logs.invocation_logs).toBe(false);
       expect(stagedConfig?.observability.traces.enabled).toBe(false);

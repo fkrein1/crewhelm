@@ -24,6 +24,11 @@ For a new or materially changed public or cross-trust interface, name its owner,
 dependencies, authority, failure behavior, and observable tests. Compare alternatives only when
 the interface is genuinely unsettled.
 
+Cloudflare Workflows coordinate durable order; they do not become a second control plane. Keep
+owner data and frozen plans in `OwnerControlPlane`, exact runtime routing in `CrewAgent`, and Think
+execution in `CrewSession`. Each Workflow stage must be observable as an ordinary admitted Run so
+existing revision, budget, approval, ToolGate, inbox, and recovery behavior stays controlling.
+
 ## Simplification
 
 After behavior works, review changed code and immediate callers. Remove accidental concepts,

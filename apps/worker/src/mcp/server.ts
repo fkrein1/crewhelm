@@ -42,6 +42,7 @@ import {
 import { registerScheduleTools } from "./schedule-tools.js";
 import { registerRecoveryTools } from "./recovery-tools.js";
 import { controlPlaneToolResult } from "./tool-result.js";
+import { MCP_AGENT_WORKFLOWS_TOOL_NAME, registerWorkflowTools } from "./workflow-tools.js";
 
 export { MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME } from "./connection-attachment-tools.js";
 export { MCP_CONFIGURE_TOOL_NAME, MCP_GET_CONFIGURATION_TOOL_NAME };
@@ -74,6 +75,7 @@ export {
   MCP_START_RUN_TOOL_NAME,
 } from "./run-tools.js";
 export { MCP_AGENT_SESSIONS_TOOL_NAME, MCP_DELETE_AGENT_SESSION_TOOL_NAME };
+export { MCP_AGENT_WORKFLOWS_TOOL_NAME };
 export {
   MCP_CONFIGURE_AGENT_SCHEDULE_TOOL_NAME,
   MCP_GET_AGENT_SCHEDULE_TOOL_NAME,
@@ -87,7 +89,7 @@ export {
 
 const MAX_MCP_BODY_BYTES = 512 * 1024;
 export const MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES = 64 * 1_024;
-export const MCP_TOOL_COUNT_BUDGET = 32;
+export const MCP_TOOL_COUNT_BUDGET = 33;
 const MCP_SERVER_INFO = {
   name: "crewhelm",
   version: "0.1.0",
@@ -177,6 +179,7 @@ function createMcpServer(
   registerAgentTools(server, context);
   registerRunTools(server, context);
   registerSessionTools(server, context);
+  registerWorkflowTools(server, context);
   registerScheduleTools(server, context);
   registerRecoveryTools(server, context);
   registerConnectionTools(server, context, {

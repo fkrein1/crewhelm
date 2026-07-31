@@ -6,6 +6,7 @@ import { MCP_SERVER_INSTRUCTIONS, statusGuidance } from "./guidance.js";
 function fleetStatus(input?: {
   activeAgents?: number;
   activeRuns?: number;
+  activeWorkflows?: number;
   needsAction?: number;
   totalAgents?: number;
   unresolvedEffects?: number;
@@ -45,6 +46,7 @@ function fleetStatus(input?: {
       recovery: { unresolvedEffects: input?.unresolvedEffects ?? 0 },
       runs: { active: input?.activeRuns ?? 0 },
       skills: { active: 0, pendingObjects: 0, storedBytes: 0, total: 0, versions: 0 },
+      workflows: { active: input?.activeWorkflows ?? 0, total: input?.activeWorkflows ?? 0 },
     },
   };
 }
@@ -53,7 +55,8 @@ describe("MCP first-use guidance", () => {
   it("keeps initialization guidance compact and centered on bounded discovery", () => {
     expect(new TextEncoder().encode(MCP_SERVER_INSTRUCTIONS).byteLength).toBeLessThanOrEqual(1_536);
     expect(MCP_SERVER_INSTRUCTIONS).toContain("Start with crewhelm_status");
-    expect(MCP_SERVER_INSTRUCTIONS).toContain("Preserve the continuation object");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("Preserve a Run continuation");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("crewhelm_agent_workflows");
     expect(MCP_SERVER_INSTRUCTIONS).toContain("Never guess or blindly retry");
   });
 
@@ -101,22 +104,30 @@ describe("MCP first-use guidance", () => {
   });
 
   it("prioritizes bounded discovery of active work before starting more", () => {
-    expect(statusGuidance(fleetStatus({ activeAgents: 1, activeRuns: 2, totalAgents: 1 }))).toEqual(
-      [
-        {
-          arguments: { limit: 10, status: "active" },
-          kind: "read",
-          reason: "active_runs",
-          tool: "crewhelm_list_agent_runs",
-        },
-        {
-          arguments: { limit: 10, status: "active" },
-          kind: "read",
-          reason: "choose_agent",
-          tool: "crewhelm_list_agents",
-        },
-      ],
-    );
+    expect(
+      statusGuidance(
+        fleetStatus({ activeAgents: 1, activeRuns: 2, activeWorkflows: 1, totalAgents: 1 }),
+      ),
+    ).toEqual([
+      {
+        arguments: { action: "list", limit: 10, status: "active" },
+        kind: "read",
+        reason: "active_workflows",
+        tool: "crewhelm_agent_workflows",
+      },
+      {
+        arguments: { limit: 10, status: "active" },
+        kind: "read",
+        reason: "active_runs",
+        tool: "crewhelm_list_agent_runs",
+      },
+      {
+        arguments: { limit: 10, status: "active" },
+        kind: "read",
+        reason: "choose_agent",
+        tool: "crewhelm_list_agents",
+      },
+    ]);
   });
 
   it("does not claim a disabled fleet is runnable", () => {

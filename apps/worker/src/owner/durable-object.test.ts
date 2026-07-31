@@ -20,6 +20,7 @@ import { drizzle } from "drizzle-orm/durable-sqlite";
 import { describe, expect, it } from "vitest";
 
 import {
+  CONTROL_PLANE_SCHEMA_VERSION,
   applyControlPlaneMigration,
   applyControlPlaneMigrationSql,
   runControlPlaneMigrationTransaction,
@@ -40,6 +41,12 @@ function removeSkillLibrarySchema(storage: DurableObjectStorage): void {
   storage.sql.exec("DROP TABLE skill_versions");
   storage.sql.exec("DROP TABLE skill_objects");
   storage.sql.exec("DROP TABLE skills");
+}
+
+function removeAgentWorkflowSchema(storage: DurableObjectStorage): void {
+  storage.sql.exec("DROP TABLE agent_workflow_stages");
+  storage.sql.exec("DROP TABLE agent_workflow_deletions");
+  storage.sql.exec("DROP TABLE agent_workflows");
 }
 
 describe("owner identity", () => {
@@ -99,7 +106,7 @@ describe("OwnerControlPlane", () => {
           },
         },
         configurationRevision: 1,
-        schemaVersion: 22,
+        schemaVersion: CONTROL_PLANE_SCHEMA_VERSION,
         status: "ready",
         usage: {
           agents: { active: 0, total: 0 },
@@ -120,6 +127,7 @@ describe("OwnerControlPlane", () => {
           recovery: { unresolvedEffects: 0 },
           runs: { active: 0 },
           skills: { active: 0, pendingObjects: 0, storedBytes: 0, total: 0, versions: 0 },
+          workflows: { active: 0, total: 0 },
         },
       },
     });
@@ -248,6 +256,11 @@ describe("OwnerControlPlane", () => {
           name: "0021_futuristic_adam_destine",
           version: 22,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0022_adorable_marrow",
+          version: 23,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });
@@ -337,6 +350,7 @@ describe("OwnerControlPlane", () => {
          )`,
       );
       removeSkillLibrarySchema(state.storage);
+      removeAgentWorkflowSchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 18");
       await state.storage.sync();
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
@@ -928,6 +942,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec("DROP TABLE agent_inbox_acknowledgements");
       state.storage.sql.exec("DROP TABLE agent_inbox_items");
       removeSkillLibrarySchema(state.storage);
+      removeAgentWorkflowSchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 12");
     });
     await evictDurableObject(stub);
@@ -988,6 +1003,7 @@ describe("OwnerControlPlane", () => {
         admission.permit.runId,
       );
       removeSkillLibrarySchema(state.storage);
+      removeAgentWorkflowSchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 14");
     });
     await evictDurableObject(stub);
@@ -1101,13 +1117,14 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec("DROP TABLE agent_inbox_acknowledgements");
       state.storage.sql.exec("DROP TABLE agent_inbox_items");
       removeSkillLibrarySchema(state.storage);
+      removeAgentWorkflowSchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 11");
     });
     await evictDurableObject(stub);
 
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 22, status: "ready" },
+      status: { schemaVersion: CONTROL_PLANE_SCHEMA_VERSION, status: "ready" },
     });
     await expect(
       runInDurableObject(stub, (_instance, state) =>
@@ -1168,12 +1185,12 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 22, status: "ready" },
+      status: { schemaVersion: CONTROL_PLANE_SCHEMA_VERSION, status: "ready" },
     });
     await evictDurableObject(stub);
     await expect(stub.status(first)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 22, status: "ready" },
+      status: { schemaVersion: CONTROL_PLANE_SCHEMA_VERSION, status: "ready" },
     });
     await expect(stub.status(second)).resolves.toMatchObject({
       error: { code: "owner_mismatch" },
@@ -1366,6 +1383,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec("DROP TABLE agent_inbox_acknowledgements");
       state.storage.sql.exec("DROP TABLE agent_inbox_items");
       removeSkillLibrarySchema(state.storage);
+      removeAgentWorkflowSchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 3");
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
 
@@ -1394,7 +1412,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 22, status: "ready" },
+      status: { schemaVersion: CONTROL_PLANE_SCHEMA_VERSION, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       const rows = [
@@ -1475,6 +1493,7 @@ describe("OwnerControlPlane", () => {
         { version: 20 },
         { version: 21 },
         { version: 22 },
+        { version: 23 },
       ]);
     });
   });
@@ -1603,6 +1622,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec("DROP TABLE agent_inbox_acknowledgements");
       state.storage.sql.exec("DROP TABLE agent_inbox_items");
       removeSkillLibrarySchema(state.storage);
+      removeAgentWorkflowSchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 5");
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
     });
@@ -1610,7 +1630,7 @@ describe("OwnerControlPlane", () => {
     await evictDurableObject(stub);
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 22, status: "ready" },
+      status: { schemaVersion: CONTROL_PLANE_SCHEMA_VERSION, status: "ready" },
     });
     await runInDurableObject(stub, (_instance, state) => {
       expect(
@@ -1654,6 +1674,76 @@ describe("OwnerControlPlane", () => {
         toolCallId: unknownToolCallId,
       }),
     ).resolves.toMatchObject({ ok: true, reconciled: true });
+  });
+
+  it("preserves admitted Runs while adding the durable Workflow schema", async () => {
+    const authority = await authorityFor("workflow-schema-migration", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("workflow-migration-agent"));
+
+    if (!created.ok) {
+      throw new Error("Expected Workflow migration Agent fixture.");
+    }
+
+    const prompt = "Preserve this admitted Run while adding durable Workflow storage.";
+    const admission = await stub.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "workflow-migration-run",
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
+    });
+
+    if (!admission.ok || admission.state !== "issued") {
+      throw new Error("Expected Workflow migration Run fixture.");
+    }
+
+    await runInDurableObject(stub, (_instance, state) => {
+      removeAgentWorkflowSchema(state.storage);
+      state.storage.sql.exec(
+        "DELETE FROM control_plane_migrations WHERE version = ?",
+        CONTROL_PLANE_SCHEMA_VERSION,
+      );
+    });
+    await evictDurableObject(stub);
+
+    await expect(stub.status(authority)).resolves.toMatchObject({
+      ok: true,
+      status: { schemaVersion: CONTROL_PLANE_SCHEMA_VERSION, usage: { workflows: { active: 0 } } },
+    });
+    await expect(stub.confirmRunAdmission(admission.permit)).resolves.toMatchObject({
+      confirmed: true,
+      ok: true,
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) => ({
+        admission: state.storage.sql
+          .exec<{ run_id: string; trigger: string }>(
+            "SELECT run_id, trigger FROM run_admissions WHERE run_id = ?",
+            admission.permit.runId,
+          )
+          .one(),
+        foreignKeys: state.storage.sql.exec("PRAGMA foreign_key_check").toArray(),
+        migration: state.storage.sql
+          .exec<{ name: string; version: number }>(
+            "SELECT name, version FROM control_plane_migrations WHERE version = ?",
+            CONTROL_PLANE_SCHEMA_VERSION,
+          )
+          .one(),
+      })),
+    ).resolves.toEqual({
+      admission: { run_id: admission.permit.runId, trigger: "manual" },
+      foreignKeys: [],
+      migration: {
+        name: "0022_adorable_marrow",
+        version: CONTROL_PLANE_SCHEMA_VERSION,
+      },
+    });
   });
 
   it("rolls back migration DDL when its journal write fails", async () => {
@@ -1706,7 +1796,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec(
         `INSERT INTO control_plane_migrations (version, name, checksum, applied_at)
          VALUES (?, ?, ?, ?)`,
-        23,
+        CONTROL_PLANE_SCHEMA_VERSION + 1,
         "future_migration",
         "f".repeat(64),
         Date.now(),

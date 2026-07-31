@@ -15,6 +15,9 @@ used across the public site, browser handoffs, CLI, and future product surfaces.
   own durable control and execution.
 - **Framework power stays reachable.** Crewhelm preserves useful Agents and Think capabilities
   behind deterministic policy and recovery contracts.
+- **Outcomes outlive the chat.** A durable Workflow carries one known multi-step objective across
+  ordered bounded Runs, so an owner can leave the MCP conversation and return to exact progress,
+  recovery, or a terminal result.
 - **Composio is the integration plane.** Crewhelm uses its catalog, authentication, and execution
   instead of rebuilding provider adapters.
 - **Recipes are the eventual sharing unit.** Once the operating model is mature, a recipe will
@@ -34,6 +37,11 @@ concepts or permanent support cost. Routine fixes do not need a product pitch.
 
 Future recipe publishing must be explicit: recipes pin reviewed source and show requested
 authority, and updates never silently widen grants.
+
+The product should feel like asking an agent to own an outcome, not programming a workflow graph.
+Use a direct Run for one bounded turn. Use a Workflow when the outcome already has a small ordered
+plan that must survive disconnects. Crewhelm keeps internal Runs inspectable for diagnosis without
+making the owner reconstruct them to understand progress.
 
 ## Current non-goals
 
