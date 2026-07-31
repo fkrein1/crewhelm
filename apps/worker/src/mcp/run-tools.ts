@@ -162,7 +162,7 @@ export function registerRunTools(server: McpServer, context: McpToolContext): vo
         readOnlyHint: false,
       },
       description:
-        "Durably start one bounded turn for an exact authenticated-owner Crewhelm Agent revision.",
+        "Durably start one bounded turn for an exact authenticated-owner Crewhelm Agent revision. Omit continuation to create a new conversation; pass the exact sessionId, branchId, and expectedBranchRevision returned by the prior run to continue it.",
       inputSchema: startRunInputSchema,
       title: "Start Crewhelm run",
     },

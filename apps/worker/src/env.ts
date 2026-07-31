@@ -1,4 +1,4 @@
-import type { CrewAgent } from "./agent/durable-object.js";
+import type { CrewAgent, CrewSession } from "./agent/durable-object.js";
 import type { OwnerControlPlane } from "./owner/durable-object.js";
 
 declare global {
@@ -10,6 +10,7 @@ declare global {
       BETTER_AUTH_SECRET: string;
       COMPOSIO_API_KEY?: string;
       CREW_AGENT: DurableObjectNamespace<CrewAgent>;
+      CREW_SESSION: DurableObjectNamespace<CrewSession>;
       CREWHELM_DEPLOYMENT_FINGERPRINT: string;
       GITHUB_CLIENT_ID: string;
       GITHUB_CLIENT_SECRET: string;

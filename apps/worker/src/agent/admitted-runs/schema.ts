@@ -7,6 +7,7 @@ import {
   runAdmissionIdempotencyKeySchema,
   runBudgetReservationSchema,
   runIdSchema,
+  runSessionSchema,
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
@@ -208,6 +209,20 @@ export const admittedRunRecordSchema = z.strictObject({
   promptCharacters: z.number().int().positive(),
   promptDigest: z.string().regex(/^[0-9a-f]{64}$/),
   scheduleRevision: z.number().int().positive().nullable().default(null),
+  session: runSessionSchema.optional(),
+  sessionContext: z
+    .strictObject({
+      characters: z.number().int().nonnegative().safe(),
+      digest: z.string().regex(/^[0-9a-f]{64}$/),
+      messages: z.array(
+        z.strictObject({
+          content: z.string(),
+          role: z.enum(["assistant", "user"]),
+        }),
+      ),
+      truncated: z.boolean(),
+    })
+    .optional(),
 });
 
 export const admittedTurnMetadataSchema = z.strictObject({
@@ -217,6 +232,8 @@ export const admittedTurnMetadataSchema = z.strictObject({
     promptCharacters: z.number().int().positive(),
     promptDigest: z.string().regex(/^[0-9a-f]{64}$/),
     runId: runIdSchema,
+    session: runSessionSchema.optional(),
+    sessionContext: admittedRunRecordSchema.shape.sessionContext,
   }),
 });
 

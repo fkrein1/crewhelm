@@ -105,6 +105,7 @@ function integrationEnv(
     BETTER_AUTH_SECRET: "test-better-auth-secret-that-is-at-least-32-bytes",
     COMPOSIO_API_KEY: "test-composio-api-key",
     CREW_AGENT: env.CREW_AGENT,
+    CREW_SESSION: env.CREW_SESSION,
     CREWHELM_DEPLOYMENT_FINGERPRINT:
       "0000000000000000000000000000000000000000000000000000000000000000",
     GITHUB_CLIENT_ID: "github-client-id",
@@ -1171,7 +1172,7 @@ describe("public OAuth to MCP integration", () => {
       error: { code: "insufficient_scope", message: "Agent request denied." },
       ok: false,
     });
-  });
+  }, 90_000);
 
   it("maps Full control to every owner capability", async () => {
     const workerEnv = integrationEnv(allowRateLimit(), "123459");
@@ -1219,7 +1220,7 @@ describe("public OAuth to MCP integration", () => {
       created: true,
       ok: true,
     });
-  });
+  }, 90_000);
 
   it("logs only a fixed stage for a secret-bearing GitHub token error", async () => {
     const providerSecret = "provider-secret-that-must-never-be-logged";

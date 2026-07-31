@@ -91,6 +91,10 @@ const stagedConfigSchema = z.looseObject({
         class_name: z.literal("CrewAgent"),
         name: z.literal("CREW_AGENT"),
       }),
+      z.looseObject({
+        class_name: z.literal("CrewSession"),
+        name: z.literal("CREW_SESSION"),
+      }),
     ]),
   }),
   observability: z.looseObject({
@@ -261,10 +265,15 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
         bindings: [
           { class_name: "OwnerControlPlane", name: "OWNER_CONTROL_PLANE" },
           { class_name: "CrewAgent", name: "CREW_AGENT" },
+          { class_name: "CrewSession", name: "CREW_SESSION" },
         ],
       },
       exports: {
         CrewAgent: {
+          storage: "sqlite",
+          type: "durable-object",
+        },
+        CrewSession: {
           storage: "sqlite",
           type: "durable-object",
         },
@@ -415,6 +424,7 @@ function recoveryWrangler({
   versions = [{ percentage: 100, version_id: DEPLOYMENT_VERSION_ID }],
   workerExports = {
     CrewAgent: { storage: "sqlite", type: "durable-object" },
+    CrewSession: { storage: "sqlite", type: "durable-object" },
     OwnerControlPlane: { storage: "sqlite", type: "durable-object" },
   },
 }: {
@@ -551,7 +561,17 @@ describe("Cloudflare bootstrap", () => {
     const progress: string[] = [];
     const persist = vi.fn<(installation: unknown) => Promise<void>>(async () => {});
     const dependencies = {
-      ...createDependencies(fixture.assets, recoveryWrangler({ databaseName, events })),
+      ...createDependencies(
+        fixture.assets,
+        recoveryWrangler({
+          databaseName,
+          events,
+          workerExports: {
+            CrewAgent: { storage: "sqlite", type: "durable-object" },
+            OwnerControlPlane: { storage: "sqlite", type: "durable-object" },
+          },
+        }),
+      ),
       reportProgress: ({ stage }: BootstrapProgress) => progress.push(stage),
       recoverExistingInstallation: { persist },
     };
@@ -828,6 +848,11 @@ describe("Cloudflare bootstrap", () => {
               state: "expecting-transfer",
               storage: "sqlite",
               transfer_from: "another-worker",
+              type: "durable-object",
+            },
+            CrewSession: {
+              state: "created",
+              storage: "sqlite",
               type: "durable-object",
             },
             OwnerControlPlane: {
@@ -1697,6 +1722,7 @@ describe("Cloudflare bootstrap", () => {
       expect(stagedConfig?.durable_objects.bindings).toEqual([
         { class_name: "OwnerControlPlane", name: "OWNER_CONTROL_PLANE" },
         { class_name: "CrewAgent", name: "CREW_AGENT" },
+        { class_name: "CrewSession", name: "CREW_SESSION" },
       ]);
       expect(stagedConfig?.observability.logs.invocation_logs).toBe(false);
       expect(stagedConfig?.observability.traces.enabled).toBe(false);

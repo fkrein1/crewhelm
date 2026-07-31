@@ -212,6 +212,7 @@ const workerVersionSchema = z.looseObject({
     script_runtime: z.looseObject({
       exports: z.looseObject({
         CrewAgent: establishedDurableObjectExportSchema,
+        CrewSession: establishedDurableObjectExportSchema.optional(),
         OwnerControlPlane: establishedDurableObjectExportSchema,
       }),
     }),
@@ -255,10 +256,18 @@ const deploymentTemplateSchema = z.strictObject({
         class_name: z.literal("CrewAgent"),
         name: z.literal("CREW_AGENT"),
       }),
+      z.strictObject({
+        class_name: z.literal("CrewSession"),
+        name: z.literal("CREW_SESSION"),
+      }),
     ]),
   }),
   exports: z.strictObject({
     CrewAgent: z.strictObject({
+      storage: z.literal("sqlite"),
+      type: z.literal("durable-object"),
+    }),
+    CrewSession: z.strictObject({
       storage: z.literal("sqlite"),
       type: z.literal("durable-object"),
     }),

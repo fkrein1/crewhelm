@@ -21,6 +21,7 @@ import {
   configureAgentConnectionResultSchema,
   controlPlaneStatusResultSchema,
   configureFleetConfigurationResultSchema,
+  crewAgentObjectName,
   enableIntegrationResultSchema,
   getAgentRevisionResultSchema,
   getAgentResultSchema,
@@ -34,6 +35,7 @@ import {
   inspectRunResultSchema,
   integrationToolSearchResultSchema,
   listAgentRevisionsResultSchema,
+  manageAgentSessionsResultSchema,
   listAgentsResultSchema,
   listConnectionsResultSchema,
   listSkillsResultSchema,
@@ -54,6 +56,8 @@ import * as z from "zod";
 
 import {
   MCP_AGENT_INBOX_TOOL_NAME,
+  MCP_AGENT_SESSIONS_TOOL_NAME,
+  MCP_DELETE_AGENT_SESSION_TOOL_NAME,
   MCP_BATCH_DISABLE_AGENTS_TOOL_NAME,
   MCP_CANCEL_RUN_TOOL_NAME,
   MCP_CONFIGURE_TOOL_NAME,
@@ -87,7 +91,7 @@ import {
   MCP_UPDATE_AGENT_TOOL_NAME,
   handleAuthenticatedMcpRequest,
 } from "./server.js";
-import { TEST_REPLY } from "../agent/admitted-runs/test-agent.js";
+import { TEST_REPLY, TestCrewAgent } from "../agent/admitted-runs/test-agent.js";
 import { deriveOwnerKey } from "../owner/identity.js";
 
 const origin = "https://crewhelm.test";
@@ -254,6 +258,12 @@ describe("authenticated MCP handler", () => {
     );
     const startRunTool = payload.result.tools.find((tool) => tool.name === MCP_START_RUN_TOOL_NAME);
     const inboxTool = payload.result.tools.find((tool) => tool.name === MCP_AGENT_INBOX_TOOL_NAME);
+    const sessionsTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_AGENT_SESSIONS_TOOL_NAME,
+    );
+    const deleteSessionTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_DELETE_AGENT_SESSION_TOOL_NAME,
+    );
     const configureScheduleTool = payload.result.tools.find(
       (tool) => tool.name === MCP_CONFIGURE_AGENT_SCHEDULE_TOOL_NAME,
     );
@@ -315,6 +325,24 @@ describe("authenticated MCP handler", () => {
       idempotentHint: true,
       openWorldHint: false,
       readOnlyHint: false,
+    });
+    expect(sessionsTool).toMatchObject({
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: true,
+      },
+      description: expect.stringContaining("branchRevision"),
+    });
+    expect(JSON.stringify(sessionsTool?.inputSchema)).toContain('"action"');
+    expect(deleteSessionTool).toMatchObject({
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: false,
+      },
     });
     expect(scheduleReadTools).toHaveLength(2);
     expect(scheduleReadTools.every((tool) => tool.annotations.readOnlyHint)).toBe(true);
@@ -1469,6 +1497,19 @@ describe("authenticated MCP handler", () => {
       throw new Error("Expected MCP run fixture Agent.");
     }
 
+    await runInDurableObject(
+      env.CREW_AGENT.getByName(
+        crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
+      ),
+      (instance) => {
+        if (!(instance instanceof TestCrewAgent)) {
+          throw new Error("Expected the test CrewAgent implementation.");
+        }
+
+        instance.enableDurableSessionsForTest();
+      },
+    );
+
     const runInput = {
       agentId: created.agent.id,
       expectedRevision: created.agent.revision,
@@ -1500,6 +1541,7 @@ describe("authenticated MCP handler", () => {
       run: {
         agentId: created.agent.id,
         agentRevision: created.agent.revision,
+        session: { branchRevision: 1 },
       },
     });
 
@@ -1559,6 +1601,31 @@ describe("authenticated MCP handler", () => {
       },
       { interval: 25, timeout: 5_000 },
     );
+    const sessionsResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 319,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { action: "list", agentId: created.agent.id, limit: 10 },
+            name: MCP_AGENT_SESSIONS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const sessionsPayload = jsonRpcToolResultSchema.parse(await sessionsResponse.json()).result;
+    const sessions = manageAgentSessionsResultSchema.parse(
+      JSON.parse(sessionsPayload.content[0]?.text ?? ""),
+    );
+
+    expect(sessionsPayload.isError).toBe(false);
+    expect(sessions).toMatchObject({
+      ok: true,
+      sessions: [{ branchRevision: 1, sessionId: started.run.session?.sessionId }],
+    });
     const inboxResponse = await handleAuthenticatedMcpRequest(
       toolRequest(
         JSON.stringify({

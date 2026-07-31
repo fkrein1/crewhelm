@@ -1,4 +1,5 @@
 export * from "./agent-runtime.js";
+export * from "./agent-sessions.js";
 export * from "./agent-capabilities.js";
 export * from "./agent-blueprint-identity.js";
 export * from "./agent-blueprints.js";
