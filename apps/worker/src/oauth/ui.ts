@@ -44,7 +44,7 @@ const navigationResultSchema = z.looseObject({
 const navigationJsonSchema = z.strictObject({
   redirectUrl: z.url().max(2_048),
 });
-const OAUTH_ACTIONS_SCRIPT = `
+export const OAUTH_ACTIONS_SCRIPT = `
 const consentForms = document.querySelectorAll("[data-consent-form]");
 const navigationStarts = document.querySelectorAll("[data-navigation-start]");
 
@@ -250,7 +250,7 @@ async function navigationJsonResponse(response: Response, request: Request): Pro
   });
 }
 
-function loginPage(query: string): string {
+export function renderOAuthLoginPage(query: string): string {
   return renderWorkerPage({
     body: `      <p class="ch-copy">Crewhelm uses the GitHub account configured for this deployment to verify owner authority.</p>
       <input type="hidden" name="oauth_query" value="${escapePageHtml(query)}">
@@ -263,7 +263,7 @@ function loginPage(query: string): string {
   });
 }
 
-function completionPage(): string {
+export function renderOAuthCompletionPage(): string {
   return renderWorkerPage({
     body: '      <p class="ch-copy">Crewhelm completed this handoff. You can close this window and return to your MCP client.</p>',
     heading: "Authorization returned to your client.",
@@ -271,7 +271,7 @@ function completionPage(): string {
   });
 }
 
-function consentPage(
+export function renderOAuthConsentPage(
   query: string,
   client: { id: string; name: string },
   redirectOrigin: string,
@@ -334,7 +334,7 @@ async function showLogin(context: WorkerContext): Promise<Response> {
   const query = signedQuery(context.req.raw);
   return query === null
     ? authorizationDenied()
-    : workerPageResponse(loginPage(query), { connections: true, scripts: true });
+    : workerPageResponse(renderOAuthLoginPage(query), { connections: true, scripts: true });
 }
 
 async function submitLogin(context: WorkerContext, createAuth: AuthFactory): Promise<Response> {
@@ -420,7 +420,7 @@ async function showConsent(context: WorkerContext, createAuth: AuthFactory): Pro
     const redirectOrigin = new URL(parsedQuery.data.redirect_uri).origin;
 
     return workerPageResponse(
-      consentPage(
+      renderOAuthConsentPage(
         query,
         {
           id: client.data.client_id,
@@ -521,7 +521,7 @@ async function startConsent(
 export function registerOAuthUiRoutes(worker: OAuthApp, createAuth: AuthFactory): void {
   worker.get("/oauth/error", authorizationError);
   worker.all("/oauth/error", () => fixedResponse("Method not allowed.\n", 405));
-  worker.get("/oauth/complete", () => workerPageResponse(completionPage()));
+  worker.get("/oauth/complete", () => workerPageResponse(renderOAuthCompletionPage()));
   worker.all("/oauth/complete", () => fixedResponse("Method not allowed.\n", 405));
   worker.get("/oauth/styles.css", workerStylesheetResponse);
   worker.all("/oauth/styles.css", () => fixedResponse("Method not allowed.\n", 405));

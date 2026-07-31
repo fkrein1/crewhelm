@@ -23,6 +23,21 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
+export function renderCodexBrowserHandoffPage(continuePath: string): string {
+  return renderLocalPage({
+    form: {
+      action: continuePath,
+      fields: {},
+      label: "Open Crewhelm authorization",
+    },
+    heading: "Continue in the Codex browser.",
+    paragraphs: [
+      "Crewhelm will open the signed authorization page without printing that capability-bearing URL in the terminal.",
+    ],
+    title: "Crewhelm browser handoff",
+  });
+}
+
 export async function openInCodexBrowser(
   targetUrl: URL,
   dependencies: CodexBrowserDependencies,
@@ -88,20 +103,7 @@ export async function openInCodexBrowser(
       requestUrl.search === ""
     ) {
       response.writeHead(200, localPageHeaders("'self'"));
-      response.end(
-        renderLocalPage({
-          form: {
-            action: continuePath,
-            fields: {},
-            label: "Open Crewhelm authorization",
-          },
-          heading: "Continue in the Codex browser.",
-          paragraphs: [
-            "Crewhelm will open the signed authorization page without printing that capability-bearing URL in the terminal.",
-          ],
-          title: "Crewhelm browser handoff",
-        }),
-      );
+      response.end(renderCodexBrowserHandoffPage(continuePath));
       return;
     }
 
