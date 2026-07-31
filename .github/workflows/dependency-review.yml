@@ -28,6 +28,7 @@ jobs:
           # Wrangler's development-only Miniflare/Sharp toolchain downloads libvips binaries.
           # The exact-pinned Think/Agents graph includes the five versioned browser-data,
           # schema, compression, and file-detection dependencies listed after libvips.
+          # Astro's YAML parser and Tailwind's Lightning CSS toolchain use Python-2.0 and MPL-2.0.
           # Keep every exception versioned and package-specific; never widen the global allowlist.
           allow-dependencies-licenses: >-
             pkg:npm/json-schema-typed@8.0.2,
@@ -46,7 +47,20 @@ jobs:
             pkg:npm/json-schema@0.4.0,
             pkg:npm/node-liblzma@2.2.0,
             pkg:npm/pako@1.0.11,
-            pkg:npm/strtok3@10.3.5
+            pkg:npm/strtok3@10.3.5,
+            pkg:npm/argparse@2.0.1,
+            pkg:npm/lightningcss@1.32.0,
+            pkg:npm/lightningcss-android-arm64@1.32.0,
+            pkg:npm/lightningcss-darwin-arm64@1.32.0,
+            pkg:npm/lightningcss-darwin-x64@1.32.0,
+            pkg:npm/lightningcss-freebsd-x64@1.32.0,
+            pkg:npm/lightningcss-linux-arm-gnueabihf@1.32.0,
+            pkg:npm/lightningcss-linux-arm64-gnu@1.32.0,
+            pkg:npm/lightningcss-linux-arm64-musl@1.32.0,
+            pkg:npm/lightningcss-linux-x64-gnu@1.32.0,
+            pkg:npm/lightningcss-linux-x64-musl@1.32.0,
+            pkg:npm/lightningcss-win32-arm64-msvc@1.32.0,
+            pkg:npm/lightningcss-win32-x64-msvc@1.32.0
           allow-licenses: 0BSD, Apache-2.0, BSD-2-Clause, BSD-3-Clause, BlueOak-1.0.0, CC0-1.0, ISC, MIT, Unlicense
           fail-on-scopes: runtime, development, unknown
           fail-on-severity: moderate
