@@ -27,7 +27,9 @@ describe("Crewhelm site discovery foundation", () => {
 
     expect(serialized).toContain('"@type":"WebSite"');
     expect(serialized).toContain('"@type":"SoftwareApplication"');
+    expect(serialized).toContain(`"sameAs":"${CREWHELM_SITE.githubUrl}"`);
     expect(serialized).toContain(CREWHELM_SITE.githubUrl);
+    expect(serialized).not.toContain("codeRepository");
     expect(serialized).not.toContain("operatingSystem");
   });
 
