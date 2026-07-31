@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 
-import { CREWHELM_BRAND_PROMISE, CREWHELM_LOGO_MARK_PATHS, CREWHELM_LOGO_TEXT } from "./brand.js";
+import { CREWHELM_BRAND_PROMISE, CREWHELM_LOGO_MARK_PATHS } from "./brand.js";
 import { CREWHELM_CLI_BANNER, crewhelmTerminalTheme } from "./terminal.js";
 import { crewhelmColorScales } from "./tokens.js";
 import { CREWHELM_COMPACT_BRAND_HTML, CREWHELM_WEB_STYLES } from "./web.js";
@@ -37,24 +37,30 @@ function contrastRatio(first: number, second: number): number {
 
 describe("Crewhelm design foundation", () => {
   it("defines one accessible compact brand for browser and terminal surfaces", () => {
-    expect(CREWHELM_LOGO_TEXT).toBe(">_ CREWHELM");
     expect(CREWHELM_BRAND_PROMISE).toBe("Give Agents a mandate. Not a master key.");
-    expect(CREWHELM_CLI_BANNER).toBe("┌────┐\n│ >_ CREWHELM\n└────┘\n");
+    expect(CREWHELM_CLI_BANNER).toBe("┌  ┐\n ■   CREWHELM\n└  ┘\n");
     expect(CREWHELM_COMPACT_BRAND_HTML).toContain('role="img" aria-label="Crewhelm"');
     expect(CREWHELM_COMPACT_BRAND_HTML).toContain('class="ch-brand__mark"');
+    expect(CREWHELM_COMPACT_BRAND_HTML).toContain('class="ch-brand__mark-frame"');
+    expect(CREWHELM_COMPACT_BRAND_HTML).toContain('class="ch-brand__mark-accent"');
     for (const path of Object.values(CREWHELM_LOGO_MARK_PATHS)) {
       expect(CREWHELM_COMPACT_BRAND_HTML).toContain(`d="${path}"`);
     }
-    expect(crewhelmTerminalTheme.logoPrompt).toEqual([48, 126, 224]);
-    expect(crewhelmTerminalTheme.logoWordmark).toEqual([94, 165, 245]);
+    expect(crewhelmTerminalTheme.logoAccent).toEqual([48, 126, 224]);
   });
 
   it("ships synchronized vector and raster brand assets", async () => {
     const mark = await readFile(new URL("../assets/crewhelm-mark.svg", import.meta.url));
     const favicon = await readFile(new URL("../assets/crewhelm-favicon.svg", import.meta.url));
-    const master = await readFile(new URL("../assets/crewhelm-logo-master.svg", import.meta.url));
-    const highResolutionPng = await readFile(
-      new URL("../assets/crewhelm-logo-1024.png", import.meta.url),
+    const lightMaster = await readFile(
+      new URL("../assets/crewhelm-logo-light.svg", import.meta.url),
+    );
+    const darkMaster = await readFile(new URL("../assets/crewhelm-logo-dark.svg", import.meta.url));
+    const lightHighResolutionPng = await readFile(
+      new URL("../assets/crewhelm-logo-light.png", import.meta.url),
+    );
+    const darkHighResolutionPng = await readFile(
+      new URL("../assets/crewhelm-logo-dark.png", import.meta.url),
     );
     const siteFavicon = await readFile(
       new URL("../../../apps/site/public/favicon.svg", import.meta.url),
@@ -70,32 +76,75 @@ describe("Crewhelm design foundation", () => {
     expect(siteFavicon).toEqual(favicon);
     expect(siteMark).toEqual(mark);
     expect(favicon).toEqual(mark);
-    expect(createHash("sha256").update(master).digest("hex")).toBe(
-      "9db2e7fa7bfc82c7dfa2b0974988f61ad9076e6b7516945935c87e132c13e108",
+    expect(createHash("sha256").update(lightMaster).digest("hex")).toBe(
+      "1b3b315ab3edea768a1077152c12d6ddb24cae6431e21b95e4f707bcaf650f1f",
     );
-    expect(createHash("sha256").update(highResolutionPng).digest("hex")).toBe(
-      "6fe8e2441a7f6850d5be0de28844a6d07d3a352189663cc95449ae79fa792338",
+    expect(createHash("sha256").update(darkMaster).digest("hex")).toBe(
+      "5aa372c7fbbf79d59e439ade5df5edeadc04eeed0f49ce817141d6a7555f430f",
     );
-    expect(master.toString()).toContain('viewBox="0 0 1024 1024"');
-    expect(highResolutionPng.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
-    expect(highResolutionPng.readUInt32BE(16)).toBe(1024);
-    expect(highResolutionPng.readUInt32BE(20)).toBe(1024);
-    expect(highResolutionPng[25]).toBe(6);
+    expect(createHash("sha256").update(lightHighResolutionPng).digest("hex")).toBe(
+      "90ed2f38f6aa9dca41e05cfb2fb39c561136a9ec10bd5f9793e2afccb5c4c975",
+    );
+    expect(createHash("sha256").update(darkHighResolutionPng).digest("hex")).toBe(
+      "7feb7725441f7396e307344b8dd035eb1d40cadc8e94fa14c28e007def18de0a",
+    );
 
-    for (const [filename, size] of [
-      ["crewhelm-mark-32.png", 32],
-      ["crewhelm-mark-64.png", 64],
-      ["crewhelm-mark-128.png", 128],
-      ["crewhelm-mark-256.png", 256],
-      ["crewhelm-mark-512.png", 512],
-      ["crewhelm-favicon-32.png", 32],
-      ["crewhelm-favicon-180.png", 180],
-    ] as const) {
-      const png = await readFile(new URL(`../assets/${filename}`, import.meta.url));
+    for (const master of [lightMaster, darkMaster]) {
+      expect(master.toString()).toContain('viewBox="0 0 1024 1024"');
+    }
 
-      expect(png.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
-      expect(png.readUInt32BE(16)).toBe(size);
-      expect(png.readUInt32BE(20)).toBe(size);
+    for (const highResolutionPng of [lightHighResolutionPng, darkHighResolutionPng]) {
+      expect(highResolutionPng.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+      expect(highResolutionPng.readUInt32BE(16)).toBe(1024);
+      expect(highResolutionPng.readUInt32BE(20)).toBe(1024);
+      expect(highResolutionPng[25]).toBe(6);
+    }
+
+    for (const variant of ["light", "dark"] as const) {
+      const variantMark = await readFile(
+        new URL(`../assets/crewhelm-mark-${variant}.svg`, import.meta.url),
+      );
+      const variantFavicon = await readFile(
+        new URL(`../assets/crewhelm-favicon-${variant}.svg`, import.meta.url),
+      );
+      const siteVariantMark = await readFile(
+        new URL(`../../../apps/site/public/crewhelm-mark-${variant}.svg`, import.meta.url),
+      );
+      const siteVariantFavicon = await readFile(
+        new URL(`../../../apps/site/public/favicon-${variant}.svg`, import.meta.url),
+      );
+
+      expect(variantFavicon).toEqual(variantMark);
+      expect(siteVariantMark).toEqual(variantMark);
+      expect(siteVariantFavicon).toEqual(variantFavicon);
+
+      for (const size of [32, 64, 128, 256, 512] as const) {
+        const png = await readFile(
+          new URL(`../assets/crewhelm-mark-${variant}-${size}.png`, import.meta.url),
+        );
+        expect(png.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+        expect(png.readUInt32BE(16)).toBe(size);
+        expect(png.readUInt32BE(20)).toBe(size);
+      }
+
+      for (const size of [32, 180] as const) {
+        const png = await readFile(
+          new URL(`../assets/crewhelm-favicon-${variant}-${size}.png`, import.meta.url),
+        );
+        const sitePng = await readFile(
+          new URL(
+            size === 32
+              ? `../../../apps/site/public/favicon-${variant}-32.png`
+              : `../../../apps/site/public/apple-touch-icon-${variant}.png`,
+            import.meta.url,
+          ),
+        );
+
+        expect(png.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+        expect(png.readUInt32BE(16)).toBe(size);
+        expect(png.readUInt32BE(20)).toBe(size);
+        expect(sitePng).toEqual(png);
+      }
     }
   });
 
@@ -141,6 +190,8 @@ describe("Crewhelm design foundation", () => {
 
   it("provides bounded, responsive, theme-aware web foundations", () => {
     expect(CREWHELM_WEB_STYLES).toContain("--ch-color-canvas: oklch(0.96 0.009 95)");
+    expect(CREWHELM_WEB_STYLES).toContain("--ch-logo-frame: #0b121b");
+    expect(CREWHELM_WEB_STYLES).toContain("--ch-logo-frame: #f3f2eb");
     expect(CREWHELM_WEB_STYLES).toContain("--ch-color-accent-contrast: #fff");
     expect(CREWHELM_WEB_STYLES).toContain("--ch-color-text-muted: oklch(0.68 0.025 255)");
     expect(CREWHELM_WEB_STYLES).toContain("--ch-color-text-muted: oklch(0.45 0.032 255)");

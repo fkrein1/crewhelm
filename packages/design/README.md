@@ -14,8 +14,8 @@ Product meaning, voice, and application rules live in the [brand guide](../../do
 - `@crewhelm/design/web` provides the compact brand fragment, semantic page tones, and the
   same-origin stylesheet served by each browser runtime.
 - `@crewhelm/design/terminal` provides the canonical CLI banner and semantic RGB roles.
-- `@crewhelm/design/assets/*` provides the vector master, original 1024px PNG, optimized SVG mark,
-  transparent PNG sizes, and universal favicon exports for light and dark mode.
+- `@crewhelm/design/assets/*` provides byte-preserved SVG and 1024px PNG masters for light and dark
+  backgrounds, paired transparent PNG sizes, explicit favicon variants, and adaptive SVG aliases.
 
 The package owns static assets and semantic roles. Each runtime continues to own document
 rendering, escaping, response headers, content security policy, forms, and interaction behavior.

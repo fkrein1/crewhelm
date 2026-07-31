@@ -31,17 +31,17 @@ Use `@crewhelm/design/theme.css`. Extend tokens before inventing local values.
 
 ### Logo
 
-The Crewhelm mark places the terminal prompt inside a square frame with one deliberate opening. The
-prompt is ready to act; the frame makes its boundary legible. Use the supplied signal-blue mark from
-`@crewhelm/design/assets/*`, preserve the square geometry, gradient, and open right edge, and never
-add a shield, lock, or rounded app tile.
+The Crewhelm mark places a signal square inside four boundary corners. The signal is ready to act;
+the separated frame makes its limits legible. Preserve the supplied square geometry and never add a
+shield, lock, rounded app tile, gradient, stroke, shadow, or glow.
 
-The 1024px PNG is the expressive high-resolution master and includes its original soft glow. Use the
-glow-free optimized SVG or its derived PNG sizes for favicons, navigation, authorization, and other
-small product UI. Do not downsample the glowing master for those surfaces.
+Use the explicit light-background and dark-background assets from `@crewhelm/design/assets/*`. The
+light variant uses `ink-950` with a `signal-600` center; the dark variant uses `paper-100` with a
+`signal-400` center. Keep both transparent 1024px PNG and SVG masters unchanged. Use their derived
+SVG or PNG sizes for favicons, navigation, authorization, and other compact UI.
 
-The wordmark remains `CREWHELM`. The CLI renders the same open frame with terminal characters. The
-browser favicon uses the same transparent mark in both color schemes.
+The wordmark remains `CREWHELM`. Browser marks and favicons follow the user’s color scheme. The CLI
+uses the terminal’s adaptive foreground for the four corners and signal blue for the center.
 
 ## Surface test
 
