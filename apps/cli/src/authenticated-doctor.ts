@@ -13,6 +13,7 @@ import {
   toolListResponseSchema,
   type TemporaryOwnerSessionDependencies,
 } from "./temporary-owner-session.js";
+import { CREWHELM_CLI_VERSION } from "./version.js";
 
 const VIEW_SCOPE = "crewhelm:view";
 const MAXIMUM_MCP_SCHEMA_BYTES = 64 * 1_024;
@@ -194,7 +195,7 @@ export async function diagnoseAuthenticatedDeployment(
         "initialize",
         {
           capabilities: {},
-          clientInfo: { name: "crewhelm-cli", version: "0.0.0" },
+          clientInfo: { name: "crewhelm-cli", version: CREWHELM_CLI_VERSION },
           protocolVersion: MCP_PROTOCOL_VERSION,
         },
         initializeResponseSchema,

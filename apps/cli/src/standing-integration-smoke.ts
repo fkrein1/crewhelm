@@ -41,6 +41,7 @@ import {
   type TemporaryOwnerMcpSession,
   type TemporaryOwnerSessionDependencies,
 } from "./temporary-owner-session.js";
+import { CREWHELM_CLI_VERSION } from "./version.js";
 
 const FULL_SCOPE = "crewhelm:full";
 const GMAIL_INTEGRATION_SLUG = "gmail";
@@ -1119,7 +1120,7 @@ export async function runStandingIntegrationSmoke(
         "initialize",
         {
           capabilities: {},
-          clientInfo: { name: "crewhelm-cli", version: "0.0.0" },
+          clientInfo: { name: "crewhelm-cli", version: CREWHELM_CLI_VERSION },
           protocolVersion: MCP_PROTOCOL_VERSION,
         },
         initializeResponseSchema,

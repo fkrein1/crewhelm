@@ -14,6 +14,7 @@ import { installationSmokeFailureSchema } from "../src/installation-smoke.js";
 import { CLI_BANNER } from "../src/presentation.js";
 import { standingIntegrationSmokeReportSchema } from "../src/standing-integration-smoke.js";
 import { upgradeSmokeFailureSchema } from "../src/upgrade-smoke.js";
+import { CREWHELM_CLI_VERSION } from "../src/version.js";
 
 const DATABASE_ID = "c58217fd-fe09-447b-b79c-5d63ed1cedc0";
 const DEPLOYMENT_VERSION_ID = "37bcd44d-e373-41a2-8a47-eb03cce01d32";
@@ -222,6 +223,27 @@ describe("Crewhelm CLI", () => {
     expect(CLI_HELP).toContain("$ crewhelm up");
     expect(CLI_HELP).not.toContain("CREWHELM_CLOUDFLARE_API_TOKEN");
     expect(harness.dependencies.fetch).not.toHaveBeenCalled();
+  });
+
+  it("reports the CLI and packaged Worker identity without external work", async () => {
+    const plainHarness = createHarness();
+
+    await expect(runCli(["--version"], plainHarness.dependencies)).resolves.toBe(0);
+    expect(plainHarness.output).toEqual([`${CREWHELM_CLI_VERSION}\n`]);
+    expect(plainHarness.dependencies.fetch).not.toHaveBeenCalled();
+    expect(plainHarness.dependencies.runWrangler).not.toHaveBeenCalled();
+
+    const jsonHarness = createHarness();
+
+    await expect(runCli(["version", "--json"], jsonHarness.dependencies)).resolves.toBe(0);
+    expect(JSON.parse(jsonHarness.output.join(""))).toEqual({
+      cliVersion: CREWHELM_CLI_VERSION,
+      deploymentProtocolVersion: 1,
+      workerFingerprint: DEPLOYMENT_FINGERPRINT,
+    });
+    expect(parseCli(["version", "--json"])).toEqual({ json: true, kind: "version" });
+    expect(jsonHarness.dependencies.fetch).not.toHaveBeenCalled();
+    expect(jsonHarness.dependencies.runWrangler).not.toHaveBeenCalled();
   });
 
   it("colors the root hierarchy when interactive", async () => {

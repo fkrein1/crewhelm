@@ -10,6 +10,7 @@ export const verificationChecks = Object.freeze([
   "typecheck",
   "test",
   "build",
+  "release:check",
 ]);
 
 function run() {

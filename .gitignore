@@ -6,6 +6,7 @@
 node_modules/
 coverage/
 dist/
+release/
 .wrangler/
 .dev.vars*
 !.dev.vars.example

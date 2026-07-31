@@ -7,6 +7,7 @@ import { DoctorInputError, parseDeploymentOrigin } from "./doctor.js";
 import { installationSmokeOptionsSchema } from "./installation-smoke.js";
 import { createCliTextStyle, type CliTextStyle } from "./presentation.js";
 import { upgradeSmokeOptionsSchema } from "./upgrade-smoke.js";
+import { CREWHELM_CLI_VERSION } from "./version.js";
 
 export const browserModeSchema = z.enum(["system", "codex", "none"]);
 export type BrowserMode = z.infer<typeof browserModeSchema>;
@@ -110,6 +111,10 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("help"),
     text: z.string(),
+  }),
+  z.strictObject({
+    json: z.boolean(),
+    kind: z.literal("version"),
   }),
   z.strictObject({
     accountId: bootstrapOptionsSchema.shape.accountId,
@@ -352,6 +357,7 @@ function createCliProgram(
   const program = new Command()
     .name("crewhelm")
     .description("Deploy and diagnose a personal Crewhelm control plane.")
+    .version(CREWHELM_CLI_VERSION)
     .option("--no-color", "disable terminal colors")
     .helpCommand(true)
     .configureHelp({
@@ -372,6 +378,20 @@ function createCliProgram(
     program.exitOverride();
     program.configureOutput(output);
   }
+
+  program
+    .command("version")
+    .summary("show CLI and packaged Worker identity")
+    .description("Show the CLI version and optionally its packaged Worker identity.")
+    .option("--json", "write one machine-readable JSON result")
+    .action((options: { json?: boolean }) => {
+      onCommand?.(
+        validatedCommand({
+          json: options.json === true,
+          kind: "version",
+        }),
+      );
+    });
 
   program
     .command("up")
@@ -701,6 +721,10 @@ export function parseCli(
     if (error instanceof CommanderError) {
       if (error.code === "commander.helpDisplayed") {
         return { kind: "help", text: helpText || CLI_HELP };
+      }
+
+      if (error.code === "commander.version") {
+        return { json: false, kind: "version" };
       }
 
       throw new CliUsageError(commanderMessage(error));
