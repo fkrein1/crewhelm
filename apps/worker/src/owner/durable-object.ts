@@ -36,8 +36,10 @@ import {
   type ListUnresolvedToolEffectsResult,
   type LookupAgentConnectionConfigurationResult,
   type InspectRunResult,
+  type InspectAgentSessionResult,
   type ListRunToolApprovalsResult,
   type ListAgentRunsResult,
+  type ListAgentSessionsResult,
   type DecideRunToolApprovalResult,
   type OwnerAuthority,
   type OwnerScope,
@@ -72,6 +74,7 @@ import {
   type ListAgentBlueprintsResult,
   type PublishAgentBlueprintResult,
   type RetireAgentBlueprintResult,
+  type DeleteAgentSessionResult,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
 import { and, count, desc, eq, gte, isNull, lt, lte } from "drizzle-orm";
@@ -642,6 +645,48 @@ export class OwnerControlPlane extends DurableObject {
     return authorization.ok
       ? this.#agentChannel.listRuns(authorization.authority, input)
       : deniedListAgentRuns(authorization.code);
+  }
+
+  async listAgentSessions(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<ListAgentSessionsResult> {
+    const authorization = this.#authorize(authorityInput, AGENTS_READ_SCOPE);
+
+    return authorization.ok
+      ? this.#agentChannel.listSessions(authorization.authority, input)
+      : {
+          error: { code: authorization.code, message: "Session request denied." },
+          ok: false,
+        };
+  }
+
+  async inspectAgentSession(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<InspectAgentSessionResult> {
+    const authorization = this.#authorize(authorityInput, AGENTS_READ_SCOPE);
+
+    return authorization.ok
+      ? this.#agentChannel.inspectSession(authorization.authority, input)
+      : {
+          error: { code: authorization.code, message: "Session request denied." },
+          ok: false,
+        };
+  }
+
+  async deleteAgentSession(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<DeleteAgentSessionResult> {
+    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#agentChannel.deleteSession(authorization.authority, input)
+      : {
+          error: { code: authorization.code, message: "Session deletion denied." },
+          ok: false,
+        };
   }
 
   async agentInbox(authorityInput: unknown, input: unknown): Promise<AgentInboxResult> {

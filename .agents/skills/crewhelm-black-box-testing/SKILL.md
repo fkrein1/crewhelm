@@ -12,7 +12,11 @@ client uses. This supplements deterministic tests; it never replaces them.
 
 Repository rehearsals use `crewhelm.testing.installation.json`. The explicit request to run this
 skill authorizes `crewhelm up` against that dedicated installation so the deployed Worker matches
-the current packaged build. It does not authorize production.
+the current packaged build. It also authorizes the ephemeral Crewhelm rehearsal OAuth client to
+request and approve temporary owner access on `crewhelm-testing`, including Full control when the
+requested public MCP journey requires mutations. No additional consent pause is required for that
+exact test installation, client type, and bounded rehearsal scope. It does not authorize production
+or access through a different account, client, installation, or broader scope.
 
 Before any OAuth, MCP, or mutating call:
 
@@ -47,9 +51,10 @@ Before any OAuth, MCP, or mutating call:
   in-app tab, and delete the file immediately. Never print the target or use the system browser.
 - On authorization pages, inspect only scoped visible text and controls. Do not capture a full DOM
   snapshot containing signed links.
-- Automate OAuth only after the user approves the exact deployment, account, client, and scopes;
-  ambient sign-in is not consent. Pause for authority changes. Use temporary owner access and
-  require verified token revocation.
+- An explicit request to run this skill approves the standard target's ephemeral rehearsal client
+  and bounded temporary scope described above; ambient sign-in alone is not consent. Pause for any
+  authority change outside that grant. Use temporary owner access and require verified token
+  revocation.
 - Exercise public OAuth and MCP only. Do not substitute direct Durable Object, D1, R2, or provider
   writes for black-box behavior.
 - Keep fixtures unique, bounded, and disposable. Record retained immutable evidence when the

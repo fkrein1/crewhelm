@@ -365,11 +365,17 @@ describe("repository foundation", () => {
     const workerEntry = await read("apps/worker/src/index.ts");
     const wrangler = await read("apps/worker/wrangler.jsonc");
 
-    expect(workerEntry).toContain('export { CrewAgent } from "./agent/durable-object.js";');
+    expect(workerEntry).toContain(
+      'export { CrewAgent, CrewSession } from "./agent/durable-object.js";',
+    );
     expect(wrangler).toMatch(/"ai"\s*:\s*\{\s*"binding"\s*:\s*"AI"/);
     expect(wrangler).toMatch(/"name"\s*:\s*"CREW_AGENT"\s*,\s*"class_name"\s*:\s*"CrewAgent"/);
+    expect(wrangler).toMatch(/"name"\s*:\s*"CREW_SESSION"\s*,\s*"class_name"\s*:\s*"CrewSession"/);
     expect(wrangler).toMatch(
       /"CrewAgent"\s*:\s*\{\s*"type"\s*:\s*"durable-object"\s*,\s*"storage"\s*:\s*"sqlite"/,
+    );
+    expect(wrangler).toMatch(
+      /"CrewSession"\s*:\s*\{\s*"type"\s*:\s*"durable-object"\s*,\s*"storage"\s*:\s*"sqlite"/,
     );
   });
 

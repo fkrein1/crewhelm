@@ -14,16 +14,18 @@ flowchart LR
     Worker --> Auth["Auth D1"]
     Worker --> Owner["OwnerControlPlane"]
     Owner --> Skills["Skill packages / R2"]
-    Owner --> Agent["CrewAgent / Think"]
-    Agent -. optional .-> Gateway["Dedicated AI Gateway"]
+    Owner --> Agent["CrewAgent directory"]
+    Agent --> Session["CrewSession / Think"]
+    Session -. optional .-> Gateway["Dedicated AI Gateway"]
     Worker --> Catalog["Composio catalog and Connect Links"]
-    Agent --> Gate["ToolGate and execution reservation"]
+    Session --> Gate["ToolGate and execution reservation"]
     Gate --> Composio["Trusted adapter / Composio"]
 ```
 
 The Worker authenticates requests, derives owner and client authority, and creates a fresh MCP
-server per request. There is one SQLite-backed `OwnerControlPlane` per owner and one name-addressed
-`CrewAgent` per logical Agent.
+server per request. There is one SQLite-backed `OwnerControlPlane` per owner, one name-addressed
+`CrewAgent` directory per logical Agent, and one isolated `CrewSession` runtime per durable
+conversation. Retained pre-session runs remain readable through the Agent object during migration.
 
 | State owner         | Authoritative facts                                                                                                    |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------- |
@@ -31,13 +33,19 @@ server per request. There is one SQLite-backed `OwnerControlPlane` per owner and
 | Auth D1             | OAuth state, signing keys, rotating refresh tokens, and token revocation                                               |
 | `OwnerControlPlane` | Agent and connection lifecycle, grants, schedules, admission, owner inbox, approvals, effect reconciliation, and audit |
 | Skill package R2    | Immutable, content-addressed Skill files; owner-local SQLite holds metadata and lifecycle                              |
-| `CrewAgent`         | Think submissions, transcripts, output, deadlines, and approval waits                                                  |
+| `CrewAgent`         | Session discovery, branch revisions, retention, deletion, and exact run-to-session routing                             |
+| `CrewSession`       | One conversation's Think transcript, submissions, output, deadlines, and approval waits                                |
 | AI Gateway          | Optional installation-wide hard spend ceiling and model-call cost metadata                                             |
 | Composio            | Connected-account credentials and refresh                                                                              |
 
-The control plane owns admission and administration; the Agent owns execution. Cross-object calls
+The control plane owns admission and administration; the Agent directory owns conversation
+lifecycle; each session owns execution. Cross-object calls
 carry explicit authority because Durable Objects do not share transactions. D1 is not an
 authoritative store for control-plane or Agent domain state.
+
+Session deletion is revision-bound and idempotent. An ambiguous deletion remains sealed beyond
+ordinary session retention until the exact request retries, preserving owner redaction and audit
+recovery without reopening an empty conversation.
 
 Runs and tool calls are bound to the admitted Agent and fleet-configuration revisions.
 Configuration changes invalidate unconsumed authority. The optional AI Gateway provides the
@@ -47,22 +55,23 @@ cost-reconciliation controls.
 
 ## Module map
 
-| Change                                | Owning path               |
-| ------------------------------------- | ------------------------- |
-| Owner authorization and wiring        | `owner/durable-object.ts` |
-| Agent definitions and revisions       | `owner/agents/`           |
-| Agent capability registry and plans   | `agent-capabilities/`     |
-| Run admission, budgets, and execution | `owner/runs/`             |
-| Recurring Agent schedules             | `owner/schedules/`        |
-| Disablement, revocation, recovery     | `owner/recovery/`         |
-| Connection lifecycle                  | `owner/connections/`      |
-| Skill package lifecycle               | `owner/skills/`           |
-| Owner inbox and Agent capabilities    | `owner/agent-channel/`    |
-| Admitted Think execution              | `agent/admitted-runs/`    |
-| MCP presentation                      | `mcp/*-tools.ts`          |
-| Public routing and bounded HTTP input | `http/`                   |
-| OAuth persistence and protocol        | `oauth/`                  |
-| Shared visual foundations             | `packages/design/`        |
+| Change                                | Owning path                  |
+| ------------------------------------- | ---------------------------- |
+| Owner authorization and wiring        | `owner/durable-object.ts`    |
+| Agent definitions and revisions       | `owner/agents/`              |
+| Agent capability registry and plans   | `agent-capabilities/`        |
+| Run admission, budgets, and execution | `owner/runs/`                |
+| Recurring Agent schedules             | `owner/schedules/`           |
+| Disablement, revocation, recovery     | `owner/recovery/`            |
+| Connection lifecycle                  | `owner/connections/`         |
+| Skill package lifecycle               | `owner/skills/`              |
+| Owner inbox and Agent capabilities    | `owner/agent-channel/`       |
+| Session directory and lifecycle       | `agent/session-directory.ts` |
+| Admitted Think execution              | `agent/admitted-runs/`       |
+| MCP presentation                      | `mcp/*-tools.ts`             |
+| Public routing and bounded HTTP input | `http/`                      |
+| OAuth persistence and protocol        | `oauth/`                     |
+| Shared visual foundations             | `packages/design/`           |
 
 Entrypoints compose capability modules. Each module exposes its public API through `index.ts`;
 policy, persistence, transactions, and failure handling remain internal.
@@ -77,8 +86,9 @@ branding, stylesheet assets, and terminal color roles.
    Worker.
 2. `OwnerControlPlane` revalidates authority, compiles validated Agent modules into an immutable
    runtime plan, and issues a bounded single-use permit against the exact Agent and fleet revisions.
-3. `CrewAgent` redeems the permit before inference. Discovery and configuration grant no execution
-   authority.
+3. `CrewAgent` resolves or creates one exact session and branch revision. `CrewSession` redeems the
+   unchanged permit, freezes a bounded transcript snapshot, and only then submits inference.
+   Discovery, session coordinates, and configuration grant no execution authority.
 4. `ToolGate` rechecks the grant, policy, connection, effect, approval, and budget before Composio
    dispatch. Ambiguous mutations remain blocked until reconciled.
 5. Schedules use the same admission path. Projections support discovery, never authority. Connect

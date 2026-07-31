@@ -10,13 +10,15 @@ import type { ThinkModel } from "@cloudflare/think";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import * as z from "zod";
 
-import { CrewAgent, type CrewAgentToolAdapter } from "./module.js";
+import { CrewAgent } from "../session-directory.js";
+import { CrewSession, type CrewAgentToolAdapter } from "./module.js";
 import { digestToolInput } from "./protocol.js";
 
 const TEST_REPLY = "Crewhelm completed the admitted test run.";
 const LARGE_TEST_PROMPT = "Return an output larger than the retained character boundary.";
 const DEADLINE_TEST_PROMPT = "Hold this test run well beyond its short deadline.";
 const SLOW_TEST_PROMPT = "Hold this test run beyond its deadline.";
+const REJECTED_SESSION_PROMPT = "Reject this durable session submission for recovery testing.";
 const TOOL_TEST_PROMPT = "Use the exact admitted test tool.";
 const TOOL_RESULT_FALLBACK_TEST_PROMPT =
   "Use the exact admitted test tool without a final model response.";
@@ -33,6 +35,7 @@ export class TestCrewAgent extends CrewAgent {
   #inspectionCount = 0;
   readonly #modelCalls: TestModelCall[] = [];
   readonly #toolExecutions: unknown[] = [];
+  #durableSessions = false;
   #completeBeforeNextCancellation = false;
   #rejectNextCancellation = false;
   readonly #model = new MockLanguageModelV4({
@@ -136,6 +139,14 @@ export class TestCrewAgent extends CrewAgent {
       };
     },
   });
+
+  enableDurableSessionsForTest(): void {
+    this.#durableSessions = true;
+  }
+
+  protected override durableSessionsEnabled(): boolean {
+    return this.#durableSessions;
+  }
 
   override getModel(): ThinkModel {
     return this.#model;
@@ -276,9 +287,107 @@ export class TestCrewAgent extends CrewAgent {
   }
 }
 
+export class TestCrewSession extends CrewSession {
+  #delayDeletion = false;
+  #deletionWaiting = false;
+  #failDeletionResponse = false;
+  #releaseDeletion: (() => void) | undefined;
+  readonly #modelCalls: TestModelCall[] = [];
+  readonly #model = new MockLanguageModelV4({
+    doGenerate: async () => ({
+      content: [{ text: TEST_REPLY, type: "text" }],
+      finishReason: { raw: "stop", unified: "stop" },
+      usage: {
+        inputTokens: { cacheRead: 0, cacheWrite: 0, noCache: 8, total: 8 },
+        outputTokens: { reasoning: 0, text: 8, total: 8 },
+      },
+      warnings: [],
+    }),
+    doStream: async (options) => {
+      this.#modelCalls.push({
+        maxOutputTokens: options.maxOutputTokens,
+        prompt: structuredClone(options.prompt),
+        toolCount: options.tools?.length ?? 0,
+      });
+
+      return {
+        stream: simulateReadableStream({
+          chunks: [
+            { type: "stream-start", warnings: [] },
+            { id: "session-text", type: "text-start" },
+            { delta: TEST_REPLY, id: "session-text", type: "text-delta" },
+            { id: "session-text", type: "text-end" },
+            {
+              finishReason: { raw: "stop", unified: "stop" },
+              type: "finish",
+              usage: {
+                inputTokens: { cacheRead: 0, cacheWrite: 0, noCache: 8, total: 8 },
+                outputTokens: { reasoning: 0, text: 8, total: 8 },
+              },
+            },
+          ],
+          initialDelayInMs: JSON.stringify(options.prompt).includes(SLOW_TEST_PROMPT)
+            ? 3_000
+            : null,
+        }),
+      };
+    },
+  });
+
+  override getModel(): ThinkModel {
+    return this.#model;
+  }
+
+  modelCallsForTest(): TestModelCall[] {
+    return structuredClone(this.#modelCalls);
+  }
+
+  delayNextDeletionForTest(): void {
+    this.#delayDeletion = true;
+  }
+
+  deletionWaitingForTest(): boolean {
+    return this.#deletionWaiting;
+  }
+
+  releaseDeletionForTest(): void {
+    this.#releaseDeletion?.();
+  }
+
+  failNextDeletionResponseForTest(): void {
+    this.#failDeletionResponse = true;
+  }
+
+  override async deleteSessionStorage(input: unknown): Promise<boolean> {
+    if (this.#delayDeletion) {
+      this.#delayDeletion = false;
+      this.#deletionWaiting = true;
+      await new Promise<void>((resolve) => {
+        this.#releaseDeletion = resolve;
+      });
+      this.#deletionWaiting = false;
+      this.#releaseDeletion = undefined;
+    }
+
+    const deleted = await super.deleteSessionStorage(input);
+
+    if (this.#failDeletionResponse) {
+      this.#failDeletionResponse = false;
+      throw new Error("Injected lost session deletion response.");
+    }
+
+    return deleted;
+  }
+
+  protected override rejectAdmittedSubmission(prompt: string): boolean {
+    return prompt === REJECTED_SESSION_PROMPT;
+  }
+}
+
 export {
   DEADLINE_TEST_PROMPT,
   LARGE_TEST_PROMPT,
+  REJECTED_SESSION_PROMPT,
   SLOW_TEST_PROMPT,
   TEST_REPLY,
   TOOL_RESULT_FALLBACK_TEST_PROMPT,

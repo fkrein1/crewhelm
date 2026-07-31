@@ -4,6 +4,7 @@ import {
   AUTONOMY_WRITE_SCOPE,
   MAXIMUM_RUN_ADMISSIONS_PER_OWNER,
   MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
+  MAXIMUM_SESSION_CONTEXT_CHARACTERS,
   MAXIMUM_AGENT_SKILL_CONTEXT_CHARACTERS,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
@@ -612,7 +613,8 @@ describe("OwnerControlPlane runs", () => {
         agentRevision: created.agent.revision,
         budgetReservation: {
           maxDurationSeconds: created.agent.executionLimits.maxDurationSeconds,
-          maxInputCharacters: created.agent.instructions.length + prompt.length,
+          maxInputCharacters:
+            created.agent.instructions.length + prompt.length + MAXIMUM_SESSION_CONTEXT_CHARACTERS,
           maxModelCalls: 1,
           maxOutputTokens: MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
           maxToolCalls: 0,
@@ -1091,7 +1093,8 @@ describe("OwnerControlPlane runs", () => {
         created.agent.id,
         JSON.stringify({
           maxDurationSeconds: created.agent.executionLimits.maxDurationSeconds,
-          maxInputCharacters: created.agent.instructions.length + 1,
+          maxInputCharacters:
+            created.agent.instructions.length + 1 + MAXIMUM_SESSION_CONTEXT_CHARACTERS,
           maxModelCalls: 1,
           model: created.agent.model,
           maxOutputTokens: created.agent.executionLimits.maxModelTokens,
