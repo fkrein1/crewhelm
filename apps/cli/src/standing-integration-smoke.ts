@@ -7,7 +7,6 @@ import {
   connectionSummarySchema,
   configureAgentScheduleResultSchema,
   configureAgentConnectionResultSchema,
-  controlPlaneStatusResultSchema,
   createAgentResultSchema,
   getFleetConfigurationResultSchema,
   getAgentResultSchema,
@@ -29,6 +28,7 @@ import {
 import * as z from "zod";
 
 import { diagnoseDeployment, doctorReportSchema, type DoctorOptions } from "./doctor.js";
+import { mcpControlPlaneStatusResultSchema } from "./mcp-result-schemas.js";
 import {
   initializeResponseSchema,
   MCP_PROTOCOL_VERSION,
@@ -416,7 +416,7 @@ async function readStatus(session: TemporaryOwnerMcpSession) {
     session,
     "crewhelm_status",
     {},
-    controlPlaneStatusResultSchema,
+    mcpControlPlaneStatusResultSchema,
     "Fleet status returned an invalid payload.",
   );
 
@@ -1068,7 +1068,7 @@ export async function runStandingIntegrationSmoke(
         session,
         "crewhelm_status",
         {},
-        controlPlaneStatusResultSchema,
+        mcpControlPlaneStatusResultSchema,
         "Fleet status returned an invalid payload.",
         CLEANUP_REQUEST_TIMEOUT_MS,
       );

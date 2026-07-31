@@ -2,7 +2,6 @@ import { randomBytes } from "node:crypto";
 
 import {
   batchDisableAgentsResultSchema,
-  controlPlaneStatusResultSchema,
   createAgentResultSchema,
   getAgentResultSchema,
   inspectRunResultSchema,
@@ -13,6 +12,7 @@ import {
 import * as z from "zod";
 
 import { diagnoseDeployment, doctorReportSchema, type DoctorOptions } from "./doctor.js";
+import { mcpControlPlaneStatusResultSchema } from "./mcp-result-schemas.js";
 import {
   initializeResponseSchema,
   MCP_PROTOCOL_VERSION,
@@ -215,7 +215,7 @@ async function readStatus(session: TemporaryOwnerMcpSession) {
     session,
     "crewhelm_status",
     {},
-    controlPlaneStatusResultSchema,
+    mcpControlPlaneStatusResultSchema,
     "Fleet status returned an invalid payload.",
   );
 

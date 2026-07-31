@@ -1,7 +1,7 @@
-import { controlPlaneStatusResultSchema } from "@crewhelm/contracts";
 import * as z from "zod";
 
 import { diagnoseDeployment, doctorReportSchema, type DoctorOptions } from "./doctor.js";
+import { mcpControlPlaneStatusResultSchema } from "./mcp-result-schemas.js";
 import {
   initializeResponseSchema,
   MCP_PROTOCOL_VERSION,
@@ -225,7 +225,7 @@ export async function diagnoseAuthenticatedDeployment(
       );
       const status = parseMcpToolResult(
         statusResponse,
-        controlPlaneStatusResultSchema,
+        mcpControlPlaneStatusResultSchema,
         "Fleet status tool returned an invalid payload.",
       );
 

@@ -108,6 +108,14 @@ function publicPayload(path: string): unknown {
 
 function fleetStatus(active: number) {
   return {
+    guidance: [
+      {
+        arguments: { limit: 10, status: "active" },
+        kind: "read",
+        reason: "choose_agent",
+        tool: "crewhelm_list_agents",
+      },
+    ],
     ok: true,
     status: {
       capacity: {
