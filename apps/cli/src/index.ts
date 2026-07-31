@@ -11,6 +11,7 @@ const cliArguments = process.argv.slice(2);
 const interactive = process.stdin.isTTY && process.stdout.isTTY;
 const color =
   interactive && process.env.NO_COLOR === undefined && !cliArguments.includes("--no-color");
+let wranglerRunner: ReturnType<typeof createWranglerRunner> | undefined;
 const dependencies = {
   color,
   deploymentAssetsDirectory: fileURLToPath(new URL("./deployment", import.meta.url)),
@@ -22,7 +23,10 @@ const dependencies = {
   openUrl: openInDefaultBrowser,
   ...(interactive ? { promptSecret, promptText } : {}),
   readEnvironment: (name: string) => process.env[name],
-  runWrangler: createWranglerRunner(process.env),
+  runWrangler: (...arguments_: Parameters<ReturnType<typeof createWranglerRunner>>) => {
+    wranglerRunner ??= createWranglerRunner(process.env);
+    return wranglerRunner(...arguments_);
+  },
   writeError: (text: string) => process.stderr.write(text),
   writeOutput: (text: string) => process.stdout.write(text),
 };

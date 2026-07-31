@@ -105,7 +105,7 @@ function workflowPolicyErrors(name: string, workflow: Record<string, unknown>): 
   const triggers = workflowTriggers(workflow["on"]);
   const forbiddenTriggers = ["issue_comment", "pull_request_target", "workflow_run"];
   const expectedPermissions: Record<string, "read" | "write"> =
-    name === "codeql.yml" ? {} : { contents: "read" };
+    name === "codeql.yml" || name === "release-cli.yml" ? {} : { contents: "read" };
 
   if (triggers.length === 0) {
     errors.push("Workflow must declare a trigger.");
@@ -135,7 +135,15 @@ function workflowPolicyErrors(name: string, workflow: Record<string, unknown>): 
     const expectedJobPermissions =
       name === "codeql.yml" && jobName === "analyze"
         ? { contents: "read" as const, "security-events": "write" as const }
-        : undefined;
+        : name === "release-cli.yml" && jobName === "package"
+          ? {
+              attestations: "write" as const,
+              contents: "read" as const,
+              "id-token": "write" as const,
+            }
+          : name === "release-cli.yml" && jobName === "release"
+            ? { contents: "write" as const }
+            : undefined;
 
     if (
       expectedJobPermissions
@@ -235,7 +243,14 @@ describe("repository foundation", () => {
     const scripts = manifest["scripts"];
 
     expect(isRecord(scripts)).toBe(true);
-    expect([...verificationChecks]).toEqual(["format:check", "lint", "typecheck", "test", "build"]);
+    expect([...verificationChecks]).toEqual([
+      "format:check",
+      "lint",
+      "typecheck",
+      "test",
+      "build",
+      "release:check",
+    ]);
     expect([...workspaceBuildArguments]).toEqual([
       "--filter=!crewhelm-monorepo",
       "--workspace-concurrency=1",
@@ -249,6 +264,7 @@ describe("repository foundation", () => {
       "docs:mcp:check": "vitest run apps/worker/src/mcp/documentation.test.ts --maxWorkers=50%",
       "format:check": "oxfmt --check .",
       lint: "oxlint --type-aware --type-check --deny-warnings --report-unused-disable-directives .",
+      "release:check": "node apps/cli/scripts/release-package.mjs",
       test: "vitest run --maxWorkers=50%",
       "test:watch": "vitest --maxWorkers=50%",
       typecheck:
@@ -411,19 +427,38 @@ describe("repository foundation", () => {
 
     expect(cliManifest).toMatchObject({
       name: "@crewhelm/cli",
-      private: true,
+      version: "0.1.0-beta.1",
       bin: {
         crewhelm: "dist/crewhelm.js",
       },
       dependencies: {
-        "@crewhelm/contracts": "workspace:*",
-        zod: "4.4.3",
+        wrangler: "4.114.0",
       },
       devDependencies: {
+        "@crewhelm/contracts": "workspace:*",
+        "@crewhelm/design": "workspace:*",
+        chalk: "6.0.0",
+        commander: "15.0.0",
         esbuild: "0.28.1",
         vitest: "4.1.10",
+        zod: "4.4.3",
+      },
+      engines: {
+        node: ">=24.18.0 <25",
+      },
+      files: ["dist", "README.md", "LICENSE", "npm-shrinkwrap.json"],
+      license: "MIT",
+      publishConfig: {
+        access: "public",
+        tag: "beta",
+      },
+      scripts: {
+        build: "node ./scripts/build.mjs",
+        "release:lock": "node ./scripts/generate-runtime-lock.mjs",
+        "release:pack": "node ./scripts/release-package.mjs",
       },
     });
+    expect(cliManifest).not.toHaveProperty("private");
     expect(composioManifest).toMatchObject({
       name: "@crewhelm/composio",
       private: true,
@@ -523,7 +558,10 @@ describe("repository foundation", () => {
     const allowedActions = new Set([
       "actions/checkout",
       "actions/dependency-review-action",
+      "actions/download-artifact",
       "actions/setup-node",
+      "actions/attest",
+      "actions/upload-artifact",
       "github/codeql-action/analyze",
       "github/codeql-action/init",
       "pnpm/action-setup",
@@ -633,7 +671,7 @@ describe("repository foundation", () => {
     }
 
     expect(pullRequestAuthorityViolations).toEqual([]);
-    expect(pnpmSetupInputs).toEqual([{ run_install: false }]);
+    expect(pnpmSetupInputs).toEqual([{ run_install: false }, { run_install: false }]);
 
     const workflowByName = Object.fromEntries(
       workflows.map(({ name, workflow }) => [name, workflow]),
@@ -654,6 +692,24 @@ describe("repository foundation", () => {
     expect(workflowTriggers(workflowByName["dependency-review.yml"]?.["on"])).toEqual([
       "pull_request",
     ]);
+    expect(workflowTriggers(workflowByName["release-cli.yml"]?.["on"])).toEqual(["push"]);
+
+    const releaseWorkflow = workflowByName["release-cli.yml"];
+    expect(releaseWorkflow?.["on"]).toEqual({
+      push: {
+        tags: ["cli-v*"],
+      },
+    });
+    const releaseJobs = releaseWorkflow?.["jobs"];
+    expect(isRecord(releaseJobs)).toBe(true);
+    if (!isRecord(releaseJobs)) {
+      throw new TypeError("Expected release workflow jobs.");
+    }
+    expect(releaseJobs["release"]).toMatchObject({
+      environment: "cli-release",
+      needs: "package",
+      permissions: { contents: "write" },
+    });
 
     const baseWorkflow = {
       jobs: { verify: { "runs-on": "ubuntu-24.04", steps: [] } },
@@ -842,6 +898,24 @@ describe("repository foundation", () => {
           tool: "CodeQL",
         },
       ],
+    });
+  });
+
+  it("versions immutable CLI release tags", async () => {
+    const ruleset = parseJsonObject(await read(".github/rulesets/cli-releases.json"));
+
+    expect(ruleset).toEqual({
+      bypass_actors: [],
+      conditions: {
+        ref_name: {
+          exclude: [],
+          include: ["refs/tags/cli-v*"],
+        },
+      },
+      enforcement: "active",
+      name: "Protected CLI release tags",
+      rules: [{ type: "deletion" }, { type: "update" }],
+      target: "tag",
     });
   });
 

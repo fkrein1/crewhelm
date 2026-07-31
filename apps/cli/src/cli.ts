@@ -54,6 +54,8 @@ import {
   upgradeSmokeReportSchema,
   type UpgradeSmokeReport,
 } from "./upgrade-smoke.js";
+import { CREWHELM_CLI_VERSION } from "./version.js";
+import { CREWHELM_DEPLOYMENT_PROTOCOL_VERSION } from "@crewhelm/contracts";
 
 export { CLI_HELP, parseCli } from "./command.js";
 
@@ -619,6 +621,22 @@ export async function runCli(
       presentation.banner();
     }
     dependencies.writeOutput(command.text);
+    return 0;
+  }
+
+  if (command.kind === "version") {
+    if (!command.json) {
+      dependencies.writeOutput(`${CREWHELM_CLI_VERSION}\n`);
+      return 0;
+    }
+
+    dependencies.writeOutput(
+      `${JSON.stringify({
+        cliVersion: CREWHELM_CLI_VERSION,
+        deploymentProtocolVersion: CREWHELM_DEPLOYMENT_PROTOCOL_VERSION,
+        workerFingerprint: await expectedDeploymentFingerprint(dependencies),
+      })}\n`,
+    );
     return 0;
   }
 

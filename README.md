@@ -34,19 +34,17 @@ Read [AGENTS.md](AGENTS.md) before using an AI coding agent. Human contribution 
 
 ## Install and upgrade
 
-Build the CLI, then deploy to a Cloudflare account already authenticated with Wrangler:
+Run the guided installer from a terminal authenticated with Cloudflare:
 
 ```sh
-pnpm --filter @crewhelm/cli build
-node apps/cli/dist/crewhelm.js up \
-  --endpoint https://YOUR_WORKER_HOST
+npx @crewhelm/cli@beta up
 ```
 
 On a fresh installation, `crewhelm up` creates a private GitHub App in your browser and securely
-prompts for the Composio project key. Interactive setup recommends Cloudflare AI Gateway spend
-protection, asks for the daily USD limit when enabled, and also lets you skip it. The CLI applies
-packaged migrations, provisions isolated Skill package storage, deploys, and diagnoses the public
-origin. It saves only non-secret
+prompts for the Worker URL and Composio project key. Interactive setup recommends Cloudflare AI
+Gateway spend protection, asks for the daily USD limit when enabled, and also lets you skip it. The
+CLI applies packaged migrations, provisions isolated Skill package storage, deploys, and diagnoses
+the public origin. It saves only non-secret
 coordinates in `crewhelm.installation.json`; `crewhelm.installation.example.json` shows the shape.
 Repeat upgrades preserve deployed secrets and an existing Gateway route, and skip an identical
 Worker upload while still reconciling triggers.

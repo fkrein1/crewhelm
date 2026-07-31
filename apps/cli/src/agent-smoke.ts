@@ -25,6 +25,7 @@ import {
   type TemporaryOwnerMcpSession,
   type TemporaryOwnerSessionDependencies,
 } from "./temporary-owner-session.js";
+import { CREWHELM_CLI_VERSION } from "./version.js";
 
 const FULL_SCOPE = "crewhelm:full";
 const MAXIMUM_MCP_SCHEMA_BYTES = 64 * 1_024;
@@ -446,7 +447,7 @@ export async function runAgentSmoke(
         "initialize",
         {
           capabilities: {},
-          clientInfo: { name: "crewhelm-cli", version: "0.0.0" },
+          clientInfo: { name: "crewhelm-cli", version: CREWHELM_CLI_VERSION },
           protocolVersion: MCP_PROTOCOL_VERSION,
         },
         initializeResponseSchema,

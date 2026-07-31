@@ -1,0 +1,93 @@
+name: Release CLI
+
+on:
+  push:
+    tags:
+      - cli-v*
+
+permissions: {}
+
+concurrency:
+  group: release-cli-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Package and attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          run_install: false
+      - name: Install Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          cache: pnpm
+          node-version-file: .nvmrc
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Require a release commit from main
+        run: git merge-base --is-ancestor HEAD origin/main
+      - name: Verify repository
+        run: pnpm verify
+      - name: Bind package to release tag
+        run: node apps/cli/scripts/release-package.mjs --install-smoke --tag "$RELEASE_TAG"
+      - name: Attest CLI package
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: apps/cli/release/*.tgz
+      - name: Upload release package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          include-hidden-files: false
+          name: crewhelm-cli-release
+          path: apps/cli/release/
+          retention-days: 7
+
+  release:
+    name: Create GitHub prerelease
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: cli-release
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Download release package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: crewhelm-cli-release
+          path: release
+      - name: Verify release checksums
+        run: cd release && sha256sum --check SHA256SUMS
+      - name: Prepare GitHub draft
+        run: |
+          release_state="$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          if [[ "$release_state" == "false" ]]; then
+            echo "Release already exists and is not a draft." >&2
+            exit 1
+          fi
+          if [[ -z "$release_state" ]]; then
+            gh release create "$RELEASE_TAG" --draft --generate-notes --title "Crewhelm CLI $RELEASE_TAG" --verify-tag
+          fi
+      - name: Upload release assets
+        run: gh release upload "$RELEASE_TAG" release/* --clobber
+      - name: Publish GitHub prerelease
+        run: gh release edit "$RELEASE_TAG" --draft=false --prerelease

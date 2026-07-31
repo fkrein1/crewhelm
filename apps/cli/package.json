@@ -1,24 +1,49 @@
 {
   "name": "@crewhelm/cli",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0-beta.1",
+  "description": "Bootstrap and diagnose a personal Crewhelm control plane.",
+  "homepage": "https://github.com/fkrein1/crewhelm#readme",
+  "bugs": {
+    "url": "https://github.com/fkrein1/crewhelm/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fkrein1/crewhelm.git",
+    "directory": "apps/cli"
+  },
   "bin": {
     "crewhelm": "dist/crewhelm.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "npm-shrinkwrap.json"
+  ],
   "type": "module",
+  "publishConfig": {
+    "access": "public",
+    "tag": "beta"
+  },
   "scripts": {
-    "build": "node ./scripts/build.mjs"
+    "build": "node ./scripts/build.mjs",
+    "release:lock": "node ./scripts/generate-runtime-lock.mjs",
+    "release:pack": "node ./scripts/release-package.mjs"
   },
   "dependencies": {
+    "wrangler": "4.114.0"
+  },
+  "devDependencies": {
     "@crewhelm/contracts": "workspace:*",
     "@crewhelm/design": "workspace:*",
     "chalk": "6.0.0",
     "commander": "15.0.0",
-    "wrangler": "4.114.0",
+    "esbuild": "0.28.1",
+    "vitest": "4.1.10",
     "zod": "4.4.3"
   },
-  "devDependencies": {
-    "esbuild": "0.28.1",
-    "vitest": "4.1.10"
+  "engines": {
+    "node": ">=24.18.0 <25"
   }
 }

@@ -197,8 +197,9 @@ conflicting flags, duplicate bindings, unknown databases, and malformed inventor
 
 Public pull-request code runs only on disposable, read-only runners after external-contributor
 approval. Privileged workflows never execute pull-request artifacts or restore their caches. A
-future npm release separates package construction from stage-only publishing and requires
-independent npm 2FA approval.
+release tag builds one allowlisted CLI tarball with an integrity-locked runtime graph, verifies an
+isolated installation and packaged identity, and attests it before a protected environment creates
+a GitHub prerelease. npm publishing remains a separate stage with independent npm approval.
 
 AI Gateway management may use a process-scoped `CREWHELM_CLOUDFLARE_API_TOKEN` limited to
 account-level AI Gateway Edit. Interactive recovery prints a scoped token recipe and never stores

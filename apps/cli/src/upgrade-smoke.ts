@@ -38,6 +38,7 @@ import {
   type TemporaryOwnerMcpSession,
   type TemporaryOwnerSessionDependencies,
 } from "./temporary-owner-session.js";
+import { CREWHELM_CLI_VERSION } from "./version.js";
 
 export const UPGRADE_SMOKE_SCOPE = "crewhelm:view";
 const MAXIMUM_RECEIPT_BYTES = 16 * 1_024;
@@ -330,7 +331,7 @@ export async function readUpgradeOwnerState(
     "initialize",
     {
       capabilities: {},
-      clientInfo: { name: "crewhelm-cli", version: "0.0.0" },
+      clientInfo: { name: "crewhelm-cli", version: CREWHELM_CLI_VERSION },
       protocolVersion: MCP_PROTOCOL_VERSION,
     },
     initializeResponseSchema,

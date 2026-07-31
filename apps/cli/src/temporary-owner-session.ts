@@ -4,6 +4,7 @@ import { createServer, type Server } from "node:http";
 import * as z from "zod";
 
 import type { DoctorDependencies, DoctorOptions } from "./doctor.js";
+import { CREWHELM_CLI_VERSION } from "./version.js";
 
 const AUTH_BASE_PATH = "/api/auth";
 const MCP_PATH = "/mcp";
@@ -522,7 +523,7 @@ async function confirmAccessTokenRevoked(
         method: "initialize",
         params: {
           capabilities: {},
-          clientInfo: { name: "crewhelm-cli", version: "0.0.0" },
+          clientInfo: { name: "crewhelm-cli", version: CREWHELM_CLI_VERSION },
           protocolVersion: MCP_PROTOCOL_VERSION,
         },
       }),
