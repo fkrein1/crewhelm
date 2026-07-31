@@ -27,7 +27,10 @@ import {
   resolveConnectionForAttachmentInputSchema,
   resolvedConnectionForAttachmentSchema,
   type Agent,
+  type AgentBlueprintProvenance,
   type AgentCapabilityConfigurations,
+  type AgentCapabilityPrerequisite,
+  type AgentRuntimePlan,
   type AgentRevision,
   type AgentRevisionSummary,
   type AgentSummary,
@@ -66,6 +69,7 @@ import type { Skills } from "../skills/index.js";
 type AgentRequestFailure = Extract<CreateAgentResult, { ok: false }>;
 type StoredAgentRow = {
   agentId: string;
+  blueprintProvenance: AgentBlueprintProvenance | null;
   capabilities: AgentCapabilityConfigurations;
   capabilityGrants: Agent["capabilityGrants"];
   createdAt: number;
@@ -87,6 +91,26 @@ type StoredAgentRevisionSummaryRow = Pick<
 >;
 type ControlPlaneDatabase = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type ConnectionAttachmentFailure = Extract<ConfigureAgentConnectionResult, { ok: false }>;
+export type ResolvedAgentDefinition =
+  | { ok: false }
+  | {
+      agent: {
+        capabilities: AgentCapabilityConfigurations;
+        executionLimits: Agent["executionLimits"];
+        instructions: string;
+        name: string;
+      };
+      ok: true;
+      prerequisites: (AgentCapabilityPrerequisite & {
+        state: "available" | "missing";
+      })[];
+      runtimePlan: AgentRuntimePlan;
+      skills: {
+        id: string;
+        state: "available" | "missing";
+        version: number;
+      }[];
+    };
 
 function encodeBase64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -108,9 +132,13 @@ async function digestCanonicalRequest(canonicalRequest: string): Promise<string>
   return encodeBase64Url(new Uint8Array(digest));
 }
 
-async function digestAgentCreation(input: CreateAgentInput): Promise<string> {
+async function digestAgentCreation(
+  input: CreateAgentInput,
+  blueprintProvenance: AgentBlueprintProvenance | null,
+): Promise<string> {
   return digestCanonicalRequest(
     JSON.stringify({
+      blueprintProvenance,
       executionLimits: input.executionLimits,
       capabilities: input.capabilities,
       instructions: input.instructions,
@@ -196,6 +224,12 @@ export class AgentRegistry {
     this.#skills = skills;
   }
 
+  resolveDefinition(
+    input: Pick<CreateAgentInput, "capabilities" | "executionLimits" | "instructions" | "name">,
+  ): ResolvedAgentDefinition {
+    return this.#resolveDefinition(input, this.#database);
+  }
+
   resolveConnectionForAttachment(input: unknown): ResolvedConnectionForAttachment {
     const request = resolveConnectionForAttachmentInputSchema.safeParse(input);
 
@@ -256,6 +290,7 @@ export class AgentRegistry {
     const existingUpdate = this.#database
       .select({
         agentId: agents.agentId,
+        blueprintProvenance: agentRevisions.blueprintProvenance,
         capabilities: agentRevisions.capabilities,
         capabilityGrants: agentRevisions.capabilityGrants,
         createdAt: agents.createdAt,
@@ -337,6 +372,7 @@ export class AgentRegistry {
       const existingUpdate = transaction
         .select({
           agentId: agents.agentId,
+          blueprintProvenance: agentRevisions.blueprintProvenance,
           capabilities: agentRevisions.capabilities,
           capabilityGrants: agentRevisions.capabilityGrants,
           createdAt: agents.createdAt,
@@ -380,6 +416,7 @@ export class AgentRegistry {
       const currentRow = transaction
         .select({
           agentId: agents.agentId,
+          blueprintProvenance: agentRevisions.blueprintProvenance,
           capabilities: agentRevisions.capabilities,
           capabilityGrants: agentRevisions.capabilityGrants,
           createdAt: agents.createdAt,
@@ -519,6 +556,7 @@ export class AgentRegistry {
         .insert(agentRevisions)
         .values({
           agentId: currentRow.agentId,
+          blueprintProvenance: currentRow.blueprintProvenance,
           capabilities: currentRow.capabilities,
           capabilityGrants: grantIds,
           createdAt,
@@ -584,6 +622,7 @@ export class AgentRegistry {
 
       return configureAgentConnectionResultSchema.parse({
         agent: {
+          blueprint: currentRow.blueprintProvenance,
           capabilities: currentRow.capabilities,
           capabilityGrants: grantIds,
           createdAt: new Date(currentRow.createdAt).toISOString(),
@@ -601,14 +640,18 @@ export class AgentRegistry {
     });
   }
 
-  async create(authority: OwnerAuthority, input: unknown): Promise<CreateAgentResult> {
+  async create(
+    authority: OwnerAuthority,
+    input: unknown,
+    blueprintProvenance: AgentBlueprintProvenance | null = null,
+  ): Promise<CreateAgentResult> {
     const request = createAgentInputSchema.safeParse(input);
 
     if (!request.success) {
       return deniedAgent("invalid_request");
     }
 
-    const requestDigest = await digestAgentCreation(request.data);
+    const requestDigest = await digestAgentCreation(request.data, blueprintProvenance);
     const fleetConfiguration = this.#currentFleetConfiguration();
     const executionLimits = request.data.executionLimits ?? fleetConfiguration.execution;
 
@@ -616,6 +659,7 @@ export class AgentRegistry {
       const existingRow = transaction
         .select({
           agentId: agents.agentId,
+          blueprintProvenance: agentRevisions.blueprintProvenance,
           capabilities: agentRevisions.capabilities,
           capabilityGrants: agentRevisions.capabilityGrants,
           createdAt: agents.createdAt,
@@ -656,24 +700,14 @@ export class AgentRegistry {
         });
       }
 
-      const compiledCapabilities = agentCapabilityRegistry.compile(request.data.capabilities, {
-        availablePrerequisites: this.#availableCapabilityPrerequisites,
-        checkPrerequisites: false,
-        fleetConfiguration,
-      });
+      const resolved = this.#resolveDefinition(request.data, transaction);
 
-      if (!compiledCapabilities.ok) {
+      if (!resolved.ok || resolved.skills.some(({ state }) => state === "missing")) {
         return deniedAgent("invalid_request");
       }
 
-      const { capabilities, runtimePlan } = compiledCapabilities;
-
-      if (
-        this.#skills.runtimeProvenance(runtimePlan.skillReferences, transaction, true) === undefined
-      ) {
-        return deniedAgent("invalid_request");
-      }
-
+      const { capabilities } = resolved.agent;
+      const { runtimePlan } = resolved;
       const model = runtimePlan.inference.model;
       const agentCount = transaction.select({ value: count() }).from(agents).get()?.value ?? 0;
 
@@ -689,6 +723,7 @@ export class AgentRegistry {
         .insert(agentRevisions)
         .values({
           agentId,
+          blueprintProvenance,
           capabilities,
           capabilityGrants: [],
           createdAt,
@@ -720,6 +755,7 @@ export class AgentRegistry {
         .run();
 
       const agent = agentSchema.parse({
+        blueprint: blueprintProvenance,
         capabilities,
         capabilityGrants: [],
         createdAt: new Date(createdAt).toISOString(),
@@ -824,12 +860,12 @@ export class AgentRegistry {
     }
 
     const requestDigest = await digestAgentUpdate(request.data);
-    const fleetConfiguration = this.#currentFleetConfiguration();
 
     return this.#database.transaction((transaction) => {
       const existingUpdate = transaction
         .select({
           agentId: agents.agentId,
+          blueprintProvenance: agentRevisions.blueprintProvenance,
           capabilities: agentRevisions.capabilities,
           capabilityGrants: agentRevisions.capabilityGrants,
           createdAt: agents.createdAt,
@@ -870,28 +906,19 @@ export class AgentRegistry {
         });
       }
 
-      const compiledCapabilities = agentCapabilityRegistry.compile(request.data.capabilities, {
-        availablePrerequisites: this.#availableCapabilityPrerequisites,
-        checkPrerequisites: false,
-        fleetConfiguration,
-      });
+      const resolved = this.#resolveDefinition(request.data, transaction);
 
-      if (!compiledCapabilities.ok) {
+      if (!resolved.ok || resolved.skills.some(({ state }) => state === "missing")) {
         return deniedAgent("invalid_request");
       }
 
-      const { capabilities, runtimePlan } = compiledCapabilities;
-
-      if (
-        this.#skills.runtimeProvenance(runtimePlan.skillReferences, transaction, true) === undefined
-      ) {
-        return deniedAgent("invalid_request");
-      }
-
+      const { capabilities } = resolved.agent;
+      const { runtimePlan } = resolved;
       const model = runtimePlan.inference.model;
       const currentRow = transaction
         .select({
           agentId: agents.agentId,
+          blueprintProvenance: agentRevisions.blueprintProvenance,
           capabilities: agentRevisions.capabilities,
           capabilityGrants: agentRevisions.capabilityGrants,
           createdAt: agents.createdAt,
@@ -980,6 +1007,7 @@ export class AgentRegistry {
         .insert(agentRevisions)
         .values({
           agentId: currentAgent.id,
+          blueprintProvenance: null,
           capabilities,
           capabilityGrants: grantIds,
           createdAt: updatedAt,
@@ -1032,6 +1060,7 @@ export class AgentRegistry {
 
       return updateAgentResultSchema.parse({
         agent: {
+          blueprint: null,
           capabilities,
           capabilityGrants: grantIds,
           createdAt: currentAgent.createdAt,
@@ -1117,6 +1146,7 @@ export class AgentRegistry {
   #agentFromRow(row: StoredAgentRow): Agent {
     return agentSchema.parse({
       capabilities: row.capabilities,
+      blueprint: row.blueprintProvenance,
       capabilityGrants: row.capabilityGrants,
       createdAt: new Date(row.createdAt).toISOString(),
       executionLimits: row.executionLimits,
@@ -1127,6 +1157,55 @@ export class AgentRegistry {
       revision: row.currentRevision,
       status: row.status,
     });
+  }
+
+  #resolveDefinition(
+    input: Pick<CreateAgentInput, "capabilities" | "executionLimits" | "instructions" | "name">,
+    database: ControlPlaneDatabase,
+  ): ResolvedAgentDefinition {
+    const fleetConfiguration = this.#currentFleetConfiguration();
+    const compiled = agentCapabilityRegistry.compile(input.capabilities, {
+      availablePrerequisites: this.#availableCapabilityPrerequisites,
+      checkPrerequisites: false,
+      fleetConfiguration,
+    });
+
+    if (!compiled.ok) {
+      return { ok: false };
+    }
+
+    const descriptors = agentCapabilityRegistry
+      .catalog(this.#availableCapabilityPrerequisites)
+      .filter(({ id }) => compiled.capabilities.some((capability) => capability.id === id));
+    const prerequisites = descriptors.flatMap((descriptor) =>
+      descriptor.prerequisites.map((prerequisite) => ({
+        ...prerequisite,
+        state: this.#availableCapabilityPrerequisites.has(prerequisite.id)
+          ? ("available" as const)
+          : ("missing" as const),
+      })),
+    );
+    const skills = compiled.runtimePlan.skillReferences.map((reference) => ({
+      id: reference.id,
+      state:
+        this.#skills.runtimeProvenance([reference], database, true) === undefined
+          ? ("missing" as const)
+          : ("available" as const),
+      version: reference.version,
+    }));
+
+    return {
+      agent: {
+        capabilities: compiled.capabilities,
+        executionLimits: input.executionLimits ?? fleetConfiguration.execution,
+        instructions: input.instructions,
+        name: input.name,
+      },
+      ok: true,
+      prerequisites,
+      runtimePlan: compiled.runtimePlan,
+      skills,
+    };
   }
 
   #agentRevisionFromRow(row: StoredAgentRevisionRow): AgentRevision {
@@ -1140,6 +1219,7 @@ export class AgentRegistry {
     return this.#database
       .select({
         agentId: agents.agentId,
+        blueprintProvenance: agentRevisions.blueprintProvenance,
         capabilities: agentRevisions.capabilities,
         capabilityGrants: agentRevisions.capabilityGrants,
         createdAt: agents.createdAt,
@@ -1171,6 +1251,7 @@ export class AgentRegistry {
     return this.#database
       .select({
         agentId: agents.agentId,
+        blueprintProvenance: agentRevisions.blueprintProvenance,
         capabilities: agentRevisions.capabilities,
         capabilityGrants: agentRevisions.capabilityGrants,
         createdAt: agents.createdAt,

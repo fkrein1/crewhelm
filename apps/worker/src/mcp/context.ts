@@ -13,12 +13,14 @@ export interface OwnerControlPlaneClient {
   configureFleetConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
   decideRunToolApproval(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
+  getAgentBlueprint(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgentRevision(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgentSchedule(authorityInput: unknown, input: unknown): Promise<unknown>;
   getFleetConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
   getSkill(authorityInput: unknown, input: unknown): Promise<unknown>;
   inspectRun(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgentRevisions(authorityInput: unknown, input: unknown): Promise<unknown>;
+  listAgentBlueprints(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgentRuns(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgents(authorityInput: unknown, input: unknown): Promise<unknown>;
   listConnections(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -30,6 +32,9 @@ export interface OwnerControlPlaneClient {
   reserveIntegrationEnablement(authorityInput: unknown, input: unknown): Promise<unknown>;
   reconcileToolExecution(authorityInput: unknown, input: unknown): Promise<unknown>;
   publishSkill(authorityInput: unknown, input: unknown): Promise<unknown>;
+  publishAgentBlueprint(authorityInput: unknown, input: unknown): Promise<unknown>;
+  instantiateAgentBlueprint(authorityInput: unknown, input: unknown): Promise<unknown>;
+  retireAgentBlueprint(authorityInput: unknown, input: unknown): Promise<unknown>;
   retireSkill(authorityInput: unknown, input: unknown): Promise<unknown>;
   resolveConnectionForAttachment(authorityInput: unknown, input: unknown): Promise<unknown>;
   startRun(authorityInput: unknown, input: unknown): Promise<unknown>;

@@ -1,5 +1,7 @@
 import type {
   Agent,
+  AgentBlueprintPackage,
+  AgentBlueprintProvenance,
   AgentCapabilityConfigurations,
   AgentInboxDeferredReason,
   AgentExecutionLimits,
@@ -130,6 +132,9 @@ export const agentRevisions = sqliteTable(
     capabilityGrants: text("capability_grants", { mode: "json" })
       .$type<Agent["capabilityGrants"]>()
       .notNull(),
+    blueprintProvenance: text("blueprint_provenance", {
+      mode: "json",
+    }).$type<AgentBlueprintProvenance | null>(),
     createdAt: integer("created_at").notNull(),
   },
   (table) => [
@@ -141,7 +146,95 @@ export const agentRevisions = sqliteTable(
     check("agent_revisions_revision_positive", sql`${table.revision} > 0`),
     check("agent_revisions_capabilities_json", sql`json_valid(${table.capabilities})`),
     check("agent_revisions_capability_grants_json", sql`json_valid(${table.capabilityGrants})`),
+    check(
+      "agent_revisions_blueprint_provenance_json",
+      sql`${table.blueprintProvenance} IS NULL OR json_valid(${table.blueprintProvenance})`,
+    ),
     check("agent_revisions_created_at_positive", sql`${table.createdAt} > 0`),
+  ],
+);
+
+export const agentBlueprints = sqliteTable(
+  "agent_blueprints",
+  {
+    blueprintId: text("blueprint_id").primaryKey(),
+    currentVersion: integer("current_version").notNull(),
+    name: text("name").notNull(),
+    status: text("status", { enum: ["active", "retired"] }).notNull(),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+    retiredAt: integer("retired_at"),
+  },
+  (table) => [
+    index("agent_blueprints_status_id").on(table.status, table.blueprintId),
+    uniqueIndex("agent_blueprints_active_name")
+      .on(table.name)
+      .where(sql`${table.status} = 'active'`),
+    check("agent_blueprints_current_version_positive", sql`${table.currentVersion} > 0`),
+    check("agent_blueprints_status", sql`${table.status} IN ('active', 'retired')`),
+    check("agent_blueprints_created_at_positive", sql`${table.createdAt} > 0`),
+    check("agent_blueprints_updated_after_creation", sql`${table.updatedAt} >= ${table.createdAt}`),
+    check(
+      "agent_blueprints_state",
+      sql`(
+        (${table.status} = 'active' AND ${table.retiredAt} IS NULL)
+        OR (${table.status} = 'retired'
+          AND ${table.retiredAt} IS NOT NULL
+          AND ${table.retiredAt} >= ${table.createdAt})
+      )`,
+    ),
+  ],
+);
+
+export const agentBlueprintVersions = sqliteTable(
+  "agent_blueprint_versions",
+  {
+    blueprintId: text("blueprint_id").notNull(),
+    version: integer("version").notNull(),
+    package: text("package", { mode: "json" }).$type<AgentBlueprintPackage>().notNull(),
+    packageDigest: text("package_digest").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.blueprintId, table.version] }),
+    foreignKey({
+      columns: [table.blueprintId],
+      foreignColumns: [agentBlueprints.blueprintId],
+    }).onDelete("restrict"),
+    check("agent_blueprint_versions_version_positive", sql`${table.version} > 0`),
+    check("agent_blueprint_versions_package_json", sql`json_valid(${table.package})`),
+    check(
+      "agent_blueprint_versions_package_digest_length",
+      sql`length(${table.packageDigest}) = 64`,
+    ),
+    check("agent_blueprint_versions_size_bytes_positive", sql`${table.sizeBytes} > 0`),
+    check("agent_blueprint_versions_created_at_positive", sql`${table.createdAt} > 0`),
+  ],
+);
+
+export const agentBlueprintMutations = sqliteTable(
+  "agent_blueprint_mutations",
+  {
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    operation: text("operation", { enum: ["publish", "retire"] }).notNull(),
+    blueprintId: text("blueprint_id").notNull(),
+    version: integer("version").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.clientId, table.idempotencyKey] }),
+    foreignKey({
+      columns: [table.blueprintId, table.version],
+      foreignColumns: [agentBlueprintVersions.blueprintId, agentBlueprintVersions.version],
+    }).onDelete("restrict"),
+    check(
+      "agent_blueprint_mutations_request_digest_length",
+      sql`length(${table.requestDigest}) = 43`,
+    ),
+    check("agent_blueprint_mutations_operation", sql`${table.operation} IN ('publish', 'retire')`),
+    check("agent_blueprint_mutations_version_positive", sql`${table.version} > 0`),
   ],
 );
 
@@ -1128,6 +1221,9 @@ export const controlPlaneMigrations = sqliteTable(
 
 export const controlPlaneSchema = {
   aiGatewayCalls,
+  agentBlueprintMutations,
+  agentBlueprintVersions,
+  agentBlueprints,
   agentCreations,
   agentInboxAcknowledgements,
   agentInboxItems,

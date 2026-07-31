@@ -113,6 +113,8 @@ export const agentCapabilityPrerequisiteSchema = z.strictObject({
   kind: z.enum(["binding", "grant", "resource"]),
 });
 
+export type AgentCapabilityPrerequisite = z.infer<typeof agentCapabilityPrerequisiteSchema>;
+
 export const agentCapabilityConfigurationFieldSchema = z.strictObject({
   description: z.string().min(1).max(240),
   enum: z.array(z.string().min(1).max(160)).min(1).max(64).optional(),

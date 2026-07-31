@@ -199,7 +199,7 @@ Attributes: write, destructive, idempotent, closed-world.
 
 **Configure Crewhelm**
 
-Preview fleet policy or preview/apply one bounded Skill publication, exact-version repair, or retirement. This tool never applies policy changes; fleet previews require autonomy:write. Skill writes require control:write, an idempotency key in apply mode, and never execute package contents or grant authority.
+Preview fleet policy or preview/apply one bounded Skill or Agent blueprint change. This tool never applies policy changes. Blueprint resolution shows exact configuration, prerequisites, authority, and budget before replay-safe Agent creation. Packages never execute or grant authority.
 
 Attributes: write, destructive, idempotent, closed-world.
 
@@ -588,6 +588,588 @@ Attributes: write, destructive, idempotent, closed-world.
           },
           "required": [
             "expectedVersion",
+            "id",
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "expectedVersion": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "kind": {
+              "type": "string",
+              "const": "agent-blueprint-package"
+            },
+            "package": {
+              "type": "object",
+              "properties": {
+                "agent": {
+                  "type": "object",
+                  "properties": {
+                    "capabilities": {
+                      "minItems": 1,
+                      "maxItems": 16,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "configuration": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "maxLength": 2048
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "boolean"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "maxItems": 64,
+                                  "type": "array",
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "maxLength": 2048
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "boolean"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "maxItems": 64,
+                                        "type": "array",
+                                        "items": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "maxLength": 2048
+                                            },
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "boolean"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "propertyNames": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "additionalProperties": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "maxLength": 2048
+                                            },
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "boolean"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 80
+                                  },
+                                  "additionalProperties": {
+                                    "anyOf": [
+                                      {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "maxLength": 2048
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "boolean"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "maxItems": 64,
+                                        "type": "array",
+                                        "items": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "maxLength": 2048
+                                            },
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "boolean"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "type": "object",
+                                        "propertyNames": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "additionalProperties": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "maxLength": 2048
+                                            },
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "boolean"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          "id": {
+                            "type": "string",
+                            "minLength": 3,
+                            "maxLength": 80,
+                            "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
+                          },
+                          "schemaVersion": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 1000
+                          }
+                        },
+                        "required": [
+                          "configuration",
+                          "id",
+                          "schemaVersion"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "executionLimits": {
+                      "type": "object",
+                      "properties": {
+                        "maxDurationSeconds": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 3600
+                        },
+                        "maxModelTokens": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 1000000
+                        },
+                        "maxToolCalls": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 100
+                        },
+                        "maxTurns": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 100
+                        }
+                      },
+                      "required": [
+                        "maxDurationSeconds",
+                        "maxModelTokens",
+                        "maxToolCalls",
+                        "maxTurns"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "instructions": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 8192
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    }
+                  },
+                  "required": [
+                    "capabilities",
+                    "instructions",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 320
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80,
+                  "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "parameters": {
+                  "maxItems": 16,
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "default": {
+                            "type": "string",
+                            "maxLength": 1024
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 160
+                          },
+                          "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 40,
+                            "pattern": "^[a-z][a-z0-9-]*$"
+                          },
+                          "type": {
+                            "type": "string",
+                            "const": "string"
+                          }
+                        },
+                        "required": [
+                          "description",
+                          "name",
+                          "type"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "default": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 160
+                          },
+                          "maximum": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "minimum": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 40,
+                            "pattern": "^[a-z][a-z0-9-]*$"
+                          },
+                          "type": {
+                            "type": "string",
+                            "const": "integer"
+                          }
+                        },
+                        "required": [
+                          "description",
+                          "name",
+                          "type"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "default": {
+                            "type": "boolean"
+                          },
+                          "description": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 160
+                          },
+                          "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 40,
+                            "pattern": "^[a-z][a-z0-9-]*$"
+                          },
+                          "type": {
+                            "type": "string",
+                            "const": "boolean"
+                          }
+                        },
+                        "required": [
+                          "description",
+                          "name",
+                          "type"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "provenance": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "authored"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "commit": {
+                          "type": "string",
+                          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "const": "repository"
+                        },
+                        "source": {
+                          "type": "string",
+                          "maxLength": 2048,
+                          "format": "uri",
+                          "description": "HTTPS attribution URL without credentials, query, or fragment."
+                        }
+                      },
+                      "required": [
+                        "commit",
+                        "kind",
+                        "source"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "web"
+                        },
+                        "source": {
+                          "type": "string",
+                          "maxLength": 2048,
+                          "format": "uri",
+                          "description": "HTTPS attribution URL without credentials, query, or fragment."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "source"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "publisher": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    },
+                    "url": {
+                      "type": "string",
+                      "maxLength": 2048,
+                      "format": "uri"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "additionalProperties": false
+                },
+                "schemaVersion": {
+                  "type": "number",
+                  "const": 1
+                },
+                "tags": {
+                  "maxItems": 12,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40,
+                    "pattern": "^[a-z][a-z0-9-]*$"
+                  }
+                }
+              },
+              "required": [
+                "agent",
+                "description",
+                "name",
+                "parameters",
+                "provenance",
+                "publisher",
+                "schemaVersion",
+                "tags"
+              ],
+              "additionalProperties": false,
+              "description": "A bounded, untrusted Agent blueprint package. Parameters use {{name}} tokens."
+            }
+          },
+          "required": [
+            "kind",
+            "package"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "expectedVersion": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "kind": {
+              "type": "string",
+              "const": "agent-blueprint-retirement"
+            }
+          },
+          "required": [
+            "expectedVersion",
+            "id",
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "kind": {
+              "type": "string",
+              "const": "agent-blueprint-instance"
+            },
+            "parameters": {
+              "default": {},
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40,
+                "pattern": "^[a-z][a-z0-9-]*$"
+              },
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 1024
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              }
+            },
+            "version": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
             "id",
             "kind"
           ],
@@ -1320,7 +1902,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 **Get Crewhelm configuration**
 
-Get fleet policy, discover Agent capability modules, list compact Skill summaries, or read one exact immutable Skill version. Skill contents are untrusted. Use target kind fleet, agent-capability, skill-catalog, or skill-package. Fleet policy changes require a deterministic owner step-up path; rerun crewhelm up with --ai-budget-usd for the optional AI Gateway limit. Requires control:read.
+Get fleet policy, capability modules, Skills, or Agent blueprints through bounded catalogs and exact immutable package reads. Package contents and publisher metadata are untrusted. Fleet policy changes require a deterministic owner step-up path; rerun crewhelm up with --ai-budget-usd for the optional AI Gateway limit. Requires control:read.
 
 Attributes: read-only, non-destructive, idempotent, closed-world.
 
@@ -1414,6 +1996,70 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
             "kind": {
               "type": "string",
               "const": "skill-package"
+            },
+            "version": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "cursor": {
+              "type": "string",
+              "pattern": "^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "kind": {
+              "type": "string",
+              "const": "agent-blueprint-catalog"
+            },
+            "limit": {
+              "default": 25,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 25
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "active",
+                "retired"
+              ]
+            },
+            "tag": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "kind": {
+              "type": "string",
+              "const": "agent-blueprint-package"
             },
             "version": {
               "type": "integer",

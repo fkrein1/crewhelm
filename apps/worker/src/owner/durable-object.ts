@@ -67,6 +67,11 @@ import {
   type ListSkillsResult,
   type PublishSkillResult,
   type RetireSkillResult,
+  type GetAgentBlueprintResult,
+  type InstantiateAgentBlueprintResult,
+  type ListAgentBlueprintsResult,
+  type PublishAgentBlueprintResult,
+  type RetireAgentBlueprintResult,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
 import { and, count, desc, eq, gte, isNull, lt, lte } from "drizzle-orm";
@@ -84,6 +89,7 @@ import {
   deniedStartRun,
 } from "./agent-channel/index.js";
 import { AgentRegistry, deniedAgent, deniedConnectionAttachment } from "./agents/index.js";
+import { AgentBlueprints, deniedAgentBlueprint } from "./agent-blueprints/index.js";
 import {
   Connections,
   deniedConnectionAuthorizationReturn,
@@ -168,6 +174,7 @@ export class OwnerControlPlane extends DurableObject {
   readonly #runAdmissions: RunAdmissions;
   readonly #toolExecutions: ToolExecutions;
   readonly #agents: AgentRegistry;
+  readonly #agentBlueprints: AgentBlueprints;
   readonly #connections: Connections;
   readonly #agentChannel: AgentChannel;
   readonly #authorityControls: AuthorityControls;
@@ -216,6 +223,7 @@ export class OwnerControlPlane extends DurableObject {
       this.#skills,
       availableCapabilityPrerequisites,
     );
+    this.#agentBlueprints = new AgentBlueprints(this.#database, this.#agents);
     this.#connections = new Connections(this.#database, this.#storage, () =>
       this.#fleetConfigurations.currentData(),
     );
@@ -346,6 +354,55 @@ export class OwnerControlPlane extends DurableObject {
     return authorization.ok
       ? this.#skills.retire(authorization.authority, input)
       : deniedSkill(authorization.code);
+  }
+
+  listAgentBlueprints(authorityInput: unknown, input: unknown): ListAgentBlueprintsResult {
+    const authorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
+
+    return authorization.ok
+      ? this.#agentBlueprints.list(input)
+      : deniedAgentBlueprint(authorization.code);
+  }
+
+  getAgentBlueprint(authorityInput: unknown, input: unknown): GetAgentBlueprintResult {
+    const authorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
+
+    return authorization.ok
+      ? this.#agentBlueprints.get(input)
+      : deniedAgentBlueprint(authorization.code);
+  }
+
+  async publishAgentBlueprint(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<PublishAgentBlueprintResult> {
+    const authorization = this.#authorize(authorityInput, OWNER_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#agentBlueprints.publish(authorization.authority, input)
+      : deniedAgentBlueprint(authorization.code);
+  }
+
+  async instantiateAgentBlueprint(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<InstantiateAgentBlueprintResult> {
+    const authorization = this.#authorize(authorityInput, OWNER_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#agentBlueprints.instantiate(authorization.authority, input)
+      : deniedAgentBlueprint(authorization.code);
+  }
+
+  async retireAgentBlueprint(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<RetireAgentBlueprintResult> {
+    const authorization = this.#authorize(authorityInput, OWNER_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#agentBlueprints.retire(authorization.authority, input)
+      : deniedAgentBlueprint(authorization.code);
   }
 
   recordAiGatewayCall(input: unknown): Promise<void> {
