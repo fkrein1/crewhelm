@@ -12,7 +12,6 @@
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint --type-aware --type-check --deny-warnings --report-unused-disable-directives .",
-    "playground:authorization": "pnpm --filter @crewhelm/cli playground:authorization",
     "release:check": "node apps/cli/scripts/release-package.mjs",
     "test": "vitest run --maxWorkers=50%",
     "test:watch": "vitest --maxWorkers=50%",

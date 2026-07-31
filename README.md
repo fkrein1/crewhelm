@@ -34,15 +34,6 @@ pnpm verify
 Read [AGENTS.md](AGENTS.md) before using an AI coding agent. Human contribution guidance is in
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Preview every raw authorization-flow HTML surface with fixture-only data on loopback:
-
-```sh
-pnpm playground:authorization
-```
-
-Open `http://127.0.0.1:4173/`. The playground imports the production renderers; its forms and links
-terminate locally and do not contact GitHub, OAuth clients, providers, or a Crewhelm deployment.
-
 ## Install and upgrade
 
 Run the guided installer from a terminal authenticated with Cloudflare:
