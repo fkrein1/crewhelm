@@ -206,6 +206,16 @@ only a workflow- and environment-bound npm OIDC identity. It publishes the verif
 a separate GitHub-write job creates the immutable prerelease; retries require the existing npm and
 GitHub artifacts to match exactly.
 
+The public site's Cloudflare upload lane accepts only branches inside the connected Crewhelm
+repository that trusted maintainers can push. Fork pull requests receive secretless verification
+but no Cloudflare credential or preview upload. Dependabot and every other automation-owned branch
+prefix are excluded from this lane. Workers Builds uses a custom user token limited to the Crewhelm
+account and `crewhelm.app` zone, with no KV or R2 access. Cloudflare exposes Workers Scripts Edit
+only at account scope, so that account-wide deployment authority remains a residual risk. Suspected
+compromise requires disabling branch builds, revoking the token, auditing Worker build and
+deployment history, restoring the last verified site version when needed, and selecting a
+replacement token before previews resume.
+
 AI Gateway management may use a process-scoped `CREWHELM_CLOUDFLARE_API_TOKEN` limited to
 account-level AI Gateway Edit. Interactive recovery prints a scoped token recipe and never stores
 or deploys the token. Bootstrap skips Gateway management unless the operator chooses a daily USD

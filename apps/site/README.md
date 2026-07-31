@@ -30,16 +30,32 @@ Keep the `crewhelm-site` Workers Build configured with:
 
 | Setting                       | Value                                |
 | ----------------------------- | ------------------------------------ |
-| Root directory                | `/apps/site`                         |
+| Root directory                | `apps/site`                          |
 | Production branch             | `main`                               |
 | Build command                 | `pnpm run build`                     |
 | Production deploy command     | `pnpm exec wrangler deploy`          |
 | Non-production deploy command | `pnpm exec wrangler versions upload` |
 | Non-production branch builds  | Enabled                              |
+| Preview branch excludes       | `dependabot/*`                       |
 | Build watch include paths     | `*`; every branch commit builds      |
 
-The Cloudflare Git integration owns its narrowly scoped build token; no Cloudflare secret is stored
-in GitHub Actions. GitHub App repository access is limited to `fkrein1/crewhelm`.
+Do not leave Cloudflare's automatically generated Workers Builds token at its default scope. Edit
+it, or select a custom user token, so its resources are limited to the Crewhelm Cloudflare account
+and the `crewhelm.app` zone. It may grant Account Settings Read, Workers Scripts Edit, User Details
+Read, Memberships Read, and Workers Routes Edit for `crewhelm.app`; it must not grant KV or R2
+access. Cloudflare currently scopes Workers Scripts Edit to an account rather than one Worker, so
+this remains deployment authority for every Worker in that account.
+
+Only pushes to branches inside `fkrein1/crewhelm`, restricted to trusted maintainers, may enter the
+Cloudflare upload lane. Exclude `dependabot/*`; add every future automation-owned branch prefix to
+the exclusions before enabling that automation. Fork pull requests run only the secretless GitHub
+Actions verification and must never receive a Cloudflare build token. GitHub App repository access
+remains limited to `fkrein1/crewhelm`.
+
+If the build token or a trusted branch is compromised, disable non-production builds, revoke the
+token, inspect Worker build and deployment history, restore the last verified `crewhelm-site`
+version if needed, then create and select a replacement custom token before re-enabling previews.
+No Cloudflare secret is stored in GitHub Actions.
 
 Do not add D1 until a server-rendered recipe slice defines its schema, ranking semantics, abuse
 bounds, migration/recovery path, and SEO contracts. When that slice exists, add the binding to the
