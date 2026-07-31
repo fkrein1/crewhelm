@@ -83,7 +83,7 @@ export const toolListResponseSchema = z.looseObject({
           name: z.string().min(1).max(256),
         }),
       )
-      .max(30),
+      .max(32),
   }),
 });
 
