@@ -27,7 +27,8 @@ const canonicalUrl = canonical === undefined
 <title>{title}</title>
 <meta name="description" content={description} />
 <meta name="robots" content={index ? "index, follow" : "noindex, follow"} />
-<meta name="theme-color" content="#f2f0e9" />
+<meta name="theme-color" content="#f2f0e9" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#11151e" media="(prefers-color-scheme: dark)" />
 <meta name="color-scheme" content="light dark" />
 {canonicalUrl && <link rel="canonical" href={canonicalUrl} />}
 <link rel="sitemap" href="/sitemap-index.xml" />

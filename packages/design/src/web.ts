@@ -34,7 +34,6 @@ function themeVariables(theme: CrewhelmColorTheme, indentation = "  "): string {
     .join("\n");
 }
 
-const darkThemeVariables = themeVariables(crewhelmColorThemes.dark);
 const lightThemeVariables = themeVariables(crewhelmColorThemes.light);
 const nestedDarkThemeVariables = themeVariables(crewhelmColorThemes.dark, "    ");
 
@@ -60,18 +59,8 @@ ${lightThemeVariables}
   background: var(--ch-color-canvas);
 }
 
-:root[data-theme="light"] {
-  color-scheme: light;
-${lightThemeVariables}
-}
-
-:root[data-theme="dark"] {
-  color-scheme: dark;
-${darkThemeVariables}
-}
-
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
+  :root {
     color-scheme: dark;
 ${nestedDarkThemeVariables}
   }

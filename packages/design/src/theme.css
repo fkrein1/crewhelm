@@ -119,30 +119,32 @@
   --radius: 0;
 }
 
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --background: var(--color-ink-950);
-  --foreground: var(--color-paper-100);
-  --card: var(--color-ink-900);
-  --card-foreground: var(--color-paper-100);
-  --primary: var(--color-signal-400);
-  --primary-foreground: var(--color-ink-950);
-  --secondary: var(--color-ink-800);
-  --secondary-foreground: var(--color-paper-100);
-  --muted: var(--color-ink-800);
-  --muted-foreground: var(--color-ink-300);
-  --border: var(--color-ink-700);
-  --border-strong: var(--color-ink-300);
-  --ring: var(--color-signal-400);
-  --success: var(--color-success-400);
-  --success-soft: var(--color-success-950);
-  --warning: var(--color-warning-400);
-  --warning-soft: var(--color-warning-950);
-  --danger: var(--color-danger-400);
-  --danger-soft: var(--color-danger-950);
-  --ledger-shadow: 10px 12px 0 color-mix(in oklch, var(--color-signal-400) 22%, transparent);
-  --signal-shadow: 10px 10px 0 var(--color-signal-400);
-  --signal-shadow-sm: 7px 7px 0 var(--color-signal-400);
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --background: var(--color-ink-950);
+    --foreground: var(--color-paper-100);
+    --card: var(--color-ink-900);
+    --card-foreground: var(--color-paper-100);
+    --primary: var(--color-signal-400);
+    --primary-foreground: var(--color-ink-950);
+    --secondary: var(--color-ink-800);
+    --secondary-foreground: var(--color-paper-100);
+    --muted: var(--color-ink-800);
+    --muted-foreground: var(--color-ink-300);
+    --border: var(--color-ink-700);
+    --border-strong: var(--color-ink-300);
+    --ring: var(--color-signal-400);
+    --success: var(--color-success-400);
+    --success-soft: var(--color-success-950);
+    --warning: var(--color-warning-400);
+    --warning-soft: var(--color-warning-950);
+    --danger: var(--color-danger-400);
+    --danger-soft: var(--color-danger-950);
+    --ledger-shadow: 10px 12px 0 color-mix(in oklch, var(--color-signal-400) 22%, transparent);
+    --signal-shadow: 10px 10px 0 var(--color-signal-400);
+    --signal-shadow-sm: 7px 7px 0 var(--color-signal-400);
+  }
 }
 
 @theme inline {
