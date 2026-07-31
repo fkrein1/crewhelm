@@ -11,9 +11,6 @@ export const crewhelmTerminalTheme = {
 } as const satisfies Record<string, CrewhelmRgbColor>;
 
 export const CREWHELM_CLI_MARK_ACCENT = "■";
-export const CREWHELM_CLI_MARK_LINES = ["┌  ┐", ` ${CREWHELM_CLI_MARK_ACCENT}  `, "└  ┘"] as const;
-export const CREWHELM_CLI_BANNER = `${CREWHELM_CLI_MARK_LINES.map((line) =>
-  line.includes(CREWHELM_CLI_MARK_ACCENT) ? `${line} ${CREWHELM_LOGO_WORDMARK}` : line,
-).join("\n")}\n`;
+export const CREWHELM_CLI_BANNER = `  ${CREWHELM_CLI_MARK_ACCENT} ${CREWHELM_LOGO_WORDMARK}\n`;
 
 export { CREWHELM_LOGO_WORDMARK };

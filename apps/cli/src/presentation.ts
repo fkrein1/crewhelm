@@ -1,7 +1,6 @@
 import {
   CREWHELM_CLI_BANNER,
   CREWHELM_CLI_MARK_ACCENT,
-  CREWHELM_CLI_MARK_LINES,
   CREWHELM_LOGO_WORDMARK,
   crewhelmTerminalTheme,
 } from "@crewhelm/design/terminal";
@@ -44,13 +43,10 @@ export function createCliTextStyle(color: boolean): CliTextStyle {
 }
 
 function styledBanner(style: CliTextStyle): string {
-  return `${CREWHELM_CLI_MARK_LINES.map((line) => {
-    if (!line.includes(CREWHELM_CLI_MARK_ACCENT)) {
-      return line;
-    }
-
-    return `${line.replace(CREWHELM_CLI_MARK_ACCENT, style.logoAccent(CREWHELM_CLI_MARK_ACCENT))} ${style.logoWordmark(CREWHELM_LOGO_WORDMARK)}`;
-  }).join("\n")}\n`;
+  return CREWHELM_CLI_BANNER.replace(
+    CREWHELM_CLI_MARK_ACCENT,
+    style.logoAccent(CREWHELM_CLI_MARK_ACCENT),
+  ).replace(CREWHELM_LOGO_WORDMARK, style.logoWordmark(CREWHELM_LOGO_WORDMARK));
 }
 
 export interface CliPresentationOptions {
