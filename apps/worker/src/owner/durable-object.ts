@@ -72,6 +72,7 @@ import { DurableObject } from "cloudflare:workers";
 import { and, count, desc, eq, gte, isNull, lt, lte } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
+import { availableAgentCapabilityPrerequisites } from "../agent-capabilities/registry.js";
 import {
   AgentChannel,
   deniedAgentInbox,
@@ -195,12 +196,16 @@ export class OwnerControlPlane extends DurableObject {
       new R2SkillPackageObjectStore(environment.SKILL_PACKAGES),
       this.#objectName,
     );
+    const availableCapabilityPrerequisites = availableAgentCapabilityPrerequisites(
+      environment.AI_GATEWAY_ID,
+    );
     this.#runAdmissions = new RunAdmissions(
       this.#objectName,
       this.#database,
       this.#storage,
       () => this.#fleetConfigurations.current(),
       this.#skills,
+      availableCapabilityPrerequisites,
     );
     this.#toolExecutions = new ToolExecutions(this.#objectName, this.#database, this.#storage, () =>
       this.#fleetConfigurations.current(),
@@ -209,6 +214,7 @@ export class OwnerControlPlane extends DurableObject {
       this.#database,
       () => this.#fleetConfigurations.currentData(),
       this.#skills,
+      availableCapabilityPrerequisites,
     );
     this.#connections = new Connections(this.#database, this.#storage, () =>
       this.#fleetConfigurations.currentData(),

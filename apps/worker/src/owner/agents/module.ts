@@ -50,10 +50,7 @@ import {
 import { and, asc, count, desc, eq, gt, lt, sql } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
-import {
-  AVAILABLE_AGENT_CAPABILITY_PREREQUISITES,
-  agentCapabilityRegistry,
-} from "../../agent-capabilities/registry.js";
+import { agentCapabilityRegistry } from "../../agent-capabilities/registry.js";
 import {
   agentCreations,
   agentRevisions,
@@ -182,6 +179,7 @@ export function deniedConnectionAttachment(
 }
 
 export class AgentRegistry {
+  readonly #availableCapabilityPrerequisites: ReadonlySet<string>;
   readonly #currentFleetConfiguration: () => FleetConfigurationData;
   readonly #database: ControlPlaneDatabase;
   readonly #skills: Skills;
@@ -190,7 +188,9 @@ export class AgentRegistry {
     database: ControlPlaneDatabase,
     currentFleetConfiguration: () => FleetConfigurationData,
     skills: Skills,
+    availableCapabilityPrerequisites: ReadonlySet<string>,
   ) {
+    this.#availableCapabilityPrerequisites = availableCapabilityPrerequisites;
     this.#database = database;
     this.#currentFleetConfiguration = currentFleetConfiguration;
     this.#skills = skills;
@@ -657,7 +657,7 @@ export class AgentRegistry {
       }
 
       const compiledCapabilities = agentCapabilityRegistry.compile(request.data.capabilities, {
-        availablePrerequisites: AVAILABLE_AGENT_CAPABILITY_PREREQUISITES,
+        availablePrerequisites: this.#availableCapabilityPrerequisites,
         checkPrerequisites: false,
         fleetConfiguration,
       });
@@ -871,7 +871,7 @@ export class AgentRegistry {
       }
 
       const compiledCapabilities = agentCapabilityRegistry.compile(request.data.capabilities, {
-        availablePrerequisites: AVAILABLE_AGENT_CAPABILITY_PREREQUISITES,
+        availablePrerequisites: this.#availableCapabilityPrerequisites,
         checkPrerequisites: false,
         fleetConfiguration,
       });

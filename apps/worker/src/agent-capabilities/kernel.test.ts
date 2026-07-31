@@ -17,6 +17,11 @@ import { describe, expect, it } from "vitest";
 import * as z from "zod";
 
 import { AgentCapabilityRegistry, type AgentCapabilityModule } from "./kernel.js";
+import {
+  AI_GATEWAY_PREREQUISITE,
+  aiGatewayCapabilityConfiguration,
+  aiGatewayCapabilityModule,
+} from "./ai-gateway.js";
 import { skillsCapabilityConfiguration, skillsCapabilityModule } from "./skills.js";
 import {
   WORKERS_AI_BINDING_PREREQUISITE,
@@ -78,6 +83,82 @@ function contextModule(id = "context.test"): AgentCapabilityModule<{ text: strin
 }
 
 describe("Agent capability registry", () => {
+  it("compiles an AI Gateway profile with bounded fallbacks and sampling controls", () => {
+    const registry = new AgentCapabilityRegistry([aiGatewayCapabilityModule]);
+    const result = registry.compile(
+      [
+        aiGatewayCapabilityConfiguration("openai/gpt-5.6-luna", {
+          fallbackModels: ["openai/gpt-5.6-sol"],
+          reasoningEffort: "medium",
+          temperature: 0.4,
+          topP: 0.9,
+        }),
+      ],
+      {
+        availablePrerequisites: new Set([AI_GATEWAY_PREREQUISITE]),
+        checkPrerequisites: true,
+        fleetConfiguration,
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      runtimePlan: {
+        inference: {
+          fallbackModels: ["openai/gpt-5.6-sol"],
+          model: "openai/gpt-5.6-luna",
+          moduleId: "inference.ai-gateway",
+          reasoningEffort: "medium",
+          schemaVersion: 1,
+          temperature: 0.4,
+          topP: 0.9,
+        },
+      },
+    });
+  });
+
+  it("rejects unavailable Gateway infrastructure and invalid Workers AI profiles", () => {
+    const gatewayRegistry = new AgentCapabilityRegistry([aiGatewayCapabilityModule]);
+    const workersRegistry = new AgentCapabilityRegistry([workersAiCapabilityModule]);
+
+    expect(
+      gatewayRegistry.compile([aiGatewayCapabilityConfiguration("openai/gpt-5.6-luna")], {
+        availablePrerequisites: new Set(),
+        checkPrerequisites: true,
+        fleetConfiguration,
+      }),
+    ).toEqual({
+      code: "capability_unavailable",
+      ok: false,
+    });
+    expect(
+      workersRegistry.compile(
+        [
+          {
+            configuration: {
+              fallbackModels: ["@cf/meta/llama-4-scout-17b-16e-instruct"],
+              primaryModel: "@cf/meta/llama-4-scout-17b-16e-instruct",
+            },
+            id: "inference.workers-ai",
+            schemaVersion: 2,
+          },
+        ],
+        { availablePrerequisites, checkPrerequisites: true, fleetConfiguration },
+      ),
+    ).toEqual({ code: "invalid_configuration", ok: false });
+    expect(
+      workersRegistry.compile(
+        [
+          workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct", {
+            fallbackModels: [],
+            reasoningEffort: "high",
+          }),
+        ],
+        { availablePrerequisites, checkPrerequisites: true, fleetConfiguration },
+      ),
+    ).toEqual({ code: "invalid_configuration", ok: false });
+  });
+
   it("defaults and compiles Workers AI into a deterministic runtime plan", () => {
     const registry = new AgentCapabilityRegistry([workersAiCapabilityModule]);
     const result = registry.compile(undefined, {
@@ -91,11 +172,12 @@ describe("Agent capability registry", () => {
       ok: true,
       runtimePlan: {
         inference: {
+          fallbackModels: [],
           model: "@cf/meta/llama-4-scout-17b-16e-instruct",
           moduleId: "inference.workers-ai",
-          schemaVersion: 1,
+          schemaVersion: 2,
         },
-        modules: [{ id: "inference.workers-ai", schemaVersion: 1 }],
+        modules: [{ id: "inference.workers-ai", schemaVersion: 2 }],
         skillReferences: [],
         systemContext: [],
       },
@@ -310,9 +392,12 @@ describe("Agent capability registry", () => {
       registry.compile(
         [
           {
-            configuration: { model: "@cf/meta/llama-4-scout-17b-16e-instruct" },
+            configuration: {
+              fallbackModels: [],
+              primaryModel: "@cf/meta/llama-4-scout-17b-16e-instruct",
+            },
             id: "inference.conflict",
-            schemaVersion: 1,
+            schemaVersion: 2,
           },
           workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct"),
         ],

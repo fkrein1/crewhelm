@@ -12,6 +12,7 @@ export * from "./fleet-configuration.js";
 export * from "./fleet-capacity.js";
 export * from "./health.js";
 export * from "./integrations.js";
+export * from "./inference.js";
 export * from "./recovery.js";
 export * from "./run-admission.js";
 export * from "./schedule-revision.js";

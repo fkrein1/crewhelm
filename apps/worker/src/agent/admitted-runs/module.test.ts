@@ -103,6 +103,43 @@ function legacyRuntimeConfiguration(
   return legacy;
 }
 
+function retainedWorkersAiV1RuntimePlan(runtimePlan: CrewAgentRuntimeConfig["runtimePlan"]) {
+  return {
+    ...structuredClone(runtimePlan),
+    inference: {
+      model: runtimePlan.inference.model,
+      moduleId: "inference.workers-ai",
+      schemaVersion: 1,
+    },
+    modules: runtimePlan.modules.map((module) =>
+      module.id === "inference.workers-ai" ? { ...module, schemaVersion: 1 } : module,
+    ),
+  };
+}
+
+function retainedWorkersAiV1Reservation(reservation: RunBudgetReservation) {
+  return {
+    ...structuredClone(reservation),
+    runtimePlan: retainedWorkersAiV1RuntimePlan(reservation.runtimePlan),
+  };
+}
+
+function retainedWorkersAiV1Configuration(configuration: CrewAgentRuntimeConfig) {
+  return {
+    ...structuredClone(configuration),
+    capabilities: configuration.capabilities.map((capability) =>
+      capability.id === "inference.workers-ai"
+        ? {
+            configuration: { model: configuration.runtimePlan.inference.model },
+            id: capability.id,
+            schemaVersion: 1,
+          }
+        : capability,
+    ),
+    runtimePlan: retainedWorkersAiV1RuntimePlan(configuration.runtimePlan),
+  };
+}
+
 async function completedRun(
   controlPlane: ReturnType<Cloudflare.Env["OWNER_CONTROL_PLANE"]["getByName"]>,
   authority: OwnerAuthority,
@@ -143,7 +180,13 @@ async function runWithTimeline(
       const result = await controlPlane.inspectRun(authority, { runId });
 
       expect(result).toMatchObject({ ok: true });
-      expect(result.ok ? result.timeline.map((event) => event.event) : []).toEqual(expectedEvents);
+      expect(
+        result.ok
+          ? result.timeline
+              .map((event) => event.event)
+              .filter((event) => !event.startsWith("inference."))
+          : [],
+      ).toEqual(expectedEvents);
 
       if (!result.ok) {
         throw new Error("Expected an inspectable run timeline.");
@@ -635,6 +678,15 @@ describe("CrewAgent admitted execution", () => {
     }
 
     const finished = await completedRun(controlPlane, authority, started.run.runId);
+    expect(finished.timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "inference.model_selected",
+          model: created.agent.model,
+          modelCall: 1,
+        }),
+      ]),
+    );
     const replay = await controlPlane.startRun(authority, input);
     const secondClient = {
       ...authority,
@@ -678,6 +730,71 @@ describe("CrewAgent admitted execution", () => {
     await expect(controlPlane.inspectRun(authority, { runId: started.run.runId })).resolves.toEqual(
       finished,
     );
+  });
+
+  it("preserves same-millisecond provider-neutral inference evidence", async () => {
+    const authority = await authorityFor("crew-agent-inference-evidence");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("crew-agent-inference-evidence"),
+    );
+
+    if (!created.ok) {
+      throw new Error("Expected inference evidence Agent.");
+    }
+
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-inference-evidence-run",
+      prompt: "Record exact inference evidence.",
+    });
+
+    if (!started.ok) {
+      throw new Error("Expected inference evidence run.");
+    }
+
+    await completedRun(controlPlane, authority, started.run.runId);
+    const occurredAt = "2026-07-31T00:00:00.000Z";
+    const stub = crewAgentNamespace().getByName(
+      crewAgentObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+      }),
+    );
+
+    await runInDurableObject(stub, async (_agent, state) => {
+      await state.storage.put(`crewhelm:run-trace:${started.run.runId}`, [
+        {
+          event: "inference.attempt_failed",
+          model: "provider/future-primary",
+          modelCall: 1,
+          occurredAt,
+          reason: "provider_unavailable",
+        },
+        {
+          event: "inference.attempt_failed",
+          model: "provider/future-fallback",
+          modelCall: 2,
+          occurredAt,
+          reason: "rate_limited",
+        },
+      ]);
+    });
+
+    const inspected = await controlPlane.inspectRun(authority, { runId: started.run.runId });
+
+    expect(
+      inspected.ok
+        ? inspected.timeline
+            .filter((event) => event.event === "inference.attempt_failed")
+            .map((event) => ("modelCall" in event ? [event.modelCall, event.model] : []))
+        : [],
+    ).toEqual([
+      [1, "provider/future-primary"],
+      [2, "provider/future-fallback"],
+    ]);
   });
 
   it("runs with hydrated Skill instructions inside the reserved input ceiling", async () => {
@@ -1230,7 +1347,7 @@ describe("CrewAgent admitted execution", () => {
     await completedRun(controlPlane, authority, admission.permit.runId);
   });
 
-  it("loads legacy capability state from retained records and turn metadata after eviction", async () => {
+  it("normalizes retained Workers AI v1 state after the owner reservation migrates", async () => {
     const authority = await authorityFor("crew-agent-legacy-capability-state");
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const created = await controlPlane.createAgent(
@@ -1283,8 +1400,8 @@ describe("CrewAgent admitted execution", () => {
 
       await state.storage.put(recordKey, {
         ...record,
-        budgetReservation: legacyBudgetReservation(record.budgetReservation),
-        configuration: legacyRuntimeConfiguration(record.configuration),
+        budgetReservation: retainedWorkersAiV1Reservation(record.budgetReservation),
+        configuration: retainedWorkersAiV1Configuration(record.configuration),
       });
       state.storage.sql.exec(
         "UPDATE assistant_messages SET content = ? WHERE id = ?",
@@ -1295,10 +1412,12 @@ describe("CrewAgent admitted execution", () => {
             turnMetadata: {
               crewhelmRun: {
                 ...turnMetadata.crewhelmRun,
-                budgetReservation: legacyBudgetReservation(
+                budgetReservation: retainedWorkersAiV1Reservation(
                   turnMetadata.crewhelmRun.budgetReservation,
                 ),
-                configuration: legacyRuntimeConfiguration(turnMetadata.crewhelmRun.configuration),
+                configuration: retainedWorkersAiV1Configuration(
+                  turnMetadata.crewhelmRun.configuration,
+                ),
               },
             },
           },
@@ -1753,9 +1872,13 @@ describe("CrewAgent admitted execution", () => {
         "run.completed",
       ],
     );
-    const toolCallId = completed.timeline.find(
+    const completedToolEvent = completed.timeline.find(
       (event) => event.event === "tool.execution_completed",
-    )?.toolCallId;
+    );
+    const toolCallId =
+      completedToolEvent !== undefined && "toolCallId" in completedToolEvent
+        ? completedToolEvent.toolCallId
+        : undefined;
 
     if (toolCallId === undefined) {
       throw new Error("Expected completed tool execution evidence.");
@@ -1856,9 +1979,13 @@ describe("CrewAgent admitted execution", () => {
         "run.completed",
       ],
     );
-    const toolCallId = completed.timeline.find(
+    const completedToolEvent = completed.timeline.find(
       (event) => event.event === "tool.execution_completed",
-    )?.toolCallId;
+    );
+    const toolCallId =
+      completedToolEvent !== undefined && "toolCallId" in completedToolEvent
+        ? completedToolEvent.toolCallId
+        : undefined;
 
     if (toolCallId === undefined) {
       throw new Error("Expected completed tool execution evidence.");
@@ -2072,7 +2199,13 @@ describe("CrewAgent admitted execution", () => {
         status: "cancelled",
       },
     });
-    expect(cancelled.ok ? cancelled.timeline.map((event) => event.event) : []).toEqual([
+    expect(
+      cancelled.ok
+        ? cancelled.timeline
+            .map((event) => event.event)
+            .filter((event) => !event.startsWith("inference."))
+        : [],
+    ).toEqual([
       "run.admitted",
       "run.started",
       "tool.authorization_approval_required",
@@ -2180,11 +2313,13 @@ describe("CrewAgent admitted execution", () => {
         status: "completed",
       },
     });
-    expect(inspected.ok ? inspected.timeline.map((event) => event.event) : []).toEqual([
-      "run.admitted",
-      "run.started",
-      "run.completed",
-    ]);
+    expect(
+      inspected.ok
+        ? inspected.timeline
+            .map((event) => event.event)
+            .filter((event) => !event.startsWith("inference."))
+        : [],
+    ).toEqual(["run.admitted", "run.started", "run.completed"]);
     await runInDurableObject(controlPlane, (_instance, state) => {
       expect(
         [

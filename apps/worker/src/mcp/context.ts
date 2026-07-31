@@ -38,6 +38,7 @@ export interface OwnerControlPlaneClient {
 }
 
 export interface McpEnvironment {
+  AI_GATEWAY_ID?: string | undefined;
   BETTER_AUTH_SECRET: string;
   COMPOSIO_API_KEY?: string | undefined;
   PUBLIC_ORIGIN: string;
@@ -48,5 +49,6 @@ export interface McpEnvironment {
 
 export interface McpToolContext {
   authority: OwnerAuthority;
+  availableAgentCapabilityPrerequisites: ReadonlySet<string>;
   controlPlane: OwnerControlPlaneClient;
 }

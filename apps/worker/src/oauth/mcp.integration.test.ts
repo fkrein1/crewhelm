@@ -805,7 +805,7 @@ describe("public OAuth to MCP integration", () => {
     ).toMatchObject({
       ok: true,
       status: {
-        schemaVersion: 20,
+        schemaVersion: 21,
         status: "ready",
       },
     });

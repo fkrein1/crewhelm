@@ -15,6 +15,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import * as z from "zod";
 
 import type { WorkerEnv } from "../env.js";
+import { availableAgentCapabilityPrerequisites } from "../agent-capabilities/registry.js";
 import { readBoundedPostRequest } from "../http/request-body.js";
 import { recordIntegrationProviderResponse } from "../observability/integrations.js";
 import { registerAgentTools } from "./agent-tools.js";
@@ -155,7 +156,11 @@ function createMcpServer(
 ): McpServer {
   const server = new McpServer(MCP_SERVER_INFO);
   const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
-  const context = { authority, controlPlane };
+  const context = {
+    authority,
+    availableAgentCapabilityPrerequisites: availableAgentCapabilityPrerequisites(env.AI_GATEWAY_ID),
+    controlPlane,
+  };
 
   registerConfigurationTools(server, context);
   registerAgentTools(server, context);

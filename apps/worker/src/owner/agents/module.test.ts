@@ -42,9 +42,12 @@ describe("OwnerControlPlane agents", () => {
       agent: {
         capabilities: [
           {
-            configuration: { model: configuration.configuration.data.models.default },
+            configuration: {
+              fallbackModels: [],
+              primaryModel: configuration.configuration.data.models.default,
+            },
             id: "inference.workers-ai",
-            schemaVersion: 1,
+            schemaVersion: 2,
           },
         ],
         executionLimits: configuration.configuration.data.execution,

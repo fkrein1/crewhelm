@@ -446,7 +446,7 @@ describe("authenticated MCP handler", () => {
     expect(controlPlaneStatusResultSchema.parse(JSON.parse(text ?? ""))).toMatchObject({
       ok: true,
       status: {
-        schemaVersion: 20,
+        schemaVersion: 21,
         status: "ready",
         usage: {
           recovery: { unresolvedEffects: 0 },
@@ -603,50 +603,37 @@ describe("authenticated MCP handler", () => {
     );
     const result = jsonRpcToolResultSchema.parse(await response.json()).result;
 
-    expect(
-      getAgentCapabilityCatalogResultSchema.parse(JSON.parse(result.content[0]?.text ?? "")),
-    ).toEqual({
-      capabilities: [
-        {
-          availability: {
-            missingPrerequisites: [],
-            state: "available",
-          },
-          configurationFields: [
-            {
-              description: "Supported Workers AI model; the fleet policy may narrow this list.",
-              enum: [
-                "@cf/ibm-granite/granite-4.0-h-micro",
-                "@cf/meta/llama-4-scout-17b-16e-instruct",
-                "@cf/openai/gpt-oss-20b",
-                "@cf/qwen/qwen3-30b-a3b-fp8",
-                "@cf/zai-org/glm-4.7-flash",
-              ],
-              name: "model",
-              required: true,
-              type: "string",
-            },
-          ],
-          description:
-            "Selects the Cloudflare Workers AI model used for Agent reasoning and tool orchestration.",
-          id: "inference.workers-ai",
-          prerequisites: [
-            {
-              description: "Cloudflare Workers AI binding used for admitted model calls.",
-              id: "binding.ai",
-              kind: "binding",
-            },
-          ],
-          schemaVersion: 1,
-          title: "Workers AI inference",
-          trust: {
-            configuration: "untrusted-until-validated",
-            runtimeContribution: "module-validated",
-          },
-        },
-      ],
+    const catalog = getAgentCapabilityCatalogResultSchema.parse(
+      JSON.parse(result.content[0]?.text ?? ""),
+    );
+
+    expect(catalog).toMatchObject({
       ok: true,
     });
+
+    if (!catalog.ok) {
+      throw new Error("Expected an available capability catalog.");
+    }
+
+    expect(catalog.capabilities).toHaveLength(1);
+    expect(catalog.capabilities[0]).toMatchObject({
+      availability: {
+        missingPrerequisites: [],
+        state: "available",
+      },
+      id: "inference.workers-ai",
+      schemaVersion: 2,
+    });
+    expect(catalog.capabilities[0]?.configurationFields.map(({ name }) => name)).toEqual([
+      "primaryModel",
+      "fallbackModels",
+      "reasoningEffort",
+      "temperature",
+      "topP",
+    ]);
+    expect(catalog.capabilities[0]?.configurationFields[0]?.enum).toContain(
+      "@cf/moonshotai/kimi-k2.7-code",
+    );
     expect(result.isError).toBe(false);
   });
 

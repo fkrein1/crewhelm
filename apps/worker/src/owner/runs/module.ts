@@ -52,10 +52,8 @@ import {
 } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
-import {
-  AVAILABLE_AGENT_CAPABILITY_PREREQUISITES,
-  agentCapabilityRegistry,
-} from "../../agent-capabilities/registry.js";
+import { AI_GATEWAY_CAPABILITY_ID } from "../../agent-capabilities/ai-gateway.js";
+import { agentCapabilityRegistry } from "../../agent-capabilities/registry.js";
 import { WORKERS_AI_CAPABILITY_ID } from "../../agent-capabilities/workers-ai.js";
 import { recordExecutionEvent } from "../../observability/execution.js";
 import type { Skills } from "../skills/index.js";
@@ -199,7 +197,11 @@ function createBudgetReservation(input: {
   );
   const maxToolCalls = Math.min(effectiveExecutionLimits.maxToolCalls, grantedToolCalls);
   const maxTurns = Math.min(effectiveExecutionLimits.maxTurns, maxToolCalls + 1);
-  const maxModelCalls = Math.min(effectiveExecutionLimits.maxTurns, maxTurns + maxToolCalls);
+  const baseModelCalls = Math.min(effectiveExecutionLimits.maxTurns, maxTurns + maxToolCalls);
+  const maxModelCalls = Math.min(
+    100,
+    baseModelCalls * (1 + input.runtimePlan.inference.fallbackModels.length),
+  );
 
   return runBudgetReservationSchema.parse({
     fleetConfigurationRevision: input.configuration.revision,
@@ -239,6 +241,7 @@ function canonicalRequest(input: {
 }
 
 export class RunAdmissions {
+  readonly #availableCapabilityPrerequisites: ReadonlySet<string>;
   readonly #currentFleetConfiguration: () => FleetConfiguration;
   readonly #database: ControlPlaneDatabase;
   readonly #objectName: string | undefined;
@@ -251,7 +254,9 @@ export class RunAdmissions {
     storage: DurableObjectStorage,
     currentFleetConfiguration: () => FleetConfiguration,
     skills: Skills,
+    availableCapabilityPrerequisites: ReadonlySet<string>,
   ) {
+    this.#availableCapabilityPrerequisites = availableCapabilityPrerequisites;
     this.#currentFleetConfiguration = currentFleetConfiguration;
     this.#database = database;
     this.#objectName = objectName;
@@ -382,7 +387,7 @@ export class RunAdmissions {
       }
 
       const compiledCapabilities = agentCapabilityRegistry.compile(agent.capabilities, {
-        availablePrerequisites: AVAILABLE_AGENT_CAPABILITY_PREREQUISITES,
+        availablePrerequisites: this.#availableCapabilityPrerequisites,
         checkPrerequisites: true,
         fleetConfiguration: fleetConfiguration.data,
       });
@@ -390,7 +395,8 @@ export class RunAdmissions {
       if (!compiledCapabilities.ok) {
         return this.#deniedRequest(
           compiledCapabilities.code === "configuration_unavailable" &&
-            compiledCapabilities.moduleId === WORKERS_AI_CAPABILITY_ID
+            (compiledCapabilities.moduleId === WORKERS_AI_CAPABILITY_ID ||
+              compiledCapabilities.moduleId === AI_GATEWAY_CAPABILITY_ID)
             ? "model_unavailable"
             : "capability_unavailable",
         );
@@ -898,6 +904,7 @@ export class RunAdmissions {
       }
 
       return verifyActiveRunAdmissionResultSchema.parse({
+        modelCall: row.modelCallsConsumed + 1,
         ok: true,
         runId: request.data.runId,
       });
@@ -1168,7 +1175,7 @@ export class RunAdmissions {
     }
 
     const compiledCapabilities = agentCapabilityRegistry.compile(row.capabilities, {
-      availablePrerequisites: AVAILABLE_AGENT_CAPABILITY_PREREQUISITES,
+      availablePrerequisites: this.#availableCapabilityPrerequisites,
       checkPrerequisites: true,
       fleetConfiguration: this.#currentFleetConfiguration().data,
     });

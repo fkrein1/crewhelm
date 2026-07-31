@@ -20,10 +20,7 @@ import {
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod";
 
-import {
-  AVAILABLE_AGENT_CAPABILITY_PREREQUISITES,
-  agentCapabilityRegistry,
-} from "../agent-capabilities/registry.js";
+import { agentCapabilityRegistry } from "../agent-capabilities/registry.js";
 import type { McpToolContext } from "./context.js";
 import { controlPlaneToolResult } from "./tool-result.js";
 
@@ -122,7 +119,7 @@ const configureResultSchema = z.union([
 ]);
 
 export function registerConfigurationTools(server: McpServer, context: McpToolContext): void {
-  const { authority, controlPlane } = context;
+  const { authority, availableAgentCapabilityPrerequisites, controlPlane } = context;
 
   server.registerTool(
     MCP_GET_CONFIGURATION_TOOL_NAME,
@@ -154,7 +151,7 @@ export function registerConfigurationTools(server: McpServer, context: McpToolCo
           }
 
           const capabilities = agentCapabilityRegistry.catalog(
-            AVAILABLE_AGENT_CAPABILITY_PREREQUISITES,
+            availableAgentCapabilityPrerequisites,
             capabilityRequest.data.target.id,
           );
 
