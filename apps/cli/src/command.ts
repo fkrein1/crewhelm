@@ -8,6 +8,9 @@ import { installationSmokeOptionsSchema } from "./installation-smoke.js";
 import { createCliTextStyle, type CliTextStyle } from "./presentation.js";
 import { upgradeSmokeOptionsSchema } from "./upgrade-smoke.js";
 
+export const browserModeSchema = z.enum(["system", "codex", "none"]);
+export type BrowserMode = z.infer<typeof browserModeSchema>;
+
 function formatRootHelp(style: CliTextStyle): string {
   return `
 ${style.accentStrong("Examples:")}
@@ -27,6 +30,7 @@ function formatUpHelp(style: CliTextStyle): string {
 ${style.accentStrong("Examples:")}
   ${style.accent("$ crewhelm up")}
   ${style.accent("$ crewhelm up --endpoint https://crewhelm.example --ai-budget-usd 5")}
+  ${style.accent("$ crewhelm up --browser codex")}
 
 ${style.accentStrong("Automation:")}
   Set these variables to run without prompts:
@@ -48,7 +52,8 @@ function formatDoctorHelp(style: CliTextStyle): string {
   return `
 ${style.accentStrong("Examples:")}
   ${style.accent("$ crewhelm doctor --endpoint https://crewhelm.example")}
-  ${style.accent("$ crewhelm doctor --endpoint https://crewhelm.example --authenticated")}
+  ${style.accent("$ crewhelm doctor --installation crewhelm.testing.installation.json")}
+  ${style.accent("$ crewhelm doctor --installation crewhelm.testing.installation.json --authenticated --browser codex")}
 
 ${style.accentStrong("Access:")}
   ${style.accent("--authenticated")} opens the browser for temporary view-only owner access.
@@ -56,6 +61,7 @@ ${style.accentStrong("Access:")}
 
 ${style.accentStrong("Network:")}
   HTTPS is required except for exact loopback hosts.
+  Installation metadata is authoritative; a supplied endpoint must match it exactly.
 `;
 }
 
@@ -108,6 +114,7 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     accountId: bootstrapOptionsSchema.shape.accountId,
     aiDailySpendUsd: bootstrapOptionsSchema.shape.aiDailySpendUsd,
+    browser: browserModeSchema,
     databaseId: bootstrapOptionsSchema.shape.databaseId,
     databaseName: bootstrapOptionsSchema.shape.databaseName.optional(),
     installationPath: z.string().min(1).max(4_096),
@@ -120,18 +127,25 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     authenticated: z.boolean(),
+    browser: browserModeSchema,
+    installationPath: z.string().min(1).max(4_096).optional(),
     json: z.boolean(),
     kind: z.literal("doctor"),
-    origin: z.instanceof(URL),
+    origin: z.instanceof(URL).optional(),
     timeoutMs: z.number().int().min(100).max(30_000),
   }),
   z.strictObject({
+    browser: browserModeSchema,
     confirmProduction: z.literal(true),
     connectionId: connectionIdSchema,
+    installationProvided: z.boolean(),
     installationPath: z.string().min(1).max(4_096),
     json: z.boolean(),
     kind: z.literal("standing-integration-smoke"),
-    origin: z.instanceof(URL).refine((origin) => origin.protocol === "https:"),
+    origin: z
+      .instanceof(URL)
+      .refine((origin) => origin.protocol === "https:")
+      .optional(),
     runTimeoutMs: z
       .number()
       .int()
@@ -141,11 +155,16 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
     trigger: z.enum(["manual", "schedule"]),
   }),
   z.strictObject({
+    browser: browserModeSchema,
     confirmProduction: z.literal(true),
+    installationProvided: z.boolean(),
     installationPath: z.string().min(1).max(4_096),
     json: z.boolean(),
     kind: z.literal("agent-smoke"),
-    origin: z.instanceof(URL).refine((origin) => origin.protocol === "https:"),
+    origin: z
+      .instanceof(URL)
+      .refine((origin) => origin.protocol === "https:")
+      .optional(),
     runTimeoutMs: z
       .number()
       .int()
@@ -156,6 +175,7 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     accountId: installationSmokeOptionsSchema.shape.accountId,
     aiDailySpendUsd: installationSmokeOptionsSchema.shape.aiDailySpendUsd,
+    browser: browserModeSchema,
     cleanupOnly: z.boolean(),
     confirmProduction: z.literal(true),
     databaseName: installationSmokeOptionsSchema.shape.databaseName,
@@ -169,11 +189,13 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     baselineFingerprint: upgradeSmokeOptionsSchema.shape.baselineFingerprint,
+    browser: browserModeSchema,
     confirmProduction: z.literal(true),
+    installationProvided: z.boolean(),
     installationPath: upgradeSmokeOptionsSchema.shape.installationPath,
     json: z.boolean(),
     kind: z.literal("upgrade-smoke"),
-    origin: upgradeSmokeOptionsSchema.shape.origin,
+    origin: upgradeSmokeOptionsSchema.shape.origin.optional(),
     receiptPath: upgradeSmokeOptionsSchema.shape.receiptPath,
     timeoutMs: upgradeSmokeOptionsSchema.shape.timeoutMs,
   }),
@@ -184,6 +206,7 @@ export type CliCommand = z.infer<typeof cliCommandSchema>;
 interface UpCommandOptions {
   accountId?: string;
   aiBudgetUsd?: string;
+  browser: string;
   databaseId?: string;
   databaseName?: string;
   endpoint?: string;
@@ -196,15 +219,18 @@ interface UpCommandOptions {
 
 interface DoctorCommandOptions {
   authenticated?: boolean;
-  endpoint: string;
+  browser: string;
+  endpoint?: string;
+  installation?: string;
   json?: boolean;
   timeoutMs: string;
 }
 
 interface AgentSmokeCommandOptions {
+  browser: string;
   confirmProduction: boolean;
-  endpoint: string;
-  installation: string;
+  endpoint?: string;
+  installation?: string;
   json?: boolean;
   runTimeoutMs: string;
   timeoutMs: string;
@@ -218,6 +244,7 @@ interface StandingIntegrationSmokeCommandOptions extends AgentSmokeCommandOption
 interface InstallationSmokeCommandOptions {
   accountId?: string;
   aiBudgetUsd?: string;
+  browser: string;
   cleanupOnly?: boolean;
   confirmProduction: boolean;
   databaseName: string;
@@ -230,10 +257,11 @@ interface InstallationSmokeCommandOptions {
 }
 
 interface UpgradeSmokeCommandOptions {
+  browser: string;
   confirmProduction: boolean;
-  endpoint: string;
+  endpoint?: string;
   fromFingerprint: string;
-  installation: string;
+  installation?: string;
   json?: boolean;
   receipt: string;
   timeoutMs: string;
@@ -295,6 +323,16 @@ function parseOrigin(
   return origin;
 }
 
+function parseBrowserMode(value: string): BrowserMode {
+  const browser = browserModeSchema.safeParse(value);
+
+  if (!browser.success) {
+    throw new CliUsageError("Browser must be system, codex, or none.");
+  }
+
+  return browser.data;
+}
+
 function validatedCommand(candidate: unknown): Exclude<CliCommand, { kind: "help" }> {
   const command = cliCommandSchema.safeParse(candidate);
 
@@ -341,6 +379,7 @@ function createCliProgram(
     .description("Create or safely upgrade one Crewhelm installation.")
     .option("--endpoint <origin>", "HTTPS origin for the Crewhelm Worker")
     .option("--installation <path>", "installation metadata path", "crewhelm.installation.json")
+    .option("--browser <browser>", "system, codex, or none", "system")
     .option("--setup-github", "create or rotate the private GitHub App")
     .option("--account-id <id>", "Cloudflare account identifier")
     .option("--worker-name <name>", "Cloudflare Worker name")
@@ -356,6 +395,7 @@ function createCliProgram(
           accountId: options.accountId,
           aiDailySpendUsd:
             options.aiBudgetUsd === undefined ? undefined : Number(options.aiBudgetUsd),
+          browser: parseBrowserMode(options.browser),
           databaseId: options.databaseId,
           databaseName: options.databaseName,
           installationPath: options.installation,
@@ -373,7 +413,9 @@ function createCliProgram(
     .command("doctor")
     .summary("validate deployment health and OAuth discovery")
     .description("Validate bounded health, MCP discovery, and optional owner access.")
-    .requiredOption("--endpoint <origin>", "Crewhelm deployment origin")
+    .option("--endpoint <origin>", "Crewhelm deployment origin")
+    .option("--installation <path>", "authoritative installation metadata path")
+    .option("--browser <browser>", "system, codex, or none", "system")
     .option("--authenticated", "verify temporary view-only owner access")
     .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")
     .option("--json", "write one machine-readable JSON result")
@@ -382,6 +424,8 @@ function createCliProgram(
       onCommand?.(
         validatedCommand({
           authenticated: options.authenticated === true,
+          browser: parseBrowserMode(options.browser),
+          installationPath: options.installation,
           json: options.json === true,
           kind: "doctor",
           origin: parseOrigin(options.endpoint, "doctor"),
@@ -399,9 +443,10 @@ function createCliProgram(
     .command("agent")
     .summary("rehearse one disposable Agent lifecycle")
     .description("Create, run, disable, and verify one zero-grant disposable Agent.")
-    .requiredOption("--endpoint <origin>", "HTTPS Crewhelm deployment origin")
+    .option("--endpoint <origin>", "HTTPS Crewhelm deployment origin")
     .requiredOption("--confirm-production", "confirm the mutating production rehearsal")
-    .option("--installation <path>", "installation metadata path", "crewhelm.installation.json")
+    .option("--installation <path>", "authoritative installation metadata path")
+    .option("--browser <browser>", "system, codex, or none", "system")
     .option("--run-timeout-ms <milliseconds>", "maximum Agent run duration", "120000")
     .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")
     .option("--json", "write one machine-readable JSON result")
@@ -409,8 +454,10 @@ function createCliProgram(
     .action((options: AgentSmokeCommandOptions) => {
       onCommand?.(
         validatedCommand({
+          browser: parseBrowserMode(options.browser),
           confirmProduction: options.confirmProduction,
-          installationPath: options.installation,
+          installationPath: options.installation ?? "crewhelm.installation.json",
+          installationProvided: options.installation !== undefined,
           json: options.json === true,
           kind: "agent-smoke",
           origin: parseOrigin(options.endpoint, "agent-smoke"),
@@ -424,10 +471,11 @@ function createCliProgram(
     .command("upgrade")
     .summary("rehearse one supported installation upgrade")
     .description("Upgrade and verify one existing pinned Crewhelm installation fixture.")
-    .requiredOption("--endpoint <origin>", "HTTPS origin for the fixture Worker")
+    .option("--endpoint <origin>", "HTTPS origin for the fixture Worker")
     .requiredOption("--from-fingerprint <sha256>", "exact pinned baseline build fingerprint")
     .requiredOption("--confirm-production", "confirm the mutating production rehearsal")
-    .option("--installation <path>", "installation metadata path", "crewhelm.installation.json")
+    .option("--installation <path>", "authoritative installation metadata path")
+    .option("--browser <browser>", "system, codex, or none", "system")
     .option("--receipt <path>", "recovery receipt path", "crewhelm.upgrade-receipt.json")
     .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")
     .option("--json", "write one machine-readable JSON result")
@@ -436,8 +484,10 @@ function createCliProgram(
       onCommand?.(
         validatedCommand({
           baselineFingerprint: options.fromFingerprint,
+          browser: parseBrowserMode(options.browser),
           confirmProduction: options.confirmProduction,
-          installationPath: options.installation,
+          installationPath: options.installation ?? "crewhelm.installation.json",
+          installationProvided: options.installation !== undefined,
           json: options.json === true,
           kind: "upgrade-smoke",
           origin: parseOrigin(options.endpoint, "upgrade-smoke"),
@@ -453,10 +503,11 @@ function createCliProgram(
     .description(
       "Create one non-deliverable Gmail draft through an exact, one-call standing capability grant.",
     )
-    .requiredOption("--endpoint <origin>", "HTTPS Crewhelm deployment origin")
+    .option("--endpoint <origin>", "HTTPS Crewhelm deployment origin")
     .requiredOption("--connection-id <id>", "exact authorized Crewhelm Gmail connection")
     .requiredOption("--confirm-production", "confirm the mutating production rehearsal")
-    .option("--installation <path>", "installation metadata path", "crewhelm.installation.json")
+    .option("--installation <path>", "authoritative installation metadata path")
+    .option("--browser <browser>", "system, codex, or none", "system")
     .option("--trigger <trigger>", "manual or schedule", "manual")
     .option("--run-timeout-ms <milliseconds>", "maximum trigger and Agent run duration", "180000")
     .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")
@@ -465,9 +516,11 @@ function createCliProgram(
     .action((options: StandingIntegrationSmokeCommandOptions) => {
       onCommand?.(
         validatedCommand({
+          browser: parseBrowserMode(options.browser),
           confirmProduction: options.confirmProduction,
           connectionId: options.connectionId,
-          installationPath: options.installation,
+          installationPath: options.installation ?? "crewhelm.installation.json",
+          installationProvided: options.installation !== undefined,
           json: options.json === true,
           kind: "standing-integration-smoke",
           origin: parseOrigin(options.endpoint, "standing-integration-smoke"),
@@ -486,6 +539,7 @@ function createCliProgram(
     .requiredOption("--worker-name <name>", "unused crewhelm-smoke-* Worker name")
     .requiredOption("--database-name <name>", "unused crewhelm-smoke-* D1 database name")
     .requiredOption("--confirm-production", "confirm Cloudflare resource creation and deletion")
+    .option("--browser <browser>", "system, codex, or none", "system")
     .option("--account-id <id>", "Cloudflare account identifier")
     .option("--ai-budget-usd <dollars>", "create an AI Gateway with this daily hard limit")
     .option("--receipt <path>", "recovery receipt path", "crewhelm.smoke-receipt.json")
@@ -500,6 +554,7 @@ function createCliProgram(
           accountId: options.accountId,
           aiDailySpendUsd:
             options.aiBudgetUsd === undefined ? undefined : Number(options.aiBudgetUsd),
+          browser: parseBrowserMode(options.browser),
           cleanupOnly: options.cleanupOnly === true,
           confirmProduction: options.confirmProduction,
           databaseName: options.databaseName,
@@ -597,14 +652,15 @@ export function parseCli(
     );
   }
 
+  if (!helpRequested && installationSmoke && !hasFlag(arguments_, "--endpoint")) {
+    throw new CliUsageError("installation-smoke requires --endpoint.");
+  }
+
   if (
     !helpRequested &&
-    (arguments_[0] === "doctor" ||
-      agentSmoke ||
-      integrationSmoke ||
-      installationSmoke ||
-      upgradeSmoke) &&
-    !hasFlag(arguments_, "--endpoint")
+    (arguments_[0] === "doctor" || agentSmoke || integrationSmoke || upgradeSmoke) &&
+    !hasFlag(arguments_, "--endpoint") &&
+    !hasFlag(arguments_, "--installation")
   ) {
     throw new CliUsageError(
       `${
@@ -612,12 +668,10 @@ export function parseCli(
           ? "agent-smoke"
           : integrationSmoke
             ? "standing-integration-smoke"
-            : installationSmoke
-              ? "installation-smoke"
-              : upgradeSmoke
-                ? "upgrade-smoke"
-                : "doctor"
-      } requires --endpoint.`,
+            : upgradeSmoke
+              ? "upgrade-smoke"
+              : "doctor"
+      } requires --endpoint or --installation.`,
     );
   }
 

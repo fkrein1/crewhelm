@@ -9,7 +9,7 @@ import { agentSmokeReportSchema } from "../src/agent-smoke.js";
 import { readPackagedDeploymentFingerprint } from "../src/bootstrap.js";
 import { CLI_HELP, parseCli, runCli, type CliDependencies } from "../src/cli.js";
 import { doctorReportSchema } from "../src/doctor.js";
-import { readInstallation } from "../src/installation.js";
+import { readInstallation, writeInstallation } from "../src/installation.js";
 import { installationSmokeFailureSchema } from "../src/installation-smoke.js";
 import { CLI_BANNER } from "../src/presentation.js";
 import { standingIntegrationSmokeReportSchema } from "../src/standing-integration-smoke.js";
@@ -198,6 +198,20 @@ async function createDeploymentAssetsDirectory(): Promise<string> {
   return directory;
 }
 
+async function writeTestInstallation(path: string, origin = "https://crewhelm.example") {
+  await writeInstallation(path, {
+    schemaVersion: 1,
+    accountId: "055dc37aa5b65190125a66e918e9b73e",
+    aiGatewayId: "crewhelm",
+    databaseId: DATABASE_ID,
+    databaseName: "crewhelm-auth",
+    origin,
+    skillBucketName: "crewhelm-skills",
+    updatedAt: "2026-07-31T00:00:00.000Z",
+    workerName: "crewhelm",
+  });
+}
+
 describe("Crewhelm CLI", () => {
   it("prints concise help without making a request", async () => {
     const harness = createHarness();
@@ -241,25 +255,39 @@ describe("Crewhelm CLI", () => {
   });
 
   it("adds a color-safe banner and progress only for interactive human output", async () => {
+    const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-cli-presentation-test-"));
     const harness = createHarness(undefined, { color: true, interactive: true });
 
-    await expect(
-      runCli(["up", "--endpoint", "https://crewhelm.example"], harness.dependencies),
-    ).resolves.toBe(1);
-    expect(harness.output[0]).toContain(">_");
-    expect(harness.output[0]).toContain("CREWHELM");
-    expect(harness.output[0]).toContain("\u001B[");
-    expect(harness.output.join("")).toContain("Installation target");
-    expect(harness.output.join("")).toContain("Worker    crewhelm");
-    expect(harness.output.join("")).toContain("Endpoint  https://crewhelm.example");
-    expect(harness.errors.join("")).toContain("Loading packaged deployment assets");
-    expect(harness.errors.join("")).toContain("\u001B[");
+    try {
+      await expect(
+        runCli(
+          [
+            "up",
+            "--endpoint",
+            "https://crewhelm.example",
+            "--installation",
+            resolve(directory, "installation.json"),
+          ],
+          harness.dependencies,
+        ),
+      ).resolves.toBe(1);
+      expect(harness.output[0]).toContain(">_");
+      expect(harness.output[0]).toContain("CREWHELM");
+      expect(harness.output[0]).toContain("\u001B[");
+      expect(harness.output.join("")).toContain("Installation target");
+      expect(harness.output.join("")).toContain("Worker    crewhelm");
+      expect(harness.output.join("")).toContain("Endpoint  https://crewhelm.example");
+      expect(harness.errors.join("")).toContain("Loading packaged deployment assets");
+      expect(harness.errors.join("")).toContain("\u001B[");
 
-    const plainHarness = createHarness(undefined, { color: true, interactive: true });
+      const plainHarness = createHarness(undefined, { color: true, interactive: true });
 
-    await expect(runCli(["--no-color", "--help"], plainHarness.dependencies)).resolves.toBe(0);
-    expect(plainHarness.output.join("")).toContain(CLI_BANNER);
-    expect(plainHarness.output.join("")).not.toContain("\u001B[");
+      await expect(runCli(["--no-color", "--help"], plainHarness.dependencies)).resolves.toBe(0);
+      expect(plainHarness.output.join("")).toContain(CLI_BANNER);
+      expect(plainHarness.output.join("")).not.toContain("\u001B[");
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 
   it("keeps JSON setup non-interactive and stdout clean", async () => {
@@ -386,6 +414,146 @@ describe("Crewhelm CLI", () => {
     });
     expect(report.checks.slice(1).every((check) => check.status === "skip")).toBe(true);
     expect(harness.errors).toEqual([]);
+  });
+
+  it("uses installation metadata as the authoritative diagnosis target", async () => {
+    const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-cli-installation-target-test-"));
+    const installationPath = resolve(directory, "installation.json");
+    const fetch = healthyDeploymentFetch();
+    const harness = createHarness(fetch);
+
+    try {
+      await writeTestInstallation(installationPath);
+      await expect(
+        runCli(["doctor", "--installation", installationPath, "--json"], harness.dependencies),
+      ).resolves.toBe(0);
+      expect(fetch).toHaveBeenCalled();
+      expect(harness.errors).toEqual([]);
+      expect(doctorReportSchema.parse(JSON.parse(harness.output.join(""))).ok).toBe(true);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects an endpoint that disagrees with explicit installation metadata before network access", async () => {
+    const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-cli-installation-target-test-"));
+    const installationPath = resolve(directory, "installation.json");
+    const harness = createHarness(healthyDeploymentFetch());
+
+    try {
+      await writeTestInstallation(installationPath);
+      await expect(
+        runCli(
+          [
+            "doctor",
+            "--endpoint",
+            "https://other.example",
+            "--installation",
+            installationPath,
+            "--json",
+          ],
+          harness.dependencies,
+        ),
+      ).resolves.toBe(2);
+      expect(harness.dependencies.fetch).not.toHaveBeenCalled();
+      expect(harness.output).toEqual([]);
+      expect(harness.errors.join("")).toContain(
+        "Endpoint does not match the installation metadata.",
+      );
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects an up endpoint that disagrees with existing installation metadata before mutation", async () => {
+    const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-cli-up-target-test-"));
+    const installationPath = resolve(directory, "installation.json");
+    const harness = createHarness(healthyDeploymentFetch());
+
+    try {
+      await writeTestInstallation(installationPath);
+      await expect(
+        runCli(
+          [
+            "up",
+            "--endpoint",
+            "https://other.example",
+            "--installation",
+            installationPath,
+            "--json",
+          ],
+          harness.dependencies,
+        ),
+      ).resolves.toBe(2);
+      expect(harness.dependencies.runWrangler).not.toHaveBeenCalled();
+      expect(harness.dependencies.fetch).not.toHaveBeenCalled();
+      expect(harness.output).toEqual([]);
+      expect(harness.errors.join("")).toContain(
+        "Endpoint does not match the installation metadata.",
+      );
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("routes Codex browser mode without falling back to the system browser", async () => {
+    const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-cli-browser-target-test-"));
+    const installationPath = resolve(directory, "installation.json");
+    const publicFetch = healthyDeploymentFetch();
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      if (requestPath(input) === "/api/auth/oauth2/register") {
+        return Response.json({
+          client_id: "temporary-client",
+          token_endpoint_auth_method: "none",
+        });
+      }
+
+      return publicFetch(input, init);
+    });
+    const openUrl = vi.fn<(url: URL) => Promise<void>>();
+    const openCodexUrl = vi.fn<(url: URL) => Promise<void>>(async () => {
+      throw new Error("Codex browser unavailable.");
+    });
+    const harness = createHarness(fetch, { openCodexUrl, openUrl });
+
+    try {
+      await writeTestInstallation(installationPath);
+      expect(
+        parseCli([
+          "doctor",
+          "--installation",
+          installationPath,
+          "--authenticated",
+          "--browser",
+          "codex",
+        ]),
+      ).toMatchObject({ browser: "codex", kind: "doctor", origin: undefined });
+      await expect(
+        runCli(
+          [
+            "doctor",
+            "--installation",
+            installationPath,
+            "--authenticated",
+            "--browser",
+            "codex",
+            "--json",
+          ],
+          harness.dependencies,
+        ),
+      ).resolves.toBe(1);
+
+      const report = authenticatedDoctorReportSchema.parse(JSON.parse(harness.output.join("")));
+      expect(report.checks[0]).toMatchObject({
+        code: "browser_unavailable",
+        status: "fail",
+      });
+      expect(openCodexUrl).toHaveBeenCalledOnce();
+      expect(openUrl).not.toHaveBeenCalled();
+      expect(harness.errors).toEqual([]);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 
   it("requires explicit production confirmation for the Agent smoke command", () => {
@@ -979,7 +1147,17 @@ describe("Crewhelm CLI", () => {
 
     try {
       await expect(
-        runCli(["up", "--endpoint", "https://crewhelm.example", "--json"], harness.dependencies),
+        runCli(
+          [
+            "up",
+            "--endpoint",
+            "https://crewhelm.example",
+            "--installation",
+            resolve(directory, "installation.json"),
+            "--json",
+          ],
+          harness.dependencies,
+        ),
       ).resolves.toBe(1);
       expect(JSON.parse(harness.errors.join(""))).toMatchObject({
         ok: false,
@@ -1001,6 +1179,9 @@ describe("Crewhelm CLI", () => {
     },
     {
       arguments_: ["doctor", "--endpoint", "https://crewhelm.example", "--json", "--json"],
+    },
+    {
+      arguments_: ["doctor", "--endpoint", "https://crewhelm.example", "--browser", "external"],
     },
     { arguments_: ["up", "--endpoint", "http://localhost:8787"] },
     {

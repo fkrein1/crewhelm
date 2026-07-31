@@ -20,13 +20,15 @@ import {
   type BootstrapReport,
   type ExistingInstallationCoordinates,
 } from "./bootstrap.js";
-import { CLI_HELP, CliUsageError, parseCli, type CliCommand } from "./command.js";
+import { requestCloudflareGatewayAuthorization } from "./cloudflare-gateway-authorization.js";
+import { CLI_HELP, CliUsageError, parseCli, type BrowserMode, type CliCommand } from "./command.js";
 import {
   diagnoseDeployment,
   DoctorInputError,
   parseDeploymentOrigin,
   type DoctorReport,
 } from "./doctor.js";
+import { createGitHubApp as createGitHubAppSetup } from "./github-app.js";
 import {
   installationSchema,
   readInstallation,
@@ -39,7 +41,7 @@ import {
   runInstallationSmoke,
   type InstallationSmokeReport,
 } from "./installation-smoke.js";
-import { createCliPresentation, type CliPresentation } from "./presentation.js";
+import { createCliPresentation, createCliTextStyle, type CliPresentation } from "./presentation.js";
 import {
   runStandingIntegrationSmoke,
   standingIntegrationSmokeReportSchema,
@@ -48,6 +50,7 @@ import {
 import {
   createUpgradeSmokeFailure,
   runUpgradeSmoke,
+  UpgradeSmokeError,
   upgradeSmokeReportSchema,
   type UpgradeSmokeReport,
 } from "./upgrade-smoke.js";
@@ -59,10 +62,37 @@ export interface CliDependencies extends BootstrapDependencies {
   deploymentFingerprint?: string;
   interactive?: boolean;
   liveProgress?: boolean;
+  openCodexUrl?: (url: URL) => Promise<void>;
   openUrl?: (url: URL) => Promise<void>;
   promptText?: (message: string) => Promise<string>;
   writeError: (text: string) => void;
   writeOutput: (text: string) => void;
+}
+
+function browserOpener(
+  browser: BrowserMode,
+  dependencies: CliDependencies,
+): (url: URL) => Promise<void> {
+  if (browser === "system" && dependencies.openUrl) {
+    return dependencies.openUrl;
+  }
+
+  if (browser === "codex" && dependencies.openCodexUrl) {
+    return dependencies.openCodexUrl;
+  }
+
+  return async () => {
+    throw new Error("Browser unavailable.");
+  };
+}
+
+function reportCliUsageError(error: unknown, dependencies: CliDependencies): number {
+  if (!(error instanceof CliUsageError)) {
+    throw error;
+  }
+
+  dependencies.writeError(`Error: ${error.message}\n\n${CLI_HELP}`);
+  return 2;
 }
 
 const BOOTSTRAP_ACTIVITY_LABELS = {
@@ -307,6 +337,10 @@ async function resolveUpOptions(
 
   let origin = command.origin;
 
+  if (origin && previous && origin.origin !== previous.origin) {
+    throw new CliUsageError("Endpoint does not match the installation metadata.");
+  }
+
   if (!origin && previous) {
     origin = parseDeploymentOrigin(previous.origin);
   }
@@ -439,7 +473,59 @@ async function expectedDeploymentFingerprint(dependencies: CliDependencies): Pro
   );
 }
 
-type SmokeCommand = Extract<CliCommand, { kind: "agent-smoke" | "standing-integration-smoke" }>;
+type InstallationTargetCommand = Extract<
+  CliCommand,
+  { kind: "agent-smoke" | "doctor" | "standing-integration-smoke" | "upgrade-smoke" }
+>;
+
+async function resolveInstallationTargetOrigin(command: InstallationTargetCommand): Promise<URL> {
+  const installationPath =
+    command.kind === "doctor"
+      ? command.installationPath
+      : command.installationProvided || command.origin === undefined
+        ? command.installationPath
+        : undefined;
+  let installation: Installation | undefined;
+
+  if (installationPath !== undefined) {
+    try {
+      installation = await readInstallation(installationPath);
+    } catch {
+      throw new CliUsageError("Installation metadata could not be loaded.");
+    }
+
+    if (!installation) {
+      throw new CliUsageError("Installation metadata does not exist.");
+    }
+  }
+
+  const installationOrigin =
+    installation === undefined ? undefined : parseDeploymentOrigin(installation.origin);
+
+  if (
+    command.origin !== undefined &&
+    installationOrigin !== undefined &&
+    command.origin.origin !== installationOrigin.origin
+  ) {
+    throw new CliUsageError("Endpoint does not match the installation metadata.");
+  }
+
+  const origin = command.origin ?? installationOrigin;
+
+  if (!origin) {
+    throw new CliUsageError("Command requires --endpoint or --installation.");
+  }
+
+  if (command.kind !== "doctor" && origin.protocol !== "https:") {
+    throw new CliUsageError("Smoke rehearsal requires an HTTPS installation endpoint.");
+  }
+
+  return origin;
+}
+
+type SmokeCommand = Extract<CliCommand, { kind: "agent-smoke" | "standing-integration-smoke" }> & {
+  origin: URL;
+};
 
 async function offerDeploymentAlignment(
   command: SmokeCommand,
@@ -472,8 +558,32 @@ async function offerDeploymentAlignment(
     return "declined";
   }
 
+  let installation: Installation | undefined;
+
+  try {
+    installation = await readInstallation(command.installationPath);
+  } catch {
+    dependencies.writeError("Error: Installation metadata could not be loaded for alignment.\n");
+    return "failed";
+  }
+
+  if (!installation || installation.origin !== command.origin.origin) {
+    dependencies.writeError(
+      "Error: Installation metadata must match the rehearsal endpoint before alignment.\n",
+    );
+    return "failed";
+  }
+
   const result = await runCli(
-    ["up", "--endpoint", command.origin.origin, "--installation", command.installationPath],
+    [
+      "up",
+      "--endpoint",
+      command.origin.origin,
+      "--installation",
+      command.installationPath,
+      "--browser",
+      command.browser,
+    ],
     dependencies,
   );
   return result === 0 ? "updated" : "failed";
@@ -514,6 +624,7 @@ export async function runCli(
 
   if (command.kind === "up") {
     const executionDependencies: CliDependencies = { ...dependencies };
+    const openUrl = browserOpener(command.browser, dependencies);
 
     if (command.json) {
       delete executionDependencies.createGitHubApp;
@@ -522,6 +633,36 @@ export async function runCli(
       delete executionDependencies.promptText;
       delete executionDependencies.reportProgress;
     } else {
+      if (
+        dependencies.interactive === true &&
+        executionDependencies.createGitHubApp === undefined
+      ) {
+        executionDependencies.createGitHubApp = (options) =>
+          createGitHubAppSetup(options, {
+            fetch: dependencies.fetch,
+            openUrl,
+            writeOutput: dependencies.writeOutput,
+          });
+      }
+
+      if (
+        dependencies.interactive === true &&
+        executionDependencies.requestCloudflareGatewayAuthorization === undefined &&
+        dependencies.promptSecret !== undefined &&
+        dependencies.promptText !== undefined
+      ) {
+        const promptSecret = dependencies.promptSecret;
+        const promptText = dependencies.promptText;
+        executionDependencies.requestCloudflareGatewayAuthorization = (request) =>
+          requestCloudflareGatewayAuthorization(request, {
+            openUrl,
+            promptSecret,
+            promptText,
+            style: createCliTextStyle(color),
+            writeOutput: dependencies.writeOutput,
+          });
+      }
+
       presentation.banner();
       const reportProgress = executionDependencies.reportProgress;
       executionDependencies.reportProgress = (progress) => {
@@ -657,19 +798,25 @@ export async function runCli(
   }
 
   if (command.kind === "agent-smoke") {
+    let origin: URL;
+
+    try {
+      origin = await resolveInstallationTargetOrigin(command);
+    } catch (error) {
+      return reportCliUsageError(error, dependencies);
+    }
+
+    const resolvedCommand = { ...command, origin };
+    const openUrl = browserOpener(command.browser, dependencies);
     const deploymentFingerprint = await expectedDeploymentFingerprint(dependencies);
     let report = agentSmokeReportSchema.parse(
-      await runAgentSmoke(command, {
+      await runAgentSmoke(resolvedCommand, {
         expectedDeploymentFingerprint: deploymentFingerprint,
         fetch: dependencies.fetch,
-        openUrl:
-          dependencies.openUrl ??
-          (async () => {
-            throw new Error("Browser unavailable.");
-          }),
+        openUrl,
       }),
     );
-    const alignment = await offerDeploymentAlignment(command, report.public, dependencies);
+    const alignment = await offerDeploymentAlignment(resolvedCommand, report.public, dependencies);
 
     if (alignment === "failed") {
       return 1;
@@ -677,14 +824,10 @@ export async function runCli(
 
     if (alignment === "updated") {
       report = agentSmokeReportSchema.parse(
-        await runAgentSmoke(command, {
+        await runAgentSmoke(resolvedCommand, {
           expectedDeploymentFingerprint: deploymentFingerprint,
           fetch: dependencies.fetch,
-          openUrl:
-            dependencies.openUrl ??
-            (async () => {
-              throw new Error("Browser unavailable.");
-            }),
+          openUrl,
         }),
       );
     }
@@ -696,6 +839,7 @@ export async function runCli(
 
   if (command.kind === "installation-smoke") {
     try {
+      const openUrl = browserOpener(command.browser, dependencies);
       const report = installationSmokeReportSchema.parse(
         await runInstallationSmoke(
           {
@@ -713,11 +857,7 @@ export async function runCli(
           },
           {
             ...dependencies,
-            openUrl:
-              dependencies.openUrl ??
-              (async () => {
-                throw new Error("Browser unavailable.");
-              }),
+            openUrl,
           },
         ),
       );
@@ -740,11 +880,32 @@ export async function runCli(
   }
 
   if (command.kind === "upgrade-smoke") {
-    const openUrl =
-      dependencies.openUrl ??
-      (async () => {
-        throw new Error("Browser unavailable.");
-      });
+    let origin: URL;
+
+    try {
+      origin = await resolveInstallationTargetOrigin(command);
+    } catch (error) {
+      if (!(error instanceof CliUsageError)) {
+        throw error;
+      }
+
+      const failure = createUpgradeSmokeFailure(
+        command.receiptPath,
+        new UpgradeSmokeError(
+          "invalid_input",
+          "fix_input",
+          error.message,
+          "Upgrade installation target was invalid.",
+        ),
+      );
+      dependencies.writeError(
+        command.json ? `${JSON.stringify(failure)}\n` : `Error: ${failure.message}\n`,
+      );
+      return 1;
+    }
+
+    const resolvedCommand = { ...command, origin };
+    const openUrl = browserOpener(command.browser, dependencies);
 
     if (!command.json) {
       presentation.banner();
@@ -756,7 +917,7 @@ export async function runCli(
           {
             baselineFingerprint: command.baselineFingerprint,
             installationPath: command.installationPath,
-            origin: command.origin,
+            origin,
             receiptPath: command.receiptPath,
             timeoutMs: command.timeoutMs,
           },
@@ -765,7 +926,7 @@ export async function runCli(
             bootstrap: (options, expectedFingerprint) =>
               bootstrapUpgradeDeployment(options, dependencies, [expectedFingerprint]),
             diagnose: (expectedFingerprint) =>
-              diagnoseDeployment(command, {
+              diagnoseDeployment(resolvedCommand, {
                 expectedDeploymentFingerprint: expectedFingerprint,
                 fetch: dependencies.fetch,
               }),
@@ -815,19 +976,25 @@ export async function runCli(
   }
 
   if (command.kind === "standing-integration-smoke") {
+    let origin: URL;
+
+    try {
+      origin = await resolveInstallationTargetOrigin(command);
+    } catch (error) {
+      return reportCliUsageError(error, dependencies);
+    }
+
+    const resolvedCommand = { ...command, origin };
+    const openUrl = browserOpener(command.browser, dependencies);
     const deploymentFingerprint = await expectedDeploymentFingerprint(dependencies);
     let report = standingIntegrationSmokeReportSchema.parse(
-      await runStandingIntegrationSmoke(command, {
+      await runStandingIntegrationSmoke(resolvedCommand, {
         expectedDeploymentFingerprint: deploymentFingerprint,
         fetch: dependencies.fetch,
-        openUrl:
-          dependencies.openUrl ??
-          (async () => {
-            throw new Error("Browser unavailable.");
-          }),
+        openUrl,
       }),
     );
-    const alignment = await offerDeploymentAlignment(command, report.public, dependencies);
+    const alignment = await offerDeploymentAlignment(resolvedCommand, report.public, dependencies);
 
     if (alignment === "failed") {
       return 1;
@@ -835,14 +1002,10 @@ export async function runCli(
 
     if (alignment === "updated") {
       report = standingIntegrationSmokeReportSchema.parse(
-        await runStandingIntegrationSmoke(command, {
+        await runStandingIntegrationSmoke(resolvedCommand, {
           expectedDeploymentFingerprint: deploymentFingerprint,
           fetch: dependencies.fetch,
-          openUrl:
-            dependencies.openUrl ??
-            (async () => {
-              throw new Error("Browser unavailable.");
-            }),
+          openUrl,
         }),
       );
     }
@@ -854,16 +1017,22 @@ export async function runCli(
     return report.ok ? 0 : 1;
   }
 
+  let origin: URL;
+
+  try {
+    origin = await resolveInstallationTargetOrigin(command);
+  } catch (error) {
+    return reportCliUsageError(error, dependencies);
+  }
+
+  const resolvedCommand = { ...command, origin };
+
   if (command.authenticated) {
     const deploymentFingerprint = await expectedDeploymentFingerprint(dependencies);
-    const report = await diagnoseAuthenticatedDeployment(command, {
+    const report = await diagnoseAuthenticatedDeployment(resolvedCommand, {
       expectedDeploymentFingerprint: deploymentFingerprint,
       fetch: dependencies.fetch,
-      openUrl:
-        dependencies.openUrl ??
-        (async () => {
-          throw new Error("Browser unavailable.");
-        }),
+      openUrl: browserOpener(command.browser, dependencies),
     });
     dependencies.writeOutput(
       command.json
@@ -874,7 +1043,7 @@ export async function runCli(
   }
 
   const deploymentFingerprint = await expectedDeploymentFingerprint(dependencies);
-  const report = await diagnoseDeployment(command, {
+  const report = await diagnoseDeployment(resolvedCommand, {
     expectedDeploymentFingerprint: deploymentFingerprint,
     fetch: dependencies.fetch,
   });

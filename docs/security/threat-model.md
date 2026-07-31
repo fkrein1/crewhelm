@@ -71,6 +71,12 @@ attempts to revoke the temporary access token on both success and later-stage fa
 that the token no longer reaches MCP; cleanup that cannot be confirmed is reported as a failed
 diagnosis rather than hidden.
 
+Codex browser mode does not print or invoke the signed authorization target. The CLI binds a
+random-capability handoff to exact loopback, emits only that local URL, and requires an explicit
+form continuation before returning one no-store, no-referrer redirect to the target. Wrong hosts,
+methods, paths, queries, and continuation replay fail closed; timeout closes the listener. Codex
+mode never falls back to the system browser.
+
 Revisit this model before adding another identity provider, broader mutations, a multi-owner
 service, or longer token lifetimes.
 
@@ -178,6 +184,10 @@ runtime state. The CLI compares that identity before production rehearsals and v
 deployment. Interactive rehearsal may offer the operator an explicit matching deployment, while
 non-interactive use fails with recovery guidance. A CLI never automatically replaces a Worker that
 advertises a newer deployment protocol.
+
+Installation-backed diagnosis and rehearsals treat validated local installation metadata as the
+target authority. When an operator also supplies an endpoint, an exact-origin mismatch stops before
+network access or authorization.
 
 When local installation metadata is missing, bootstrap adopts an existing Worker only from one
 fully active version. It verifies the Worker shape, exact public origin, D1 binding, bounded D1
