@@ -6,7 +6,10 @@ interface Props {
 const { href = "#top" } = Astro.props;
 ---
 
-<a class="inline-flex gap-2 font-mono text-[.82rem] font-extrabold tracking-[.08em] no-underline" href={href} aria-label="Crewhelm home">
-  <span class="text-primary" aria-hidden="true">&gt;_</span>
-  CREWHELM
+<a class="inline-flex items-center gap-2 font-mono text-[.82rem] font-extrabold tracking-[.08em] no-underline" href={href} aria-label="Crewhelm home">
+  <picture class="flex size-5">
+    <source srcset="/crewhelm-mark-dark.svg" media="(prefers-color-scheme: dark)" />
+    <img class="size-5" src="/crewhelm-mark-light.svg" width="20" height="20" alt="" aria-hidden="true" />
+  </picture>
+  <span aria-hidden="true">CREWHELM</span>
 </a>

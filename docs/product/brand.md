@@ -29,6 +29,20 @@ Color carries meaning. Blue is control. Green is allowed. Amber is approval. Red
 
 Use `@crewhelm/design/theme.css`. Extend tokens before inventing local values.
 
+### Logo
+
+The Crewhelm mark places a signal square inside four boundary corners. The signal is ready to act;
+the separated frame makes its limits legible. Preserve the supplied square geometry and never add a
+shield, lock, rounded app tile, gradient, stroke, shadow, or glow.
+
+Use the explicit light-background and dark-background assets from `@crewhelm/design/assets/*`. The
+light variant uses `ink-950` with a `signal-600` center; the dark variant uses `paper-100` with a
+`signal-400` center. Keep both transparent 1024px PNG and SVG masters unchanged. Use their derived
+SVG or PNG sizes for favicons, navigation, authorization, and other compact UI.
+
+The wordmark remains `CREWHELM`. Browser marks and favicons follow the user’s color scheme. The CLI
+uses the terminal’s adaptive foreground for the four corners and signal blue for the center.
+
 ## Surface test
 
 Every surface must answer:

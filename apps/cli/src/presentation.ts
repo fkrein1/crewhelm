@@ -1,6 +1,6 @@
 import {
   CREWHELM_CLI_BANNER,
-  CREWHELM_LOGO_PROMPT,
+  CREWHELM_CLI_MARK_ACCENT,
   CREWHELM_LOGO_WORDMARK,
   crewhelmTerminalTheme,
 } from "@crewhelm/design/terminal";
@@ -13,7 +13,7 @@ type CliTextFormatter = (text: string) => string;
 export interface CliTextStyle {
   accent: CliTextFormatter;
   accentStrong: CliTextFormatter;
-  logoPrompt: CliTextFormatter;
+  logoAccent: CliTextFormatter;
   logoWordmark: CliTextFormatter;
   muted: CliTextFormatter;
   negativeStrong: CliTextFormatter;
@@ -31,8 +31,8 @@ export function createCliTextStyle(color: boolean): CliTextStyle {
   return {
     accent,
     accentStrong: accent.bold,
-    logoPrompt: style.rgb(...crewhelmTerminalTheme.logoPrompt),
-    logoWordmark: style.rgb(...crewhelmTerminalTheme.logoWordmark),
+    logoAccent: style.rgb(...crewhelmTerminalTheme.logoAccent),
+    logoWordmark: style.bold,
     muted: style.dim,
     negativeStrong: style.rgb(...crewhelmTerminalTheme.negative).bold,
     positiveStrong: style.rgb(...crewhelmTerminalTheme.positive).bold,
@@ -43,7 +43,10 @@ export function createCliTextStyle(color: boolean): CliTextStyle {
 }
 
 function styledBanner(style: CliTextStyle): string {
-  return `${style.logoPrompt(CREWHELM_LOGO_PROMPT)} ${style.logoWordmark(CREWHELM_LOGO_WORDMARK)}\n`;
+  return CREWHELM_CLI_BANNER.replace(
+    CREWHELM_CLI_MARK_ACCENT,
+    style.logoAccent(CREWHELM_CLI_MARK_ACCENT),
+  ).replace(CREWHELM_LOGO_WORDMARK, style.logoWordmark(CREWHELM_LOGO_WORDMARK));
 }
 
 export interface CliPresentationOptions {

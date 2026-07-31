@@ -17,10 +17,10 @@ describe("CLI presentation", () => {
     presentation.progress({ label: "Deployment", message: "Checking Worker availability" });
 
     expect(writeOutput).toHaveBeenCalledWith(
-      expect.stringContaining("\u001B[38;2;48;126;224m>_\u001B[39m"),
+      expect.stringContaining("\u001B[38;2;48;126;224m■\u001B[39m"),
     );
     expect(writeOutput).toHaveBeenCalledWith(
-      expect.stringContaining("\u001B[38;2;94;165;245mCREWHELM\u001B[39m"),
+      expect.stringContaining("\u001B[1mCREWHELM\u001B[22m"),
     );
     expect(writeError).toHaveBeenCalledWith(
       expect.stringContaining("\u001B[38;2;48;126;224m⠋\u001B[39m"),

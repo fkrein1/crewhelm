@@ -6,6 +6,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./assets/*": "./assets/*",
     "./theme.css": "./src/theme.css",
     "./terminal": "./src/terminal.ts",
     "./web": "./src/web.ts"
