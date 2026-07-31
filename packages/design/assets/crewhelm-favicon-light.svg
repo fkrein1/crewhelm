@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1024"
+  height="1024"
+  viewBox="0 0 1024 1024"
+  role="img"
+  aria-labelledby="title description"
+>
+  <title id="title">Crewhelm logo</title>
+  <desc id="description">Four dark corner shapes frame a blue square.</desc>
+  <g
+    fill="#0B121B"
+    data-token="color-ink-950"
+    data-token-value="oklch(0.18 0.022 255)"
+  >
+    <path d="M107 78h371v148H247v272H107V78Z" />
+    <path d="M544 78h372v387H775V226H544V78Z" />
+    <path d="M107 553h140v237h231v155H107V553Z" />
+    <path d="M775 551h141v394H544V790h231V551Z" />
+  </g>
+  <rect
+    x="442"
+    y="429"
+    width="140"
+    height="143"
+    fill="#0067DB"
+    data-token="color-signal-600"
+    data-token-value="oklch(0.53 0.2 255)"
+  />
+</svg>

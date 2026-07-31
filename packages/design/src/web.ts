@@ -41,6 +41,8 @@ export const CREWHELM_WEB_STYLES = `
 :root {
   color-scheme: light dark;
 ${lightThemeVariables}
+  --ch-logo-accent: #0067db;
+  --ch-logo-frame: #0b121b;
   --ch-font-mono: ${crewhelmFoundationTokens.font.mono};
   --ch-font-sans: ${crewhelmFoundationTokens.font.sans};
   --ch-radius-lg: ${crewhelmFoundationTokens.radius.large};
@@ -63,6 +65,8 @@ ${lightThemeVariables}
   :root {
     color-scheme: dark;
 ${nestedDarkThemeVariables}
+    --ch-logo-accent: #3e98ff;
+    --ch-logo-frame: #f3f2eb;
   }
 }
 
@@ -145,6 +149,14 @@ body.ch-page {
   width: 18px;
   height: 18px;
   flex: 0 0 auto;
+}
+
+.ch-brand__mark-frame {
+  fill: var(--ch-logo-frame);
+}
+
+.ch-brand__mark-accent {
+  fill: var(--ch-logo-accent);
 }
 
 .ch-brand__wordmark {

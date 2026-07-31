@@ -1,12 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-  <defs>
-    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0070ff"/>
-      <stop offset=".48" stop-color="#0064ff"/>
-      <stop offset="1" stop-color="#005bfa"/>
-    </linearGradient>
-  </defs>
-  <path fill="url(#blue)" d="M5 5V61H59V38H53V55H11V10H53V27H59V5Z"/>
-  <path fill="url(#blue)" d="M17 18L35 30V34L17 48V41L29 32L17 24Z"/>
-  <path fill="url(#blue)" d="M33 47H48V51H33Z"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">Crewhelm logo</title>
+  <desc id="description">Four boundary corners frame a blue signal square.</desc>
+  <style>
+    .frame { fill: #0b121b; }
+    .accent { fill: #0067db; }
+    @media (prefers-color-scheme: dark) {
+      .frame { fill: #f3f2eb; }
+      .accent { fill: #3e98ff; }
+    }
+  </style>
+  <g class="frame">
+    <path d="M107 78h371v148H247v272H107V78Z"/>
+    <path d="M544 78h372v387H775V226H544V78Z"/>
+    <path d="M107 553h140v237h231v155H107V553Z"/>
+    <path d="M775 551h141v394H544V790h231V551Z"/>
+  </g>
+  <rect class="accent" x="442" y="429" width="140" height="143"/>
 </svg>
