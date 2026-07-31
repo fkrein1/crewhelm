@@ -57,6 +57,8 @@ describe("Crewhelm design foundation", () => {
     expect(theme).toContain("@theme inline");
     expect(theme).toContain("--color-background: var(--background)");
     expect(theme).toContain("--color-primary: var(--primary)");
+    expect(theme).toContain(':root[data-theme="dark"]');
+    expect(theme).toContain("--color-inverse: var(--inverse)");
   });
 
   it("keeps semantic text pairs above WCAG AA contrast", () => {
@@ -66,6 +68,9 @@ describe("Crewhelm design foundation", () => {
       [crewhelmColorScales.success[100], crewhelmColorScales.success[700]],
       [crewhelmColorScales.warning[100], crewhelmColorScales.warning[700]],
       [crewhelmColorScales.danger[100], crewhelmColorScales.danger[700]],
+      [crewhelmColorScales.ink[950], crewhelmColorScales.paper[100]],
+      [crewhelmColorScales.ink[800], crewhelmColorScales.ink[300]],
+      [crewhelmColorScales.signal[400], crewhelmColorScales.ink[950]],
     ] as const;
 
     for (const [background, foreground] of pairs) {

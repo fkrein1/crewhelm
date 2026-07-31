@@ -1,0 +1,53 @@
+---
+import { CREWHELM_SITE, serializeJsonLd, type JsonLd } from "../lib/seo";
+
+interface Props {
+  canonical?: string | URL | null;
+  description?: string;
+  index?: boolean;
+  structuredData?: JsonLd | JsonLd[] | null;
+  title?: string;
+}
+
+const {
+  canonical,
+  description = CREWHELM_SITE.description,
+  index = true,
+  structuredData = null,
+  title = CREWHELM_SITE.title,
+} = Astro.props;
+
+const canonicalUrl = canonical === undefined
+  ? index
+    ? new URL(Astro.url.pathname, CREWHELM_SITE.url).toString()
+    : null
+  : canonical?.toString() ?? null;
+---
+
+<title>{title}</title>
+<meta name="description" content={description} />
+<meta name="robots" content={index ? "index, follow" : "noindex, follow"} />
+<meta name="theme-color" content="#f2f0e9" />
+<meta name="color-scheme" content="light dark" />
+{canonicalUrl && <link rel="canonical" href={canonicalUrl} />}
+<link rel="sitemap" href="/sitemap-index.xml" />
+{
+  index && (
+    <>
+      <meta property="og:type" content="website" />
+      <meta property="og:site_name" content={CREWHELM_SITE.name} />
+      <meta property="og:locale" content={CREWHELM_SITE.locale} />
+      <meta property="og:title" content={title} />
+      <meta property="og:description" content={description} />
+      {canonicalUrl && <meta property="og:url" content={canonicalUrl} />}
+      <meta name="twitter:card" content="summary" />
+      <meta name="twitter:title" content={title} />
+      <meta name="twitter:description" content={description} />
+    </>
+  )
+}
+{
+  index && structuredData && (
+    <script type="application/ld+json" set:html={serializeJsonLd(structuredData)} />
+  )
+}

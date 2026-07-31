@@ -11,6 +11,7 @@
     "preview:upload": "astro build && wrangler versions upload"
   },
   "dependencies": {
+    "@astrojs/sitemap": "3.7.3",
     "@crewhelm/design": "workspace:*",
     "astro": "7.1.6"
   },

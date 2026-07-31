@@ -14,7 +14,7 @@ const handoffs = ["signed request", "authorized dispatch", "scoped capability"];
       <div
         class:list={[
           "flex min-h-44 flex-col justify-center border border-border-strong bg-card/40 p-5 max-[900px]:min-h-31 max-[900px]:w-full",
-          node.primary && "bg-foreground text-paper-50 shadow-signal-sm",
+          node.primary && "bg-inverse text-inverse-foreground shadow-signal-sm",
         ]}
       >
         <span class:list={["font-mono text-[.57rem] tracking-[.08em] text-primary", node.primary && "text-signal-300"]}>{node.eyebrow}</span>
@@ -31,8 +31,8 @@ const handoffs = ["signed request", "authorized dispatch", "scoped capability"];
   ))}
 </div>
 
-<div class="mt-6.5 flex justify-end gap-2 border-t border-ink-400 pt-4.5 max-[620px]:flex-wrap max-[620px]:justify-start" aria-label="Cloudflare runtime services">
+<div class="mt-6.5 flex justify-end gap-2 border-t border-border pt-4.5 max-[620px]:flex-wrap max-[620px]:justify-start" aria-label="Cloudflare runtime services">
   {["Workers", "Durable Objects", "Think", "Workflows", "Storage"].map((service) => (
-    <span class="border border-ink-400 px-2 py-1.5 font-mono text-[.55rem] tracking-[.04em]">{service}</span>
+    <span class="border border-border px-2 py-1.5 font-mono text-[.55rem] tracking-[.04em]">{service}</span>
   ))}
 </div>

@@ -4,6 +4,8 @@ Crewhelm is an open-source personal control plane for creating and operating AI 
 Cloudflare. MCP is the administration surface, a local CLI bootstraps and diagnoses the
 deployment, and Composio supplies the external integration plane.
 
+Website: [crewhelm.app](https://crewhelm.app)
+
 The current implementation provides an authenticated, owner-scoped Agent registry; immutable
 Agent revisions; bounded manual and scheduled runs on Cloudflare Think; deterministic capability,
 approval, budget, and recovery controls; and version-pinned Composio tool discovery and execution.
