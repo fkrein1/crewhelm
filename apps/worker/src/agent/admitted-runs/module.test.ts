@@ -2518,7 +2518,7 @@ describe("CrewAgent admitted execution", () => {
       ...input,
       executionLimits: {
         ...input.executionLimits,
-        maxDurationSeconds: 1,
+        maxDurationSeconds: 30,
       },
     });
 
@@ -2544,16 +2544,26 @@ describe("CrewAgent admitted execution", () => {
       }),
     );
 
+    await vi.waitFor(
+      async () => {
+        await expect(
+          controlPlane.inspectRun(authority, { runId: started.run.runId }),
+        ).resolves.toMatchObject({
+          ok: true,
+          run: {
+            runId: started.run.runId,
+            status: "running",
+          },
+        });
+      },
+      { interval: 25, timeout: 5_000 },
+    );
+
     await runInDurableObject(deadlineStub, async (_agent, state) => {
       const key = `crewhelm:run:${started.run.runId}`;
       const record = admittedRunRecordSchema.parse(await state.storage.get(key));
 
       await state.storage.put(key, { ...record, deadlineAt: 1 });
-      state.storage.sql.exec(
-        "UPDATE cf_think_submissions SET status = 'running', started_at = ? WHERE submission_id = ?",
-        Date.now(),
-        started.run.runId,
-      );
       state.storage.sql.exec(
         "DELETE FROM cf_agents_schedules WHERE callback = '_drainThinkSubmissions'",
       );
@@ -2563,24 +2573,16 @@ describe("CrewAgent admitted execution", () => {
     });
     await expect(runDurableObjectAlarm(deadlineStub)).resolves.toBe(true);
 
-    const inspected = await vi.waitFor(
-      async () => {
-        const result = await controlPlane.inspectRun(authority, {
-          runId: started.run.runId,
-        });
-
-        expect(result).toMatchObject({
-          ok: true,
-          run: {
-            runId: started.run.runId,
-            status: "cancelled",
-          },
-        });
-
-        return result;
+    const inspected = await controlPlane.inspectRun(authority, {
+      runId: started.run.runId,
+    });
+    expect(inspected).toMatchObject({
+      ok: true,
+      run: {
+        runId: started.run.runId,
+        status: "cancelled",
       },
-      { interval: 25, timeout: 5_000 },
-    );
+    });
     expect(inspected.ok ? inspected.run.output : undefined).toBeUndefined();
   });
 

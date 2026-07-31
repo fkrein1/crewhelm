@@ -106,7 +106,7 @@ jobs:
             exit 1
           fi
 
-          package_path="${package_files[0]}"
+          package_path="./${package_files[0]}"
           release_version="$(
             jq -er --arg release_tag "$RELEASE_TAG" \
               '.cliVersion as $version | select(.releaseTag == $release_tag) | $version | select(type == "string" and length > 0)' \
@@ -114,11 +114,14 @@ jobs:
           )"
           expected_integrity="sha512-$(openssl dgst -sha512 -binary "$package_path" | openssl base64 -A)"
           registry_document="$(mktemp)"
+          registry_read=0
 
           read_registry() {
+            registry_read=$((registry_read + 1))
             registry_code="$(
-              curl --silent --show-error --output "$registry_document" --write-out '%{http_code}' \
-                "$NPM_REGISTRY_DOCUMENT"
+              curl --silent --show-error --header 'Cache-Control: no-cache' \
+                --output "$registry_document" --write-out '%{http_code}' \
+                "$NPM_REGISTRY_DOCUMENT?crewhelm_read=$registry_read"
             )"
             if [[ "$registry_code" != "200" && "$registry_code" != "404" ]]; then
               echo "npm registry returned HTTP $registry_code." >&2
