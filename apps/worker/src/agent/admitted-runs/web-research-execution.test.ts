@@ -145,6 +145,25 @@ describe("Brave web search", () => {
       Accept: "application/json",
       "X-Subscription-Token": "secret-api-key",
     });
+    expect(options?.redirect).toBe("manual");
+  });
+
+  it("denies provider redirects without forwarding the credential", async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(null, { headers: { location: "https://other.example" }, status: 302 }),
+      );
+    const execution = runBraveWebSearch({
+      apiKey: "secret-api-key",
+      fetchImplementation: request,
+      query: "query",
+      signal: new AbortController().signal,
+      tool: searchTool,
+    });
+
+    await expect(execution).rejects.toMatchObject({ code: "provider_failed", status: 302 });
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("does not expose provider errors or the credential", async () => {
