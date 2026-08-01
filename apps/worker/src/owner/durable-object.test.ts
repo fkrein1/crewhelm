@@ -57,6 +57,10 @@ function removeBriefSchema(storage: DurableObjectStorage): void {
   storage.sql.exec("DROP TABLE briefs");
 }
 
+function removeRuntimeToolSchema(storage: DurableObjectStorage): void {
+  storage.sql.exec("DROP TABLE runtime_tool_executions");
+}
+
 describe("owner identity", () => {
   it("derives a deterministic opaque key without retaining provider identity", async () => {
     const identity = {
@@ -275,6 +279,16 @@ describe("OwnerControlPlane", () => {
           name: "0023_abnormal_sister_grimm",
           version: 24,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0024_broad_micromacro",
+          version: 25,
+        },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0025_charming_squadron_supreme",
+          version: 26,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });
@@ -366,6 +380,7 @@ describe("OwnerControlPlane", () => {
       removeSkillLibrarySchema(state.storage);
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
+      removeRuntimeToolSchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 18");
       await state.storage.sync();
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
@@ -959,6 +974,7 @@ describe("OwnerControlPlane", () => {
       removeSkillLibrarySchema(state.storage);
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
+      removeRuntimeToolSchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 12");
     });
     await evictDurableObject(stub);
@@ -1021,6 +1037,7 @@ describe("OwnerControlPlane", () => {
       removeSkillLibrarySchema(state.storage);
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
+      removeRuntimeToolSchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 14");
     });
     await evictDurableObject(stub);
@@ -1136,6 +1153,7 @@ describe("OwnerControlPlane", () => {
       removeSkillLibrarySchema(state.storage);
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
+      removeRuntimeToolSchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 11");
     });
     await evictDurableObject(stub);
@@ -1336,6 +1354,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec("DROP TABLE fleet_configuration_revisions");
       state.storage.sql.exec("DROP TABLE integration_usage_events");
       state.storage.sql.exec("DROP TABLE integration_enablement_requests");
+      removeRuntimeToolSchema(state.storage);
       state.storage.sql.exec("DROP TABLE tool_executions");
       state.storage.sql.exec("DROP TABLE tool_approvals");
       state.storage.sql.exec("DROP TABLE capability_grants");
@@ -1514,6 +1533,8 @@ describe("OwnerControlPlane", () => {
         { version: 22 },
         { version: 23 },
         { version: 24 },
+        { version: 25 },
+        { version: 26 },
       ]);
     });
   });
@@ -1618,6 +1639,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec("DROP TABLE fleet_configurations");
       state.storage.sql.exec("DROP TABLE fleet_configuration_revisions");
       state.storage.sql.exec("DROP TABLE integration_usage_events");
+      removeRuntimeToolSchema(state.storage);
       state.storage.sql.exec(
         `CREATE TABLE legacy_tool_executions AS
          SELECT
@@ -1777,6 +1799,7 @@ describe("OwnerControlPlane", () => {
         "e".repeat(64),
       );
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 24");
+      removeRuntimeToolSchema(state.storage);
     });
     await evictDurableObject(stub);
 
@@ -1821,7 +1844,7 @@ describe("OwnerControlPlane", () => {
       admission: { run_id: admission.permit.runId, trigger: "manual" },
       foreignKeys: [],
       migration: {
-        name: "0023_abnormal_sister_grimm",
+        name: "0025_charming_squadron_supreme",
         version: CONTROL_PLANE_SCHEMA_VERSION,
       },
       workflow: {

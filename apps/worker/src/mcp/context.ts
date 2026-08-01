@@ -59,6 +59,7 @@ export interface OwnerControlPlaneClient {
 export interface McpEnvironment {
   AI_GATEWAY_ID?: string | undefined;
   BETTER_AUTH_SECRET: string;
+  CODE_SANDBOX?: unknown;
   COMPOSIO_API_KEY?: string | undefined;
   PUBLIC_ORIGIN: string;
   OWNER_CONTROL_PLANE: {

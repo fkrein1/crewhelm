@@ -1,6 +1,7 @@
 import type { CrewAgent, CrewSession } from "./agent/durable-object.js";
 import type { OwnerControlPlane } from "./owner/durable-object.js";
 import type { AgentTaskWorkflow } from "./agent-workflows/agent-task.js";
+import type { CrewhelmSandbox } from "./sandbox.js";
 
 declare global {
   namespace Cloudflare {
@@ -13,6 +14,7 @@ declare global {
       COMPOSIO_API_KEY?: string;
       CREW_AGENT: DurableObjectNamespace<CrewAgent>;
       CREW_SESSION: DurableObjectNamespace<CrewSession>;
+      CODE_SANDBOX?: DurableObjectNamespace<CrewhelmSandbox>;
       CREWHELM_DEPLOYMENT_FINGERPRINT: string;
       GITHUB_CLIENT_ID: string;
       GITHUB_CLIENT_SECRET: string;

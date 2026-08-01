@@ -418,6 +418,7 @@ async function resolveUpOptions(
     databaseId: command.databaseId ?? previous?.databaseId,
     databaseName: command.databaseName ?? previous?.databaseName ?? "crewhelm-auth",
     origin,
+    sandboxEnabled: command.sandboxEnabled === true || previous?.sandboxEnabled === true,
     setupGitHub: command.setupGitHub,
     timeoutMs: command.timeoutMs,
     workerName: command.workerName ?? previous?.workerName ?? "crewhelm",
@@ -456,6 +457,7 @@ async function saveInstallation(
   path: string,
   report: BootstrapReport,
   aiDailySpendUsd?: number,
+  sandboxEnabled?: boolean,
 ): Promise<void> {
   await saveInstallationCoordinates(path, {
     accountId: report.account.id,
@@ -464,6 +466,7 @@ async function saveInstallation(
     databaseId: report.database.id,
     databaseName: report.database.name,
     origin: report.deployment.origin,
+    ...(sandboxEnabled === true ? { sandboxEnabled: true } : {}),
     skillBucketName: skillBucketNameForWorker(report.deployment.workerName),
     workerName: report.deployment.workerName,
   });
@@ -778,7 +781,12 @@ export async function runCli(
 
       if (report.ok) {
         try {
-          await saveInstallation(command.installationPath, report, options.aiDailySpendUsd);
+          await saveInstallation(
+            command.installationPath,
+            report,
+            options.aiDailySpendUsd,
+            options.sandboxEnabled,
+          );
         } catch {
           throw new BootstrapError(
             "configuration",

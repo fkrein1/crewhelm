@@ -31,6 +31,13 @@ export type CapabilityRuntimeContribution =
         id: string;
         version: number;
       };
+    }
+  | {
+      kind: "runtime-tool";
+      tool: Omit<
+        AgentRuntimePlan["tools"] extends (infer Tool)[] | undefined ? Tool : never,
+        "moduleId" | "schemaVersion"
+      >;
     };
 
 export type CapabilityModuleResolution =
@@ -148,6 +155,7 @@ export class AgentCapabilityRegistry {
     const modules: AgentRuntimePlan["modules"] = [];
     const skillReferences: AgentRuntimePlan["skillReferences"] = [];
     const systemContext: AgentRuntimePlan["systemContext"] = [];
+    const tools: NonNullable<AgentRuntimePlan["tools"]> = [];
     const canonicalCapabilities: AgentCapabilityConfiguration[] = [];
 
     for (const persistedCapability of parsedEnvelope.data) {
@@ -212,9 +220,15 @@ export class AgentCapabilityRegistry {
             schemaVersion: capability.schemaVersion,
             text: contribution.text,
           });
-        } else {
+        } else if (contribution.kind === "skill-reference") {
           skillReferences.push({
             ...contribution.skill,
+            moduleId: capability.id,
+            schemaVersion: capability.schemaVersion,
+          });
+        } else {
+          tools.push({
+            ...contribution.tool,
             moduleId: capability.id,
             schemaVersion: capability.schemaVersion,
           });
@@ -240,6 +254,7 @@ export class AgentCapabilityRegistry {
         modules,
         skillReferences,
         systemContext,
+        tools: tools.toSorted((left, right) => left.id.localeCompare(right.id)),
       }),
     };
   }

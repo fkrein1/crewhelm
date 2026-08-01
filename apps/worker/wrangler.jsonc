@@ -47,6 +47,10 @@
         "name": "CREW_SESSION",
         "class_name": "CrewSession",
       },
+      {
+        "name": "CODE_SANDBOX",
+        "class_name": "CrewhelmSandbox",
+      },
     ],
   },
   "exports": {
@@ -62,7 +66,19 @@
       "type": "durable-object",
       "storage": "sqlite",
     },
+    "CrewhelmSandbox": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
   },
+  "containers": [
+    {
+      "class_name": "CrewhelmSandbox",
+      "image": "docker.io/cloudflare/sandbox:0.12.4-python",
+      "instance_type": "lite",
+      "max_instances": 5,
+    },
+  ],
   "workflows": [
     {
       "binding": "AGENT_TASK_WORKFLOW",

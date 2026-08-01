@@ -17,6 +17,7 @@ export const installationSchema = z.strictObject({
   databaseId: z.uuid(),
   databaseName: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
   origin: z.url(),
+  sandboxEnabled: z.boolean().optional(),
   skillBucketName: z
     .string()
     .min(3)

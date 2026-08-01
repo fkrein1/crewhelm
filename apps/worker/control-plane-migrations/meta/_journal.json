@@ -169,6 +169,20 @@
       "when": 1785586999852,
       "tag": "0023_abnormal_sister_grimm",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1785595274738,
+      "tag": "0024_broad_micromacro",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1785599312493,
+      "tag": "0025_charming_squadron_supreme",
+      "breakpoints": true
     }
   ]
 }

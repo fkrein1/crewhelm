@@ -9,6 +9,8 @@ export const AI_GATEWAY_CAPABILITY_ID = "inference.ai-gateway";
 export const AI_GATEWAY_CAPABILITY_SCHEMA_VERSION = 1;
 export const SKILLS_CAPABILITY_ID = "context.skills";
 export const SKILLS_CAPABILITY_SCHEMA_VERSION = 1;
+export const SANDBOX_CODE_CAPABILITY_ID = "tools.sandbox-code";
+export const SANDBOX_CODE_CAPABILITY_SCHEMA_VERSION = 1;
 
 export const agentCapabilityModuleIdSchema = z
   .string()

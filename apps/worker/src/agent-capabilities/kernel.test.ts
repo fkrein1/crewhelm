@@ -23,6 +23,7 @@ import {
   aiGatewayCapabilityModule,
 } from "./ai-gateway.js";
 import { skillsCapabilityConfiguration, skillsCapabilityModule } from "./skills.js";
+import { sandboxCodeCapabilityConfiguration, sandboxCodeCapabilityModule } from "./sandbox-code.js";
 import {
   WORKERS_AI_BINDING_PREREQUISITE,
   workersAiCapabilityConfiguration,
@@ -180,8 +181,71 @@ describe("Agent capability registry", () => {
         modules: [{ id: "inference.workers-ai", schemaVersion: 2 }],
         skillReferences: [],
         systemContext: [],
+        tools: [],
       },
     });
+  });
+
+  it("freezes a bounded no-egress Sandbox tool into the runtime plan", () => {
+    const registry = new AgentCapabilityRegistry([
+      sandboxCodeCapabilityModule,
+      workersAiCapabilityModule,
+    ]);
+    const result = registry.compile(
+      [
+        workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct"),
+        sandboxCodeCapabilityConfiguration({
+          languages: ["python"],
+          maxCodeBytes: 4_096,
+          maxDurationMs: 5_000,
+          maxOutputBytes: 16_384,
+        }),
+      ].toSorted((left, right) => left.id.localeCompare(right.id)),
+      {
+        availablePrerequisites: new Set([WORKERS_AI_BINDING_PREREQUISITE, "cloudflare.sandbox"]),
+        checkPrerequisites: true,
+        fleetConfiguration,
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      runtimePlan: {
+        tools: [
+          {
+            effect: "local-compute",
+            id: "sandbox.code",
+            kind: "sandbox-code",
+            languages: ["python"],
+            limits: {
+              maxCodeBytes: 4_096,
+              maxDurationMs: 5_000,
+              maxOutputBytes: 16_384,
+            },
+            moduleId: "tools.sandbox-code",
+            network: "none",
+            schemaVersion: 1,
+          },
+        ],
+      },
+    });
+  });
+
+  it("denies Sandbox configuration when its isolated runtime is unavailable", () => {
+    const registry = new AgentCapabilityRegistry([
+      sandboxCodeCapabilityModule,
+      workersAiCapabilityModule,
+    ]);
+
+    expect(
+      registry.compile(
+        [
+          workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct"),
+          sandboxCodeCapabilityConfiguration(),
+        ].toSorted((left, right) => left.id.localeCompare(right.id)),
+        { availablePrerequisites, checkPrerequisites: true, fleetConfiguration },
+      ),
+    ).toEqual({ code: "capability_unavailable", ok: false });
   });
 
   it("accepts another contribution shape without changing the kernel", () => {

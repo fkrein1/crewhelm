@@ -212,6 +212,7 @@ const workerVersionSchema = z.looseObject({
     script_runtime: z.looseObject({
       exports: z.looseObject({
         CrewAgent: establishedDurableObjectExportSchema,
+        CrewhelmSandbox: establishedDurableObjectExportSchema.optional(),
         CrewSession: establishedDurableObjectExportSchema.optional(),
         OwnerControlPlane: establishedDurableObjectExportSchema,
       }),
@@ -260,14 +261,30 @@ const deploymentTemplateSchema = z.strictObject({
         class_name: z.literal("CrewSession"),
         name: z.literal("CREW_SESSION"),
       }),
+      z.strictObject({
+        class_name: z.literal("CrewhelmSandbox"),
+        name: z.literal("CODE_SANDBOX"),
+      }),
     ]),
   }),
+  containers: z.tuple([
+    z.strictObject({
+      class_name: z.literal("CrewhelmSandbox"),
+      image: z.literal("docker.io/cloudflare/sandbox:0.12.4-python"),
+      instance_type: z.literal("lite"),
+      max_instances: z.literal(5),
+    }),
+  ]),
   exports: z.strictObject({
     CrewAgent: z.strictObject({
       storage: z.literal("sqlite"),
       type: z.literal("durable-object"),
     }),
     CrewSession: z.strictObject({
+      storage: z.literal("sqlite"),
+      type: z.literal("durable-object"),
+    }),
+    CrewhelmSandbox: z.strictObject({
       storage: z.literal("sqlite"),
       type: z.literal("durable-object"),
     }),
@@ -344,6 +361,7 @@ export const bootstrapOptionsSchema = z.strictObject({
   origin: z.instanceof(URL).refine((origin) => origin.protocol === "https:"),
   requireExisting: z.boolean().optional(),
   requireFresh: z.boolean().optional(),
+  sandboxEnabled: z.boolean().optional(),
   setupGitHub: z.boolean().optional(),
   timeoutMs: z.number().int().min(100).max(30_000),
   workerName: deploymentNameSchema,
@@ -416,6 +434,7 @@ export interface ExistingInstallationCoordinates {
   databaseId: string;
   databaseName: string;
   origin: string;
+  sandboxEnabled?: boolean;
   skillBucketName?: string;
   workerName: string;
 }
@@ -1632,6 +1651,7 @@ async function recoverExistingInstallation(
   );
   const originBinding = bindings.find((binding) => binding.name === "PUBLIC_ORIGIN");
   const gatewayBinding = bindings.find((binding) => binding.name === "AI_GATEWAY_ID");
+  const sandboxBinding = bindings.find((binding) => binding.name === "CODE_SANDBOX");
   const skillBucketBinding = bindings.find((binding) => binding.name === "SKILL_PACKAGES");
 
   if (databaseBinding?.type !== "d1" || databaseBinding.database_id === undefined) {
@@ -1656,6 +1676,14 @@ async function recoverExistingInstallation(
       !deploymentNameSchema.safeParse(gatewayBinding.text).success)
   ) {
     throw commandFailed("worker", "Existing Worker has an invalid AI_GATEWAY_ID binding.");
+  }
+
+  if (
+    sandboxBinding !== undefined &&
+    (sandboxBinding.type !== "durable_object_namespace" ||
+      version.resources.script_runtime.exports.CrewhelmSandbox === undefined)
+  ) {
+    throw commandFailed("worker", "Existing Worker has an invalid CODE_SANDBOX binding.");
   }
 
   if (
@@ -1743,6 +1771,7 @@ async function recoverExistingInstallation(
     databaseId: database.uuid,
     databaseName: database.name,
     origin: options.origin.origin,
+    ...(sandboxBinding === undefined ? {} : { sandboxEnabled: true }),
     ...(skillBucketBinding?.bucket_name === undefined
       ? {}
       : { skillBucketName: skillBucketBinding.bucket_name }),
@@ -1763,6 +1792,7 @@ async function recoverExistingInstallation(
     aiGatewayId,
     databaseId: database.uuid,
     databaseName: database.name,
+    sandboxEnabled: sandboxBinding !== undefined,
   });
 }
 
@@ -1982,11 +2012,13 @@ async function stageDeployment(
     }
 
     const rateLimitNamespaces = rateLimitNamespacesForWorker(options.workerName);
+    const sandboxEnabled = options.sandboxEnabled === true;
     const config = {
       account_id: accountId,
       ai: assets.template.ai,
       compatibility_date: assets.template.compatibility_date,
       compatibility_flags: assets.template.compatibility_flags,
+      ...(sandboxEnabled ? { containers: assets.template.containers } : {}),
       d1_databases: [
         {
           binding: "AUTH_DB",
@@ -1995,8 +2027,16 @@ async function stageDeployment(
           migrations_dir: "./migrations",
         },
       ],
-      durable_objects: assets.template.durable_objects,
-      exports: assets.template.exports,
+      durable_objects: {
+        bindings: assets.template.durable_objects.bindings.filter(
+          (binding) => sandboxEnabled || binding.name !== "CODE_SANDBOX",
+        ),
+      },
+      exports: Object.fromEntries(
+        Object.entries(assets.template.exports).filter(
+          ([name]) => sandboxEnabled || name !== "CrewhelmSandbox",
+        ),
+      ),
       main: "./index.js",
       name: options.workerName,
       observability: assets.template.observability,
@@ -2555,6 +2595,7 @@ export async function bootstrapDeployment(
           databaseId: database.uuid,
           databaseName: database.name,
           origin: deploymentOptions.origin.origin,
+          ...(deploymentOptions.sandboxEnabled === true ? { sandboxEnabled: true } : {}),
           skillBucketName: skillBucket.name,
           workerName: deploymentOptions.workerName,
         });

@@ -652,7 +652,7 @@ describe("authenticated MCP handler", () => {
     expect(unchanged).toMatchObject({ configuration: { revision: 1 }, ok: true });
   });
 
-  it("discovers one bounded Agent capability through the existing configuration surface", async () => {
+  it("discovers bounded inference and Sandbox capabilities through the existing configuration surface", async () => {
     const authority = await ownerAuthority("mcp-capability-catalog-owner", [OWNER_READ_SCOPE]);
     const response = await handleAuthenticatedMcpRequest(
       toolRequest(
@@ -708,6 +708,53 @@ describe("authenticated MCP handler", () => {
       "@cf/moonshotai/kimi-k2.7-code",
     );
     expect(result.isError).toBe(false);
+
+    const sandboxResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 2,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              target: {
+                id: "tools.sandbox-code",
+                kind: "agent-capability",
+              },
+            },
+            name: MCP_GET_CONFIGURATION_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const sandboxResult = jsonRpcToolResultSchema.parse(await sandboxResponse.json()).result;
+    const sandboxCatalog = getAgentCapabilityCatalogResultSchema.parse(
+      JSON.parse(sandboxResult.content[0]?.text ?? ""),
+    );
+
+    expect(sandboxCatalog).toMatchObject({
+      capabilities: [
+        {
+          availability: { missingPrerequisites: [], state: "available" },
+          id: "tools.sandbox-code",
+          schemaVersion: 1,
+          title: "Sandbox code",
+        },
+      ],
+      ok: true,
+    });
+    if (!sandboxCatalog.ok) {
+      throw new Error("Expected an available Sandbox capability.");
+    }
+    expect(sandboxCatalog.capabilities[0]?.configurationFields.map(({ name }) => name)).toEqual([
+      "languages",
+      "maxCodeBytes",
+      "maxDurationMs",
+      "maxOutputBytes",
+    ]);
+    expect(sandboxResult.isError).toBe(false);
   });
 
   it("publishes, discovers, reads, and retires an immutable Skill through MCP", async () => {

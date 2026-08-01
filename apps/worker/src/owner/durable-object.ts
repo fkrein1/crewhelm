@@ -55,10 +55,13 @@ import {
   type VerifyActiveRunAdmissionResult,
   type VerifyRunAdmissionResult,
   type CompleteToolExecutionResult,
+  type CompleteRuntimeToolExecutionResult,
   type ConfigureAgentConnectionResult,
   type EvaluateToolExecutionResult,
   type ResolvedConnectionForAttachment,
   type ReserveToolExecutionResult,
+  type ReserveRuntimeToolExecutionResult,
+  type DispatchRuntimeToolExecutionResult,
   type ResolveToolExecutionConnectionResult,
   type ChangeAuthorityResult,
   type ReconcileToolExecutionResult,
@@ -133,6 +136,7 @@ import {
 } from "./recovery/index.js";
 import {
   RunAdmissions,
+  RuntimeToolExecutions,
   ToolExecutions,
   deniedToolExecutionEvaluation,
   deniedToolExecutionReconciliation,
@@ -195,6 +199,7 @@ export class OwnerControlPlane extends DurableObject {
   #migrationReady = false;
   readonly #runAdmissions: RunAdmissions;
   readonly #toolExecutions: ToolExecutions;
+  readonly #runtimeToolExecutions: RuntimeToolExecutions;
   readonly #agents: AgentRegistry;
   readonly #agentBlueprints: AgentBlueprints;
   readonly #connections: Connections;
@@ -234,6 +239,7 @@ export class OwnerControlPlane extends DurableObject {
     );
     const availableCapabilityPrerequisites = availableAgentCapabilityPrerequisites(
       environment.AI_GATEWAY_ID,
+      environment.CODE_SANDBOX !== undefined,
     );
     this.#runAdmissions = new RunAdmissions(
       this.#objectName,
@@ -246,6 +252,13 @@ export class OwnerControlPlane extends DurableObject {
     );
     this.#toolExecutions = new ToolExecutions(this.#objectName, this.#database, this.#storage, () =>
       this.#fleetConfigurations.current(),
+    );
+    this.#runtimeToolExecutions = new RuntimeToolExecutions(
+      this.#objectName,
+      this.#database,
+      this.#storage,
+      () => this.#fleetConfigurations.current(),
+      environment.CODE_SANDBOX,
     );
     this.#agents = new AgentRegistry(
       this.#database,
@@ -557,6 +570,33 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     return this.#toolExecutions.reserve(input);
+  }
+
+  reserveRuntimeToolExecution(input: unknown): Promise<ReserveRuntimeToolExecutionResult> {
+    return this.#migrationReady
+      ? this.#runtimeToolExecutions.reserve(input)
+      : Promise.resolve({
+          error: { code: "invalid_execution", message: "Runtime tool execution denied." },
+          ok: false,
+        });
+  }
+
+  dispatchRuntimeToolExecution(input: unknown): Promise<DispatchRuntimeToolExecutionResult> {
+    return this.#migrationReady
+      ? this.#runtimeToolExecutions.dispatch(input)
+      : Promise.resolve({
+          error: { code: "invalid_execution", message: "Runtime tool execution denied." },
+          ok: false,
+        });
+  }
+
+  completeRuntimeToolExecution(input: unknown): Promise<CompleteRuntimeToolExecutionResult> {
+    return this.#migrationReady
+      ? this.#runtimeToolExecutions.complete(input)
+      : Promise.resolve({
+          error: { code: "invalid_execution", message: "Runtime tool execution denied." },
+          ok: false,
+        });
   }
 
   completeToolExecution(input: unknown): Promise<CompleteToolExecutionResult> {
@@ -1021,8 +1061,10 @@ export class OwnerControlPlane extends DurableObject {
     const currentTime = Date.now();
     await this.#aiGatewayUsage.reconcilePending(currentTime);
     const expiredExecutionRuns = this.#toolExecutions.reconcileExpired(currentTime);
+    const expiredRuntimeToolRuns = this.#runtimeToolExecutions.reconcileExpired(currentTime);
+    await this.#runtimeToolExecutions.reconcileCleanup(currentTime);
 
-    for (const runId of expiredExecutionRuns) {
+    for (const runId of [...expiredExecutionRuns, ...expiredRuntimeToolRuns]) {
       this.#agentChannel.repairFailedRun(runId);
     }
     this.#runAdmissions.cleanup(currentTime);
@@ -1053,6 +1095,7 @@ export class OwnerControlPlane extends DurableObject {
     const nextRunCleanup = this.#runAdmissions.nextCleanupAt();
     const nextScheduledRun = this.#agentSchedules.nextAlarmAt();
     const nextToolReconciliation = this.#toolExecutions.nextReconciliationAt();
+    const nextRuntimeToolReconciliation = this.#runtimeToolExecutions.nextReconciliationAt();
     const nextWorkflowAction = this.#workflows.nextAlarmAt();
     const nextAiUsageReconciliation = this.#aiGatewayUsage.nextReconciliationAt();
     const nextAlarm =
@@ -1060,6 +1103,7 @@ export class OwnerControlPlane extends DurableObject {
         nextAiUsageReconciliation,
         nextConnectionCleanup,
         nextRunCleanup,
+        nextRuntimeToolReconciliation,
         nextScheduledRun,
         nextToolReconciliation,
         nextWorkflowAction,
