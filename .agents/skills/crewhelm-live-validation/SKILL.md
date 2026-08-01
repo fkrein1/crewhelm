@@ -1,6 +1,6 @@
 ---
 name: crewhelm-live-validation
-description: Validate Crewhelm behavior live through public CLI and MCP on the dedicated test installation. Use when the user asks for live validation, smoke testing, remote E2E, release confidence, or explicitly authorizes test deployment for live evidence required by crewhelm-delivery. Do not use for deterministic CI or production testing.
+description: Validate Crewhelm behavior live through public CLI and MCP on the dedicated test installation. Use when the user asks for live validation, smoke testing or rehearsal testing, remote E2E, release confidence, or explicitly authorizes test deployment for live evidence required by crewhelm-delivery. Do not use for deterministic CI or production testing.
 ---
 
 # Crewhelm live validation
@@ -41,14 +41,14 @@ Before any MCP or mutating call:
 ## Access lanes
 
 Routine feature rehearsals use the saved credential through
-`scripts/crewhelm-feature-rehearsal.ts`; they do not repeat browser authorization. The credential is
+`scripts/crewhelm-live-rehearsal.ts`; they do not repeat browser authorization. The credential is
 origin-bound, ignored by Git, mode 0600, and rotated before every session. Tokens never appear in
 output, and each 15-minute access token is revoked and verified before exit.
 
 Run the durable Workflow journey without a browser:
 
 ```sh
-pnpm exec tsx scripts/crewhelm-feature-rehearsal.ts workflow \
+pnpm exec tsx scripts/crewhelm-live-rehearsal.ts workflow \
   --installation crewhelm.testing.installation.json \
   --credential .crewhelm-rehearsal-credential.json
 ```
@@ -57,7 +57,7 @@ The journey polls no faster than the public MCP rate-limit budget allows. If a p
 with retained exact fixture IDs, resume cleanup rather than creating another fixture:
 
 ```sh
-pnpm exec tsx scripts/crewhelm-feature-rehearsal.ts recover \
+pnpm exec tsx scripts/crewhelm-live-rehearsal.ts recover \
   --installation crewhelm.testing.installation.json \
   --credential .crewhelm-rehearsal-credential.json \
   --agent-id '<exact agentId>' \
@@ -70,7 +70,7 @@ tokens. Do not use discovery heuristics when the exact IDs are available.
 Create or recover the credential only as an occasional combined authentication check:
 
 ```sh
-pnpm exec tsx scripts/crewhelm-feature-rehearsal.ts authorize \
+pnpm exec tsx scripts/crewhelm-live-rehearsal.ts authorize \
   --installation crewhelm.testing.installation.json \
   --credential .crewhelm-rehearsal-credential.json \
   --browser codex

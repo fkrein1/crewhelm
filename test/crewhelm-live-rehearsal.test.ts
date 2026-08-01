@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { runFeatureRehearsal } from "../scripts/crewhelm-feature-rehearsal.js";
+import { runLiveRehearsal } from "../scripts/crewhelm-live-rehearsal.js";
 
 const directories: string[] = [];
 
@@ -35,7 +35,7 @@ describe("feature rehearsal target", () => {
     vi.stubGlobal("fetch", fetch);
 
     await expect(
-      runFeatureRehearsal(["workflow", "--installation", installationPath]),
+      runLiveRehearsal(["workflow", "--installation", installationPath]),
     ).rejects.toThrow("canonical crewhelm-testing origin");
     expect(fetch).not.toHaveBeenCalled();
   });

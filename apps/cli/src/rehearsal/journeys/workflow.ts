@@ -13,21 +13,19 @@ import {
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
-import { diagnoseDeployment, doctorReportSchema, type DoctorOptions } from "./doctor.js";
-import { mcpControlPlaneStatusResultSchema } from "./mcp-result-schemas.js";
+import { diagnoseDeployment, doctorReportSchema, type DoctorOptions } from "../../doctor.js";
 import {
   initializeResponseSchema,
   MCP_PROTOCOL_VERSION,
-  parseMcpToolResult,
   runRefreshableOwnerSession,
   TemporaryOwnerSessionError,
   temporaryOwnerSessionErrorCodeSchema,
-  toolCallResponseSchema,
   toolListResponseSchema,
   type RefreshableOwnerCredential,
   type TemporaryOwnerMcpSession,
-} from "./temporary-owner-session.js";
-import { CREWHELM_CLI_VERSION } from "./version.js";
+} from "../../temporary-owner-session.js";
+import { CREWHELM_CLI_VERSION } from "../../version.js";
+import { callRehearsalTool, readRehearsalStatus } from "../mcp.js";
 
 const POLL_INTERVAL_MS = 5_000;
 const TERMINAL_WORKFLOW_STATUSES = ["cancelled", "completed", "failed"] as const;
@@ -46,9 +44,9 @@ const AGENT_LIMITS = {
   maxToolCalls: 0,
   maxTurns: 2,
 } as const;
-const SMOKE_MODEL = "@cf/zai-org/glm-4.7-flash" as const;
+const REHEARSAL_MODEL = "@cf/zai-org/glm-4.7-flash" as const;
 
-const workflowSmokeCheckSchema = z.strictObject({
+const workflowRehearsalCheckSchema = z.strictObject({
   code: z.union([z.enum(["valid", "not_run"]), temporaryOwnerSessionErrorCodeSchema]),
   message: z.string().max(512),
   name: z.enum([
@@ -67,11 +65,11 @@ const workflowSmokeCheckSchema = z.strictObject({
   status: z.enum(["pass", "fail", "skip"]),
 });
 
-export const workflowSmokeReportSchema = z.strictObject({
+export const workflowRehearsalReportSchema = z.strictObject({
   activeAgentsAfter: z.number().int().nonnegative().optional(),
   activeAgentsBefore: z.number().int().nonnegative().optional(),
   agentId: z.string().optional(),
-  checks: z.array(workflowSmokeCheckSchema).length(11),
+  checks: z.array(workflowRehearsalCheckSchema).length(11),
   ok: z.boolean(),
   public: doctorReportSchema,
   schemaVersion: z.literal(1),
@@ -79,22 +77,22 @@ export const workflowSmokeReportSchema = z.strictObject({
   workflowStatus: z.enum(TERMINAL_WORKFLOW_STATUSES).optional(),
 });
 
-export type WorkflowSmokeReport = z.infer<typeof workflowSmokeReportSchema>;
+export type WorkflowRehearsalReport = z.infer<typeof workflowRehearsalReportSchema>;
 
-export interface WorkflowSmokeOptions extends DoctorOptions {
+export interface WorkflowRehearsalOptions extends DoctorOptions {
   credential: RefreshableOwnerCredential;
   persistCredential: (credential: RefreshableOwnerCredential) => Promise<void>;
   runTimeoutMs: number;
 }
 
-export interface WorkflowSmokeDependencies {
+export interface WorkflowRehearsalDependencies {
   expectedDeploymentFingerprint?: string;
   fetch: typeof globalThis.fetch;
   now?: () => number;
   wait?: (milliseconds: number) => Promise<void>;
 }
 
-export interface WorkflowSmokeRecoveryOptions extends DoctorOptions {
+export interface WorkflowRehearsalRecoveryOptions extends DoctorOptions {
   agentId: string;
   credential: RefreshableOwnerCredential;
   persistCredential: (credential: RefreshableOwnerCredential) => Promise<void>;
@@ -102,7 +100,7 @@ export interface WorkflowSmokeRecoveryOptions extends DoctorOptions {
   workflowId: string;
 }
 
-const workflowSmokeRecoveryReportSchema = z.strictObject({
+const workflowRehearsalRecoveryReportSchema = z.strictObject({
   activeAgentsAfter: z.number().int().nonnegative().optional(),
   agentDisabled: z.boolean(),
   authorization: z.union([
@@ -147,16 +145,16 @@ const workflowSmokeRecoveryReportSchema = z.strictObject({
   workflowDeleted: z.boolean(),
 });
 
-export type WorkflowSmokeRecoveryReport = z.infer<typeof workflowSmokeRecoveryReportSchema>;
+export type WorkflowRehearsalRecoveryReport = z.infer<typeof workflowRehearsalRecoveryReportSchema>;
 
-type CheckName = WorkflowSmokeReport["checks"][number]["name"];
+type CheckName = WorkflowRehearsalReport["checks"][number]["name"];
 
 function check(
   name: CheckName,
-  code: WorkflowSmokeReport["checks"][number]["code"],
+  code: WorkflowRehearsalReport["checks"][number]["code"],
   message: string,
 ) {
-  return workflowSmokeCheckSchema.parse({
+  return workflowRehearsalCheckSchema.parse({
     code,
     message,
     name,
@@ -175,59 +173,12 @@ function failure(name: CheckName, error: unknown) {
   return check(name, "request_failed", "Workflow rehearsal check failed.");
 }
 
-async function callTool<T>(
-  session: TemporaryOwnerMcpSession,
-  name: string,
-  arguments_: unknown,
-  schema: z.ZodType<T>,
-  invalidMessage: string,
-  allowDeniedResult = false,
-): Promise<T> {
-  const response = await session.call(
-    "tools/call",
-    { arguments: arguments_, name },
-    toolCallResponseSchema,
-  );
-  if (!allowDeniedResult) {
-    return parseMcpToolResult(response, schema, invalidMessage);
-  }
-
-  const text = response.result.content.find((content) => content.text !== undefined)?.text;
-  let payload: unknown;
-
-  try {
-    payload = JSON.parse(text ?? "");
-  } catch {
-    throw new TemporaryOwnerSessionError("invalid_payload", invalidMessage);
-  }
-  const parsed = schema.safeParse(payload);
-  if (!parsed.success) {
-    throw new TemporaryOwnerSessionError("invalid_payload", invalidMessage);
-  }
-  return parsed.data;
-}
-
-async function readStatus(session: TemporaryOwnerMcpSession) {
-  const result = await callTool(
-    session,
-    "crewhelm_status",
-    {},
-    mcpControlPlaneStatusResultSchema,
-    "Fleet status returned an invalid payload.",
-  );
-
-  if (!result.ok) {
-    throw new TemporaryOwnerSessionError("invalid_payload", "Fleet status request was denied.");
-  }
-  return result.status;
-}
-
 function fixtureSuffix(): string {
   return `${Date.now().toString(36)}-${randomBytes(6).toString("base64url")}`;
 }
 
 function workflowDeletionIdempotencyKey(workflowId: string): string {
-  return `smoke-delete-${workflowId.slice("workflow_".length)}`;
+  return `rehearsal-delete-${workflowId.slice("workflow_".length)}`;
 }
 
 function isTerminalWorkflowStatus(
@@ -253,10 +204,10 @@ function exactWorkflow(
   return result.workflow;
 }
 
-export async function runWorkflowSmoke(
-  options: WorkflowSmokeOptions,
-  dependencies: WorkflowSmokeDependencies,
-): Promise<WorkflowSmokeReport> {
+export async function runWorkflowRehearsal(
+  options: WorkflowRehearsalOptions,
+  dependencies: WorkflowRehearsalDependencies,
+): Promise<WorkflowRehearsalReport> {
   const publicReport = await diagnoseDeployment(options, dependencies);
   const names: CheckName[] = [
     "saved-owner-access",
@@ -274,7 +225,7 @@ export async function runWorkflowSmoke(
   const checks = names.map(skipped);
 
   if (!publicReport.ok || publicReport.deployment.alignment !== "aligned") {
-    return workflowSmokeReportSchema.parse({
+    return workflowRehearsalReportSchema.parse({
       checks,
       ok: false,
       public: publicReport,
@@ -297,7 +248,7 @@ export async function runWorkflowSmoke(
   const cleanup = async (session: TemporaryOwnerMcpSession): Promise<void> => {
     if (!workflow && agent) {
       try {
-        const listed = await callTool(
+        const listed = await callRehearsalTool(
           session,
           "crewhelm_agent_workflows",
           { action: "list", agentId: agent.id, limit: 2 },
@@ -326,7 +277,7 @@ export async function runWorkflowSmoke(
               "Workflow cleanup did not reach a terminal state in time.",
             );
           }
-          const inspected = await callTool(
+          const inspected = await callRehearsalTool(
             session,
             "crewhelm_agent_workflows",
             { action: "inspect", workflowId: current.workflowId },
@@ -338,7 +289,7 @@ export async function runWorkflowSmoke(
 
           let cancelled: z.infer<typeof manageAgentWorkflowsResultSchema>;
           try {
-            cancelled = await callTool(
+            cancelled = await callRehearsalTool(
               session,
               "crewhelm_agent_workflows",
               {
@@ -348,7 +299,7 @@ export async function runWorkflowSmoke(
               },
               manageAgentWorkflowsResultSchema,
               "Workflow cleanup cancellation returned an invalid payload.",
-              true,
+              { acceptErrorResult: true },
             );
           } catch {
             // Cancellation may have committed before a lost response. Re-inspect exact state.
@@ -368,7 +319,7 @@ export async function runWorkflowSmoke(
         }
 
         if (isTerminalWorkflowStatus(current.status)) {
-          const deleted = await callTool(
+          const deleted = await callRehearsalTool(
             session,
             "crewhelm_agent_workflows",
             {
@@ -401,7 +352,7 @@ export async function runWorkflowSmoke(
     activeCheck = 9;
     if (!agent) return;
     try {
-      const disabled = await callTool(
+      const disabled = await callRehearsalTool(
         session,
         "crewhelm_batch_disable_agents",
         { agents: [{ agentId: agent.id, expectedRevision: agent.revision }] },
@@ -411,7 +362,7 @@ export async function runWorkflowSmoke(
       if (!disabled.ok || disabled.receipts.length !== 1) {
         throw new TemporaryOwnerSessionError("invalid_payload", "Agent cleanup was not verified.");
       }
-      activeAgentsAfter = (await readStatus(session)).usage.agents.active;
+      activeAgentsAfter = (await readRehearsalStatus(session)).usage.agents.active;
       if (activeAgentsAfter !== activeAgentsBefore) {
         throw new TemporaryOwnerSessionError(
           "invalid_payload",
@@ -433,7 +384,7 @@ export async function runWorkflowSmoke(
       "initialize",
       {
         capabilities: {},
-        clientInfo: { name: "crewhelm-feature-rehearsal", version: CREWHELM_CLI_VERSION },
+        clientInfo: { name: "crewhelm-live-rehearsal", version: CREWHELM_CLI_VERSION },
         protocolVersion: MCP_PROTOCOL_VERSION,
       },
       initializeResponseSchema,
@@ -456,23 +407,23 @@ export async function runWorkflowSmoke(
     );
 
     activeCheck = 3;
-    activeAgentsBefore = (await readStatus(session)).usage.agents.active;
+    activeAgentsBefore = (await readRehearsalStatus(session)).usage.agents.active;
     const createInput = {
       capabilities: [
         {
-          configuration: { fallbackModels: [], primaryModel: SMOKE_MODEL },
+          configuration: { fallbackModels: [], primaryModel: REHEARSAL_MODEL },
           id: WORKERS_AI_CAPABILITY_ID,
           schemaVersion: WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
         },
       ],
       executionLimits: AGENT_LIMITS,
-      idempotencyKey: `smoke-agent-${suffix}`,
+      idempotencyKey: `rehearsal-agent-${suffix}`,
       instructions: "Complete each admitted Workflow stage concisely without tools.",
-      name: `Crewhelm Workflow smoke ${suffix}`,
+      name: `Crewhelm Workflow rehearsal ${suffix}`,
     };
     let created: z.infer<typeof createAgentResultSchema> | undefined;
     try {
-      created = await callTool(
+      created = await callRehearsalTool(
         session,
         "crewhelm_create_agent",
         createInput,
@@ -481,7 +432,7 @@ export async function runWorkflowSmoke(
       );
     } catch {
       try {
-        created = await callTool(
+        created = await callRehearsalTool(
           session,
           "crewhelm_create_agent",
           createInput,
@@ -489,7 +440,7 @@ export async function runWorkflowSmoke(
           "Agent creation replay returned an invalid payload.",
         );
       } catch {
-        const listed = await callTool(
+        const listed = await callRehearsalTool(
           session,
           "crewhelm_list_agents",
           { limit: 2, name: createInput.name, status: "active" },
@@ -500,7 +451,7 @@ export async function runWorkflowSmoke(
           ? listed.agents.filter((candidate) => candidate.name === createInput.name)
           : [];
         if (recovered.length === 1) {
-          const exact = await callTool(
+          const exact = await callRehearsalTool(
             session,
             "crewhelm_get_agent",
             { id: recovered[0]!.id },
@@ -527,7 +478,7 @@ export async function runWorkflowSmoke(
         action: "start",
         agentId: agent.id,
         expectedRevision: agent.revision,
-        idempotencyKey: `smoke-workflow-${suffix}`,
+        idempotencyKey: `rehearsal-workflow-${suffix}`,
         objective: "Produce one concise two-step rehearsal acknowledgment.",
         stages: [
           { name: "Observe", prompt: "State that the first bounded stage completed." },
@@ -535,7 +486,7 @@ export async function runWorkflowSmoke(
         ],
       };
       try {
-        const started = await callTool(
+        const started = await callRehearsalTool(
           session,
           "crewhelm_agent_workflows",
           input,
@@ -545,7 +496,7 @@ export async function runWorkflowSmoke(
         workflow = exactWorkflow(started);
       } catch {
         try {
-          const recovered = await callTool(
+          const recovered = await callRehearsalTool(
             session,
             "crewhelm_agent_workflows",
             input,
@@ -554,7 +505,7 @@ export async function runWorkflowSmoke(
           );
           workflow = exactWorkflow(recovered);
         } catch {
-          const listed = await callTool(
+          const listed = await callRehearsalTool(
             session,
             "crewhelm_agent_workflows",
             { action: "list", agentId: agent.id, limit: 2 },
@@ -569,7 +520,7 @@ export async function runWorkflowSmoke(
       if (!workflow) {
         throw new TemporaryOwnerSessionError("request_failed", "Workflow start was not recovered.");
       }
-      const replayed = await callTool(
+      const replayed = await callRehearsalTool(
         session,
         "crewhelm_agent_workflows",
         input,
@@ -593,13 +544,17 @@ export async function runWorkflowSmoke(
       );
 
       activeCheck = 5;
-      const denied = await callTool(
+      const denied = await callRehearsalTool(
         session,
         "crewhelm_agent_workflows",
-        { ...input, expectedRevision: agent.revision + 1, idempotencyKey: `smoke-stale-${suffix}` },
+        {
+          ...input,
+          expectedRevision: agent.revision + 1,
+          idempotencyKey: `rehearsal-stale-${suffix}`,
+        },
         manageAgentWorkflowsResultSchema,
         "Stale Agent revision denial returned an invalid payload.",
-        true,
+        { acceptErrorResult: true },
       );
       if (denied.ok || denied.error.code !== "revision_conflict") {
         throw new TemporaryOwnerSessionError(
@@ -614,7 +569,7 @@ export async function runWorkflowSmoke(
       );
 
       activeCheck = 6;
-      const listed = await callTool(
+      const listed = await callRehearsalTool(
         session,
         "crewhelm_agent_workflows",
         { action: "list", agentId: agent.id, limit: 2 },
@@ -631,7 +586,7 @@ export async function runWorkflowSmoke(
           "Compact Workflow discovery omitted the fixture.",
         );
       }
-      const inspected = await callTool(
+      const inspected = await callRehearsalTool(
         session,
         "crewhelm_agent_workflows",
         { action: "inspect", workflowId: workflow.workflowId },
@@ -661,7 +616,7 @@ export async function runWorkflowSmoke(
           );
         }
         await wait(Math.min(POLL_INTERVAL_MS, Math.max(1, deadline - now())));
-        const polled = await callTool(
+        const polled = await callRehearsalTool(
           session,
           "crewhelm_agent_workflows",
           { action: "inspect", workflowId: workflow.workflowId },
@@ -698,7 +653,7 @@ export async function runWorkflowSmoke(
         ? failure("access-token-revocation", sessionResult.revocation.error)
         : skipped("access-token-revocation");
 
-  return workflowSmokeReportSchema.parse({
+  return workflowRehearsalReportSchema.parse({
     ...(activeAgentsAfter === undefined ? {} : { activeAgentsAfter }),
     ...(activeAgentsBefore === undefined ? {} : { activeAgentsBefore }),
     ...(agent === undefined ? {} : { agentId: agent.id }),
@@ -711,11 +666,11 @@ export async function runWorkflowSmoke(
   });
 }
 
-export async function recoverWorkflowSmoke(
-  options: WorkflowSmokeRecoveryOptions,
-  dependencies: WorkflowSmokeDependencies,
+export async function recoverWorkflowRehearsal(
+  options: WorkflowRehearsalRecoveryOptions,
+  dependencies: WorkflowRehearsalDependencies,
 ): Promise<
-  | WorkflowSmokeRecoveryReport
+  | WorkflowRehearsalRecoveryReport
   | { ok: false; public: z.infer<typeof doctorReportSchema>; schemaVersion: 1 }
 > {
   const publicReport = await diagnoseDeployment(options, dependencies);
@@ -742,13 +697,13 @@ export async function recoverWorkflowSmoke(
       initializeResponseSchema,
     );
     const deadline = now() + options.runTimeoutMs;
-    let inspected = await callTool(
+    let inspected = await callRehearsalTool(
       session,
       "crewhelm_agent_workflows",
       { action: "inspect", workflowId: options.workflowId },
       manageAgentWorkflowsResultSchema,
       "Workflow recovery inspection returned an invalid payload.",
-      true,
+      { acceptErrorResult: true },
     );
     let current: AgentWorkflowSummary | undefined;
     if (!inspected.ok) {
@@ -773,7 +728,7 @@ export async function recoverWorkflowSmoke(
       }
       let cancelled: z.infer<typeof manageAgentWorkflowsResultSchema> | undefined;
       try {
-        cancelled = await callTool(
+        cancelled = await callRehearsalTool(
           session,
           "crewhelm_agent_workflows",
           {
@@ -783,7 +738,7 @@ export async function recoverWorkflowSmoke(
           },
           manageAgentWorkflowsResultSchema,
           "Workflow recovery cancellation returned an invalid payload.",
-          true,
+          { acceptErrorResult: true },
         );
       } catch {
         // A lost cancellation response is reconciled by the exact inspection below.
@@ -804,7 +759,7 @@ export async function recoverWorkflowSmoke(
       }
       if (!isTerminalWorkflowStatus(current.status)) {
         await wait(Math.min(POLL_INTERVAL_MS, Math.max(1, deadline - now())));
-        inspected = await callTool(
+        inspected = await callRehearsalTool(
           session,
           "crewhelm_agent_workflows",
           { action: "inspect", workflowId: current.workflowId },
@@ -825,24 +780,24 @@ export async function recoverWorkflowSmoke(
       };
       let deleted: z.infer<typeof manageAgentWorkflowsResultSchema> | undefined;
       try {
-        deleted = await callTool(
+        deleted = await callRehearsalTool(
           session,
           "crewhelm_agent_workflows",
           deletionInput,
           manageAgentWorkflowsResultSchema,
           "Workflow recovery deletion returned an invalid payload.",
-          true,
+          { acceptErrorResult: true },
         );
       } catch {
         // A lost deletion response is reconciled by an idempotent replay below.
       }
-      deleted ??= await callTool(
+      deleted ??= await callRehearsalTool(
         session,
         "crewhelm_agent_workflows",
         deletionInput,
         manageAgentWorkflowsResultSchema,
         "Workflow recovery deletion replay returned an invalid payload.",
-        true,
+        { acceptErrorResult: true },
       );
       if (!deleted.ok && deleted.error.code === "workflow_not_found") {
         workflowDeleted = true;
@@ -858,7 +813,7 @@ export async function recoverWorkflowSmoke(
       }
     }
 
-    let exactAgent = await callTool(
+    let exactAgent = await callRehearsalTool(
       session,
       "crewhelm_get_agent",
       { id: options.agentId },
@@ -874,7 +829,7 @@ export async function recoverWorkflowSmoke(
     if (exactAgent.agent.status === "active") {
       let disabled: z.infer<typeof batchDisableAgentsResultSchema> | undefined;
       try {
-        disabled = await callTool(
+        disabled = await callRehearsalTool(
           session,
           "crewhelm_batch_disable_agents",
           {
@@ -886,7 +841,7 @@ export async function recoverWorkflowSmoke(
       } catch {
         // A lost response is reconciled through exact Agent inspection below.
       }
-      exactAgent = await callTool(
+      exactAgent = await callRehearsalTool(
         session,
         "crewhelm_get_agent",
         { id: options.agentId },
@@ -909,14 +864,14 @@ export async function recoverWorkflowSmoke(
       }
     }
     agentDisabled = true;
-    activeAgentsAfter = (await readStatus(session)).usage.agents.active;
+    activeAgentsAfter = (await readRehearsalStatus(session)).usage.agents.active;
   });
 
   const operation =
     sessionResult.operation.status === "failed"
       ? { error: sessionResult.operation.error, status: "failed" as const }
       : { status: sessionResult.operation.status };
-  return workflowSmokeRecoveryReportSchema.parse({
+  return workflowRehearsalRecoveryReportSchema.parse({
     ...(activeAgentsAfter === undefined ? {} : { activeAgentsAfter }),
     agentDisabled,
     authorization: sessionResult.authorization,

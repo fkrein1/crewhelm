@@ -4,8 +4,8 @@ import * as z from "zod";
 import {
   hasExactWebResearchToolSequence,
   includesOfficialCloudflareDevelopersUrl,
-  runWebResearchSmoke,
-} from "../src/web-research-smoke.js";
+  runWebResearchRehearsal,
+} from "../../../src/rehearsal/journeys/web-research.js";
 
 const origin = "https://crewhelm-testing.example";
 const fingerprint = "a".repeat(64);
@@ -275,7 +275,7 @@ describe("Web research feature rehearsal", () => {
       throw new Error(`Unexpected tool call: ${name}`);
     };
 
-    const report = await runWebResearchSmoke(
+    const report = await runWebResearchRehearsal(
       {
         credential,
         origin: new URL(origin),

@@ -2,7 +2,11 @@ import {
   diagnoseAuthenticatedDeployment,
   type AuthenticatedDoctorReport,
 } from "./authenticated-doctor.js";
-import { agentSmokeReportSchema, runAgentSmoke, type AgentSmokeReport } from "./agent-smoke.js";
+import {
+  agentRehearsalReportSchema,
+  runAgentRehearsal,
+  type AgentRehearsalReport,
+} from "./rehearsal/public/agent.js";
 import {
   bootstrapDeployment,
   bootstrapUpgradeDeployment,
@@ -36,24 +40,24 @@ import {
   type Installation,
 } from "./installation.js";
 import {
-  createInstallationSmokeFailure,
-  installationSmokeReportSchema,
-  runInstallationSmoke,
-  type InstallationSmokeReport,
-} from "./installation-smoke.js";
+  createInstallationRehearsalFailure,
+  installationRehearsalReportSchema,
+  runInstallationRehearsal,
+  type InstallationRehearsalReport,
+} from "./rehearsal/public/installation.js";
 import { createCliPresentation, createCliTextStyle, type CliPresentation } from "./presentation.js";
 import {
-  runStandingIntegrationSmoke,
-  standingIntegrationSmokeReportSchema,
-  type StandingIntegrationSmokeReport,
-} from "./standing-integration-smoke.js";
+  runStandingIntegrationRehearsal,
+  standingIntegrationRehearsalReportSchema,
+  type StandingIntegrationRehearsalReport,
+} from "./rehearsal/public/standing-integration.js";
 import {
-  createUpgradeSmokeFailure,
-  runUpgradeSmoke,
-  UpgradeSmokeError,
-  upgradeSmokeReportSchema,
-  type UpgradeSmokeReport,
-} from "./upgrade-smoke.js";
+  createUpgradeRehearsalFailure,
+  runUpgradeRehearsal,
+  UpgradeRehearsalError,
+  upgradeRehearsalReportSchema,
+  type UpgradeRehearsalReport,
+} from "./rehearsal/public/upgrade.js";
 import { CREWHELM_CLI_VERSION } from "./version.js";
 import { CREWHELM_DEPLOYMENT_PROTOCOL_VERSION } from "@crewhelm/contracts";
 
@@ -109,7 +113,7 @@ const BOOTSTRAP_ACTIVITY_LABELS = {
   worker: "Worker",
 } as const satisfies Record<BootstrapProgress["stage"], string>;
 
-const UPGRADE_SMOKE_ACTIVITY_LABELS = {
+const UPGRADE_REHEARSAL_ACTIVITY_LABELS = {
   baseline: "Baseline",
   deployment: "Upgrade",
   retry: "Retry",
@@ -155,8 +159,11 @@ function formatAuthenticatedDoctorReport(
   return `${formatDoctorReport(report.public, presentation)}${authenticatedChecks}`;
 }
 
-function formatAgentSmokeReport(report: AgentSmokeReport, presentation: CliPresentation): string {
-  const smokeChecks = report.checks
+function formatAgentRehearsalReport(
+  report: AgentRehearsalReport,
+  presentation: CliPresentation,
+): string {
+  const rehearsalChecks = report.checks
     .map((check) => {
       const prefix = presentation.status(check.status);
       return `${prefix} ${check.name} ${presentation.muted(check.endpoint)}\n${check.message}\n`;
@@ -171,14 +178,14 @@ function formatAgentSmokeReport(report: AgentSmokeReport, presentation: CliPrese
       ? `Active Agents ${report.activeAgentsBefore} -> ${report.activeAgentsAfter} after cleanup.\n`
       : "";
 
-  return `${formatDoctorReport(report.public, presentation)}${smokeChecks}${fixture}${capacity}`;
+  return `${formatDoctorReport(report.public, presentation)}${rehearsalChecks}${fixture}${capacity}`;
 }
 
-function formatStandingIntegrationSmokeReport(
-  report: StandingIntegrationSmokeReport,
+function formatStandingIntegrationRehearsalReport(
+  report: StandingIntegrationRehearsalReport,
   presentation: CliPresentation,
 ): string {
-  const smokeChecks = report.checks
+  const rehearsalChecks = report.checks
     .map((check) => {
       const prefix = presentation.status(check.status);
       return `${prefix} ${check.name} ${presentation.muted(check.endpoint)}\n${check.message}\n`;
@@ -204,11 +211,11 @@ function formatStandingIntegrationSmokeReport(
       ? `Schedule revision ${report.scheduleRevision}; ${report.schedulePaused ? "paused after first dispatch" : "cleanup unverified"}.\n`
       : "";
 
-  return `${formatDoctorReport(report.public, presentation)}${smokeChecks}${connection}${fixture}${schedule}${draft}${cleanup}`;
+  return `${formatDoctorReport(report.public, presentation)}${rehearsalChecks}${connection}${fixture}${schedule}${draft}${cleanup}`;
 }
 
-function formatInstallationSmokeReport(
-  report: InstallationSmokeReport,
+function formatInstallationRehearsalReport(
+  report: InstallationRehearsalReport,
   presentation: CliPresentation,
 ): string {
   const deployment =
@@ -236,8 +243,8 @@ function formatInstallationSmokeReport(
   return `${outcome}\n${deployment}${agent}${cleanup}Recovery receipt: ${report.receiptPath}\n`;
 }
 
-function formatUpgradeSmokeReport(
-  report: UpgradeSmokeReport,
+function formatUpgradeRehearsalReport(
+  report: UpgradeRehearsalReport,
   presentation: CliPresentation,
 ): string {
   return [
@@ -484,7 +491,7 @@ async function expectedDeploymentFingerprint(dependencies: CliDependencies): Pro
 
 type InstallationTargetCommand = Extract<
   CliCommand,
-  { kind: "agent-smoke" | "doctor" | "standing-integration-smoke" | "upgrade-smoke" }
+  { kind: "agent-rehearsal" | "doctor" | "standing-integration-rehearsal" | "upgrade-rehearsal" }
 >;
 
 async function resolveInstallationTargetOrigin(command: InstallationTargetCommand): Promise<URL> {
@@ -526,18 +533,21 @@ async function resolveInstallationTargetOrigin(command: InstallationTargetComman
   }
 
   if (command.kind !== "doctor" && origin.protocol !== "https:") {
-    throw new CliUsageError("Smoke rehearsal requires an HTTPS installation endpoint.");
+    throw new CliUsageError("Production rehearsal requires an HTTPS installation endpoint.");
   }
 
   return origin;
 }
 
-type SmokeCommand = Extract<CliCommand, { kind: "agent-smoke" | "standing-integration-smoke" }> & {
+type RehearsalCommand = Extract<
+  CliCommand,
+  { kind: "agent-rehearsal" | "standing-integration-rehearsal" }
+> & {
   origin: URL;
 };
 
 async function offerDeploymentAlignment(
-  command: SmokeCommand,
+  command: RehearsalCommand,
   report: DoctorReport,
   dependencies: CliDependencies,
 ): Promise<"declined" | "failed" | "not_offered" | "updated"> {
@@ -827,7 +837,7 @@ export async function runCli(
     }
   }
 
-  if (command.kind === "agent-smoke") {
+  if (command.kind === "agent-rehearsal") {
     let origin: URL;
 
     try {
@@ -839,8 +849,8 @@ export async function runCli(
     const resolvedCommand = { ...command, origin };
     const openUrl = browserOpener(command.browser, dependencies);
     const deploymentFingerprint = await expectedDeploymentFingerprint(dependencies);
-    let report = agentSmokeReportSchema.parse(
-      await runAgentSmoke(resolvedCommand, {
+    let report = agentRehearsalReportSchema.parse(
+      await runAgentRehearsal(resolvedCommand, {
         expectedDeploymentFingerprint: deploymentFingerprint,
         fetch: dependencies.fetch,
         openUrl,
@@ -853,8 +863,8 @@ export async function runCli(
     }
 
     if (alignment === "updated") {
-      report = agentSmokeReportSchema.parse(
-        await runAgentSmoke(resolvedCommand, {
+      report = agentRehearsalReportSchema.parse(
+        await runAgentRehearsal(resolvedCommand, {
           expectedDeploymentFingerprint: deploymentFingerprint,
           fetch: dependencies.fetch,
           openUrl,
@@ -862,16 +872,18 @@ export async function runCli(
       );
     }
     dependencies.writeOutput(
-      command.json ? `${JSON.stringify(report)}\n` : formatAgentSmokeReport(report, presentation),
+      command.json
+        ? `${JSON.stringify(report)}\n`
+        : formatAgentRehearsalReport(report, presentation),
     );
     return report.ok ? 0 : 1;
   }
 
-  if (command.kind === "installation-smoke") {
+  if (command.kind === "installation-rehearsal") {
     try {
       const openUrl = browserOpener(command.browser, dependencies);
-      const report = installationSmokeReportSchema.parse(
-        await runInstallationSmoke(
+      const report = installationRehearsalReportSchema.parse(
+        await runInstallationRehearsal(
           {
             ...(command.accountId === undefined ? {} : { accountId: command.accountId }),
             ...(command.aiDailySpendUsd === undefined
@@ -894,14 +906,14 @@ export async function runCli(
       dependencies.writeOutput(
         command.json
           ? `${JSON.stringify(report)}\n`
-          : formatInstallationSmokeReport(report, presentation),
+          : formatInstallationRehearsalReport(report, presentation),
       );
       return report.ok ? 0 : 1;
     } catch (error) {
       dependencies.writeError(
         command.json
           ? `${JSON.stringify(
-              createInstallationSmokeFailure(command.receiptPath, command.cleanupOnly),
+              createInstallationRehearsalFailure(command.receiptPath, command.cleanupOnly),
             )}\n`
           : `Error: ${error instanceof Error ? error.message : "Installation rehearsal failed."}\n`,
       );
@@ -909,7 +921,7 @@ export async function runCli(
     }
   }
 
-  if (command.kind === "upgrade-smoke") {
+  if (command.kind === "upgrade-rehearsal") {
     let origin: URL;
 
     try {
@@ -919,9 +931,9 @@ export async function runCli(
         throw error;
       }
 
-      const failure = createUpgradeSmokeFailure(
+      const failure = createUpgradeRehearsalFailure(
         command.receiptPath,
-        new UpgradeSmokeError(
+        new UpgradeRehearsalError(
           "invalid_input",
           "fix_input",
           error.message,
@@ -942,8 +954,8 @@ export async function runCli(
     }
 
     try {
-      const report = upgradeSmokeReportSchema.parse(
-        await runUpgradeSmoke(
+      const report = upgradeRehearsalReportSchema.parse(
+        await runUpgradeRehearsal(
           {
             baselineFingerprint: command.baselineFingerprint,
             installationPath: command.installationPath,
@@ -977,7 +989,7 @@ export async function runCli(
             reportUpgradeProgress: (progress) => {
               if (!command.json) {
                 presentation.progress({
-                  label: UPGRADE_SMOKE_ACTIVITY_LABELS[progress.stage],
+                  label: UPGRADE_REHEARSAL_ACTIVITY_LABELS[progress.stage],
                   message: progress.message,
                 });
               }
@@ -989,14 +1001,14 @@ export async function runCli(
       dependencies.writeOutput(
         command.json
           ? `${JSON.stringify(report)}\n`
-          : formatUpgradeSmokeReport(report, presentation),
+          : formatUpgradeRehearsalReport(report, presentation),
       );
       return 0;
     } catch (error) {
       presentation.stopProgress();
       dependencies.writeError(
         command.json
-          ? `${JSON.stringify(createUpgradeSmokeFailure(command.receiptPath, error))}\n`
+          ? `${JSON.stringify(createUpgradeRehearsalFailure(command.receiptPath, error))}\n`
           : `Error: ${error instanceof Error ? error.message : "Upgrade rehearsal failed."}\n`,
       );
       return 1;
@@ -1005,7 +1017,7 @@ export async function runCli(
     }
   }
 
-  if (command.kind === "standing-integration-smoke") {
+  if (command.kind === "standing-integration-rehearsal") {
     let origin: URL;
 
     try {
@@ -1017,8 +1029,8 @@ export async function runCli(
     const resolvedCommand = { ...command, origin };
     const openUrl = browserOpener(command.browser, dependencies);
     const deploymentFingerprint = await expectedDeploymentFingerprint(dependencies);
-    let report = standingIntegrationSmokeReportSchema.parse(
-      await runStandingIntegrationSmoke(resolvedCommand, {
+    let report = standingIntegrationRehearsalReportSchema.parse(
+      await runStandingIntegrationRehearsal(resolvedCommand, {
         expectedDeploymentFingerprint: deploymentFingerprint,
         fetch: dependencies.fetch,
         openUrl,
@@ -1031,8 +1043,8 @@ export async function runCli(
     }
 
     if (alignment === "updated") {
-      report = standingIntegrationSmokeReportSchema.parse(
-        await runStandingIntegrationSmoke(resolvedCommand, {
+      report = standingIntegrationRehearsalReportSchema.parse(
+        await runStandingIntegrationRehearsal(resolvedCommand, {
           expectedDeploymentFingerprint: deploymentFingerprint,
           fetch: dependencies.fetch,
           openUrl,
@@ -1042,7 +1054,7 @@ export async function runCli(
     dependencies.writeOutput(
       command.json
         ? `${JSON.stringify(report)}\n`
-        : formatStandingIntegrationSmokeReport(report, presentation),
+        : formatStandingIntegrationRehearsalReport(report, presentation),
     );
     return report.ok ? 0 : 1;
   }

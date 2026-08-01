@@ -77,8 +77,11 @@ capabilities remain available.
 - If local installation metadata is missing, `up` verifies the Worker's active version, origin, D1
   binding, provenance, and optional Gateway route before recreating it. Conflicting or ambiguous
   remote state stops the upgrade.
-- Production smoke commands stop before authorization when the installed Worker does not match
+- Production rehearsal commands stop before authorization when the installed Worker does not match
   the CLI. An older CLI never replaces a newer Worker protocol.
+
+Run `crewhelm rehearse --help` to discover the Agent, integration, installation, and upgrade
+journeys. Each command is explicit about the production state it creates and cleans up.
 
 ### Operator controls
 
@@ -111,7 +114,7 @@ node apps/cli/dist/crewhelm.js doctor \
   --installation crewhelm.testing.installation.json
 ```
 
-Installation-backed diagnosis and smoke commands derive their endpoint from the metadata. When
+Installation-backed diagnosis and rehearsal commands derive their endpoint from the metadata. When
 both `--installation` and `--endpoint` are supplied, Crewhelm rejects a mismatch before making a
 network request.
 

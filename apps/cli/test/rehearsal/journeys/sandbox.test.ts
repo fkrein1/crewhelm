@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import * as z from "zod";
 
-import { observedNetworkDenial, runSandboxSmoke } from "../src/sandbox-smoke.js";
+import {
+  observedNetworkDenial,
+  runSandboxRehearsal,
+} from "../../../src/rehearsal/journeys/sandbox.js";
 
 const origin = "https://crewhelm-testing.example";
 const fingerprint = "a".repeat(64);
@@ -100,7 +103,7 @@ function status(activeAgents: number) {
 }
 
 function agent(
-  name = "Crewhelm Sandbox smoke fixture",
+  name = "Crewhelm Sandbox rehearsal fixture",
   instructions = "fixture instructions",
   currentStatus: "active" | "disabled" = "active",
 ) {
@@ -210,7 +213,7 @@ describe("Sandbox feature rehearsal", () => {
     let activeAgents = 3;
     let agentStatus: "active" | "disabled" = "active";
     let createdInstructions = "fixture instructions";
-    let createdName = "Crewhelm Sandbox smoke fixture";
+    let createdName = "Crewhelm Sandbox rehearsal fixture";
     let cancelCalls = 0;
     let createCalls = 0;
     let disableCalls = 0;
@@ -400,7 +403,7 @@ describe("Sandbox feature rehearsal", () => {
       throw new Error(`Unexpected tool call: ${name}`);
     };
 
-    const report = await runSandboxSmoke(
+    const report = await runSandboxRehearsal(
       {
         credential,
         origin: new URL(origin),

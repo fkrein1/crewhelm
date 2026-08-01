@@ -27,21 +27,19 @@ import {
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
-import { diagnoseDeployment, doctorReportSchema, type DoctorOptions } from "./doctor.js";
-import { mcpControlPlaneStatusResultSchema } from "./mcp-result-schemas.js";
+import { diagnoseDeployment, doctorReportSchema, type DoctorOptions } from "../../doctor.js";
 import {
   initializeResponseSchema,
   MCP_PROTOCOL_VERSION,
-  parseMcpToolResult,
   runTemporaryOwnerSession,
   TemporaryOwnerSessionError,
   temporaryOwnerSessionErrorCodeSchema,
-  toolCallResponseSchema,
   toolListResponseSchema,
   type TemporaryOwnerMcpSession,
   type TemporaryOwnerSessionDependencies,
-} from "./temporary-owner-session.js";
-import { CREWHELM_CLI_VERSION } from "./version.js";
+} from "../../temporary-owner-session.js";
+import { CREWHELM_CLI_VERSION } from "../../version.js";
+import { callRehearsalTool, readRehearsalStatus } from "../mcp.js";
 
 const FULL_SCOPE = "crewhelm:full";
 const GMAIL_INTEGRATION_SLUG = "gmail";
@@ -57,7 +55,7 @@ const GMAIL_DRAFT_REQUIRED_SCOPES = [
   "https://www.googleapis.com/auth/contacts",
   "https://www.googleapis.com/auth/contacts.readonly",
 ] as const;
-const SAFE_DRAFT_RECIPIENT = "crewhelm-smoke@example.invalid";
+const SAFE_DRAFT_RECIPIENT = "crewhelm-rehearsal@example.invalid";
 const TOOL_CALLING_MODEL = "@cf/zai-org/glm-4.7-flash";
 const MAXIMUM_CONNECTION_PAGES = 50;
 const MAXIMUM_MCP_SCHEMA_BYTES = 64 * 1_024;
@@ -218,7 +216,7 @@ const gmailDraftInputSchema = z
     "Expected no required Gmail draft inputs.",
   );
 
-const standingIntegrationSmokeCheckSchema = z.strictObject({
+const standingIntegrationRehearsalCheckSchema = z.strictObject({
   code: z.union([z.enum(["valid", "not_run"]), temporaryOwnerSessionErrorCodeSchema]),
   endpoint: z.url(),
   message: z.string().max(512),
@@ -242,7 +240,7 @@ const standingIntegrationSmokeCheckSchema = z.strictObject({
   status: z.enum(["pass", "fail", "skip"]),
 });
 
-export const standingIntegrationSmokeReportSchema = z.strictObject({
+export const standingIntegrationRehearsalReportSchema = z.strictObject({
   schemaVersion: z.literal(2),
   ok: z.boolean(),
   public: doctorReportSchema,
@@ -261,36 +259,38 @@ export const standingIntegrationSmokeReportSchema = z.strictObject({
   activeAgentsBefore: z.number().int().nonnegative().safe().optional(),
   activeAgentsAfter: z.number().int().nonnegative().safe().optional(),
   checks: z.tuple([
-    standingIntegrationSmokeCheckSchema,
-    standingIntegrationSmokeCheckSchema,
-    standingIntegrationSmokeCheckSchema,
-    standingIntegrationSmokeCheckSchema,
-    standingIntegrationSmokeCheckSchema,
-    standingIntegrationSmokeCheckSchema,
-    standingIntegrationSmokeCheckSchema,
-    standingIntegrationSmokeCheckSchema,
-    standingIntegrationSmokeCheckSchema,
-    standingIntegrationSmokeCheckSchema,
-    standingIntegrationSmokeCheckSchema,
-    standingIntegrationSmokeCheckSchema,
-    standingIntegrationSmokeCheckSchema,
-    standingIntegrationSmokeCheckSchema,
-    standingIntegrationSmokeCheckSchema,
+    standingIntegrationRehearsalCheckSchema,
+    standingIntegrationRehearsalCheckSchema,
+    standingIntegrationRehearsalCheckSchema,
+    standingIntegrationRehearsalCheckSchema,
+    standingIntegrationRehearsalCheckSchema,
+    standingIntegrationRehearsalCheckSchema,
+    standingIntegrationRehearsalCheckSchema,
+    standingIntegrationRehearsalCheckSchema,
+    standingIntegrationRehearsalCheckSchema,
+    standingIntegrationRehearsalCheckSchema,
+    standingIntegrationRehearsalCheckSchema,
+    standingIntegrationRehearsalCheckSchema,
+    standingIntegrationRehearsalCheckSchema,
+    standingIntegrationRehearsalCheckSchema,
+    standingIntegrationRehearsalCheckSchema,
   ]),
 });
 
-export type StandingIntegrationSmokeReport = z.infer<typeof standingIntegrationSmokeReportSchema>;
-type SmokeCheck = StandingIntegrationSmokeReport["checks"][number];
-type SmokeCheckName = SmokeCheck["name"];
+export type StandingIntegrationRehearsalReport = z.infer<
+  typeof standingIntegrationRehearsalReportSchema
+>;
+type RehearsalCheck = StandingIntegrationRehearsalReport["checks"][number];
+type RehearsalCheckName = RehearsalCheck["name"];
 
-export interface StandingIntegrationSmokeOptions extends DoctorOptions {
+export interface StandingIntegrationRehearsalOptions extends DoctorOptions {
   authorizationTimeoutMs?: number;
   connectionId: string;
   runTimeoutMs: number;
   trigger: "manual" | "schedule";
 }
 
-export interface StandingIntegrationSmokeDependencies extends TemporaryOwnerSessionDependencies {
+export interface StandingIntegrationRehearsalDependencies extends TemporaryOwnerSessionDependencies {
   now?: () => number;
   wait?: (milliseconds: number) => Promise<void>;
 }
@@ -356,15 +356,15 @@ const checkDefinitions = {
     name: "trigger-ready",
     validMessage: "One near-term schedule dispatched the exact Agent revision.",
   },
-} as const satisfies Record<string, { name: SmokeCheckName; validMessage: string }>;
+} as const satisfies Record<string, { name: RehearsalCheckName; validMessage: string }>;
 
 function createCheck(
-  name: SmokeCheckName,
+  name: RehearsalCheckName,
   endpoint: URL,
-  code: SmokeCheck["code"],
+  code: RehearsalCheck["code"],
   message: string,
-): SmokeCheck {
-  return standingIntegrationSmokeCheckSchema.parse({
+): RehearsalCheck {
+  return standingIntegrationRehearsalCheckSchema.parse({
     code,
     endpoint: endpoint.href,
     message,
@@ -373,11 +373,11 @@ function createCheck(
   });
 }
 
-function skippedCheck(name: SmokeCheckName, endpoint: URL): SmokeCheck {
+function skippedCheck(name: RehearsalCheckName, endpoint: URL): RehearsalCheck {
   return createCheck(name, endpoint, "not_run", "Check was not run.");
 }
 
-function failedCheck(name: SmokeCheckName, endpoint: URL, error: unknown): SmokeCheck {
+function failedCheck(name: RehearsalCheckName, endpoint: URL, error: unknown): RehearsalCheck {
   return typeof error === "object" &&
     error !== null &&
     "code" in error &&
@@ -394,41 +394,8 @@ function failedCheck(name: SmokeCheckName, endpoint: URL, error: unknown): Smoke
     : createCheck(name, endpoint, "request_failed", "Standing integration rehearsal check failed.");
 }
 
-async function callTool<T>(
-  session: TemporaryOwnerMcpSession,
-  name: keyof typeof REQUIRED_TOOLS,
-  arguments_: unknown,
-  schema: z.ZodType<T>,
-  invalidMessage: string,
-  timeoutMs?: number,
-): Promise<T> {
-  const response = await session.call(
-    "tools/call",
-    { arguments: arguments_, name },
-    toolCallResponseSchema,
-    timeoutMs,
-  );
-  return parseMcpToolResult(response, schema, invalidMessage);
-}
-
-async function readStatus(session: TemporaryOwnerMcpSession) {
-  const result = await callTool(
-    session,
-    "crewhelm_status",
-    {},
-    mcpControlPlaneStatusResultSchema,
-    "Fleet status returned an invalid payload.",
-  );
-
-  if (!result.ok) {
-    throw new TemporaryOwnerSessionError("invalid_payload", "Fleet status request was denied.");
-  }
-
-  return result.status;
-}
-
 async function validateSchedulePolicy(session: TemporaryOwnerMcpSession): Promise<void> {
-  const result = await callTool(
+  const result = await callRehearsalTool(
     session,
     "crewhelm_get_config",
     { target: { kind: "fleet" } },
@@ -504,7 +471,7 @@ async function validateConnectionTarget(
   );
 
   for (let page = 0; page < maximumPages; page += 1) {
-    const result = await callTool(
+    const result = await callRehearsalTool(
       session,
       "crewhelm_list_connections",
       {
@@ -550,7 +517,7 @@ async function validateConnectionTarget(
 }
 
 async function validateIntegrationTool(session: TemporaryOwnerMcpSession): Promise<void> {
-  const result = await callTool(
+  const result = await callRehearsalTool(
     session,
     "crewhelm_inspect_integration_tool",
     GMAIL_DRAFT_TOOL,
@@ -767,15 +734,15 @@ function validateSingleDispatch(inspected: Extract<InspectRunResult, { ok: true 
   return toolCallId;
 }
 
-export async function runStandingIntegrationSmoke(
-  options: StandingIntegrationSmokeOptions,
-  dependencies: StandingIntegrationSmokeDependencies,
-): Promise<StandingIntegrationSmokeReport> {
+export async function runStandingIntegrationRehearsal(
+  options: StandingIntegrationRehearsalOptions,
+  dependencies: StandingIntegrationRehearsalDependencies,
+): Promise<StandingIntegrationRehearsalReport> {
   const publicReport = await diagnoseDeployment(options, dependencies);
   const mcpEndpoint = new URL("/mcp", options.origin);
   const authorizeEndpoint = new URL("/api/auth/oauth2/authorize", options.origin);
   const revokeEndpoint = new URL("/api/auth/oauth2/revoke", options.origin);
-  const checks: StandingIntegrationSmokeReport["checks"] = [
+  const checks: StandingIntegrationRehearsalReport["checks"] = [
     skippedCheck(checkDefinitions.oauthFullControl.name, authorizeEndpoint),
     skippedCheck(checkDefinitions.mcpInitialize.name, mcpEndpoint),
     skippedCheck(checkDefinitions.mcpToolCatalog.name, mcpEndpoint),
@@ -794,7 +761,7 @@ export async function runStandingIntegrationSmoke(
   ];
 
   if (!publicReport.ok || publicReport.deployment.alignment !== "aligned") {
-    return standingIntegrationSmokeReportSchema.parse({
+    return standingIntegrationRehearsalReportSchema.parse({
       schemaVersion: 2,
       ok: false,
       public: publicReport,
@@ -810,10 +777,10 @@ export async function runStandingIntegrationSmoke(
     ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   const startedAt = now();
   const suffix = fixtureSuffix(startedAt);
-  const fixtureSubject = `Crewhelm ${options.trigger === "schedule" ? "scheduled " : ""}standing authority smoke ${suffix}`;
+  const fixtureSubject = `Crewhelm ${options.trigger === "schedule" ? "scheduled " : ""}standing authority rehearsal ${suffix}`;
   const fixture = {
     instructions: `Execute exactly one Gmail draft creation when explicitly asked. Address it only to ${SAFE_DRAFT_RECIPIENT}. Never send, update, list, read, or delete email. Return only a short confirmation without provider data.`,
-    name: `Crewhelm ${options.trigger === "schedule" ? "scheduled " : ""}standing integration smoke ${suffix}`,
+    name: `Crewhelm ${options.trigger === "schedule" ? "scheduled " : ""}standing integration rehearsal ${suffix}`,
   };
   const runPrompt = `Create exactly one Gmail draft addressed only to "${SAFE_DRAFT_RECIPIENT}" with subject "${fixtureSubject}" and body "This draft was created by an explicitly authorized Crewhelm standing-authority rehearsal." Do not add Cc, Bcc, extra recipients, attachments, HTML, or a thread ID. Do not perform any other action.`;
   const createInput = {
@@ -825,7 +792,7 @@ export async function runStandingIntegrationSmoke(
       },
     ],
     executionLimits: AGENT_LIMITS,
-    idempotencyKey: `smoke-integration-create-${suffix}`,
+    idempotencyKey: `rehearsal-integration-create-${suffix}`,
     ...fixture,
   };
   let activeCheckIndex = 1;
@@ -878,13 +845,13 @@ export async function runStandingIntegrationSmoke(
       let activeSchedule = schedule;
 
       if (!activeSchedule) {
-        const recovered = await callTool(
+        const recovered = await callRehearsalTool(
           session,
           "crewhelm_get_agent_schedule",
           { agentId: agent.id },
           getAgentScheduleResultSchema,
           "Scheduled trigger state could not be recovered for cleanup.",
-          CLEANUP_REQUEST_TIMEOUT_MS,
+          { timeoutMs: CLEANUP_REQUEST_TIMEOUT_MS },
         );
 
         if (!recovered.ok) {
@@ -912,19 +879,19 @@ export async function runStandingIntegrationSmoke(
         agentId: agent.id,
         expectedAgentRevision: agent.revision,
         expectedScheduleRevision: activeSchedule.revision,
-        idempotencyKey: `smoke-integration-schedule-pause-${suffix}`,
+        idempotencyKey: `rehearsal-integration-schedule-pause-${suffix}`,
         schedule: null,
       };
       let paused: AgentSchedule | undefined;
 
       try {
-        const result = await callTool(
+        const result = await callRehearsalTool(
           session,
           "crewhelm_configure_agent_schedule",
           pauseInput,
           configureAgentScheduleResultSchema,
           "Scheduled trigger pause returned an invalid payload.",
-          CLEANUP_REQUEST_TIMEOUT_MS,
+          { timeoutMs: CLEANUP_REQUEST_TIMEOUT_MS },
         );
 
         if (!result.ok || !result.configured) {
@@ -941,13 +908,13 @@ export async function runStandingIntegrationSmoke(
         }
 
         try {
-          const replay = await callTool(
+          const replay = await callRehearsalTool(
             session,
             "crewhelm_configure_agent_schedule",
             pauseInput,
             configureAgentScheduleResultSchema,
             "Scheduled trigger pause could not be reconciled after an ambiguous response.",
-            CLEANUP_REQUEST_TIMEOUT_MS,
+            { timeoutMs: CLEANUP_REQUEST_TIMEOUT_MS },
           );
 
           if (!replay.ok) {
@@ -959,13 +926,13 @@ export async function runStandingIntegrationSmoke(
 
           paused = validatePausedSchedule(replay.schedule, agent, activeSchedule);
         } catch {
-          const recovered = await callTool(
+          const recovered = await callRehearsalTool(
             session,
             "crewhelm_get_agent_schedule",
             { agentId: agent.id },
             getAgentScheduleResultSchema,
             "Scheduled trigger pause state could not be recovered.",
-            CLEANUP_REQUEST_TIMEOUT_MS,
+            { timeoutMs: CLEANUP_REQUEST_TIMEOUT_MS },
           );
 
           if (!recovered.ok) {
@@ -1000,13 +967,13 @@ export async function runStandingIntegrationSmoke(
     }
 
     try {
-      const revoked = await callTool(
+      const revoked = await callRehearsalTool(
         session,
         "crewhelm_revoke_authority",
         { grantId, target: "capability" },
         changeAuthorityResultSchema,
         "Standing grant revocation returned an invalid payload.",
-        CLEANUP_REQUEST_TIMEOUT_MS,
+        { timeoutMs: CLEANUP_REQUEST_TIMEOUT_MS },
       );
 
       if (
@@ -1040,7 +1007,7 @@ export async function runStandingIntegrationSmoke(
     }
 
     try {
-      const disabled = await callTool(
+      const disabled = await callRehearsalTool(
         session,
         "crewhelm_batch_disable_agents",
         {
@@ -1048,7 +1015,7 @@ export async function runStandingIntegrationSmoke(
         },
         batchDisableAgentsResultSchema,
         "Agent disablement returned an invalid payload.",
-        CLEANUP_REQUEST_TIMEOUT_MS,
+        { timeoutMs: CLEANUP_REQUEST_TIMEOUT_MS },
       );
       const receipt = disabled.ok ? disabled.receipts[0] : undefined;
 
@@ -1065,28 +1032,17 @@ export async function runStandingIntegrationSmoke(
         );
       }
 
-      const exactAgent = await callTool(
+      const exactAgent = await callRehearsalTool(
         session,
         "crewhelm_get_agent",
         { id: agent.id },
         getAgentResultSchema,
         "Disabled Agent read returned an invalid payload.",
-        CLEANUP_REQUEST_TIMEOUT_MS,
+        { timeoutMs: CLEANUP_REQUEST_TIMEOUT_MS },
       );
-      const afterDisable = await callTool(
-        session,
-        "crewhelm_status",
-        {},
-        mcpControlPlaneStatusResultSchema,
-        "Fleet status returned an invalid payload.",
-        CLEANUP_REQUEST_TIMEOUT_MS,
-      );
-
-      if (!afterDisable.ok) {
-        throw new TemporaryOwnerSessionError("invalid_payload", "Fleet status request was denied.");
-      }
-
-      const afterDisableStatus = afterDisable.status;
+      const afterDisableStatus = await readRehearsalStatus(session, {
+        timeoutMs: CLEANUP_REQUEST_TIMEOUT_MS,
+      });
       activeAgentsAfter = afterDisableStatus.usage.agents.active;
 
       if (
@@ -1118,7 +1074,7 @@ export async function runStandingIntegrationSmoke(
       ...(options.authorizationTimeoutMs === undefined
         ? {}
         : { authorizationTimeoutMs: options.authorizationTimeoutMs }),
-      clientName: "Crewhelm standing integration smoke",
+      clientName: "Crewhelm standing integration rehearsal",
       origin: options.origin,
       scope: FULL_SCOPE,
       timeoutMs: options.timeoutMs,
@@ -1152,9 +1108,9 @@ export async function runStandingIntegrationSmoke(
       );
 
       activeCheckIndex = 3;
-      const baseline = await readStatus(session);
+      const baseline = await readRehearsalStatus(session);
       activeAgentsBefore = baseline.usage.agents.active;
-      const recovery = await callTool(
+      const recovery = await callRehearsalTool(
         session,
         "crewhelm_list_unresolved_tool_effects",
         { limit: 1 },
@@ -1214,7 +1170,7 @@ export async function runStandingIntegrationSmoke(
       let created: z.infer<typeof createAgentResultSchema> | undefined;
 
       try {
-        created = await callTool(
+        created = await callRehearsalTool(
           session,
           "crewhelm_create_agent",
           createInput,
@@ -1222,7 +1178,7 @@ export async function runStandingIntegrationSmoke(
           "Agent creation returned an invalid payload.",
         );
       } catch {
-        const recovered = await callTool(
+        const recovered = await callRehearsalTool(
           session,
           "crewhelm_create_agent",
           createInput,
@@ -1247,7 +1203,7 @@ export async function runStandingIntegrationSmoke(
       agentId = createdAgent.id;
 
       try {
-        const afterCreate = await readStatus(session);
+        const afterCreate = await readRehearsalStatus(session);
 
         if (afterCreate.usage.agents.active !== activeAgentsBefore + 1) {
           throw new TemporaryOwnerSessionError(
@@ -1269,7 +1225,7 @@ export async function runStandingIntegrationSmoke(
           connectionId: options.connectionId,
           expectedRevision: createdAgent.revision,
           expiresAt: new Date(now() + 10 * 60 * 1_000).toISOString(),
-          idempotencyKey: `smoke-integration-grant-${suffix}`,
+          idempotencyKey: `rehearsal-integration-grant-${suffix}`,
           limits: TOOL_LIMITS,
           tools: [{ authorization: "standing", ...GMAIL_DRAFT_TOOL }],
         };
@@ -1277,7 +1233,7 @@ export async function runStandingIntegrationSmoke(
         let configured: z.infer<typeof configureAgentConnectionResultSchema> | undefined;
 
         try {
-          configured = await callTool(
+          configured = await callRehearsalTool(
             session,
             "crewhelm_configure_agent_connection",
             configureInput,
@@ -1287,7 +1243,7 @@ export async function runStandingIntegrationSmoke(
           configuredAgent = validateConfiguredAgent(configured, createdAgent, true);
         } catch {
           try {
-            const recovered = await callTool(
+            const recovered = await callRehearsalTool(
               session,
               "crewhelm_configure_agent_connection",
               configureInput,
@@ -1296,7 +1252,7 @@ export async function runStandingIntegrationSmoke(
             );
             configuredAgent = validateConfiguredAgent(recovered, createdAgent);
           } catch {
-            const exactAgent = await callTool(
+            const exactAgent = await callRehearsalTool(
               session,
               "crewhelm_get_agent",
               { id: createdAgent.id },
@@ -1342,14 +1298,14 @@ export async function runStandingIntegrationSmoke(
           const startInput = {
             agentId: configuredAgent.id,
             expectedRevision: configuredAgent.revision,
-            idempotencyKey: `smoke-integration-run-${suffix}`,
+            idempotencyKey: `rehearsal-integration-run-${suffix}`,
             prompt: runPrompt,
           };
           let startedRun: Run | undefined;
           let started: z.infer<typeof startRunResultSchema> | undefined;
 
           try {
-            started = await callTool(
+            started = await callRehearsalTool(
               session,
               "crewhelm_start_run",
               startInput,
@@ -1357,7 +1313,7 @@ export async function runStandingIntegrationSmoke(
               "Standing integration run start returned an invalid payload.",
             );
           } catch {
-            const recovered = await callTool(
+            const recovered = await callRehearsalTool(
               session,
               "crewhelm_start_run",
               startInput,
@@ -1390,7 +1346,7 @@ export async function runStandingIntegrationSmoke(
             agentId: configuredAgent.id,
             expectedAgentRevision: configuredAgent.revision,
             expectedScheduleRevision: null,
-            idempotencyKey: `smoke-integration-schedule-${suffix}`,
+            idempotencyKey: `rehearsal-integration-schedule-${suffix}`,
             schedule: {
               intervalSeconds: SCHEDULE_INTERVAL_SECONDS,
               prompt: runPrompt,
@@ -1400,7 +1356,7 @@ export async function runStandingIntegrationSmoke(
           scheduleMayExist = true;
 
           try {
-            const result = await callTool(
+            const result = await callRehearsalTool(
               session,
               "crewhelm_configure_agent_schedule",
               scheduleInput,
@@ -1415,7 +1371,7 @@ export async function runStandingIntegrationSmoke(
             );
           } catch {
             try {
-              const replay = await callTool(
+              const replay = await callRehearsalTool(
                 session,
                 "crewhelm_configure_agent_schedule",
                 scheduleInput,
@@ -1424,7 +1380,7 @@ export async function runStandingIntegrationSmoke(
               );
               configuredSchedule = validateConfiguredSchedule(replay, configuredAgent, runPrompt);
             } catch {
-              const recovered = await callTool(
+              const recovered = await callRehearsalTool(
                 session,
                 "crewhelm_get_agent_schedule",
                 { agentId: configuredAgent.id },
@@ -1458,7 +1414,7 @@ export async function runStandingIntegrationSmoke(
           scheduleRevision = configuredSchedule.revision;
 
           for (;;) {
-            const scheduled = await callTool(
+            const scheduled = await callRehearsalTool(
               session,
               "crewhelm_get_agent_schedule",
               { agentId: configuredAgent.id },
@@ -1539,7 +1495,7 @@ export async function runStandingIntegrationSmoke(
           let inspected: z.infer<typeof inspectRunResultSchema>;
 
           try {
-            inspected = await callTool(
+            inspected = await callRehearsalTool(
               session,
               "crewhelm_inspect_run",
               { runId: expectedRunId, timelineLimit: 50 },
@@ -1626,7 +1582,7 @@ export async function runStandingIntegrationSmoke(
         activeCheckIndex = 10;
 
         for (;;) {
-          const inbox = await callTool(
+          const inbox = await callRehearsalTool(
             session,
             "crewhelm_agent_inbox",
             {
@@ -1742,7 +1698,7 @@ export async function runStandingIntegrationSmoke(
     );
   }
 
-  return standingIntegrationSmokeReportSchema.parse({
+  return standingIntegrationRehearsalReportSchema.parse({
     schemaVersion: 2,
     ok: publicReport.ok && checks.every((check) => check.status === "pass"),
     public: publicReport,

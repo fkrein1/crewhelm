@@ -19,21 +19,19 @@ import {
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
-import { diagnoseDeployment, doctorReportSchema, type DoctorOptions } from "./doctor.js";
-import { mcpControlPlaneStatusResultSchema } from "./mcp-result-schemas.js";
+import { diagnoseDeployment, doctorReportSchema, type DoctorOptions } from "../../doctor.js";
 import {
   initializeResponseSchema,
   MCP_PROTOCOL_VERSION,
-  parseMcpToolResult,
   runRefreshableOwnerSession,
   TemporaryOwnerSessionError,
   temporaryOwnerSessionErrorCodeSchema,
-  toolCallResponseSchema,
   toolListResponseSchema,
   type RefreshableOwnerCredential,
   type TemporaryOwnerMcpSession,
-} from "./temporary-owner-session.js";
-import { CREWHELM_CLI_VERSION } from "./version.js";
+} from "../../temporary-owner-session.js";
+import { CREWHELM_CLI_VERSION } from "../../version.js";
+import { callRehearsalTool, readRehearsalStatus } from "../mcp.js";
 
 const POLL_INTERVAL_MS = 5_000;
 const TERMINAL_RUN_STATUSES = ["cancelled", "completed", "failed"] as const;
@@ -49,9 +47,9 @@ const REQUIRED_TOOLS = [
   "crewhelm_start_run",
   "crewhelm_status",
 ] as const;
-const SMOKE_MODEL = "@cf/zai-org/glm-4.7-flash";
+const REHEARSAL_MODEL = "@cf/zai-org/glm-4.7-flash";
 
-const sandboxSmokeCheckSchema = z.strictObject({
+const sandboxRehearsalCheckSchema = z.strictObject({
   code: z.union([z.enum(["valid", "not_run"]), temporaryOwnerSessionErrorCodeSchema]),
   message: z.string().max(512),
   name: z.enum([
@@ -69,11 +67,11 @@ const sandboxSmokeCheckSchema = z.strictObject({
   status: z.enum(["pass", "fail", "skip"]),
 });
 
-export const sandboxSmokeReportSchema = z.strictObject({
+export const sandboxRehearsalReportSchema = z.strictObject({
   activeAgentsAfter: z.number().int().nonnegative().optional(),
   activeAgentsBefore: z.number().int().nonnegative().optional(),
   agentId: z.string().optional(),
-  checks: z.array(sandboxSmokeCheckSchema).length(10),
+  checks: z.array(sandboxRehearsalCheckSchema).length(10),
   codeRunId: z.string().optional(),
   networkRunId: z.string().optional(),
   ok: z.boolean(),
@@ -81,16 +79,16 @@ export const sandboxSmokeReportSchema = z.strictObject({
   schemaVersion: z.literal(1),
 });
 
-export type SandboxSmokeReport = z.infer<typeof sandboxSmokeReportSchema>;
-type CheckName = SandboxSmokeReport["checks"][number]["name"];
+export type SandboxRehearsalReport = z.infer<typeof sandboxRehearsalReportSchema>;
+type CheckName = SandboxRehearsalReport["checks"][number]["name"];
 
-export interface SandboxSmokeOptions extends DoctorOptions {
+export interface SandboxRehearsalOptions extends DoctorOptions {
   credential: RefreshableOwnerCredential;
   persistCredential: (credential: RefreshableOwnerCredential) => Promise<void>;
   runTimeoutMs: number;
 }
 
-export interface SandboxSmokeDependencies {
+export interface SandboxRehearsalDependencies {
   expectedDeploymentFingerprint?: string;
   fetch: typeof globalThis.fetch;
   now?: () => number;
@@ -105,10 +103,10 @@ export interface SandboxRunInspectionOptions extends DoctorOptions {
 
 function check(
   name: CheckName,
-  code: SandboxSmokeReport["checks"][number]["code"],
+  code: SandboxRehearsalReport["checks"][number]["code"],
   message: string,
 ) {
-  return sandboxSmokeCheckSchema.parse({
+  return sandboxRehearsalCheckSchema.parse({
     code,
     message,
     name,
@@ -124,35 +122,6 @@ function failure(name: CheckName, error: unknown) {
   return error instanceof TemporaryOwnerSessionError
     ? check(name, error.code, error.message)
     : check(name, "request_failed", "Sandbox rehearsal check failed.");
-}
-
-async function callTool<T>(
-  session: TemporaryOwnerMcpSession,
-  name: string,
-  arguments_: unknown,
-  schema: z.ZodType<T>,
-  invalidMessage: string,
-): Promise<T> {
-  const response = await session.call(
-    "tools/call",
-    { arguments: arguments_, name },
-    toolCallResponseSchema,
-  );
-  return parseMcpToolResult(response, schema, invalidMessage);
-}
-
-async function readStatus(session: TemporaryOwnerMcpSession) {
-  const result = await callTool(
-    session,
-    "crewhelm_status",
-    {},
-    mcpControlPlaneStatusResultSchema,
-    "Fleet status returned an invalid payload.",
-  );
-  if (!result.ok) {
-    throw new TemporaryOwnerSessionError("invalid_payload", "Fleet status request was denied.");
-  }
-  return result.status;
 }
 
 function fixtureSuffix(): string {
@@ -185,7 +154,7 @@ async function inspectTerminalRun(
   wait: (milliseconds: number) => Promise<void>,
 ): Promise<InspectRunResult> {
   while (true) {
-    const inspected = await callTool(
+    const inspected = await callRehearsalTool(
       session,
       "crewhelm_inspect_run",
       { runId, timelineLimit: 50 },
@@ -213,7 +182,7 @@ async function startRunWithRecovery(
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let started: z.infer<typeof startRunResultSchema>;
     try {
-      started = await callTool(
+      started = await callRehearsalTool(
         session,
         "crewhelm_start_run",
         input,
@@ -231,7 +200,7 @@ async function startRunWithRecovery(
     return started;
   }
 
-  const listed = await callTool(
+  const listed = await callRehearsalTool(
     session,
     "crewhelm_list_agent_runs",
     { agentId: input.agentId, limit: 10 },
@@ -244,7 +213,7 @@ async function startRunWithRecovery(
   if (candidates.length !== 1) {
     throw new TemporaryOwnerSessionError("request_failed", "Sandbox Run start was not recovered.");
   }
-  const inspected = await callTool(
+  const inspected = await callRehearsalTool(
     session,
     "crewhelm_inspect_run",
     { runId: candidates[0]!.runId, timelineLimit: 1 },
@@ -260,10 +229,10 @@ async function startRunWithRecovery(
   return startRunResultSchema.parse({ created: false, ok: true, run: inspected.run });
 }
 
-export async function runSandboxSmoke(
-  options: SandboxSmokeOptions,
-  dependencies: SandboxSmokeDependencies,
-): Promise<SandboxSmokeReport> {
+export async function runSandboxRehearsal(
+  options: SandboxRehearsalOptions,
+  dependencies: SandboxRehearsalDependencies,
+): Promise<SandboxRehearsalReport> {
   const publicReport = await diagnoseDeployment(options, dependencies);
   const names: CheckName[] = [
     "saved-owner-access",
@@ -280,7 +249,7 @@ export async function runSandboxSmoke(
   const checks = names.map(skipped);
 
   if (!publicReport.ok || publicReport.deployment.alignment !== "aligned") {
-    return sandboxSmokeReportSchema.parse({
+    return sandboxRehearsalReportSchema.parse({
       checks,
       ok: false,
       public: publicReport,
@@ -309,7 +278,7 @@ export async function runSandboxSmoke(
 
     try {
       try {
-        const listed = await callTool(
+        const listed = await callRehearsalTool(
           session,
           "crewhelm_list_agent_runs",
           { agentId: agent.id, limit: 10 },
@@ -335,7 +304,7 @@ export async function runSandboxSmoke(
       const cleanupDeadline = now() + Math.min(options.runTimeoutMs, 60_000);
       for (const runId of knownRunIds) {
         while (true) {
-          const inspected = await callTool(
+          const inspected = await callRehearsalTool(
             session,
             "crewhelm_inspect_run",
             { runId, timelineLimit: 1 },
@@ -360,7 +329,7 @@ export async function runSandboxSmoke(
             );
           }
           try {
-            const cancelled = await callTool(
+            const cancelled = await callRehearsalTool(
               session,
               "crewhelm_cancel_run",
               { runId },
@@ -388,7 +357,7 @@ export async function runSandboxSmoke(
     }
 
     try {
-      let exact = await callTool(
+      let exact = await callRehearsalTool(
         session,
         "crewhelm_get_agent",
         { id: agent.id },
@@ -401,7 +370,7 @@ export async function runSandboxSmoke(
       for (let attempt = 0; exact.agent.status === "active" && attempt < 2; attempt += 1) {
         let disabled: z.infer<typeof batchDisableAgentsResultSchema> | undefined;
         try {
-          disabled = await callTool(
+          disabled = await callRehearsalTool(
             session,
             "crewhelm_batch_disable_agents",
             { agents: [{ agentId: exact.agent.id, expectedRevision: exact.agent.revision }] },
@@ -425,7 +394,7 @@ export async function runSandboxSmoke(
             "Agent cleanup receipt did not match the exact fixture.",
           );
         }
-        exact = await callTool(
+        exact = await callRehearsalTool(
           session,
           "crewhelm_get_agent",
           { id: agent.id },
@@ -442,7 +411,7 @@ export async function runSandboxSmoke(
       if (exact.agent.status !== "disabled") {
         throw new TemporaryOwnerSessionError("invalid_payload", "Agent cleanup was not verified.");
       }
-      activeAgentsAfter = (await readStatus(session)).usage.agents.active;
+      activeAgentsAfter = (await readRehearsalStatus(session)).usage.agents.active;
       if (activeAgentsAfter !== activeAgentsBefore) {
         throw new TemporaryOwnerSessionError(
           "invalid_payload",
@@ -484,7 +453,7 @@ export async function runSandboxSmoke(
     checks[2] = check("mcp-tool-catalog", "valid", "MCP exposed the bounded Run lifecycle tools.");
 
     activeCheck = 3;
-    const capability = await callTool(
+    const capability = await callRehearsalTool(
       session,
       "crewhelm_get_config",
       { target: { id: SANDBOX_CODE_CAPABILITY_ID, kind: "agent-capability" } },
@@ -516,11 +485,11 @@ export async function runSandboxSmoke(
     );
 
     activeCheck = 4;
-    activeAgentsBefore = (await readStatus(session)).usage.agents.active;
+    activeAgentsBefore = (await readRehearsalStatus(session)).usage.agents.active;
     const createInput = {
       capabilities: [
         {
-          configuration: { fallbackModels: [], primaryModel: SMOKE_MODEL },
+          configuration: { fallbackModels: [], primaryModel: REHEARSAL_MODEL },
           id: WORKERS_AI_CAPABILITY_ID,
           schemaVersion: WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
         },
@@ -541,14 +510,14 @@ export async function runSandboxSmoke(
         maxToolCalls: 1,
         maxTurns: 2,
       },
-      idempotencyKey: `sandbox-smoke-agent-${suffix}`,
+      idempotencyKey: `sandbox-rehearsal-agent-${suffix}`,
       instructions:
         "For every request, call sandbox_run_code exactly once with the requested Python code. Never simulate its output. Then answer concisely with the exact printed marker.",
-      name: `Crewhelm Sandbox smoke ${suffix}`,
+      name: `Crewhelm Sandbox rehearsal ${suffix}`,
     };
     let created: z.infer<typeof createAgentResultSchema> | undefined;
     try {
-      created = await callTool(
+      created = await callRehearsalTool(
         session,
         "crewhelm_create_agent",
         createInput,
@@ -557,7 +526,7 @@ export async function runSandboxSmoke(
       );
     } catch {
       try {
-        created = await callTool(
+        created = await callRehearsalTool(
           session,
           "crewhelm_create_agent",
           createInput,
@@ -565,7 +534,7 @@ export async function runSandboxSmoke(
           "Sandbox Agent creation replay returned an invalid payload.",
         );
       } catch {
-        const listed = await callTool(
+        const listed = await callRehearsalTool(
           session,
           "crewhelm_list_agents",
           { limit: 2, name: createInput.name, status: "active" },
@@ -576,7 +545,7 @@ export async function runSandboxSmoke(
           ? listed.agents.filter((candidate) => candidate.name === createInput.name)
           : [];
         if (recovered.length === 1) {
-          const exact = await callTool(
+          const exact = await callRehearsalTool(
             session,
             "crewhelm_get_agent",
             { id: recovered[0]!.id },
@@ -607,7 +576,7 @@ export async function runSandboxSmoke(
         {
           agentId: agent.id,
           expectedRevision: agent.revision,
-          idempotencyKey: `sandbox-smoke-code-${suffix}`,
+          idempotencyKey: `sandbox-rehearsal-code-${suffix}`,
           prompt:
             "Call sandbox_run_code with Python code `print(123456 * 789)`. Return SANDBOX_MATH followed by the exact printed number.",
         },
@@ -647,7 +616,7 @@ export async function runSandboxSmoke(
         {
           agentId: agent.id,
           expectedRevision: agent.revision,
-          idempotencyKey: `sandbox-smoke-network-${suffix}`,
+          idempotencyKey: `sandbox-rehearsal-network-${suffix}`,
           prompt:
             "Call sandbox_run_code with this Python code exactly: `import socket\ns = socket.socket()\ns.settimeout(2)\ntry:\n s.connect(('1.1.1.1', 443))\n print('NETWORK_UNEXPECTED_CONNECTED')\nexcept OSError as error:\n print('NETWORK_BLOCKED', type(error).__name__)\nfinally:\n s.close()`. Return only the printed marker and diagnostic class.",
         },
@@ -683,7 +652,7 @@ export async function runSandboxSmoke(
       );
 
       activeCheck = 7;
-      const listedRuns = await callTool(
+      const listedRuns = await callRehearsalTool(
         session,
         "crewhelm_list_agent_runs",
         { agentId: agent.id, limit: 10 },
@@ -728,7 +697,7 @@ export async function runSandboxSmoke(
         ? failure("access-token-revocation", sessionResult.revocation.error)
         : skipped("access-token-revocation");
 
-  return sandboxSmokeReportSchema.parse({
+  return sandboxRehearsalReportSchema.parse({
     ...(activeAgentsAfter === undefined ? {} : { activeAgentsAfter }),
     ...(activeAgentsBefore === undefined ? {} : { activeAgentsBefore }),
     ...(agent === undefined ? {} : { agentId: agent.id }),
@@ -743,7 +712,7 @@ export async function runSandboxSmoke(
 
 export async function inspectSandboxRun(
   options: SandboxRunInspectionOptions,
-  dependencies: SandboxSmokeDependencies,
+  dependencies: SandboxRehearsalDependencies,
 ): Promise<unknown> {
   const publicReport = await diagnoseDeployment(options, dependencies);
   if (!publicReport.ok || publicReport.deployment.alignment !== "aligned") {
@@ -760,7 +729,7 @@ export async function inspectSandboxRun(
       },
       initializeResponseSchema,
     );
-    const inspected = await callTool(
+    const inspected = await callRehearsalTool(
       session,
       "crewhelm_inspect_run",
       { runId: options.runId, timelineLimit: 50 },

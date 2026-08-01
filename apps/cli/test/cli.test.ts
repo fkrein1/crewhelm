@@ -5,15 +5,15 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { authenticatedDoctorReportSchema } from "../src/authenticated-doctor.js";
-import { agentSmokeReportSchema } from "../src/agent-smoke.js";
 import { readPackagedDeploymentFingerprint } from "../src/bootstrap.js";
 import { CLI_HELP, parseCli, runCli, type CliDependencies } from "../src/cli.js";
 import { doctorReportSchema } from "../src/doctor.js";
 import { readInstallation, writeInstallation } from "../src/installation.js";
-import { installationSmokeFailureSchema } from "../src/installation-smoke.js";
 import { CLI_BANNER } from "../src/presentation.js";
-import { standingIntegrationSmokeReportSchema } from "../src/standing-integration-smoke.js";
-import { upgradeSmokeFailureSchema } from "../src/upgrade-smoke.js";
+import { agentRehearsalReportSchema } from "../src/rehearsal/public/agent.js";
+import { installationRehearsalFailureSchema } from "../src/rehearsal/public/installation.js";
+import { standingIntegrationRehearsalReportSchema } from "../src/rehearsal/public/standing-integration.js";
+import { upgradeRehearsalFailureSchema } from "../src/rehearsal/public/upgrade.js";
 import { CREWHELM_CLI_VERSION } from "../src/version.js";
 
 const DATABASE_ID = "c58217fd-fe09-447b-b79c-5d63ed1cedc0";
@@ -240,6 +240,8 @@ describe("Crewhelm CLI", () => {
     expect(harness.output).toEqual([CLI_HELP]);
     expect(CLI_HELP).toContain("Examples:");
     expect(CLI_HELP).toContain("$ crewhelm up");
+    expect(CLI_HELP).toContain("$ crewhelm rehearse agent --help");
+    expect(CLI_HELP).not.toContain("$ crewhelm smoke");
     expect(CLI_HELP).not.toContain("CREWHELM_CLOUDFLARE_API_TOKEN");
     expect(harness.dependencies.fetch).not.toHaveBeenCalled();
   });
@@ -609,51 +611,57 @@ describe("Crewhelm CLI", () => {
     }
   });
 
-  it("requires explicit production confirmation for the Agent smoke command", () => {
-    expect(() => parseCli(["smoke", "agent", "--endpoint", "https://crewhelm.example"])).toThrow(
-      "smoke agent requires --confirm-production.",
+  it("requires explicit production confirmation for the Agent rehearsal command", () => {
+    expect(() => parseCli(["rehearse", "agent", "--endpoint", "https://crewhelm.example"])).toThrow(
+      "rehearse agent requires --confirm-production.",
     );
     expect(() =>
-      parseCli(["smoke", "agent", "--endpoint", "http://127.0.0.1:8787", "--confirm-production"]),
-    ).toThrow("smoke agent requires an HTTPS endpoint.");
+      parseCli([
+        "rehearse",
+        "agent",
+        "--endpoint",
+        "http://127.0.0.1:8787",
+        "--confirm-production",
+      ]),
+    ).toThrow("rehearse agent requires an HTTPS endpoint.");
   });
 
-  it("requires isolated coordinates for the fresh-install smoke command", () => {
+  it("requires isolated coordinates for the fresh-install rehearsal command", () => {
     expect(() =>
       parseCli([
-        "smoke",
+        "rehearse",
         "installation",
         "--endpoint",
-        "https://crewhelm-smoke-example.workers.dev",
+        "https://crewhelm-rehearsal-example.workers.dev",
         "--worker-name",
-        "crewhelm-smoke-example",
+        "crewhelm-rehearsal-example",
         "--database-name",
-        "crewhelm-smoke-example",
+        "crewhelm-rehearsal-example",
       ]),
-    ).toThrow("smoke installation requires --confirm-production.");
+    ).toThrow("rehearse installation requires --confirm-production.");
     expect(() =>
       parseCli([
-        "smoke",
+        "rehearse",
         "installation",
         "--endpoint",
-        "https://crewhelm-smoke-example.workers.dev",
+        "https://crewhelm-rehearsal-example.workers.dev",
         "--worker-name",
         "crewhelm",
         "--database-name",
-        "crewhelm-smoke-example",
+        "crewhelm-rehearsal-example",
         "--confirm-production",
       ]),
     ).toThrow("One or more command values were invalid or outside their bounds.");
     expect(
       parseCli([
-        "smoke",
+        "rehearse",
         "installation",
         "--endpoint",
-        "https://crewhelm-smoke-example.workers.dev",
+        "https://crewhelm-rehearsal-example.workers.dev",
         "--worker-name",
-        "crewhelm-smoke-example",
+        "crewhelm-rehearsal-example",
         "--database-name",
-        "crewhelm-smoke-example",
+        "crewhelm-rehearsal-example",
         "--ai-budget-usd",
         "3",
         "--confirm-production",
@@ -661,25 +669,26 @@ describe("Crewhelm CLI", () => {
     ).toMatchObject({
       aiDailySpendUsd: 3,
       cleanupOnly: false,
-      kind: "installation-smoke",
-      workerName: "crewhelm-smoke-example",
+      kind: "installation-rehearsal",
+      receiptPath: "crewhelm.smoke-receipt.json",
+      workerName: "crewhelm-rehearsal-example",
     });
   });
 
-  it("requires a pinned build and explicit confirmation for the upgrade smoke", () => {
+  it("requires a pinned build and explicit confirmation for the upgrade rehearsal", () => {
     expect(() =>
       parseCli([
-        "smoke",
+        "rehearse",
         "upgrade",
         "--endpoint",
         "https://crewhelm-upgrade.example",
         "--from-fingerprint",
         "b".repeat(64),
       ]),
-    ).toThrow("smoke upgrade requires --confirm-production.");
+    ).toThrow("rehearse upgrade requires --confirm-production.");
     expect(() =>
       parseCli([
-        "smoke",
+        "rehearse",
         "upgrade",
         "--endpoint",
         "https://crewhelm-upgrade.example",
@@ -690,7 +699,7 @@ describe("Crewhelm CLI", () => {
     ).toThrow("One or more command values were invalid or outside their bounds.");
     expect(
       parseCli([
-        "smoke",
+        "rehearse",
         "upgrade",
         "--endpoint",
         "https://crewhelm-upgrade.example",
@@ -700,21 +709,21 @@ describe("Crewhelm CLI", () => {
       ]),
     ).toMatchObject({
       baselineFingerprint: "b".repeat(64),
-      kind: "upgrade-smoke",
+      kind: "upgrade-rehearsal",
       receiptPath: "crewhelm.upgrade-receipt.json",
     });
   });
 
   it("routes only upgrade options into the strict rehearsal contract", async () => {
     const harness = createHarness(healthyDeploymentFetch());
-    const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-upgrade-smoke-cli-test-"));
+    const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-upgrade-rehearsal-cli-test-"));
     const receiptPath = resolve(directory, "receipt.json");
 
     try {
       await expect(
         runCli(
           [
-            "smoke",
+            "rehearse",
             "upgrade",
             "--endpoint",
             "https://crewhelm-upgrade.example",
@@ -731,7 +740,9 @@ describe("Crewhelm CLI", () => {
         ),
       ).resolves.toBe(1);
 
-      expect(upgradeSmokeFailureSchema.parse(JSON.parse(harness.errors.join("")))).toMatchObject({
+      expect(
+        upgradeRehearsalFailureSchema.parse(JSON.parse(harness.errors.join(""))),
+      ).toMatchObject({
         code: "invalid_input",
         ok: false,
         receiptPath,
@@ -747,7 +758,7 @@ describe("Crewhelm CLI", () => {
 
   it("classifies malformed upgrade metadata as an input failure", async () => {
     const harness = createHarness(healthyDeploymentFetch());
-    const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-upgrade-smoke-cli-test-"));
+    const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-upgrade-rehearsal-cli-test-"));
     const installationPath = resolve(directory, "installation.json");
     const receiptPath = resolve(directory, "receipt.json");
     await writeFile(installationPath, "{", { mode: 0o600 });
@@ -756,7 +767,7 @@ describe("Crewhelm CLI", () => {
       await expect(
         runCli(
           [
-            "smoke",
+            "rehearse",
             "upgrade",
             "--endpoint",
             "https://crewhelm-upgrade.example",
@@ -773,7 +784,9 @@ describe("Crewhelm CLI", () => {
         ),
       ).resolves.toBe(1);
 
-      expect(upgradeSmokeFailureSchema.parse(JSON.parse(harness.errors.join("")))).toMatchObject({
+      expect(
+        upgradeRehearsalFailureSchema.parse(JSON.parse(harness.errors.join(""))),
+      ).toMatchObject({
         code: "invalid_input",
         recovery: "fix_input",
       });
@@ -785,7 +798,7 @@ describe("Crewhelm CLI", () => {
   it("keeps thrown fresh-install failures machine-readable in JSON mode", async () => {
     const harness = createHarness(healthyDeploymentFetch());
     const receiptPath = resolve(
-      await mkdtemp(resolve(tmpdir(), "crewhelm-installation-smoke-cli-test-")),
+      await mkdtemp(resolve(tmpdir(), "crewhelm-installation-rehearsal-cli-test-")),
       "missing.json",
     );
 
@@ -793,14 +806,14 @@ describe("Crewhelm CLI", () => {
       await expect(
         runCli(
           [
-            "smoke",
+            "rehearse",
             "installation",
             "--endpoint",
-            "https://crewhelm-smoke-example.workers.dev",
+            "https://crewhelm-rehearsal-example.workers.dev",
             "--worker-name",
-            "crewhelm-smoke-example",
+            "crewhelm-rehearsal-example",
             "--database-name",
-            "crewhelm-smoke-example",
+            "crewhelm-rehearsal-example",
             "--receipt",
             receiptPath,
             "--cleanup-only",
@@ -812,7 +825,7 @@ describe("Crewhelm CLI", () => {
       ).resolves.toBe(1);
 
       expect(
-        installationSmokeFailureSchema.parse(JSON.parse(harness.errors.join(""))),
+        installationRehearsalFailureSchema.parse(JSON.parse(harness.errors.join(""))),
       ).toMatchObject({
         ok: false,
         receiptPath,
@@ -825,10 +838,10 @@ describe("Crewhelm CLI", () => {
     }
   });
 
-  it("parses bounded Agent smoke timeouts and routes public failures without authorization", async () => {
+  it("parses bounded Agent rehearsal timeouts and routes public failures without authorization", async () => {
     expect(
       parseCli([
-        "smoke",
+        "rehearse",
         "agent",
         "--endpoint",
         "https://crewhelm.example",
@@ -840,7 +853,7 @@ describe("Crewhelm CLI", () => {
       ]),
     ).toMatchObject({
       confirmProduction: true,
-      kind: "agent-smoke",
+      kind: "agent-rehearsal",
       runTimeoutMs: 45_000,
       timeoutMs: 2_000,
     });
@@ -854,7 +867,7 @@ describe("Crewhelm CLI", () => {
     await expect(
       runCli(
         [
-          "smoke",
+          "rehearse",
           "agent",
           "--endpoint",
           "https://crewhelm.example",
@@ -865,14 +878,14 @@ describe("Crewhelm CLI", () => {
       ),
     ).resolves.toBe(1);
 
-    const report = agentSmokeReportSchema.parse(JSON.parse(harness.output.join("")));
+    const report = agentRehearsalReportSchema.parse(JSON.parse(harness.output.join("")));
     expect(report.public.ok).toBe(false);
     expect(report.checks.every((check) => check.status === "skip")).toBe(true);
     expect(openUrl).not.toHaveBeenCalled();
     expect(harness.errors).toEqual([]);
   });
 
-  it("offers an explicit matching deploy before an interactive smoke and respects decline", async () => {
+  it("offers an explicit matching deploy before an interactive rehearsal and respects decline", async () => {
     const openUrl = vi.fn<(url: URL) => Promise<void>>();
     const promptText = vi.fn<(message: string) => Promise<string>>(async () => "no");
     const harness = createHarness(healthyDeploymentFetch("b".repeat(64)), {
@@ -883,7 +896,7 @@ describe("Crewhelm CLI", () => {
 
     await expect(
       runCli(
-        ["smoke", "agent", "--endpoint", "https://crewhelm.example", "--confirm-production"],
+        ["rehearse", "agent", "--endpoint", "https://crewhelm.example", "--confirm-production"],
         harness.dependencies,
       ),
     ).resolves.toBe(1);
@@ -896,22 +909,22 @@ describe("Crewhelm CLI", () => {
     expect(harness.errors).toEqual([]);
   });
 
-  it("requires an exact connection and explicit confirmation for the integration smoke", async () => {
+  it("requires an exact connection and explicit confirmation for the integration rehearsal", async () => {
     const connectionId = "connection_33333333-3333-4333-8333-333333333333";
 
     expect(() =>
       parseCli([
-        "smoke",
+        "rehearse",
         "integration",
         "--endpoint",
         "https://crewhelm.example",
         "--connection-id",
         connectionId,
       ]),
-    ).toThrow("smoke integration requires --confirm-production.");
+    ).toThrow("rehearse integration requires --confirm-production.");
     expect(() =>
       parseCli([
-        "smoke",
+        "rehearse",
         "integration",
         "--endpoint",
         "https://crewhelm.example",
@@ -922,7 +935,7 @@ describe("Crewhelm CLI", () => {
     ).toThrow("One or more command values were invalid or outside their bounds.");
     expect(
       parseCli([
-        "smoke",
+        "rehearse",
         "integration",
         "--endpoint",
         "https://crewhelm.example",
@@ -935,13 +948,13 @@ describe("Crewhelm CLI", () => {
     ).toMatchObject({
       confirmProduction: true,
       connectionId,
-      kind: "standing-integration-smoke",
+      kind: "standing-integration-rehearsal",
       runTimeoutMs: 45_000,
       trigger: "manual",
     });
     expect(
       parseCli([
-        "smoke",
+        "rehearse",
         "integration",
         "--endpoint",
         "https://crewhelm.example",
@@ -953,13 +966,13 @@ describe("Crewhelm CLI", () => {
       ]),
     ).toMatchObject({
       connectionId,
-      kind: "standing-integration-smoke",
+      kind: "standing-integration-rehearsal",
       runTimeoutMs: 180_000,
       trigger: "schedule",
     });
     expect(() =>
       parseCli([
-        "smoke",
+        "rehearse",
         "integration",
         "--endpoint",
         "https://crewhelm.example",
@@ -980,7 +993,7 @@ describe("Crewhelm CLI", () => {
     await expect(
       runCli(
         [
-          "smoke",
+          "rehearse",
           "integration",
           "--endpoint",
           "https://crewhelm.example",
@@ -993,7 +1006,9 @@ describe("Crewhelm CLI", () => {
       ),
     ).resolves.toBe(1);
 
-    const report = standingIntegrationSmokeReportSchema.parse(JSON.parse(harness.output.join("")));
+    const report = standingIntegrationRehearsalReportSchema.parse(
+      JSON.parse(harness.output.join("")),
+    );
     expect(report.public.ok).toBe(false);
     expect(report.connectionId).toBe(connectionId);
     expect(report.trigger).toBe("manual");

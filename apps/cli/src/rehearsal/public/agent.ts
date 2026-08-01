@@ -11,21 +11,19 @@ import {
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
-import { diagnoseDeployment, doctorReportSchema, type DoctorOptions } from "./doctor.js";
-import { mcpControlPlaneStatusResultSchema } from "./mcp-result-schemas.js";
+import { diagnoseDeployment, doctorReportSchema, type DoctorOptions } from "../../doctor.js";
 import {
   initializeResponseSchema,
   MCP_PROTOCOL_VERSION,
-  parseMcpToolResult,
   runTemporaryOwnerSession,
   TemporaryOwnerSessionError,
   temporaryOwnerSessionErrorCodeSchema,
-  toolCallResponseSchema,
   toolListResponseSchema,
   type TemporaryOwnerMcpSession,
   type TemporaryOwnerSessionDependencies,
-} from "./temporary-owner-session.js";
-import { CREWHELM_CLI_VERSION } from "./version.js";
+} from "../../temporary-owner-session.js";
+import { CREWHELM_CLI_VERSION } from "../../version.js";
+import { callRehearsalTool, readRehearsalStatus } from "../mcp.js";
 
 const FULL_SCOPE = "crewhelm:full";
 const MAXIMUM_MCP_SCHEMA_BYTES = 64 * 1_024;
@@ -77,7 +75,7 @@ const REQUIRED_TOOLS = {
   },
 } as const;
 
-const agentSmokeCheckSchema = z.strictObject({
+const agentRehearsalCheckSchema = z.strictObject({
   code: z.union([z.enum(["valid", "not_run"]), temporaryOwnerSessionErrorCodeSchema]),
   endpoint: z.url(),
   message: z.string().max(512),
@@ -93,7 +91,7 @@ const agentSmokeCheckSchema = z.strictObject({
   status: z.enum(["pass", "fail", "skip"]),
 });
 
-export const agentSmokeReportSchema = z.strictObject({
+export const agentRehearsalReportSchema = z.strictObject({
   schemaVersion: z.literal(1),
   ok: z.boolean(),
   public: doctorReportSchema,
@@ -103,27 +101,27 @@ export const agentSmokeReportSchema = z.strictObject({
   activeAgentsBefore: z.number().int().nonnegative().safe().optional(),
   activeAgentsAfter: z.number().int().nonnegative().safe().optional(),
   checks: z.tuple([
-    agentSmokeCheckSchema,
-    agentSmokeCheckSchema,
-    agentSmokeCheckSchema,
-    agentSmokeCheckSchema,
-    agentSmokeCheckSchema,
-    agentSmokeCheckSchema,
-    agentSmokeCheckSchema,
+    agentRehearsalCheckSchema,
+    agentRehearsalCheckSchema,
+    agentRehearsalCheckSchema,
+    agentRehearsalCheckSchema,
+    agentRehearsalCheckSchema,
+    agentRehearsalCheckSchema,
+    agentRehearsalCheckSchema,
   ]),
 });
 
-export type AgentSmokeReport = z.infer<typeof agentSmokeReportSchema>;
-type AgentSmokeCheck = AgentSmokeReport["checks"][number];
-type AgentSmokeCheckName = AgentSmokeCheck["name"];
+export type AgentRehearsalReport = z.infer<typeof agentRehearsalReportSchema>;
+type AgentRehearsalCheck = AgentRehearsalReport["checks"][number];
+type AgentRehearsalCheckName = AgentRehearsalCheck["name"];
 
-export interface AgentSmokeOptions extends DoctorOptions {
+export interface AgentRehearsalOptions extends DoctorOptions {
   authorizationDelayMs?: number;
   authorizationTimeoutMs?: number;
   runTimeoutMs: number;
 }
 
-export interface AgentSmokeDependencies extends TemporaryOwnerSessionDependencies {
+export interface AgentRehearsalDependencies extends TemporaryOwnerSessionDependencies {
   now?: () => number;
   wait?: (milliseconds: number) => Promise<void>;
 }
@@ -157,15 +155,15 @@ const checkDefinitions = {
     name: "run-terminal",
     validMessage: "The bounded no-tool Agent run completed successfully.",
   },
-} as const satisfies Record<string, { name: AgentSmokeCheckName; validMessage: string }>;
+} as const satisfies Record<string, { name: AgentRehearsalCheckName; validMessage: string }>;
 
 function createCheck(
-  name: AgentSmokeCheckName,
+  name: AgentRehearsalCheckName,
   endpoint: URL,
-  code: AgentSmokeCheck["code"],
+  code: AgentRehearsalCheck["code"],
   message: string,
-): AgentSmokeCheck {
-  return agentSmokeCheckSchema.parse({
+): AgentRehearsalCheck {
+  return agentRehearsalCheckSchema.parse({
     code,
     endpoint: endpoint.href,
     message,
@@ -174,11 +172,15 @@ function createCheck(
   });
 }
 
-function skippedCheck(name: AgentSmokeCheckName, endpoint: URL): AgentSmokeCheck {
+function skippedCheck(name: AgentRehearsalCheckName, endpoint: URL): AgentRehearsalCheck {
   return createCheck(name, endpoint, "not_run", "Check was not run.");
 }
 
-function failedCheck(name: AgentSmokeCheckName, endpoint: URL, error: unknown): AgentSmokeCheck {
+function failedCheck(
+  name: AgentRehearsalCheckName,
+  endpoint: URL,
+  error: unknown,
+): AgentRehearsalCheck {
   return typeof error === "object" &&
     error !== null &&
     "code" in error &&
@@ -193,37 +195,6 @@ function failedCheck(name: AgentSmokeCheckName, endpoint: URL, error: unknown): 
         error.message,
       )
     : createCheck(name, endpoint, "request_failed", "Agent lifecycle check failed.");
-}
-
-async function callTool<T>(
-  session: TemporaryOwnerMcpSession,
-  name: keyof typeof REQUIRED_TOOLS,
-  arguments_: unknown,
-  schema: z.ZodType<T>,
-  invalidMessage: string,
-): Promise<T> {
-  const response = await session.call(
-    "tools/call",
-    { arguments: arguments_, name },
-    toolCallResponseSchema,
-  );
-  return parseMcpToolResult(response, schema, invalidMessage);
-}
-
-async function readStatus(session: TemporaryOwnerMcpSession) {
-  const result = await callTool(
-    session,
-    "crewhelm_status",
-    {},
-    mcpControlPlaneStatusResultSchema,
-    "Fleet status returned an invalid payload.",
-  );
-
-  if (!result.ok) {
-    throw new TemporaryOwnerSessionError("invalid_payload", "Fleet status request was denied.");
-  }
-
-  return result.status;
 }
 
 function validateToolCatalog(toolList: z.infer<typeof toolListResponseSchema>): void {
@@ -313,15 +284,15 @@ function validateStartedRun(
   return result.run;
 }
 
-export async function runAgentSmoke(
-  options: AgentSmokeOptions,
-  dependencies: AgentSmokeDependencies,
-): Promise<AgentSmokeReport> {
+export async function runAgentRehearsal(
+  options: AgentRehearsalOptions,
+  dependencies: AgentRehearsalDependencies,
+): Promise<AgentRehearsalReport> {
   const publicReport = await diagnoseDeployment(options, dependencies);
   const mcpEndpoint = new URL("/mcp", options.origin);
   const authorizeEndpoint = new URL("/api/auth/oauth2/authorize", options.origin);
   const revokeEndpoint = new URL("/api/auth/oauth2/revoke", options.origin);
-  const checks: AgentSmokeReport["checks"] = [
+  const checks: AgentRehearsalReport["checks"] = [
     skippedCheck(checkDefinitions.oauthFullControl.name, authorizeEndpoint),
     skippedCheck(checkDefinitions.mcpInitialize.name, mcpEndpoint),
     skippedCheck(checkDefinitions.mcpToolCatalog.name, mcpEndpoint),
@@ -332,7 +303,7 @@ export async function runAgentSmoke(
   ];
 
   if (!publicReport.ok || publicReport.deployment.alignment !== "aligned") {
-    return agentSmokeReportSchema.parse({
+    return agentRehearsalReportSchema.parse({
       schemaVersion: 1,
       ok: false,
       public: publicReport,
@@ -350,11 +321,11 @@ export async function runAgentSmoke(
   const suffix = randomFixtureSuffix();
   const fixture = {
     instructions: "Return one short plain-text acknowledgment. Do not request or call any tools.",
-    name: `Crewhelm lifecycle smoke ${suffix}`,
+    name: `Crewhelm lifecycle rehearsal ${suffix}`,
   };
   const createInput = {
     executionLimits: AGENT_LIMITS,
-    idempotencyKey: `smoke-create-${suffix}`,
+    idempotencyKey: `rehearsal-create-${suffix}`,
     ...fixture,
   };
   let activeCheckIndex = 1;
@@ -373,7 +344,7 @@ export async function runAgentSmoke(
     }
 
     try {
-      const disabled = await callTool(
+      const disabled = await callRehearsalTool(
         session,
         "crewhelm_batch_disable_agents",
         {
@@ -397,14 +368,14 @@ export async function runAgentSmoke(
         );
       }
 
-      const exactAgent = await callTool(
+      const exactAgent = await callRehearsalTool(
         session,
         "crewhelm_get_agent",
         { id: agent.id },
         getAgentResultSchema,
         "Disabled Agent read returned an invalid payload.",
       );
-      const afterDisable = await readStatus(session);
+      const afterDisable = await readRehearsalStatus(session);
       activeAgentsAfter = afterDisable.usage.agents.active;
 
       if (
@@ -436,7 +407,7 @@ export async function runAgentSmoke(
       ...(options.authorizationTimeoutMs === undefined
         ? {}
         : { authorizationTimeoutMs: options.authorizationTimeoutMs }),
-      clientName: "Crewhelm Agent lifecycle smoke",
+      clientName: "Crewhelm Agent lifecycle rehearsal",
       origin: options.origin,
       scope: FULL_SCOPE,
       timeoutMs: options.timeoutMs,
@@ -470,13 +441,13 @@ export async function runAgentSmoke(
       );
 
       activeCheckIndex = 3;
-      const baseline = await readStatus(session);
+      const baseline = await readRehearsalStatus(session);
       activeAgentsBefore = baseline.usage.agents.active;
       let createdAgent: Agent | undefined;
       let created: z.infer<typeof createAgentResultSchema> | undefined;
 
       try {
-        created = await callTool(
+        created = await callRehearsalTool(
           session,
           "crewhelm_create_agent",
           createInput,
@@ -484,7 +455,7 @@ export async function runAgentSmoke(
           "Agent creation returned an invalid payload.",
         );
       } catch {
-        const recovered = await callTool(
+        const recovered = await callRehearsalTool(
           session,
           "crewhelm_create_agent",
           createInput,
@@ -510,7 +481,7 @@ export async function runAgentSmoke(
       agentId = createdAgent.id;
 
       try {
-        const afterCreate = await readStatus(session);
+        const afterCreate = await readRehearsalStatus(session);
 
         if (afterCreate.usage.agents.active !== activeAgentsBefore + 1) {
           throw new TemporaryOwnerSessionError(
@@ -530,14 +501,14 @@ export async function runAgentSmoke(
         const startInput = {
           agentId: createdAgent.id,
           expectedRevision: createdAgent.revision,
-          idempotencyKey: `smoke-run-${suffix}`,
-          prompt: "Reply with a brief acknowledgment that this bounded smoke run completed.",
+          idempotencyKey: `rehearsal-run-${suffix}`,
+          prompt: "Reply with a brief acknowledgment that this bounded rehearsal run completed.",
         };
         let startedRun: Run | undefined;
         let started: z.infer<typeof startRunResultSchema> | undefined;
 
         try {
-          started = await callTool(
+          started = await callRehearsalTool(
             session,
             "crewhelm_start_run",
             startInput,
@@ -545,7 +516,7 @@ export async function runAgentSmoke(
             "Agent run start returned an invalid payload.",
           );
         } catch {
-          const recovered = await callTool(
+          const recovered = await callRehearsalTool(
             session,
             "crewhelm_start_run",
             startInput,
@@ -571,7 +542,7 @@ export async function runAgentSmoke(
         const deadline = now() + options.runTimeoutMs;
 
         for (;;) {
-          const inspected = await callTool(
+          const inspected = await callRehearsalTool(
             session,
             "crewhelm_inspect_run",
             { runId: startedRun.runId },
@@ -663,7 +634,7 @@ export async function runAgentSmoke(
     );
   }
 
-  return agentSmokeReportSchema.parse({
+  return agentRehearsalReportSchema.parse({
     schemaVersion: 1,
     ok: publicReport.ok && checks.every((check) => check.status === "pass"),
     public: publicReport,

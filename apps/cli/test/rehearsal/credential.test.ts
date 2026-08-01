@@ -4,7 +4,10 @@ import { resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { readRehearsalCredential, writeRehearsalCredential } from "../src/rehearsal-credential.js";
+import {
+  readRehearsalCredential,
+  writeRehearsalCredential,
+} from "../../src/rehearsal/credential.js";
 
 const directories: string[] = [];
 const credential = {

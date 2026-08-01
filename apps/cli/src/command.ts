@@ -4,9 +4,9 @@ import * as z from "zod";
 
 import { bootstrapOptionsSchema } from "./bootstrap.js";
 import { DoctorInputError, parseDeploymentOrigin } from "./doctor.js";
-import { installationSmokeOptionsSchema } from "./installation-smoke.js";
+import { installationRehearsalOptionsSchema } from "./rehearsal/public/installation.js";
 import { createCliTextStyle, type CliTextStyle } from "./presentation.js";
-import { upgradeSmokeOptionsSchema } from "./upgrade-smoke.js";
+import { upgradeRehearsalOptionsSchema } from "./rehearsal/public/upgrade.js";
 import { CREWHELM_CLI_VERSION } from "./version.js";
 
 export const browserModeSchema = z.enum(["system", "codex", "none"]);
@@ -17,10 +17,10 @@ function formatRootHelp(style: CliTextStyle): string {
 ${style.accentStrong("Examples:")}
   ${style.accent("$ crewhelm up")}
   ${style.accent("$ crewhelm doctor --endpoint https://crewhelm.example")}
-  ${style.accent("$ crewhelm smoke agent --help")}
-  ${style.accent("$ crewhelm smoke integration --help")}
-  ${style.accent("$ crewhelm smoke installation --help")}
-  ${style.accent("$ crewhelm smoke upgrade --help")}
+  ${style.accent("$ crewhelm rehearse agent --help")}
+  ${style.accent("$ crewhelm rehearse integration --help")}
+  ${style.accent("$ crewhelm rehearse installation --help")}
+  ${style.accent("$ crewhelm rehearse upgrade --help")}
 
 ${style.muted("Run crewhelm <command> --help for command-specific options and safety notes.")}
 `;
@@ -71,7 +71,7 @@ ${style.accentStrong("Network:")}
 `;
 }
 
-function formatAgentSmokeHelp(style: CliTextStyle): string {
+function formatAgentRehearsalHelp(style: CliTextStyle): string {
   return `
 ${style.warningStrong("Production rehearsal:")}
   Creates and runs one zero-grant disposable Agent, then disables it.
@@ -80,7 +80,7 @@ ${style.warningStrong("Production rehearsal:")}
 `;
 }
 
-function formatStandingIntegrationSmokeHelp(style: CliTextStyle): string {
+function formatStandingIntegrationRehearsalHelp(style: CliTextStyle): string {
   return `
 ${style.warningStrong("Production rehearsal:")}
   Creates one draft to the reserved, non-deliverable example.invalid domain.
@@ -91,18 +91,18 @@ ${style.warningStrong("Production rehearsal:")}
 `;
 }
 
-function formatInstallationSmokeHelp(style: CliTextStyle): string {
+function formatInstallationRehearsalHelp(style: CliTextStyle): string {
   return `
 ${style.warningStrong("Fresh-install rehearsal:")}
-  Creates an isolated Worker and D1 database, runs the Agent lifecycle smoke, then deletes them.
+  Creates an isolated Worker and D1 database, runs the Agent lifecycle rehearsal, then deletes them.
   ${style.accent("--ai-budget-usd")} also creates and deletes an isolated AI Gateway.
   Existing resources are rejected; exact cleanup coordinates remain in the bounded receipt.
   Supplied GitHub App credentials must allow this Worker's callback origin.
-  Requires ${style.warning("--confirm-production")} and crewhelm-smoke-* resource names.
+  Requires ${style.warning("--confirm-production")} and crewhelm-rehearsal-* resource names.
 `;
 }
 
-function formatUpgradeSmokeHelp(style: CliTextStyle): string {
+function formatUpgradeRehearsalHelp(style: CliTextStyle): string {
   return `
 ${style.warningStrong("Supported-upgrade rehearsal:")}
   Upgrades one existing pinned fixture to this CLI's packaged Worker.
@@ -152,7 +152,7 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
     installationProvided: z.boolean(),
     installationPath: z.string().min(1).max(4_096),
     json: z.boolean(),
-    kind: z.literal("standing-integration-smoke"),
+    kind: z.literal("standing-integration-rehearsal"),
     origin: z
       .instanceof(URL)
       .refine((origin) => origin.protocol === "https:")
@@ -171,7 +171,7 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
     installationProvided: z.boolean(),
     installationPath: z.string().min(1).max(4_096),
     json: z.boolean(),
-    kind: z.literal("agent-smoke"),
+    kind: z.literal("agent-rehearsal"),
     origin: z
       .instanceof(URL)
       .refine((origin) => origin.protocol === "https:")
@@ -184,31 +184,31 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
     timeoutMs: z.number().int().min(100).max(30_000),
   }),
   z.strictObject({
-    accountId: installationSmokeOptionsSchema.shape.accountId,
-    aiDailySpendUsd: installationSmokeOptionsSchema.shape.aiDailySpendUsd,
+    accountId: installationRehearsalOptionsSchema.shape.accountId,
+    aiDailySpendUsd: installationRehearsalOptionsSchema.shape.aiDailySpendUsd,
     browser: browserModeSchema,
     cleanupOnly: z.boolean(),
     confirmProduction: z.literal(true),
-    databaseName: installationSmokeOptionsSchema.shape.databaseName,
+    databaseName: installationRehearsalOptionsSchema.shape.databaseName,
     json: z.boolean(),
-    kind: z.literal("installation-smoke"),
-    origin: installationSmokeOptionsSchema.shape.origin,
-    receiptPath: installationSmokeOptionsSchema.shape.receiptPath,
-    runTimeoutMs: installationSmokeOptionsSchema.shape.runTimeoutMs,
-    timeoutMs: installationSmokeOptionsSchema.shape.timeoutMs,
-    workerName: installationSmokeOptionsSchema.shape.workerName,
+    kind: z.literal("installation-rehearsal"),
+    origin: installationRehearsalOptionsSchema.shape.origin,
+    receiptPath: installationRehearsalOptionsSchema.shape.receiptPath,
+    runTimeoutMs: installationRehearsalOptionsSchema.shape.runTimeoutMs,
+    timeoutMs: installationRehearsalOptionsSchema.shape.timeoutMs,
+    workerName: installationRehearsalOptionsSchema.shape.workerName,
   }),
   z.strictObject({
-    baselineFingerprint: upgradeSmokeOptionsSchema.shape.baselineFingerprint,
+    baselineFingerprint: upgradeRehearsalOptionsSchema.shape.baselineFingerprint,
     browser: browserModeSchema,
     confirmProduction: z.literal(true),
     installationProvided: z.boolean(),
-    installationPath: upgradeSmokeOptionsSchema.shape.installationPath,
+    installationPath: upgradeRehearsalOptionsSchema.shape.installationPath,
     json: z.boolean(),
-    kind: z.literal("upgrade-smoke"),
-    origin: upgradeSmokeOptionsSchema.shape.origin.optional(),
-    receiptPath: upgradeSmokeOptionsSchema.shape.receiptPath,
-    timeoutMs: upgradeSmokeOptionsSchema.shape.timeoutMs,
+    kind: z.literal("upgrade-rehearsal"),
+    origin: upgradeRehearsalOptionsSchema.shape.origin.optional(),
+    receiptPath: upgradeRehearsalOptionsSchema.shape.receiptPath,
+    timeoutMs: upgradeRehearsalOptionsSchema.shape.timeoutMs,
   }),
 ]);
 
@@ -238,7 +238,7 @@ interface DoctorCommandOptions {
   timeoutMs: string;
 }
 
-interface AgentSmokeCommandOptions {
+interface AgentRehearsalCommandOptions {
   browser: string;
   confirmProduction: boolean;
   endpoint?: string;
@@ -248,12 +248,12 @@ interface AgentSmokeCommandOptions {
   timeoutMs: string;
 }
 
-interface StandingIntegrationSmokeCommandOptions extends AgentSmokeCommandOptions {
+interface StandingIntegrationRehearsalCommandOptions extends AgentRehearsalCommandOptions {
   connectionId: string;
   trigger: string;
 }
 
-interface InstallationSmokeCommandOptions {
+interface InstallationRehearsalCommandOptions {
   accountId?: string;
   aiBudgetUsd?: string;
   browser: string;
@@ -262,13 +262,13 @@ interface InstallationSmokeCommandOptions {
   databaseName: string;
   endpoint: string;
   json?: boolean;
-  receipt: string;
+  receipt?: string;
   runTimeoutMs: string;
   timeoutMs: string;
   workerName: string;
 }
 
-interface UpgradeSmokeCommandOptions {
+interface UpgradeRehearsalCommandOptions {
   browser: string;
   confirmProduction: boolean;
   endpoint?: string;
@@ -288,10 +288,10 @@ function parseOrigin(
   kind:
     | "up"
     | "doctor"
-    | "agent-smoke"
-    | "installation-smoke"
-    | "standing-integration-smoke"
-    | "upgrade-smoke",
+    | "agent-rehearsal"
+    | "installation-rehearsal"
+    | "standing-integration-rehearsal"
+    | "upgrade-rehearsal",
 ) {
   if (endpoint === undefined) {
     return undefined;
@@ -311,22 +311,22 @@ function parseOrigin(
 
   if (
     (kind === "up" ||
-      kind === "agent-smoke" ||
-      kind === "installation-smoke" ||
-      kind === "standing-integration-smoke" ||
-      kind === "upgrade-smoke") &&
+      kind === "agent-rehearsal" ||
+      kind === "installation-rehearsal" ||
+      kind === "standing-integration-rehearsal" ||
+      kind === "upgrade-rehearsal") &&
     origin.protocol !== "https:"
   ) {
     throw new CliUsageError(
       `${
-        kind === "agent-smoke"
-          ? "smoke agent"
-          : kind === "installation-smoke"
-            ? "smoke installation"
-            : kind === "standing-integration-smoke"
-              ? "smoke integration"
-              : kind === "upgrade-smoke"
-                ? "smoke upgrade"
+        kind === "agent-rehearsal"
+          ? "rehearse agent"
+          : kind === "installation-rehearsal"
+            ? "rehearse installation"
+            : kind === "standing-integration-rehearsal"
+              ? "rehearse integration"
+              : kind === "upgrade-rehearsal"
+                ? "rehearse upgrade"
                 : kind
       } requires an HTTPS endpoint.`,
     );
@@ -464,12 +464,12 @@ function createCliProgram(
       );
     });
 
-  const smoke = program
-    .command("smoke")
+  const rehearse = program
+    .command("rehearse")
     .summary("run explicit production rehearsals")
     .description("Run explicit, mutating production rehearsals.");
 
-  smoke
+  rehearse
     .command("agent")
     .summary("rehearse one disposable Agent lifecycle")
     .description("Create, run, disable, and verify one zero-grant disposable Agent.")
@@ -480,8 +480,8 @@ function createCliProgram(
     .option("--run-timeout-ms <milliseconds>", "maximum Agent run duration", "120000")
     .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")
     .option("--json", "write one machine-readable JSON result")
-    .addHelpText("after", formatAgentSmokeHelp(style))
-    .action((options: AgentSmokeCommandOptions) => {
+    .addHelpText("after", formatAgentRehearsalHelp(style))
+    .action((options: AgentRehearsalCommandOptions) => {
       onCommand?.(
         validatedCommand({
           browser: parseBrowserMode(options.browser),
@@ -489,15 +489,15 @@ function createCliProgram(
           installationPath: options.installation ?? "crewhelm.installation.json",
           installationProvided: options.installation !== undefined,
           json: options.json === true,
-          kind: "agent-smoke",
-          origin: parseOrigin(options.endpoint, "agent-smoke"),
+          kind: "agent-rehearsal",
+          origin: parseOrigin(options.endpoint, "agent-rehearsal"),
           runTimeoutMs: Number(options.runTimeoutMs),
           timeoutMs: Number(options.timeoutMs),
         }),
       );
     });
 
-  smoke
+  rehearse
     .command("upgrade")
     .summary("rehearse one supported installation upgrade")
     .description("Upgrade and verify one existing pinned Crewhelm installation fixture.")
@@ -509,8 +509,8 @@ function createCliProgram(
     .option("--receipt <path>", "recovery receipt path", "crewhelm.upgrade-receipt.json")
     .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")
     .option("--json", "write one machine-readable JSON result")
-    .addHelpText("after", formatUpgradeSmokeHelp(style))
-    .action((options: UpgradeSmokeCommandOptions) => {
+    .addHelpText("after", formatUpgradeRehearsalHelp(style))
+    .action((options: UpgradeRehearsalCommandOptions) => {
       onCommand?.(
         validatedCommand({
           baselineFingerprint: options.fromFingerprint,
@@ -519,15 +519,15 @@ function createCliProgram(
           installationPath: options.installation ?? "crewhelm.installation.json",
           installationProvided: options.installation !== undefined,
           json: options.json === true,
-          kind: "upgrade-smoke",
-          origin: parseOrigin(options.endpoint, "upgrade-smoke"),
+          kind: "upgrade-rehearsal",
+          origin: parseOrigin(options.endpoint, "upgrade-rehearsal"),
           receiptPath: options.receipt,
           timeoutMs: Number(options.timeoutMs),
         }),
       );
     });
 
-  smoke
+  rehearse
     .command("integration")
     .summary("rehearse one standing Gmail draft action")
     .description(
@@ -542,8 +542,8 @@ function createCliProgram(
     .option("--run-timeout-ms <milliseconds>", "maximum trigger and Agent run duration", "180000")
     .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")
     .option("--json", "write one machine-readable JSON result")
-    .addHelpText("after", formatStandingIntegrationSmokeHelp(style))
-    .action((options: StandingIntegrationSmokeCommandOptions) => {
+    .addHelpText("after", formatStandingIntegrationRehearsalHelp(style))
+    .action((options: StandingIntegrationRehearsalCommandOptions) => {
       onCommand?.(
         validatedCommand({
           browser: parseBrowserMode(options.browser),
@@ -552,8 +552,8 @@ function createCliProgram(
           installationPath: options.installation ?? "crewhelm.installation.json",
           installationProvided: options.installation !== undefined,
           json: options.json === true,
-          kind: "standing-integration-smoke",
-          origin: parseOrigin(options.endpoint, "standing-integration-smoke"),
+          kind: "standing-integration-rehearsal",
+          origin: parseOrigin(options.endpoint, "standing-integration-rehearsal"),
           runTimeoutMs: Number(options.runTimeoutMs),
           timeoutMs: Number(options.timeoutMs),
           trigger: options.trigger,
@@ -561,24 +561,24 @@ function createCliProgram(
       );
     });
 
-  smoke
+  rehearse
     .command("installation")
     .summary("rehearse one isolated fresh installation")
     .description("Create, exercise, and exactly remove one fresh Crewhelm installation.")
     .requiredOption("--endpoint <origin>", "HTTPS origin for the rehearsal Worker")
-    .requiredOption("--worker-name <name>", "unused crewhelm-smoke-* Worker name")
-    .requiredOption("--database-name <name>", "unused crewhelm-smoke-* D1 database name")
+    .requiredOption("--worker-name <name>", "unused crewhelm-rehearsal-* Worker name")
+    .requiredOption("--database-name <name>", "unused crewhelm-rehearsal-* D1 database name")
     .requiredOption("--confirm-production", "confirm Cloudflare resource creation and deletion")
     .option("--browser <browser>", "system, codex, or none", "system")
     .option("--account-id <id>", "Cloudflare account identifier")
     .option("--ai-budget-usd <dollars>", "create an AI Gateway with this daily hard limit")
-    .option("--receipt <path>", "recovery receipt path", "crewhelm.smoke-receipt.json")
+    .option("--receipt <path>", "recovery receipt path")
     .option("--cleanup-only", "retry exact cleanup from an existing receipt")
     .option("--run-timeout-ms <milliseconds>", "maximum Agent run duration", "120000")
     .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")
     .option("--json", "write one machine-readable JSON result")
-    .addHelpText("after", formatInstallationSmokeHelp(style))
-    .action((options: InstallationSmokeCommandOptions) => {
+    .addHelpText("after", formatInstallationRehearsalHelp(style))
+    .action((options: InstallationRehearsalCommandOptions) => {
       onCommand?.(
         validatedCommand({
           accountId: options.accountId,
@@ -589,9 +589,10 @@ function createCliProgram(
           confirmProduction: options.confirmProduction,
           databaseName: options.databaseName,
           json: options.json === true,
-          kind: "installation-smoke",
-          origin: parseOrigin(options.endpoint, "installation-smoke"),
-          receiptPath: options.receipt,
+          kind: "installation-rehearsal",
+          origin: parseOrigin(options.endpoint, "installation-rehearsal"),
+          // Keep the established path so an interrupted pre-rename cleanup remains discoverable.
+          receiptPath: options.receipt ?? "crewhelm.smoke-receipt.json",
           runTimeoutMs: Number(options.runTimeoutMs),
           timeoutMs: Number(options.timeoutMs),
           workerName: options.workerName,
@@ -659,47 +660,47 @@ export function parseCli(
   }
 
   const helpRequested = hasFlag(arguments_, "--help") || arguments_.includes("-h");
-  const agentSmoke = arguments_[0] === "smoke" && arguments_[1] === "agent";
-  const integrationSmoke = arguments_[0] === "smoke" && arguments_[1] === "integration";
-  const installationSmoke = arguments_[0] === "smoke" && arguments_[1] === "installation";
-  const upgradeSmoke = arguments_[0] === "smoke" && arguments_[1] === "upgrade";
+  const agentRehearsal = arguments_[0] === "rehearse" && arguments_[1] === "agent";
+  const integrationRehearsal = arguments_[0] === "rehearse" && arguments_[1] === "integration";
+  const installationRehearsal = arguments_[0] === "rehearse" && arguments_[1] === "installation";
+  const upgradeRehearsal = arguments_[0] === "rehearse" && arguments_[1] === "upgrade";
 
   if (
     !helpRequested &&
-    (agentSmoke || integrationSmoke || installationSmoke || upgradeSmoke) &&
+    (agentRehearsal || integrationRehearsal || installationRehearsal || upgradeRehearsal) &&
     !hasFlag(arguments_, "--confirm-production")
   ) {
     throw new CliUsageError(
       `${
-        integrationSmoke
-          ? "smoke integration"
-          : installationSmoke
-            ? "smoke installation"
-            : upgradeSmoke
-              ? "smoke upgrade"
-              : "smoke agent"
+        integrationRehearsal
+          ? "rehearse integration"
+          : installationRehearsal
+            ? "rehearse installation"
+            : upgradeRehearsal
+              ? "rehearse upgrade"
+              : "rehearse agent"
       } requires --confirm-production.`,
     );
   }
 
-  if (!helpRequested && installationSmoke && !hasFlag(arguments_, "--endpoint")) {
-    throw new CliUsageError("installation-smoke requires --endpoint.");
+  if (!helpRequested && installationRehearsal && !hasFlag(arguments_, "--endpoint")) {
+    throw new CliUsageError("rehearse installation requires --endpoint.");
   }
 
   if (
     !helpRequested &&
-    (arguments_[0] === "doctor" || agentSmoke || integrationSmoke || upgradeSmoke) &&
+    (arguments_[0] === "doctor" || agentRehearsal || integrationRehearsal || upgradeRehearsal) &&
     !hasFlag(arguments_, "--endpoint") &&
     !hasFlag(arguments_, "--installation")
   ) {
     throw new CliUsageError(
       `${
-        agentSmoke
-          ? "agent-smoke"
-          : integrationSmoke
-            ? "standing-integration-smoke"
-            : upgradeSmoke
-              ? "upgrade-smoke"
+        agentRehearsal
+          ? "rehearse agent"
+          : integrationRehearsal
+            ? "rehearse integration"
+            : upgradeRehearsal
+              ? "rehearse upgrade"
               : "doctor"
       } requires --endpoint or --installation.`,
     );

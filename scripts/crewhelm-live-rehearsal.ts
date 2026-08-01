@@ -25,7 +25,7 @@ import { openInDefaultBrowser } from "../apps/cli/src/interactive.js";
 import {
   readRehearsalCredential,
   writeRehearsalCredential,
-} from "../apps/cli/src/rehearsal-credential.js";
+} from "../apps/cli/src/rehearsal/credential.js";
 import {
   authorizeRefreshableOwnerCredential,
   initializeResponseSchema,
@@ -38,9 +38,15 @@ import {
   type TemporaryOwnerMcpSession,
 } from "../apps/cli/src/temporary-owner-session.js";
 import { CREWHELM_CLI_VERSION } from "../apps/cli/src/version.js";
-import { inspectSandboxRun, runSandboxSmoke } from "../apps/cli/src/sandbox-smoke.js";
-import { recoverWorkflowSmoke, runWorkflowSmoke } from "../apps/cli/src/workflow-smoke.js";
-import { runWebResearchSmoke } from "../apps/cli/src/web-research-smoke.js";
+import {
+  inspectSandboxRun,
+  runSandboxRehearsal,
+} from "../apps/cli/src/rehearsal/journeys/sandbox.js";
+import { runWebResearchRehearsal } from "../apps/cli/src/rehearsal/journeys/web-research.js";
+import {
+  recoverWorkflowRehearsal,
+  runWorkflowRehearsal,
+} from "../apps/cli/src/rehearsal/journeys/workflow.js";
 
 const DEFAULT_INSTALLATION = "crewhelm.testing.installation.json";
 const DEFAULT_CREDENTIAL = ".crewhelm-rehearsal-credential.json";
@@ -78,10 +84,10 @@ export async function resolveRehearsalTarget(installationPath: string): Promise<
   const installation = await readInstallation(installationPath);
   if (!installation) throw new Error("Rehearsal installation metadata does not exist.");
   if (installation.workerName !== "crewhelm-testing") {
-    throw new Error("Feature rehearsal is pinned to the crewhelm-testing Worker.");
+    throw new Error("Live rehearsal is pinned to the crewhelm-testing Worker.");
   }
   if (installation.origin !== STANDARD_REHEARSAL_ORIGIN) {
-    throw new Error("Feature rehearsal is pinned to the canonical crewhelm-testing origin.");
+    throw new Error("Live rehearsal is pinned to the canonical crewhelm-testing origin.");
   }
   const release: unknown = JSON.parse(await readFile("apps/cli/dist/release.json", "utf8"));
   const workerFingerprint =
@@ -130,7 +136,7 @@ async function authorize(options: {
         "initialize",
         {
           capabilities: {},
-          clientInfo: { name: "crewhelm-feature-rehearsal", version: CREWHELM_CLI_VERSION },
+          clientInfo: { name: "crewhelm-live-rehearsal", version: CREWHELM_CLI_VERSION },
           protocolVersion: MCP_PROTOCOL_VERSION,
         },
         initializeResponseSchema,
@@ -159,7 +165,7 @@ async function workflow(options: {
 }): Promise<unknown> {
   const rehearsalTarget = await resolveRehearsalTarget(options.installationPath);
   const credential = await readRehearsalCredential(options.credentialPath);
-  return runWorkflowSmoke(
+  return runWorkflowRehearsal(
     {
       credential,
       origin: rehearsalTarget.origin,
@@ -179,7 +185,7 @@ async function sandbox(options: {
 }): Promise<unknown> {
   const rehearsalTarget = await resolveRehearsalTarget(options.installationPath);
   const credential = await readRehearsalCredential(options.credentialPath);
-  return runSandboxSmoke(
+  return runSandboxRehearsal(
     {
       credential,
       origin: rehearsalTarget.origin,
@@ -199,7 +205,7 @@ async function webResearch(options: {
 }): Promise<unknown> {
   const rehearsalTarget = await resolveRehearsalTarget(options.installationPath);
   const credential = await readRehearsalCredential(options.credentialPath);
-  return runWebResearchSmoke(
+  return runWebResearchRehearsal(
     {
       credential,
       origin: rehearsalTarget.origin,
@@ -241,7 +247,7 @@ async function recover(options: {
 }): Promise<unknown> {
   const rehearsalTarget = await resolveRehearsalTarget(options.installationPath);
   const credential = await readRehearsalCredential(options.credentialPath);
-  return recoverWorkflowSmoke(
+  return recoverWorkflowRehearsal(
     {
       agentId: options.agentId,
       credential,
@@ -348,7 +354,7 @@ async function schedules(options: {
         "initialize",
         {
           capabilities: {},
-          clientInfo: { name: "crewhelm-feature-rehearsal", version: CREWHELM_CLI_VERSION },
+          clientInfo: { name: "crewhelm-live-rehearsal", version: CREWHELM_CLI_VERSION },
           protocolVersion: MCP_PROTOCOL_VERSION,
         },
         initializeResponseSchema,
@@ -654,7 +660,7 @@ async function schedules(options: {
   };
 }
 
-export async function runFeatureRehearsal(arguments_: readonly string[]): Promise<number> {
+export async function runLiveRehearsal(arguments_: readonly string[]): Promise<number> {
   const [action, ...rest] = arguments_;
   if (
     action !== "authorize" &&
@@ -666,7 +672,7 @@ export async function runFeatureRehearsal(arguments_: readonly string[]): Promis
     action !== "workflow"
   ) {
     process.stderr.write(
-      "Usage: crewhelm-feature-rehearsal.ts <authorize|inspect-sandbox|recover|sandbox|schedules|web-research|workflow> [options]\n",
+      "Usage: crewhelm-live-rehearsal.ts <authorize|inspect-sandbox|recover|sandbox|schedules|web-research|workflow> [options]\n",
     );
     return 2;
   }
@@ -754,14 +760,14 @@ export async function runFeatureRehearsal(arguments_: readonly string[]): Promis
 }
 
 if (import.meta.url === new URL(process.argv[1] ?? "", "file:").href) {
-  runFeatureRehearsal(process.argv.slice(2)).then(
+  runLiveRehearsal(process.argv.slice(2)).then(
     (code) => {
       process.exitCode = code;
       return undefined;
     },
     (error: unknown) => {
       process.stderr.write(
-        `Feature rehearsal failed: ${error instanceof Error ? error.message : "unknown error"}\n`,
+        `Live rehearsal failed: ${error instanceof Error ? error.message : "unknown error"}\n`,
       );
       process.exitCode = 1;
       return undefined;

@@ -21,27 +21,26 @@ import {
   type BootstrapReport,
   type ExistingInstallationCoordinates,
   type InstallationInfrastructureInventory,
-} from "./bootstrap.js";
-import { doctorReportSchema, type DoctorReport } from "./doctor.js";
+} from "../../bootstrap.js";
+import { doctorReportSchema, type DoctorReport } from "../../doctor.js";
 import {
   installationSchema,
   readInstallation,
   writeInstallation,
   type Installation,
-} from "./installation.js";
+} from "../../installation.js";
 import {
   initializeResponseSchema,
   MCP_PROTOCOL_VERSION,
-  parseMcpToolResult,
   runTemporaryOwnerSession,
   TemporaryOwnerSessionError,
-  toolCallResponseSchema,
   type TemporaryOwnerMcpSession,
   type TemporaryOwnerSessionDependencies,
-} from "./temporary-owner-session.js";
-import { CREWHELM_CLI_VERSION } from "./version.js";
+} from "../../temporary-owner-session.js";
+import { CREWHELM_CLI_VERSION } from "../../version.js";
+import { callRehearsalTool } from "../mcp.js";
 
-export const UPGRADE_SMOKE_SCOPE = "crewhelm:view";
+export const UPGRADE_REHEARSAL_SCOPE = "crewhelm:view";
 const MAXIMUM_RECEIPT_BYTES = 16 * 1_024;
 const MAXIMUM_FIXTURE_AGENTS = 4;
 const MAXIMUM_FIXTURE_AGENT_REVISIONS = 8;
@@ -125,7 +124,7 @@ const upgradeCoordinatesSchema = installationSchema.omit({
 
 const upgradeReceiptBaseSchema = z.strictObject({
   schemaVersion: z.literal(1),
-  kind: z.literal("crewhelm-upgrade-smoke"),
+  kind: z.union([z.literal("crewhelm-upgrade-rehearsal"), z.literal("crewhelm-upgrade-smoke")]),
   baselineFingerprint: deploymentFingerprintSchema,
   coordinates: upgradeCoordinatesSchema,
   currentFingerprint: deploymentFingerprintSchema,
@@ -151,7 +150,7 @@ export const upgradeReceiptSchema = z.discriminatedUnion("phase", [
   upgradeCompletedReceiptSchema,
 ]);
 
-export const upgradeSmokeOptionsSchema = z.strictObject({
+export const upgradeRehearsalOptionsSchema = z.strictObject({
   authorizationTimeoutMs: z
     .number()
     .int()
@@ -165,7 +164,7 @@ export const upgradeSmokeOptionsSchema = z.strictObject({
   timeoutMs: z.number().int().min(100).max(30_000),
 });
 
-export const upgradeSmokeReportSchema = z.strictObject({
+export const upgradeRehearsalReportSchema = z.strictObject({
   schemaVersion: z.literal(1),
   ok: z.literal(true),
   baselineFingerprint: deploymentFingerprintSchema,
@@ -181,7 +180,7 @@ export const upgradeSmokeReportSchema = z.strictObject({
   recovery: z.enum(["completed_receipt", "fresh", "resumed"]),
 });
 
-export const upgradeSmokeFailureSchema = z.strictObject({
+export const upgradeRehearsalFailureSchema = z.strictObject({
   schemaVersion: z.literal(1),
   ok: z.literal(false),
   receiptPath: z.string().min(1).max(4_096),
@@ -202,18 +201,18 @@ export const upgradeSmokeFailureSchema = z.strictObject({
 });
 
 export type UpgradeOwnerStateEvidence = z.infer<typeof upgradeOwnerStateEvidenceSchema>;
-export type UpgradeSmokeOptions = z.infer<typeof upgradeSmokeOptionsSchema>;
-export type UpgradeSmokeReport = z.infer<typeof upgradeSmokeReportSchema>;
+export type UpgradeRehearsalOptions = z.infer<typeof upgradeRehearsalOptionsSchema>;
+export type UpgradeRehearsalReport = z.infer<typeof upgradeRehearsalReportSchema>;
 type UpgradeReceipt = z.infer<typeof upgradeReceiptSchema>;
 type UpgradeStateEvidence = z.infer<typeof upgradeStateEvidenceSchema>;
-type UpgradeSmokeFailure = z.infer<typeof upgradeSmokeFailureSchema>;
+type UpgradeRehearsalFailure = z.infer<typeof upgradeRehearsalFailureSchema>;
 
-export class UpgradeSmokeError extends Error {
-  override readonly name = "UpgradeSmokeError";
+export class UpgradeRehearsalError extends Error {
+  override readonly name = "UpgradeRehearsalError";
 
   constructor(
-    readonly code: UpgradeSmokeFailure["code"],
-    readonly recovery: UpgradeSmokeFailure["recovery"],
+    readonly code: UpgradeRehearsalFailure["code"],
+    readonly recovery: UpgradeRehearsalFailure["recovery"],
     readonly publicMessage: string,
     message: string,
   ) {
@@ -221,8 +220,8 @@ export class UpgradeSmokeError extends Error {
   }
 }
 
-function invalidInput(message: string): UpgradeSmokeError {
-  return new UpgradeSmokeError(
+function invalidInput(message: string): UpgradeRehearsalError {
+  return new UpgradeRehearsalError(
     "invalid_input",
     "fix_input",
     "Upgrade rehearsal inputs are invalid or incomplete.",
@@ -230,18 +229,18 @@ function invalidInput(message: string): UpgradeSmokeError {
   );
 }
 
-export interface UpgradeSmokeProgress {
+export interface UpgradeRehearsalProgress {
   message: string;
   stage: "baseline" | "deployment" | "retry" | "verification";
 }
 
-export interface UpgradeSmokeDependencies extends TemporaryOwnerSessionDependencies {
+export interface UpgradeRehearsalDependencies extends TemporaryOwnerSessionDependencies {
   bootstrap: (
     options: BootstrapOptions,
     expectedDeploymentFingerprint: string,
   ) => Promise<BootstrapReport>;
   captureOwnerState?: (
-    options: Pick<UpgradeSmokeOptions, "authorizationTimeoutMs" | "origin" | "timeoutMs">,
+    options: Pick<UpgradeRehearsalOptions, "authorizationTimeoutMs" | "origin" | "timeoutMs">,
   ) => Promise<UpgradeOwnerStateEvidence>;
   diagnose: (expectedFingerprint: string) => Promise<DoctorReport>;
   inspectInfrastructure: (
@@ -250,7 +249,7 @@ export interface UpgradeSmokeDependencies extends TemporaryOwnerSessionDependenc
   now?: () => Date;
   readCurrentFingerprint: () => Promise<string>;
   readCurrentMigrations: () => Promise<readonly string[]>;
-  reportUpgradeProgress?: (progress: UpgradeSmokeProgress) => void;
+  reportUpgradeProgress?: (progress: UpgradeRehearsalProgress) => void;
 }
 
 function digest(value: unknown): string {
@@ -258,8 +257,8 @@ function digest(value: unknown): string {
 }
 
 function reportProgress(
-  dependencies: UpgradeSmokeDependencies,
-  stage: UpgradeSmokeProgress["stage"],
+  dependencies: UpgradeRehearsalDependencies,
+  stage: UpgradeRehearsalProgress["stage"],
   message: string,
 ): void {
   dependencies.reportUpgradeProgress?.({ message, stage });
@@ -315,21 +314,6 @@ function infrastructureEvidence(
   });
 }
 
-async function callTool<T>(
-  session: TemporaryOwnerMcpSession,
-  name: string,
-  arguments_: unknown,
-  schema: z.ZodType<T>,
-  invalidMessage: string,
-): Promise<T> {
-  const response = await session.call(
-    "tools/call",
-    { arguments: arguments_, name },
-    toolCallResponseSchema,
-  );
-  return parseMcpToolResult(response, schema, invalidMessage);
-}
-
 export async function readUpgradeOwnerState(
   session: TemporaryOwnerMcpSession,
 ): Promise<UpgradeOwnerStateEvidence> {
@@ -342,28 +326,28 @@ export async function readUpgradeOwnerState(
     },
     initializeResponseSchema,
   );
-  const statusResult = await callTool(
+  const statusResult = await callRehearsalTool(
     session,
     "crewhelm_status",
     {},
     upgradeStatusResultSchema,
     "Fleet status returned an invalid payload.",
   );
-  const agentResult = await callTool(
+  const agentResult = await callRehearsalTool(
     session,
     "crewhelm_list_agents",
     { limit: MAXIMUM_FIXTURE_AGENTS },
     listAgentsResultSchema,
     "Agent fixture inventory returned an invalid payload.",
   );
-  const connectionResult = await callTool(
+  const connectionResult = await callRehearsalTool(
     session,
     "crewhelm_list_connections",
     { limit: MAXIMUM_FIXTURE_CONNECTIONS },
     listConnectionsResultSchema,
     "Connection fixture inventory returned an invalid payload.",
   );
-  const configurationResult = await callTool(
+  const configurationResult = await callRehearsalTool(
     session,
     "crewhelm_get_config",
     { target: { kind: "fleet" } },
@@ -397,14 +381,14 @@ export async function readUpgradeOwnerState(
   const schedules: unknown[] = [];
 
   for (const agent of agentResult.agents) {
-    const exactAgent = await callTool(
+    const exactAgent = await callRehearsalTool(
       session,
       "crewhelm_get_agent",
       { id: agent.id },
       getAgentResultSchema,
       "Exact Agent fixture returned an invalid payload.",
     );
-    const revisions = await callTool(
+    const revisions = await callRehearsalTool(
       session,
       "crewhelm_list_agent_revisions",
       { id: agent.id, limit: MAXIMUM_FIXTURE_AGENT_REVISIONS },
@@ -444,7 +428,7 @@ export async function readUpgradeOwnerState(
         );
       }
 
-      const exactRevision = await callTool(
+      const exactRevision = await callRehearsalTool(
         session,
         "crewhelm_get_agent_revision",
         { id: agent.id, revision: revision.revision },
@@ -474,7 +458,7 @@ export async function readUpgradeOwnerState(
       agentRevisions.push(exactRevision.agent);
     }
 
-    const scheduleResult = await callTool(
+    const scheduleResult = await callRehearsalTool(
       session,
       "crewhelm_get_agent_schedule",
       { agentId: agent.id },
@@ -541,7 +525,7 @@ export async function readUpgradeOwnerState(
 }
 
 export async function captureUpgradeOwnerState(
-  options: Pick<UpgradeSmokeOptions, "authorizationTimeoutMs" | "origin" | "timeoutMs">,
+  options: Pick<UpgradeRehearsalOptions, "authorizationTimeoutMs" | "origin" | "timeoutMs">,
   dependencies: TemporaryOwnerSessionDependencies,
 ): Promise<UpgradeOwnerStateEvidence> {
   const result = await runTemporaryOwnerSession(
@@ -551,7 +535,7 @@ export async function captureUpgradeOwnerState(
         : { authorizationTimeoutMs: options.authorizationTimeoutMs }),
       clientName: "Crewhelm supported upgrade rehearsal",
       origin: options.origin,
-      scope: UPGRADE_SMOKE_SCOPE,
+      scope: UPGRADE_REHEARSAL_SCOPE,
       timeoutMs: options.timeoutMs,
     },
     dependencies,
@@ -565,7 +549,7 @@ export async function captureUpgradeOwnerState(
     result.revocation.status !== "revoked"
   ) {
     if (result.revocation.status === "failed") {
-      throw new UpgradeSmokeError(
+      throw new UpgradeRehearsalError(
         "token_revocation_unconfirmed",
         "revoke_temporary_access",
         "Temporary owner-token revocation was not confirmed. Revoke that access before retrying.",
@@ -635,7 +619,7 @@ async function writeReceipt(path: string, receipt: UpgradeReceipt): Promise<void
 
 function assertMatchingReceipt(
   receipt: UpgradeReceipt,
-  options: UpgradeSmokeOptions,
+  options: UpgradeRehearsalOptions,
   coordinates: z.infer<typeof upgradeCoordinatesSchema>,
   currentFingerprint: string,
 ): void {
@@ -704,7 +688,7 @@ function assertBaselineMigrationsSupported(
     expectedMigrations.length < before.count ||
     digest(expectedMigrations.slice(0, before.count)) !== before.digest
   ) {
-    throw new UpgradeSmokeError(
+    throw new UpgradeRehearsalError(
       "unsupported_upgrade",
       "use_supported_upgrade",
       "The pinned installation is not compatible with this package. Use a supported upgrade path.",
@@ -733,7 +717,7 @@ function stateEvidence(
 }
 
 function bootstrapOptions(
-  options: UpgradeSmokeOptions,
+  options: UpgradeRehearsalOptions,
   coordinates: z.infer<typeof upgradeCoordinatesSchema>,
 ): BootstrapOptions {
   return {
@@ -752,9 +736,9 @@ function bootstrapOptions(
 function completedReport(
   receipt: z.infer<typeof upgradeCompletedReceiptSchema>,
   receiptPath: string,
-  recovery: UpgradeSmokeReport["recovery"],
-): UpgradeSmokeReport {
-  return upgradeSmokeReportSchema.parse({
+  recovery: UpgradeRehearsalReport["recovery"],
+): UpgradeRehearsalReport {
+  return upgradeRehearsalReportSchema.parse({
     schemaVersion: 1,
     ok: true,
     baselineFingerprint: receipt.baselineFingerprint,
@@ -768,18 +752,18 @@ function completedReport(
   });
 }
 
-export function createUpgradeSmokeFailure(receiptPath: string, error?: unknown) {
+export function createUpgradeRehearsalFailure(receiptPath: string, error?: unknown) {
   const failure =
-    error instanceof UpgradeSmokeError
+    error instanceof UpgradeRehearsalError
       ? error
-      : new UpgradeSmokeError(
+      : new UpgradeRehearsalError(
           "rehearsal_failed",
           "retry_same_rehearsal",
           "Upgrade rehearsal did not complete. Preserve the fixture and retry with the same receipt.",
           "Upgrade rehearsal failed.",
         );
 
-  return upgradeSmokeFailureSchema.parse({
+  return upgradeRehearsalFailureSchema.parse({
     schemaVersion: 1,
     ok: false,
     code: failure.code,
@@ -790,11 +774,11 @@ export function createUpgradeSmokeFailure(receiptPath: string, error?: unknown) 
   });
 }
 
-export async function runUpgradeSmoke(
-  input: UpgradeSmokeOptions,
-  dependencies: UpgradeSmokeDependencies,
-): Promise<UpgradeSmokeReport> {
-  const options = upgradeSmokeOptionsSchema.parse(input);
+export async function runUpgradeRehearsal(
+  input: UpgradeRehearsalOptions,
+  dependencies: UpgradeRehearsalDependencies,
+): Promise<UpgradeRehearsalReport> {
+  const options = upgradeRehearsalOptionsSchema.parse(input);
   let installation: Installation | undefined;
 
   try {
@@ -871,7 +855,7 @@ export async function runUpgradeSmoke(
     before = stateEvidence(beforeOwner, beforeInfrastructure);
     await writeReceipt(options.receiptPath, {
       schemaVersion: 1,
-      kind: "crewhelm-upgrade-smoke",
+      kind: "crewhelm-upgrade-rehearsal",
       baselineFingerprint: options.baselineFingerprint,
       coordinates,
       currentFingerprint,
@@ -955,7 +939,7 @@ export async function runUpgradeSmoke(
 
   const completed = upgradeCompletedReceiptSchema.parse({
     schemaVersion: 1,
-    kind: "crewhelm-upgrade-smoke",
+    kind: "crewhelm-upgrade-rehearsal",
     baselineFingerprint: options.baselineFingerprint,
     coordinates,
     currentFingerprint,
