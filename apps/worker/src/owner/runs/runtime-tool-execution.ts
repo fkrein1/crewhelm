@@ -36,6 +36,7 @@ const INVALID_RUNTIME_TOOL_EXECUTION = {
   ok: false,
 } as const;
 const MAXIMUM_RUNTIME_TOOL_EXECUTION_MS = 30_000;
+const RUNTIME_TOOL_COMPLETION_GRACE_MS = 5_000;
 const RUNTIME_TOOL_CLEANUP_GRACE_MS = 30_000;
 const RUNTIME_TOOL_CLEANUP_RETRY_MS = 30_000;
 const RUNTIME_TOOL_CLEANUP_TIMEOUT_MS = 5_000;
@@ -130,7 +131,10 @@ export class RuntimeToolExecutions {
       nonce,
     });
     const permitDigest = await digestPermit(permit, "reserved");
-    const executionDeadline = evaluatedAt + validated.maxDurationMs;
+    // The adapter enforces maxDurationMs around stream open/read. This later deadline is only for
+    // durable completion reporting and never extends the permit's execution or dispatch limits.
+    const completionDeadline =
+      evaluatedAt + validated.maxDurationMs + RUNTIME_TOOL_COMPLETION_GRACE_MS;
     const result = this.#database.transaction((transaction) => {
       const current = this.#validate(transaction, request.data, evaluatedAt);
 
@@ -166,8 +170,8 @@ export class RuntimeToolExecutions {
         .insert(runtimeToolExecutions)
         .values({
           actionDigest,
-          expiresAt: executionDeadline,
-          cleanupRetryAt: executionDeadline + RUNTIME_TOOL_CLEANUP_GRACE_MS,
+          expiresAt: completionDeadline,
+          cleanupRetryAt: completionDeadline + RUNTIME_TOOL_CLEANUP_GRACE_MS,
           inputDigest: request.data.action.codeDigest,
           nonceDigest: permitDigest,
           runId: request.data.runId,
@@ -197,7 +201,7 @@ export class RuntimeToolExecutions {
         runId: request.data.runId,
         toolCallId: request.data.action.toolCallId,
       });
-      await this.#scheduleReconciliation(executionDeadline);
+      await this.#scheduleReconciliation(completionDeadline);
     }
 
     return result;
@@ -233,6 +237,7 @@ export class RuntimeToolExecutions {
         row.nonceDigest !== reservedDigest ||
         row.actionDigest !== permit.actionDigest ||
         row.runId !== permit.action.runId ||
+        row.startedAt + permit.constraints.maxDurationMs <= currentTime ||
         row.expiresAt <= currentTime
       ) {
         return INVALID_RUNTIME_TOOL_EXECUTION;
