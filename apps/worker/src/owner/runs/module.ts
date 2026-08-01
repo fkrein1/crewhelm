@@ -64,6 +64,7 @@ import type { Briefs } from "../briefs/index.js";
 import type { Skills } from "../skills/index.js";
 import {
   agentRevisions,
+  agentScheduleRevisions,
   agents,
   agentInboxItems,
   auditEvents,
@@ -1089,12 +1090,21 @@ export class RunAdmissions {
         completedAt: projectedCompletedAt,
         createdAt: runAdmissions.createdAt,
         runId: runAdmissions.runId,
+        scheduleId: agentScheduleRevisions.scheduleId,
+        scheduleRevision: runAdmissions.scheduleRevision,
         startedAt: runAdmissions.redeemedAt,
         status: projectedStatus,
         trigger: runAdmissions.trigger,
       })
       .from(runAdmissions)
       .leftJoin(agentInboxItems, eq(agentInboxItems.runId, runAdmissions.runId))
+      .leftJoin(
+        agentScheduleRevisions,
+        and(
+          eq(agentScheduleRevisions.agentId, runAdmissions.agentId),
+          eq(agentScheduleRevisions.revision, runAdmissions.scheduleRevision),
+        ),
+      )
       .where(
         and(
           filters,
@@ -1122,6 +1132,9 @@ export class RunAdmissions {
           : { completedAt: new Date(row.completedAt).toISOString() }),
         createdAt: new Date(row.createdAt).toISOString(),
         runId: row.runId,
+        ...(row.scheduleId === null || row.scheduleRevision === null
+          ? {}
+          : { schedule: { id: row.scheduleId, revision: row.scheduleRevision } }),
         ...(row.startedAt === null ? {} : { startedAt: new Date(row.startedAt).toISOString() }),
         status: row.status,
         trigger: row.trigger,

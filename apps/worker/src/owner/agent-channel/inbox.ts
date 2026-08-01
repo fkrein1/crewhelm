@@ -24,6 +24,7 @@ import {
   agentInboxAcknowledgements,
   agentInboxItems,
   agentRevisions,
+  agentScheduleRevisions,
   auditEvents,
   runAdmissions,
   toolExecutions,
@@ -53,8 +54,8 @@ function preview(value: string): string {
   return normalized.slice(0, MAXIMUM_AGENT_INBOX_PREVIEW_CHARACTERS);
 }
 
-function deferredItemId(agentId: string): string {
-  return `inbox_deferred_${agentId.slice("agent_".length)}`;
+function deferredItemId(scheduleId: string): string {
+  return `inbox_deferred_${scheduleId.slice("schedule_".length)}`;
 }
 
 function unreachable(_value: never): never {
@@ -535,6 +536,7 @@ export class AgentInbox {
       configuration: {
         agentRevision: item.agentRevision,
         fleetRevision: item.fleetRevision,
+        scheduleId: item.scheduleId,
         scheduleRevision: item.scheduleRevision,
       },
       itemId: item.itemId,
@@ -583,6 +585,24 @@ export class AgentInbox {
       (admission.status !== "redeemed" &&
         !(request.data.event.runStatus === "cancelled" && admission.cancelledAt !== null))
     ) {
+      return this.#deniedProjection();
+    }
+
+    const schedule =
+      admission.scheduleRevision === null
+        ? null
+        : this.#database
+            .select({ scheduleId: agentScheduleRevisions.scheduleId })
+            .from(agentScheduleRevisions)
+            .where(
+              and(
+                eq(agentScheduleRevisions.agentId, admission.agentId),
+                eq(agentScheduleRevisions.revision, admission.scheduleRevision),
+              ),
+            )
+            .get();
+
+    if (admission.scheduleRevision !== null && schedule === undefined) {
       return this.#deniedProjection();
     }
 
@@ -648,6 +668,7 @@ export class AgentInbox {
       retryAt: null,
       runId: admission.runId,
       runStatus: event.runStatus,
+      scheduleId: schedule?.scheduleId ?? null,
       scheduleRevision: admission.scheduleRevision,
       scheduledAt: null,
       trigger: admission.trigger,
@@ -722,11 +743,12 @@ export class AgentInbox {
     prompt: string;
     reason: AgentInboxDeferredReason;
     retryAt: number | null;
+    scheduleId: string;
     scheduleRevision: number;
     scheduledAt: number;
   }): void {
     this.#cleanup(Date.now());
-    const itemId = deferredItemId(input.agentId);
+    const itemId = deferredItemId(input.scheduleId);
     const existing = this.#database
       .select({ itemId: agentInboxItems.itemId })
       .from(agentInboxItems)
@@ -747,6 +769,7 @@ export class AgentInbox {
       retryAt: input.retryAt,
       runId: null,
       runStatus: null,
+      scheduleId: input.scheduleId,
       scheduleRevision: input.scheduleRevision,
       scheduledAt: input.scheduledAt,
       trigger: null,
@@ -781,8 +804,8 @@ export class AgentInbox {
     this.#pruneCapacity();
   }
 
-  clearDeferral(agentId: string): void {
-    const itemId = deferredItemId(agentId);
+  clearDeferral(scheduleId: string): void {
+    const itemId = deferredItemId(scheduleId);
 
     this.#database.transaction((transaction) => {
       transaction

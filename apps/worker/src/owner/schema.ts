@@ -365,9 +365,11 @@ export const agentUpdates = sqliteTable(
 export const agentScheduleRevisions = sqliteTable(
   "agent_schedule_revisions",
   {
+    scheduleId: text("schedule_id").notNull(),
     agentId: text("agent_id").notNull(),
     revision: integer("revision").notNull(),
     agentRevision: integer("agent_revision").notNull(),
+    name: text("name").notNull(),
     configuration: text("configuration", {
       mode: "json",
     }).$type<AgentScheduleConfiguration | null>(),
@@ -375,12 +377,18 @@ export const agentScheduleRevisions = sqliteTable(
   },
   (table) => [
     primaryKey({ columns: [table.agentId, table.revision] }),
+    uniqueIndex("agent_schedule_revisions_schedule_revision").on(
+      table.scheduleId,
+      table.agentId,
+      table.revision,
+    ),
     foreignKey({
       columns: [table.agentId, table.agentRevision],
       foreignColumns: [agentRevisions.agentId, agentRevisions.revision],
     }).onDelete("restrict"),
     check("agent_schedule_revisions_revision_positive", sql`${table.revision} > 0`),
     check("agent_schedule_revisions_agent_revision_positive", sql`${table.agentRevision} > 0`),
+    check("agent_schedule_revisions_name_length", sql`length(${table.name}) BETWEEN 1 AND 80`),
     check(
       "agent_schedule_revisions_configuration_json",
       sql`${table.configuration} IS NULL OR json_valid(${table.configuration})`,
@@ -392,7 +400,8 @@ export const agentScheduleRevisions = sqliteTable(
 export const agentSchedules = sqliteTable(
   "agent_schedules",
   {
-    agentId: text("agent_id").primaryKey(),
+    scheduleId: text("schedule_id").primaryKey(),
+    agentId: text("agent_id").notNull(),
     currentRevision: integer("current_revision").notNull(),
     status: text("status", { enum: ["active", "paused"] }).notNull(),
     nextRunAt: integer("next_run_at"),
@@ -406,9 +415,14 @@ export const agentSchedules = sqliteTable(
       foreignColumns: [agents.agentId],
     }).onDelete("restrict"),
     foreignKey({
-      columns: [table.agentId, table.currentRevision],
-      foreignColumns: [agentScheduleRevisions.agentId, agentScheduleRevisions.revision],
+      columns: [table.scheduleId, table.agentId, table.currentRevision],
+      foreignColumns: [
+        agentScheduleRevisions.scheduleId,
+        agentScheduleRevisions.agentId,
+        agentScheduleRevisions.revision,
+      ],
     }).onDelete("restrict"),
+    index("agent_schedules_agent").on(table.agentId),
     index("agent_schedules_due")
       .on(table.nextRunAt)
       .where(sql`${table.status} = 'active'`),
@@ -1309,6 +1323,7 @@ export const agentInboxItems = sqliteTable(
     agentId: text("agent_id").notNull(),
     agentRevision: integer("agent_revision").notNull(),
     fleetRevision: integer("fleet_revision").notNull(),
+    scheduleId: text("schedule_id"),
     scheduleRevision: integer("schedule_revision"),
     runId: text("run_id"),
     trigger: text("trigger", { enum: ["manual", "schedule", "workflow"] }),
@@ -1348,6 +1363,10 @@ export const agentInboxItems = sqliteTable(
     check(
       "agent_inbox_items_schedule_revision",
       sql`${table.scheduleRevision} IS NULL OR ${table.scheduleRevision} > 0`,
+    ),
+    check(
+      "agent_inbox_items_schedule_identity",
+      sql`(${table.scheduleId} IS NULL) = (${table.scheduleRevision} IS NULL)`,
     ),
     check(
       "agent_inbox_items_kind",

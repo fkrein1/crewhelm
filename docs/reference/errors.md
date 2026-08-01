@@ -11,7 +11,8 @@ Use the named `nextAction`. Recovery reads are bounded:
 - `crewhelm_list_unresolved_tool_effects`: effects requiring independent verification.
 - `crewhelm_list_connections` with `connectionId`: lifecycle and next action.
 - `crewhelm_status` with `includeRecentAudit`: recent actions without client IDs.
-- `crewhelm_get_agent_schedule`: latest dispatch or deferral.
+- `crewhelm_list_agent_schedules`: exact schedule identities and current trigger state.
+- `crewhelm_get_agent_schedule`: latest dispatch or deferral for one exact schedule.
 
 ## Ambiguous writes
 

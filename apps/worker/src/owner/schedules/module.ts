@@ -1,40 +1,70 @@
 import {
+  MAXIMUM_AGENT_SCHEDULES_PER_AGENT,
   MAXIMUM_DUE_AGENT_SCHEDULES_PER_ALARM,
   agentScheduleConfigurationSchema,
+  agentScheduleIdSchema,
   agentScheduleSchema,
   configureAgentScheduleInputSchema,
   configureAgentScheduleResultSchema,
   getAgentScheduleInputSchema,
   getAgentScheduleResultSchema,
+  listAgentSchedulesInputSchema,
+  listAgentSchedulesResultSchema,
   type AgentSchedule,
+  type AgentScheduleConfiguration,
   type ConfigureAgentScheduleResult,
   type FleetConfigurationData,
   type GetAgentScheduleResult,
+  type ListAgentSchedulesResult,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
-import { and, desc, eq, lte, min } from "drizzle-orm";
+import { and, asc, desc, eq, lte, max, min } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import {
+  agentInboxItems,
   agentScheduleRevisions,
   agentSchedules,
   agentScheduleUpdates,
-  agentInboxItems,
   agents,
   auditEvents,
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
+import {
+  minimumAgentScheduleIntervalSeconds,
+  nextAgentScheduleOccurrence,
+  nextAgentScheduleOccurrenceAfterClaim,
+} from "./recurrence.js";
 
 type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type ScheduleFailure = Extract<ConfigureAgentScheduleResult, { ok: false }>;
+type ScheduleRevisionRow = {
+  agentId: string;
+  agentRevision: number;
+  configuration: AgentSchedule["configuration"];
+  createdAt: number;
+  name: string;
+  revision: number;
+  scheduleId: string;
+};
+type ScheduleStateRow = {
+  createdAt: number;
+  currentRevision: number;
+  lastDispatchedAt: number | null;
+  lastRunId: string | null;
+  nextRunAt: number | null;
+  scheduleId: string;
+  status: "active" | "paused";
+};
 
 export type DueAgentSchedule = {
   agentId: string;
   agentRevision: number;
-  intervalSeconds: number;
   lastRunId: string | null;
+  name: string;
   prompt: string;
   retryAt: number;
+  scheduleId: string;
   scheduleRevision: number;
   scheduledAt: number;
 };
@@ -49,17 +79,27 @@ function encodeBase64Url(bytes: Uint8Array): string {
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 
-async function digestRequest(input: {
-  agentId: string;
-  expectedAgentRevision: number;
-  expectedScheduleRevision: number | null;
-  schedule: { intervalSeconds: number; prompt: string } | null;
-}): Promise<string> {
+async function digestRequest(input: unknown): Promise<string> {
   const bytes = new Uint8Array(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(input))),
   );
 
   return encodeBase64Url(bytes);
+}
+
+function newScheduleId(): string {
+  return agentScheduleIdSchema.parse(`schedule_${crypto.randomUUID()}`);
+}
+
+function activeDefinition(
+  input: Exclude<ReturnType<typeof configureAgentScheduleInputSchema.parse>["schedule"], null>,
+): { configuration: AgentScheduleConfiguration; name: string | null } {
+  return "name" in input
+    ? {
+        configuration: { prompt: input.prompt, trigger: input.trigger },
+        name: input.name,
+      }
+    : { configuration: input, name: null };
 }
 
 export function deniedAgentSchedule(code: ScheduleFailure["error"]["code"]): ScheduleFailure {
@@ -97,16 +137,28 @@ export class AgentSchedules {
       return deniedAgentSchedule("invalid_request");
     }
 
+    const configuredAt = Date.now();
+    const definition =
+      request.data.schedule === null ? null : activeDefinition(request.data.schedule);
+    const minimumInterval =
+      definition === null
+        ? null
+        : minimumAgentScheduleIntervalSeconds(definition.configuration, configuredAt);
+    const nextOccurrence =
+      definition === null
+        ? null
+        : nextAgentScheduleOccurrence(definition.configuration, configuredAt);
+
     if (
-      request.data.schedule !== null &&
-      request.data.schedule.intervalSeconds <
-        this.#currentFleetConfiguration().schedules.minimumIntervalSeconds
+      definition !== null &&
+      (minimumInterval === null ||
+        nextOccurrence === null ||
+        minimumInterval < this.#currentFleetConfiguration().schedules.minimumIntervalSeconds)
     ) {
       return deniedAgentSchedule("invalid_request");
     }
 
     const requestDigest = await digestRequest(request.data);
-    const configuredAt = Date.now();
     const result = this.#database.transaction((transaction) => {
       const replay = transaction
         .select({
@@ -114,8 +166,10 @@ export class AgentSchedules {
           agentRevision: agentScheduleRevisions.agentRevision,
           configuration: agentScheduleRevisions.configuration,
           createdAt: agentScheduleRevisions.createdAt,
+          name: agentScheduleRevisions.name,
           requestDigest: agentScheduleUpdates.requestDigest,
           revision: agentScheduleRevisions.revision,
+          scheduleId: agentScheduleRevisions.scheduleId,
         })
         .from(agentScheduleUpdates)
         .innerJoin(
@@ -141,7 +195,7 @@ export class AgentSchedules {
         const current = transaction
           .select()
           .from(agentSchedules)
-          .where(eq(agentSchedules.agentId, replay.agentId))
+          .where(eq(agentSchedules.scheduleId, replay.scheduleId))
           .get();
 
         return configureAgentScheduleResultSchema.parse({
@@ -172,7 +226,7 @@ export class AgentSchedules {
         return deniedAgentSchedule("revision_conflict");
       }
 
-      const current = transaction
+      const schedules = transaction
         .select({
           agentId: agentSchedules.agentId,
           agentRevision: agentScheduleRevisions.agentRevision,
@@ -181,21 +235,41 @@ export class AgentSchedules {
           currentRevision: agentSchedules.currentRevision,
           lastDispatchedAt: agentSchedules.lastDispatchedAt,
           lastRunId: agentSchedules.lastRunId,
+          name: agentScheduleRevisions.name,
           nextRunAt: agentSchedules.nextRunAt,
+          scheduleId: agentSchedules.scheduleId,
           status: agentSchedules.status,
         })
         .from(agentSchedules)
         .innerJoin(
           agentScheduleRevisions,
           and(
+            eq(agentScheduleRevisions.scheduleId, agentSchedules.scheduleId),
             eq(agentScheduleRevisions.agentId, agentSchedules.agentId),
             eq(agentScheduleRevisions.revision, agentSchedules.currentRevision),
           ),
         )
         .where(eq(agentSchedules.agentId, request.data.agentId))
-        .get();
+        .orderBy(asc(agentSchedules.scheduleId))
+        .all();
+      const current =
+        typeof request.data.scheduleId === "string"
+          ? schedules.find((schedule) => schedule.scheduleId === request.data.scheduleId)
+          : request.data.scheduleId === null
+            ? undefined
+            : schedules.length === 1
+              ? schedules[0]
+              : undefined;
 
-      if (current === undefined && request.data.expectedScheduleRevision !== null) {
+      if (request.data.scheduleId === undefined && schedules.length > 1) {
+        return deniedAgentSchedule("schedule_selection_required");
+      }
+
+      if (
+        (typeof request.data.scheduleId === "string" ||
+          request.data.expectedScheduleRevision !== null) &&
+        current === undefined
+      ) {
         return deniedAgentSchedule("schedule_not_found");
       }
 
@@ -206,28 +280,47 @@ export class AgentSchedules {
         return deniedAgentSchedule("revision_conflict");
       }
 
+      if (current === undefined && schedules.length >= MAXIMUM_AGENT_SCHEDULES_PER_AGENT) {
+        return deniedAgentSchedule("schedule_limit_exceeded");
+      }
+
+      const name =
+        request.data.schedule === null
+          ? current?.name
+          : (definition?.name ?? current?.name ?? "Recurring schedule");
+      const configuration = definition?.configuration ?? null;
+
+      if (name === undefined) {
+        return deniedAgentSchedule("schedule_not_found");
+      }
+
       if (
         current !== undefined &&
         current.agentRevision === request.data.expectedAgentRevision &&
-        JSON.stringify(current.configuration) === JSON.stringify(request.data.schedule)
+        current.name === name &&
+        JSON.stringify(current.configuration) === JSON.stringify(configuration)
       ) {
         return deniedAgentSchedule("no_changes");
       }
 
-      const revision = (current?.currentRevision ?? 0) + 1;
-      const nextRunAt =
-        request.data.schedule === null
-          ? null
-          : configuredAt + request.data.schedule.intervalSeconds * 1_000;
+      const revision =
+        (transaction
+          .select({ value: max(agentScheduleRevisions.revision) })
+          .from(agentScheduleRevisions)
+          .where(eq(agentScheduleRevisions.agentId, request.data.agentId))
+          .get()?.value ?? 0) + 1;
+      const scheduleId = current?.scheduleId ?? newScheduleId();
 
       transaction
         .insert(agentScheduleRevisions)
         .values({
           agentId: request.data.agentId,
           agentRevision: request.data.expectedAgentRevision,
-          configuration: request.data.schedule,
+          configuration,
           createdAt: configuredAt,
+          name,
           revision,
+          scheduleId,
         })
         .run();
       transaction
@@ -238,15 +331,16 @@ export class AgentSchedules {
           currentRevision: revision,
           lastDispatchedAt: current?.lastDispatchedAt ?? null,
           lastRunId: current?.lastRunId ?? null,
-          nextRunAt,
-          status: request.data.schedule === null ? "paused" : "active",
+          nextRunAt: configuration === null ? null : nextOccurrence,
+          scheduleId,
+          status: configuration === null ? "paused" : "active",
         })
         .onConflictDoUpdate({
-          target: agentSchedules.agentId,
+          target: agentSchedules.scheduleId,
           set: {
             currentRevision: revision,
-            nextRunAt,
-            status: request.data.schedule === null ? "paused" : "active",
+            nextRunAt: configuration === null ? null : nextOccurrence,
+            status: configuration === null ? "paused" : "active",
           },
         })
         .run();
@@ -263,11 +357,10 @@ export class AgentSchedules {
       transaction
         .insert(auditEvents)
         .values({
-          action:
-            request.data.schedule === null ? "agent.schedule_paused" : "agent.schedule_configured",
+          action: configuration === null ? "agent.schedule_paused" : "agent.schedule_configured",
           clientId: authority.clientId,
           occurredAt: configuredAt,
-          subjectId: request.data.agentId,
+          subjectId: scheduleId,
         })
         .run();
 
@@ -277,17 +370,22 @@ export class AgentSchedules {
         schedule: {
           agentId: request.data.agentId,
           agentRevision: request.data.expectedAgentRevision,
-          configuration: request.data.schedule,
+          configuration,
           createdAt: new Date(current?.createdAt ?? configuredAt).toISOString(),
+          id: scheduleId,
           lastDispatchedAt:
             current?.lastDispatchedAt === null || current?.lastDispatchedAt === undefined
               ? null
               : new Date(current.lastDispatchedAt).toISOString(),
           lastAttempt: null,
           lastRunId: current?.lastRunId ?? null,
-          nextRunAt: nextRunAt === null ? null : new Date(nextRunAt).toISOString(),
+          name,
+          nextRunAt:
+            configuration === null || nextOccurrence === null
+              ? null
+              : new Date(nextOccurrence).toISOString(),
           revision,
-          status: request.data.schedule === null ? "paused" : "active",
+          status: configuration === null ? "paused" : "active",
         },
       });
     });
@@ -306,43 +404,46 @@ export class AgentSchedules {
       return deniedAgentSchedule("invalid_request");
     }
 
-    const row = this.#database
-      .select({
-        agentId: agentSchedules.agentId,
-        agentRevision: agentScheduleRevisions.agentRevision,
-        configuration: agentScheduleRevisions.configuration,
-        createdAt: agentSchedules.createdAt,
-        currentRevision: agentSchedules.currentRevision,
-        lastDispatchedAt: agentSchedules.lastDispatchedAt,
-        lastRunId: agentSchedules.lastRunId,
-        nextRunAt: agentSchedules.nextRunAt,
-        status: agentSchedules.status,
-      })
-      .from(agentSchedules)
-      .innerJoin(
-        agentScheduleRevisions,
-        and(
-          eq(agentScheduleRevisions.agentId, agentSchedules.agentId),
-          eq(agentScheduleRevisions.revision, agentSchedules.currentRevision),
-        ),
-      )
-      .where(eq(agentSchedules.agentId, request.data.agentId))
-      .get();
+    const rows = this.#currentRows(request.data.agentId).filter(
+      (row) => request.data.scheduleId === undefined || row.scheduleId === request.data.scheduleId,
+    );
+
+    if (rows.length === 0) {
+      return deniedAgentSchedule("schedule_not_found");
+    }
+
+    if (rows.length > 1) {
+      return deniedAgentSchedule("schedule_selection_required");
+    }
+
+    const row = rows[0];
 
     return row === undefined
       ? deniedAgentSchedule("schedule_not_found")
       : getAgentScheduleResultSchema.parse({
           ok: true,
-          schedule: this.#fromRows(
-            {
-              agentId: row.agentId,
-              agentRevision: row.agentRevision,
-              configuration: row.configuration,
-              createdAt: row.createdAt,
-              revision: row.currentRevision,
-            },
-            row,
-          ),
+          schedule: this.#fromRows(row, row),
+        });
+  }
+
+  list(input: unknown): ListAgentSchedulesResult {
+    const request = listAgentSchedulesInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return deniedAgentSchedule("invalid_request");
+    }
+
+    const agent = this.#database
+      .select({ id: agents.agentId })
+      .from(agents)
+      .where(eq(agents.agentId, request.data.agentId))
+      .get();
+
+    return agent === undefined
+      ? deniedAgentSchedule("agent_not_found")
+      : listAgentSchedulesResultSchema.parse({
+          ok: true,
+          schedules: this.#currentRows(request.data.agentId).map((row) => this.#fromRows(row, row)),
         });
   }
 
@@ -356,13 +457,16 @@ export class AgentSchedules {
           configuration: agentScheduleRevisions.configuration,
           currentAgentRevision: agents.currentRevision,
           lastRunId: agentSchedules.lastRunId,
+          name: agentScheduleRevisions.name,
           nextRunAt: agentSchedules.nextRunAt,
+          scheduleId: agentSchedules.scheduleId,
           scheduleRevision: agentSchedules.currentRevision,
         })
         .from(agentSchedules)
         .innerJoin(
           agentScheduleRevisions,
           and(
+            eq(agentScheduleRevisions.scheduleId, agentSchedules.scheduleId),
             eq(agentScheduleRevisions.agentId, agentSchedules.agentId),
             eq(agentScheduleRevisions.revision, agentSchedules.currentRevision),
           ),
@@ -375,10 +479,15 @@ export class AgentSchedules {
 
       for (const row of rows) {
         const configuration = agentScheduleConfigurationSchema.safeParse(row.configuration);
+        const nextRunAt =
+          configuration.success && row.nextRunAt !== null
+            ? nextAgentScheduleOccurrenceAfterClaim(configuration.data, row.nextRunAt, currentTime)
+            : null;
 
         if (
           !configuration.success ||
           row.nextRunAt === null ||
+          nextRunAt === null ||
           row.agentStatus !== "active" ||
           row.currentAgentRevision !== row.agentRevision
         ) {
@@ -387,7 +496,7 @@ export class AgentSchedules {
             .set({ nextRunAt: null, status: "paused" })
             .where(
               and(
-                eq(agentSchedules.agentId, row.agentId),
+                eq(agentSchedules.scheduleId, row.scheduleId),
                 eq(agentSchedules.currentRevision, row.scheduleRevision),
               ),
             )
@@ -398,36 +507,34 @@ export class AgentSchedules {
               action: "agent.schedule_paused_stale",
               clientId: "crewhelm:scheduler",
               occurredAt: currentTime,
-              subjectId: row.agentId,
+              subjectId: row.scheduleId,
             })
             .run();
           continue;
         }
 
-        const intervalMs = configuration.data.intervalSeconds * 1_000;
-        const intervalsElapsed = Math.floor(Math.max(0, currentTime - row.nextRunAt) / intervalMs);
-        const nextRunAt = row.nextRunAt + (intervalsElapsed + 1) * intervalMs;
         const claimed = transaction
           .update(agentSchedules)
           .set({ nextRunAt })
           .where(
             and(
-              eq(agentSchedules.agentId, row.agentId),
+              eq(agentSchedules.scheduleId, row.scheduleId),
               eq(agentSchedules.currentRevision, row.scheduleRevision),
               eq(agentSchedules.nextRunAt, row.nextRunAt),
             ),
           )
-          .returning({ agentId: agentSchedules.agentId })
+          .returning({ scheduleId: agentSchedules.scheduleId })
           .all();
 
         if (claimed.length === 1) {
           due.push({
             agentId: row.agentId,
             agentRevision: row.agentRevision,
-            intervalSeconds: configuration.data.intervalSeconds,
             lastRunId: row.lastRunId,
+            name: row.name,
             prompt: configuration.data.prompt,
             retryAt: nextRunAt,
+            scheduleId: row.scheduleId,
             scheduleRevision: row.scheduleRevision,
             scheduledAt: row.nextRunAt,
           });
@@ -439,9 +546,9 @@ export class AgentSchedules {
   }
 
   recordDispatch(input: {
-    agentId: string;
     dispatchedAt: number;
     runId: string;
+    scheduleId: string;
     scheduleRevision: number;
   }): boolean {
     return this.#database.transaction((transaction) => {
@@ -453,12 +560,12 @@ export class AgentSchedules {
         })
         .where(
           and(
-            eq(agentSchedules.agentId, input.agentId),
+            eq(agentSchedules.scheduleId, input.scheduleId),
             eq(agentSchedules.currentRevision, input.scheduleRevision),
             eq(agentSchedules.status, "active"),
           ),
         )
-        .returning({ agentId: agentSchedules.agentId })
+        .returning({ scheduleId: agentSchedules.scheduleId })
         .all();
 
       if (updated.length !== 1) {
@@ -478,14 +585,18 @@ export class AgentSchedules {
     });
   }
 
-  recordSkipped(agentId: string, currentTime: number, reason: "active_run" | "unavailable"): void {
+  recordSkipped(
+    scheduleId: string,
+    currentTime: number,
+    reason: "active_run" | "unavailable",
+  ): void {
     this.#database
       .insert(auditEvents)
       .values({
         action: `agent.schedule_skipped_${reason}`,
         clientId: "crewhelm:scheduler",
         occurredAt: currentTime,
-        subjectId: agentId,
+        subjectId: scheduleId,
       })
       .run();
   }
@@ -500,25 +611,39 @@ export class AgentSchedules {
     );
   }
 
-  #fromRows(
-    revision: {
-      agentId: string;
-      agentRevision: number;
-      configuration: AgentSchedule["configuration"];
-      createdAt: number;
-      revision: number;
-    },
-    state:
-      | {
-          currentRevision: number;
-          lastDispatchedAt: number | null;
-          lastRunId: string | null;
-          nextRunAt: number | null;
-          status: "active" | "paused";
-        }
-      | undefined,
-  ): AgentSchedule {
-    const isCurrent = state?.currentRevision === revision.revision;
+  #currentRows(agentId: string) {
+    return this.#database
+      .select({
+        agentId: agentSchedules.agentId,
+        agentRevision: agentScheduleRevisions.agentRevision,
+        configuration: agentScheduleRevisions.configuration,
+        createdAt: agentSchedules.createdAt,
+        currentRevision: agentSchedules.currentRevision,
+        lastDispatchedAt: agentSchedules.lastDispatchedAt,
+        lastRunId: agentSchedules.lastRunId,
+        name: agentScheduleRevisions.name,
+        nextRunAt: agentSchedules.nextRunAt,
+        revision: agentScheduleRevisions.revision,
+        scheduleId: agentSchedules.scheduleId,
+        status: agentSchedules.status,
+      })
+      .from(agentSchedules)
+      .innerJoin(
+        agentScheduleRevisions,
+        and(
+          eq(agentScheduleRevisions.scheduleId, agentSchedules.scheduleId),
+          eq(agentScheduleRevisions.agentId, agentSchedules.agentId),
+          eq(agentScheduleRevisions.revision, agentSchedules.currentRevision),
+        ),
+      )
+      .where(eq(agentSchedules.agentId, agentId))
+      .orderBy(asc(agentSchedules.createdAt), asc(agentSchedules.scheduleId))
+      .all();
+  }
+
+  #fromRows(revision: ScheduleRevisionRow, state: ScheduleStateRow | undefined): AgentSchedule {
+    const isCurrent =
+      state?.scheduleId === revision.scheduleId && state.currentRevision === revision.revision;
     const deferred = isCurrent
       ? this.#database
           .select({
@@ -563,13 +688,15 @@ export class AgentSchedules {
       agentId: revision.agentId,
       agentRevision: revision.agentRevision,
       configuration: revision.configuration,
-      createdAt: new Date(revision.createdAt).toISOString(),
+      createdAt: new Date(state?.createdAt ?? revision.createdAt).toISOString(),
+      id: revision.scheduleId,
       lastDispatchedAt:
         !isCurrent || state.lastDispatchedAt === null
           ? null
           : new Date(state.lastDispatchedAt).toISOString(),
       lastAttempt,
       lastRunId: isCurrent ? state.lastRunId : null,
+      name: revision.name,
       nextRunAt:
         !isCurrent || state.nextRunAt === null ? null : new Date(state.nextRunAt).toISOString(),
       revision: revision.revision,

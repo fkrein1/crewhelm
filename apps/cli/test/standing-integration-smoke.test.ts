@@ -13,6 +13,7 @@ const authorizationCode = "temporary-authorization-code";
 const accessToken = "temporary-full-token";
 const connectionId = "connection_33333333-3333-4333-8333-333333333333";
 const agentId = "agent_11111111-1111-4111-8111-111111111111";
+const scheduleId = "schedule_66666666-6666-4666-8666-666666666666";
 const runId = "run_22222222-2222-4222-8222-222222222222";
 const grantId = "grant_44444444-4444-4444-8444-444444444444";
 const toolCallId = "tool_call_55555555-5555-4555-8555-555555555555";
@@ -365,6 +366,7 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
     agentRevision: 2,
     configuration: scheduleConfiguration,
     createdAt: timestamp,
+    id: scheduleId,
     lastAttempt:
       scheduleLastRunId === null
         ? options.scheduleDeferred
@@ -385,6 +387,7 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
           },
     lastDispatchedAt: scheduleLastRunId === null ? null : timestamp,
     lastRunId: scheduleLastRunId,
+    name: "Standing integration smoke",
     nextRunAt: scheduleStatus === "active" ? timestamp : null,
     revision: scheduleRevision,
     status: scheduleStatus,
@@ -789,6 +792,7 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
             configuration: {
               agentRevision: 2,
               fleetRevision: 1,
+              scheduleId: scheduleLastRunId === null ? null : scheduleId,
               scheduleRevision: scheduleLastRunId === null ? null : 1,
             },
             itemId: `inbox_${runId}`,

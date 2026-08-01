@@ -31,6 +31,7 @@ import { digestRunPrompt } from "../agent/admitted-runs/index.js";
 import migration1 from "../../control-plane-migrations/0001_windy_bushwacker.sql";
 import migration2 from "../../control-plane-migrations/0002_cool_rictor.sql";
 import migration22 from "../../control-plane-migrations/0022_adorable_marrow.sql";
+import { controlPlaneMigrations } from "../../control-plane-migrations/index.js";
 
 import { agentInput, authorityFor, fixedRunAdmissionFailure } from "./testkit.js";
 
@@ -59,6 +60,14 @@ function removeBriefSchema(storage: DurableObjectStorage): void {
 
 function removeRuntimeToolSchema(storage: DurableObjectStorage): void {
   storage.sql.exec("DROP TABLE runtime_tool_executions");
+}
+
+async function migrationChecksum(source: string): Promise<string> {
+  const bytes = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source)),
+  );
+
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 describe("owner identity", () => {
@@ -288,6 +297,11 @@ describe("OwnerControlPlane", () => {
           checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
           name: "0025_charming_squadron_supreme",
           version: 26,
+        },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0026_fresh_white_queen",
+          version: 27,
         },
       ],
       owner: { owner_key: authority.ownerKey },
@@ -532,6 +546,7 @@ describe("OwnerControlPlane", () => {
            agent_id,
            agent_revision,
            fleet_revision,
+           schedule_id,
            schedule_revision,
            kind,
            approval_count,
@@ -548,6 +563,7 @@ describe("OwnerControlPlane", () => {
            ?,
            ?,
            1,
+           'schedule_' || substr(?, 7),
            1,
            'deferred',
            0,
@@ -562,6 +578,7 @@ describe("OwnerControlPlane", () => {
         created.agent.id,
         created.agent.id,
         created.agent.revision,
+        created.agent.id,
         Date.now() + 60_000,
       );
     });
@@ -731,6 +748,7 @@ describe("OwnerControlPlane", () => {
            agent_id,
            agent_revision,
            fleet_revision,
+           schedule_id,
            schedule_revision,
            kind,
            approval_count,
@@ -747,6 +765,7 @@ describe("OwnerControlPlane", () => {
            ?,
            ?,
            1,
+           'schedule_' || substr(?, 7),
            1,
            'deferred',
            0,
@@ -760,6 +779,7 @@ describe("OwnerControlPlane", () => {
          FROM numbers`,
         created.agent.id,
         created.agent.revision,
+        created.agent.id,
         Date.now() + 60_000,
       );
       state.storage.sql.exec(
@@ -1291,6 +1311,142 @@ describe("OwnerControlPlane", () => {
     });
   });
 
+  it("preserves a legacy schedule and its deferred inbox identity through migration", async () => {
+    const authority = await authorityFor("90136", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const legacyMigrations = controlPlaneMigrations.slice(0, -1);
+    const migrations = await Promise.all(
+      legacyMigrations.map(async (migration) => ({
+        ...migration,
+        checksum: await migrationChecksum(migration.sql),
+      })),
+    );
+    const agentId = "agent_00000000-0000-4000-8000-000000009136";
+    const scheduleId = "schedule_00000000-0000-4000-8000-000000009136";
+    const createdAt = 1_800_000_000_000;
+    const scheduledAt = createdAt + 3_600_000;
+
+    await expect(stub.status(authority)).resolves.toMatchObject({ ok: true });
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec("PRAGMA foreign_keys=OFF");
+
+      for (const { name } of state.storage.sql
+        .exec<{ name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        )
+        .toArray()) {
+        state.storage.sql.exec(`DROP TABLE "${name.replaceAll('"', '""')}"`);
+      }
+
+      await state.storage.sync();
+      state.storage.sql.exec("PRAGMA foreign_keys=ON");
+
+      const database = drizzle(state.storage, { schema: controlPlaneSchema });
+
+      await runControlPlaneMigrationTransaction(
+        state.storage,
+        legacyMigrations.map((migration) => migration.sql),
+        () => {
+          for (const migration of migrations) {
+            applyControlPlaneMigration(database, state.storage, migration);
+          }
+        },
+      );
+
+      state.storage.sql.exec(
+        `INSERT INTO agents
+           (agent_id, current_revision, status, created_at, disabled_at)
+         VALUES (?, 1, 'active', ?, NULL)`,
+        agentId,
+        createdAt,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO agent_revisions
+           (agent_id, revision, name, model, capabilities, instructions, execution_limits,
+            capability_grants, blueprint_provenance, created_at)
+         VALUES (?, 1, 'Legacy Agent', 'gpt-5-mini', '[]', 'Preserve me.',
+           '{"maxDurationSeconds":300,"maxModelCalls":5,"maxToolCalls":10}', '[]', NULL, ?)`,
+        agentId,
+        createdAt,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO agent_schedule_revisions
+           (agent_id, revision, agent_revision, configuration, created_at)
+         VALUES (?, 1, 1, ?, ?)`,
+        agentId,
+        JSON.stringify({ intervalSeconds: 3_600, prompt: "Run the legacy responsibility." }),
+        createdAt,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO agent_schedules
+           (agent_id, current_revision, status, next_run_at, last_run_id, last_dispatched_at,
+            created_at)
+         VALUES (?, 1, 'active', ?, NULL, NULL, ?)`,
+        agentId,
+        scheduledAt,
+        createdAt,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO agent_inbox_items
+           (item_id, agent_id, agent_revision, fleet_revision, schedule_revision, run_id,
+            trigger, run_status, kind, approval_count, request_preview, result_preview, reason,
+            scheduled_at, retry_at, occurred_at, version, cleanup_at)
+         VALUES (?, ?, 1, 1, 1, NULL, NULL, NULL, 'deferred', 0, ?, NULL, 'active_run',
+           ?, ?, ?, 'legacy-version', ?)`,
+        "inbox_00000000-0000-4000-8000-000000009136",
+        agentId,
+        "Run the legacy responsibility.",
+        scheduledAt,
+        scheduledAt + 60_000,
+        createdAt,
+        createdAt + 86_400_000,
+      );
+
+      expect(state.storage.sql.exec("PRAGMA foreign_key_check").toArray()).toEqual([]);
+    });
+
+    await evictDurableObject(stub);
+    await expect(stub.status(authority)).resolves.toMatchObject({
+      ok: true,
+      status: { schemaVersion: CONTROL_PLANE_SCHEMA_VERSION, status: "ready" },
+    });
+    await expect(stub.listAgentSchedules(authority, { agentId })).resolves.toMatchObject({
+      ok: true,
+      schedules: [
+        {
+          configuration: {
+            intervalSeconds: 3_600,
+            prompt: "Run the legacy responsibility.",
+          },
+          id: scheduleId,
+          name: "Recurring schedule",
+          revision: 1,
+          status: "active",
+        },
+      ],
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) => ({
+        foreignKeys: state.storage.sql.exec("PRAGMA foreign_key_check").toArray(),
+        inbox: state.storage.sql
+          .exec<{ schedule_id: string }>(
+            "SELECT schedule_id FROM agent_inbox_items WHERE item_id = ?",
+            "inbox_00000000-0000-4000-8000-000000009136",
+          )
+          .one(),
+      })),
+    ).resolves.toEqual({
+      foreignKeys: [],
+      inbox: { schedule_id: scheduleId },
+    });
+  });
+
   it("recovers a populated v2 control plane through the tool-execution migration", async () => {
     const authority = await authorityFor("90135", [
       OWNER_READ_SCOPE,
@@ -1535,6 +1691,7 @@ describe("OwnerControlPlane", () => {
         { version: 24 },
         { version: 25 },
         { version: 26 },
+        { version: 27 },
       ]);
     });
   });
@@ -1844,7 +2001,7 @@ describe("OwnerControlPlane", () => {
       admission: { run_id: admission.permit.runId, trigger: "manual" },
       foreignKeys: [],
       migration: {
-        name: "0025_charming_squadron_supreme",
+        name: "0026_fresh_white_queen",
         version: CONTROL_PLANE_SCHEMA_VERSION,
       },
       workflow: {

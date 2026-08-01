@@ -85,6 +85,16 @@ retained turn metadata; the owner keeps its Brief reference until the Session ac
 redaction has completed.
 
 Runs and tool calls are bound to the admitted Agent and fleet-configuration revisions.
+Each Agent may also own a bounded collection of independently named recurring schedules. A
+schedule has an opaque identity and immutable, Agent-global revision history; each revision freezes
+the exact Agent revision, prompt, and either an elapsed interval or a daily, weekly, or monthly
+wall-clock trigger with an explicit IANA time zone. Alarm claims advance each schedule directly to
+its next future occurrence, so late alarms do not replay a backlog. Agent revision changes pause
+stale schedules before admission, while schedule IDs flow into deferred inbox projections and
+schedule-specific audit events. Scheduled Run discovery retains the originating schedule ID and
+revision. Each Agent has eight bounded schedule slots; an owner reclaims capacity by exactly
+updating a paused schedule, retaining one auditable identity and revision chain for that slot.
+
 An Agent capability module may contribute a native runtime-tool descriptor, but only the owner
 control plane can freeze it into a Run plan and reserve its shared tool-call budget. `CrewSession`
 redeems a short-lived permit for the exact call, dispatches through a Crewhelm-owned adapter, and
@@ -150,7 +160,10 @@ branding, stylesheet assets, and terminal color roles.
 6. Projections support discovery, never authority. Connect Links record setup lifecycle but do not
    activate or authorize connections.
 
-Control-plane migrations are ordered and checksummed; incompatible state fails closed.
+Control-plane migrations are ordered and checksummed; incompatible state fails closed. Upgrade
+compatibility is package-forward: current upgrade tooling can read the prior server's bounded
+fixtures, while an older strict CLI is not supported against a newer Worker. Installation upgrades
+replace and validate the packaged CLI and Worker together.
 
 ## Dependency direction
 

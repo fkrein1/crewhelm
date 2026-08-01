@@ -67,6 +67,7 @@ import {
   type ReconcileToolExecutionResult,
   type ConfigureAgentScheduleResult,
   type GetAgentScheduleResult,
+  type ListAgentSchedulesResult,
   type ConfigureFleetConfigurationResult,
   type GetFleetConfigurationResult,
   type GetSkillResult,
@@ -979,6 +980,14 @@ export class OwnerControlPlane extends DurableObject {
       : deniedAgentSchedule(authorization.code);
   }
 
+  listAgentSchedules(authorityInput: unknown, input: unknown): ListAgentSchedulesResult {
+    const authorization = this.#authorize(authorityInput, AGENTS_READ_SCOPE);
+
+    return authorization.ok
+      ? this.#agentSchedules.list(input)
+      : deniedAgentSchedule(authorization.code);
+  }
+
   async listRunToolApprovals(
     authorityInput: unknown,
     input: unknown,
@@ -1081,7 +1090,7 @@ export class OwnerControlPlane extends DurableObject {
       const schedule = dueSchedules[index];
 
       if (dispatch.status === "rejected" && schedule !== undefined) {
-        this.#agentSchedules.recordSkipped(schedule.agentId, currentTime, "unavailable");
+        this.#agentSchedules.recordSkipped(schedule.scheduleId, currentTime, "unavailable");
         this.#recordScheduledDeferral(schedule, currentTime, "dispatch_exception");
         recordScheduleEvent({
           agentId: schedule.agentId,
@@ -1252,7 +1261,7 @@ export class OwnerControlPlane extends DurableObject {
         if (previous.error.code === "run_not_found") {
           // Completed run admissions eventually age out of the control plane.
         } else {
-          this.#agentSchedules.recordSkipped(schedule.agentId, currentTime, "unavailable");
+          this.#agentSchedules.recordSkipped(schedule.scheduleId, currentTime, "unavailable");
           this.#recordScheduledDeferral(schedule, currentTime, "run_unavailable");
           recordScheduleEvent({
             agentId: schedule.agentId,
@@ -1261,7 +1270,7 @@ export class OwnerControlPlane extends DurableObject {
           return;
         }
       } else if (!["cancelled", "completed", "failed"].includes(previous.run.status)) {
-        this.#agentSchedules.recordSkipped(schedule.agentId, currentTime, "active_run");
+        this.#agentSchedules.recordSkipped(schedule.scheduleId, currentTime, "active_run");
         this.#recordScheduledDeferral(schedule, currentTime, "active_run");
         recordScheduleEvent({
           agentId: schedule.agentId,
@@ -1276,7 +1285,7 @@ export class OwnerControlPlane extends DurableObject {
       {
         agentId: schedule.agentId,
         expectedRevision: schedule.agentRevision,
-        idempotencyKey: `schedule.${schedule.agentId}.${schedule.scheduleRevision}.${schedule.scheduledAt}`,
+        idempotencyKey: `schedule.${schedule.scheduleId}.${schedule.scheduleRevision}.${schedule.scheduledAt}`,
         prompt: schedule.prompt,
       },
       "schedule",
@@ -1284,7 +1293,7 @@ export class OwnerControlPlane extends DurableObject {
     );
 
     if (!started.ok) {
-      this.#agentSchedules.recordSkipped(schedule.agentId, currentTime, "unavailable");
+      this.#agentSchedules.recordSkipped(schedule.scheduleId, currentTime, "unavailable");
       this.#recordScheduledDeferral(
         schedule,
         currentTime,
@@ -1299,9 +1308,9 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     const recorded = this.#agentSchedules.recordDispatch({
-      agentId: schedule.agentId,
       dispatchedAt: Date.now(),
       runId: started.run.runId,
+      scheduleId: schedule.scheduleId,
       scheduleRevision: schedule.scheduleRevision,
     });
 
@@ -1316,7 +1325,7 @@ export class OwnerControlPlane extends DurableObject {
       return;
     }
 
-    this.#agentChannel.clearScheduledDeferral(schedule.agentId);
+    this.#agentChannel.clearScheduledDeferral(schedule.scheduleId);
     recordScheduleEvent({
       agentId: schedule.agentId,
       outcome: "dispatched",
@@ -1337,6 +1346,7 @@ export class OwnerControlPlane extends DurableObject {
       prompt: schedule.prompt,
       reason,
       retryAt: schedule.retryAt,
+      scheduleId: schedule.scheduleId,
       scheduleRevision: schedule.scheduleRevision,
       scheduledAt: schedule.scheduledAt,
     });

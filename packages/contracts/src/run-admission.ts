@@ -28,7 +28,7 @@ import {
   ownerClientIdSchema,
   ownerKeySchema,
 } from "./control-plane.js";
-import { agentScheduleRevisionNumberSchema } from "./schedule-revision.js";
+import { agentScheduleIdSchema, agentScheduleRevisionNumberSchema } from "./schedule-revision.js";
 import {
   compactDiagnosticSchema,
   diagnosticCertaintySchema,
@@ -456,6 +456,12 @@ export const runSchema = z.strictObject({
   output: runOutputSchema.optional(),
   outputTruncated: z.boolean().optional(),
   runId: runIdSchema,
+  schedule: z
+    .strictObject({
+      id: agentScheduleIdSchema,
+      revision: agentScheduleRevisionNumberSchema,
+    })
+    .optional(),
   session: runSessionSchema.optional(),
   startedAt: z.iso.datetime().optional(),
   status: runStatusSchema,

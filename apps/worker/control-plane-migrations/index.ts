@@ -24,6 +24,7 @@ import migration22 from "./0022_adorable_marrow.sql";
 import migration23 from "./0023_abnormal_sister_grimm.sql";
 import migration24 from "./0024_broad_micromacro.sql";
 import migration25 from "./0025_charming_squadron_supreme.sql";
+import migration26 from "./0026_fresh_white_queen.sql";
 
 export const controlPlaneMigrations = [
   {
@@ -155,6 +156,11 @@ export const controlPlaneMigrations = [
     name: "0025_charming_squadron_supreme",
     sql: migration25,
     version: 26,
+  },
+  {
+    name: "0026_fresh_white_queen",
+    sql: migration26,
+    version: 27,
   },
 ] as const;
 

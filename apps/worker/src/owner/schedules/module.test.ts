@@ -71,6 +71,258 @@ describe("OwnerControlPlane Agent schedules", () => {
     ).resolves.toMatchObject({ configured: true, ok: true });
   });
 
+  it("keeps multiple named calendar responsibilities independently addressable", async () => {
+    const authority = await authorityFor("multiple-schedule-owner", [
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      OWNER_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+    ]);
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("multiple-schedule-agent", "Multiple Schedule Agent"),
+    );
+
+    if (!created.ok) {
+      throw new Error("Expected multiple-schedule Agent fixture.");
+    }
+
+    const morningInput = {
+      agentId: created.agent.id,
+      expectedAgentRevision: created.agent.revision,
+      expectedScheduleRevision: null,
+      idempotencyKey: "create-morning-responsibility",
+      schedule: {
+        name: "Morning brief",
+        prompt: "Prepare the morning brief.",
+        trigger: {
+          at: "07:00",
+          frequency: "daily" as const,
+          timeZone: "America/Sao_Paulo",
+          type: "calendar" as const,
+        },
+      },
+      scheduleId: null,
+    };
+    const morning = await controlPlane.configureAgentSchedule(authority, morningInput);
+    const evening = await controlPlane.configureAgentSchedule(authority, {
+      agentId: created.agent.id,
+      expectedAgentRevision: created.agent.revision,
+      expectedScheduleRevision: null,
+      idempotencyKey: "create-evening-responsibility",
+      schedule: {
+        name: "Evening wrap-up",
+        prompt: "Prepare the evening wrap-up.",
+        trigger: {
+          at: "21:00",
+          frequency: "daily",
+          timeZone: "America/Sao_Paulo",
+          type: "calendar",
+        },
+      },
+      scheduleId: null,
+    });
+
+    expect([morning, evening]).toEqual([
+      expect.objectContaining({
+        configured: true,
+        ok: true,
+        schedule: expect.objectContaining({
+          id: expect.stringMatching(/^schedule_/),
+          name: "Morning brief",
+          nextRunAt: expect.any(String),
+          revision: 1,
+        }),
+      }),
+      expect.objectContaining({
+        configured: true,
+        ok: true,
+        schedule: expect.objectContaining({
+          id: expect.stringMatching(/^schedule_/),
+          name: "Evening wrap-up",
+          nextRunAt: expect.any(String),
+          revision: 2,
+        }),
+      }),
+    ]);
+    await expect(
+      controlPlane.getAgentSchedule(authority, { agentId: created.agent.id }),
+    ).resolves.toEqual({
+      error: {
+        code: "schedule_selection_required",
+        message: "Agent schedule request denied.",
+      },
+      ok: false,
+    });
+
+    const listed = await controlPlane.listAgentSchedules(authority, {
+      agentId: created.agent.id,
+    });
+
+    expect(listed).toMatchObject({
+      ok: true,
+      schedules: [
+        expect.objectContaining({ status: "active" }),
+        expect.objectContaining({ status: "active" }),
+      ],
+    });
+
+    if (!morning.ok || morning.schedule.id === undefined) {
+      throw new Error("Expected exact morning schedule identity.");
+    }
+
+    const pauseInput = {
+      agentId: created.agent.id,
+      expectedAgentRevision: created.agent.revision,
+      expectedScheduleRevision: morning.schedule.revision,
+      idempotencyKey: "pause-morning-responsibility",
+      schedule: null,
+      scheduleId: morning.schedule.id,
+    };
+    await expect(controlPlane.configureAgentSchedule(authority, pauseInput)).resolves.toMatchObject(
+      {
+        configured: true,
+        ok: true,
+        schedule: {
+          id: morning.schedule.id,
+          name: "Morning brief",
+          revision: 3,
+          status: "paused",
+        },
+      },
+    );
+    await expect(controlPlane.configureAgentSchedule(authority, pauseInput)).resolves.toMatchObject(
+      {
+        configured: false,
+        ok: true,
+        schedule: { id: morning.schedule.id, revision: 3, status: "paused" },
+      },
+    );
+
+    if (!evening.ok || evening.schedule.id === undefined) {
+      throw new Error("Expected exact evening schedule identity.");
+    }
+
+    await expect(
+      controlPlane.getAgentSchedule(authority, {
+        agentId: created.agent.id,
+        scheduleId: evening.schedule.id,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      schedule: { id: evening.schedule.id, revision: 2, status: "active" },
+    });
+  });
+
+  it("bounds the number of independently configured schedules per Agent", async () => {
+    const authority = await authorityFor("schedule-capacity-owner", [
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      OWNER_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+    ]);
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("schedule-capacity-agent", "Schedule Capacity Agent"),
+    );
+
+    if (!created.ok) {
+      throw new Error("Expected schedule-capacity Agent fixture.");
+    }
+
+    for (let index = 0; index < 8; index += 1) {
+      await expect(
+        controlPlane.configureAgentSchedule(authority, {
+          agentId: created.agent.id,
+          expectedAgentRevision: created.agent.revision,
+          expectedScheduleRevision: null,
+          idempotencyKey: `create-capacity-schedule-${index}`,
+          schedule: {
+            name: `Responsibility ${index + 1}`,
+            prompt: `Run responsibility ${index + 1}.`,
+            trigger: { intervalSeconds: 60, type: "interval" },
+          },
+          scheduleId: null,
+        }),
+      ).resolves.toMatchObject({ configured: true, ok: true });
+    }
+
+    await expect(
+      controlPlane.configureAgentSchedule(authority, {
+        agentId: created.agent.id,
+        expectedAgentRevision: created.agent.revision,
+        expectedScheduleRevision: null,
+        idempotencyKey: "create-capacity-schedule-overflow",
+        schedule: {
+          name: "Overflow responsibility",
+          prompt: "This schedule exceeds the per-Agent bound.",
+          trigger: { intervalSeconds: 60, type: "interval" },
+        },
+        scheduleId: null,
+      }),
+    ).resolves.toEqual({
+      error: {
+        code: "schedule_limit_exceeded",
+        message: "Agent schedule request denied.",
+      },
+      ok: false,
+    });
+
+    const listed = await controlPlane.listAgentSchedules(authority, {
+      agentId: created.agent.id,
+    });
+
+    if (!listed.ok || listed.schedules[0] === undefined) {
+      throw new Error("Expected a reusable schedule slot.");
+    }
+
+    const reusable = listed.schedules[0];
+    const paused = await controlPlane.configureAgentSchedule(authority, {
+      agentId: created.agent.id,
+      expectedAgentRevision: created.agent.revision,
+      expectedScheduleRevision: reusable.revision,
+      idempotencyKey: "pause-capacity-schedule-slot",
+      schedule: null,
+      scheduleId: reusable.id,
+    });
+
+    if (!paused.ok) {
+      throw new Error("Expected a paused reusable schedule slot.");
+    }
+
+    await expect(
+      controlPlane.configureAgentSchedule(authority, {
+        agentId: created.agent.id,
+        expectedAgentRevision: created.agent.revision,
+        expectedScheduleRevision: paused.schedule.revision,
+        idempotencyKey: "reuse-capacity-schedule-slot",
+        schedule: {
+          name: "Replacement responsibility",
+          prompt: "Reuse the bounded schedule slot.",
+          trigger: { intervalSeconds: 120, type: "interval" },
+        },
+        scheduleId: reusable.id,
+      }),
+    ).resolves.toMatchObject({
+      configured: true,
+      ok: true,
+      schedule: {
+        id: reusable.id,
+        name: "Replacement responsibility",
+        status: "active",
+      },
+    });
+    const reused = await controlPlane.listAgentSchedules(authority, { agentId: created.agent.id });
+    const reusedScheduleCount = reused.ok ? reused.schedules.length : -1;
+
+    expect(reused).toMatchObject({ ok: true });
+    expect(reusedScheduleCount).toBe(8);
+  });
+
   it("dispatches multiple due Agents independently and exposes their scheduled run history", async () => {
     const authority = await authorityFor("schedule-owner-1", [
       OWNER_WRITE_SCOPE,
@@ -134,6 +386,13 @@ describe("OwnerControlPlane Agent schedules", () => {
       expect.objectContaining({ configured: true, ok: true }),
     ]);
 
+    const firstSchedule = configured[0];
+    const secondSchedule = configured[1];
+
+    if (!firstSchedule?.ok || !secondSchedule?.ok) {
+      throw new Error("Expected exact scheduled Run provenance fixtures.");
+    }
+
     await runInDurableObject(controlPlane, (_instance, state) => {
       state.storage.sql.exec(
         "UPDATE agent_schedules SET next_run_at = ? WHERE status = 'active'",
@@ -184,6 +443,10 @@ describe("OwnerControlPlane Agent schedules", () => {
         runs: [
           expect.objectContaining({
             runId: schedules[0].schedule.lastRunId,
+            schedule: {
+              id: firstSchedule.schedule.id,
+              revision: 1,
+            },
             trigger: "schedule",
           }),
         ],
@@ -193,11 +456,21 @@ describe("OwnerControlPlane Agent schedules", () => {
         runs: [
           expect.objectContaining({
             runId: schedules[1].schedule.lastRunId,
+            schedule: {
+              id: secondSchedule.schedule.id,
+              revision: 1,
+            },
             trigger: "schedule",
           }),
         ],
       }),
     ]);
+    await expect(
+      controlPlane.inspectRun(authority, { runId: schedules[0].schedule.lastRunId }),
+    ).resolves.toMatchObject({
+      ok: true,
+      run: { schedule: { id: firstSchedule.schedule.id, revision: 1 } },
+    });
 
     const outcomes = await vi.waitFor(
       async () =>
@@ -223,11 +496,17 @@ describe("OwnerControlPlane Agent schedules", () => {
 
     expect(outcomes).toEqual([
       expect.objectContaining({
-        configuration: expect.objectContaining({ scheduleRevision: 1 }),
+        configuration: expect.objectContaining({
+          scheduleId: firstSchedule.schedule.id,
+          scheduleRevision: 1,
+        }),
         runId: schedules[0].schedule.lastRunId,
       }),
       expect.objectContaining({
-        configuration: expect.objectContaining({ scheduleRevision: 1 }),
+        configuration: expect.objectContaining({
+          scheduleId: secondSchedule.schedule.id,
+          scheduleRevision: 1,
+        }),
         runId: schedules[1].schedule.lastRunId,
       }),
     ]);

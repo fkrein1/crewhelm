@@ -11,6 +11,7 @@ import {
   listAgentRevisionsResultSchema,
   listAgentsResultSchema,
   listConnectionsResultSchema,
+  upgradeCompatibleAgentScheduleSchema,
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
@@ -77,6 +78,10 @@ const upgradeStatusResultSchema = z.discriminatedUnion("ok", [
   z.looseObject({
     ok: z.literal(false),
   }),
+]);
+const upgradeGetAgentScheduleResultSchema = z.union([
+  getAgentScheduleResultSchema,
+  z.strictObject({ ok: z.literal(true), schedule: upgradeCompatibleAgentScheduleSchema }),
 ]);
 
 const collectionEvidenceSchema = z.strictObject({
@@ -473,7 +478,7 @@ export async function readUpgradeOwnerState(
       session,
       "crewhelm_get_agent_schedule",
       { agentId: agent.id },
-      getAgentScheduleResultSchema,
+      upgradeGetAgentScheduleResultSchema,
       "Agent schedule fixture returned an invalid payload.",
     );
 
