@@ -115,6 +115,27 @@ function failure(name: CheckName, error: unknown) {
     : check(name, "request_failed", "Web research rehearsal check failed.");
 }
 
+export function includesOfficialCloudflareDevelopersUrl(output: string): boolean {
+  for (const match of output.matchAll(/https:\/\/[^\s<>"']+/gu)) {
+    const candidate = match[0].replace(/[),.;\]}]+$/u, "");
+    try {
+      const url = new URL(candidate);
+      if (
+        url.protocol === "https:" &&
+        url.username === "" &&
+        url.password === "" &&
+        url.port === "" &&
+        url.hostname === "developers.cloudflare.com"
+      ) {
+        return true;
+      }
+    } catch {
+      // Continue looking for another bounded URL-shaped token.
+    }
+  }
+  return false;
+}
+
 async function callTool<T>(
   session: TemporaryOwnerMcpSession,
   name: string,
@@ -512,7 +533,7 @@ export async function runWebResearchSmoke(
       if (
         inspected.run.status !== "completed" ||
         !inspected.run.output?.includes("WEB_RESEARCH_OK") ||
-        !inspected.run.output.includes("developers.cloudflare.com") ||
+        !includesOfficialCloudflareDevelopersUrl(inspected.run.output) ||
         inspected.usage?.toolCalls.used !== 2 ||
         completedTools < 2
       ) {
