@@ -4,6 +4,7 @@ import {
   AUTONOMY_WRITE_SCOPE,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
+  RUNTIME_TOOL_EXECUTION_PERMIT_LIFETIME_MS,
   RUNTIME_TOOL_LATE_OPEN_CLEANUP_HORIZON_MS,
   RUNS_WRITE_SCOPE,
   completeRuntimeToolExecutionResultSchema,
@@ -12,7 +13,7 @@ import {
 } from "@crewhelm/contracts";
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { digestRunPrompt } from "../../agent/admitted-runs/index.js";
 import { digestToolInput } from "../../agent/admitted-runs/protocol.js";
@@ -20,7 +21,7 @@ import { sandboxCodeCapabilityConfiguration } from "../../agent-capabilities/san
 import { workersAiCapabilityConfiguration } from "../../agent-capabilities/workers-ai.js";
 import { agentInput, authorityFor } from "../testkit.js";
 
-async function fixture(subject: string) {
+async function fixture(subject: string, maximumDurationMs = 5_000) {
   const authority = await authorityFor(subject, [
     OWNER_READ_SCOPE,
     OWNER_WRITE_SCOPE,
@@ -37,7 +38,7 @@ async function fixture(subject: string) {
       sandboxCodeCapabilityConfiguration({
         languages: ["python"],
         maxCodeBytes: 4_096,
-        maxDurationMs: 5_000,
+        maxDurationMs: maximumDurationMs,
         maxOutputBytes: 16_384,
       }),
     ].toSorted((left, right) => left.id.localeCompare(right.id)),
@@ -144,6 +145,97 @@ describe("OwnerControlPlane runtime tool execution", () => {
       ];
       expect(rows).toEqual([{ output_bytes: 42, status: "completed" }]);
     });
+  });
+
+  it("keeps dispatch strict while allowing only bounded completion reporting grace", async () => {
+    const current = await fixture("runtime-tool-completion-grace");
+    let currentTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockImplementation(() => currentTime);
+
+    try {
+      const reserved = reserveRuntimeToolExecutionResultSchema.parse(
+        await current.controlPlane.reserveRuntimeToolExecution({
+          ...current.reference,
+          action: current.action,
+        }),
+      );
+
+      if (!reserved.ok) throw new Error("Expected runtime tool reservation.");
+      await expect(
+        current.controlPlane.dispatchRuntimeToolExecution({ permit: reserved.permit }),
+      ).resolves.toMatchObject({ dispatched: true, ok: true });
+      currentTime += reserved.permit.constraints.maxDurationMs + 1;
+      await expect(
+        current.controlPlane.completeRuntimeToolExecution({
+          outcome: { outputBytes: 42, status: "completed" },
+          permit: reserved.permit,
+        }),
+      ).resolves.toMatchObject({ completed: true, ok: true });
+      await runInDurableObject(current.controlPlane, (_instance, state) => {
+        expect(
+          state.storage.sql
+            .exec<{ status: string }>(
+              "SELECT status FROM runtime_tool_executions WHERE tool_call_id = ?",
+              current.action.toolCallId,
+            )
+            .one(),
+        ).toEqual({ status: "completed" });
+      });
+
+      const delayedDispatch = await fixture("runtime-tool-delayed-dispatch", 1);
+      const delayedReservation = reserveRuntimeToolExecutionResultSchema.parse(
+        await delayedDispatch.controlPlane.reserveRuntimeToolExecution({
+          ...delayedDispatch.reference,
+          action: delayedDispatch.action,
+        }),
+      );
+      if (!delayedReservation.ok) throw new Error("Expected delayed runtime tool reservation.");
+      currentTime =
+        Date.parse(delayedReservation.permit.constraints.decisionExpiresAt) -
+        RUNTIME_TOOL_EXECUTION_PERMIT_LIFETIME_MS +
+        delayedReservation.permit.constraints.maxDurationMs;
+      expect(currentTime).toBeLessThan(
+        Date.parse(delayedReservation.permit.constraints.decisionExpiresAt),
+      );
+      await expect(
+        delayedDispatch.controlPlane.dispatchRuntimeToolExecution({
+          permit: delayedReservation.permit,
+        }),
+      ).resolves.toMatchObject({ ok: false });
+
+      const lateCompletion = await fixture("runtime-tool-late-completion");
+      const lateReservation = reserveRuntimeToolExecutionResultSchema.parse(
+        await lateCompletion.controlPlane.reserveRuntimeToolExecution({
+          ...lateCompletion.reference,
+          action: lateCompletion.action,
+        }),
+      );
+      if (!lateReservation.ok) throw new Error("Expected late runtime tool reservation.");
+      await expect(
+        lateCompletion.controlPlane.dispatchRuntimeToolExecution({
+          permit: lateReservation.permit,
+        }),
+      ).resolves.toMatchObject({ dispatched: true, ok: true });
+      currentTime += lateReservation.permit.constraints.maxDurationMs + 5_001;
+      await expect(
+        lateCompletion.controlPlane.completeRuntimeToolExecution({
+          outcome: { outputBytes: 42, status: "completed" },
+          permit: lateReservation.permit,
+        }),
+      ).resolves.toMatchObject({ completed: true, ok: true });
+      await runInDurableObject(lateCompletion.controlPlane, (_instance, state) => {
+        expect(
+          state.storage.sql
+            .exec<{ status: string }>(
+              "SELECT status FROM runtime_tool_executions WHERE tool_call_id = ?",
+              lateCompletion.action.toolCallId,
+            )
+            .one(),
+        ).toEqual({ status: "unknown" });
+      });
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("denies stale revisions, altered tool plans, duplicate calls, and completion before dispatch", async () => {

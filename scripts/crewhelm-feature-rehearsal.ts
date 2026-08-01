@@ -17,6 +17,7 @@ import {
   MCP_PROTOCOL_VERSION,
 } from "../apps/cli/src/temporary-owner-session.js";
 import { CREWHELM_CLI_VERSION } from "../apps/cli/src/version.js";
+import { inspectSandboxRun, runSandboxSmoke } from "../apps/cli/src/sandbox-smoke.js";
 import { recoverWorkflowSmoke, runWorkflowSmoke } from "../apps/cli/src/workflow-smoke.js";
 
 const DEFAULT_INSTALLATION = "crewhelm.testing.installation.json";
@@ -138,6 +139,46 @@ async function workflow(options: {
   );
 }
 
+async function sandbox(options: {
+  credentialPath: string;
+  installationPath: string;
+  runTimeoutMs: number;
+  timeoutMs: number;
+}): Promise<unknown> {
+  const rehearsalTarget = await resolveRehearsalTarget(options.installationPath);
+  const credential = await readRehearsalCredential(options.credentialPath);
+  return runSandboxSmoke(
+    {
+      credential,
+      origin: rehearsalTarget.origin,
+      persistCredential: (rotated) => writeRehearsalCredential(options.credentialPath, rotated),
+      runTimeoutMs: options.runTimeoutMs,
+      timeoutMs: options.timeoutMs,
+    },
+    { expectedDeploymentFingerprint: rehearsalTarget.expectedDeploymentFingerprint, fetch },
+  );
+}
+
+async function inspectSandbox(options: {
+  credentialPath: string;
+  installationPath: string;
+  runId: string;
+  timeoutMs: number;
+}): Promise<unknown> {
+  const rehearsalTarget = await resolveRehearsalTarget(options.installationPath);
+  const credential = await readRehearsalCredential(options.credentialPath);
+  return inspectSandboxRun(
+    {
+      credential,
+      origin: rehearsalTarget.origin,
+      persistCredential: (rotated) => writeRehearsalCredential(options.credentialPath, rotated),
+      runId: options.runId,
+      timeoutMs: options.timeoutMs,
+    },
+    { expectedDeploymentFingerprint: rehearsalTarget.expectedDeploymentFingerprint, fetch },
+  );
+}
+
 async function recover(options: {
   agentId: string;
   credentialPath: string;
@@ -164,9 +205,15 @@ async function recover(options: {
 
 export async function runFeatureRehearsal(arguments_: readonly string[]): Promise<number> {
   const [action, ...rest] = arguments_;
-  if (action !== "authorize" && action !== "recover" && action !== "workflow") {
+  if (
+    action !== "authorize" &&
+    action !== "inspect-sandbox" &&
+    action !== "recover" &&
+    action !== "sandbox" &&
+    action !== "workflow"
+  ) {
     process.stderr.write(
-      "Usage: crewhelm-feature-rehearsal.ts <authorize|recover|workflow> [options]\n",
+      "Usage: crewhelm-feature-rehearsal.ts <authorize|inspect-sandbox|recover|sandbox|workflow> [options]\n",
     );
     return 2;
   }
@@ -178,6 +225,7 @@ export async function runFeatureRehearsal(arguments_: readonly string[]): Promis
       credential: { default: DEFAULT_CREDENTIAL, type: "string" },
       installation: { default: DEFAULT_INSTALLATION, type: "string" },
       "run-timeout-ms": { default: "240000", type: "string" },
+      "run-id": { type: "string" },
       "timeout-ms": { default: "5000", type: "string" },
       "workflow-id": { type: "string" },
     },
@@ -206,25 +254,39 @@ export async function runFeatureRehearsal(arguments_: readonly string[]): Promis
                   throw new Error("browser must be codex or system.");
                 })(),
         })
-      : action === "recover"
-        ? await recover({
+      : action === "inspect-sandbox"
+        ? await inspectSandbox({
             ...common,
-            agentId:
-              parsed.values["agent-id"] ??
+            runId:
+              parsed.values["run-id"] ??
               (() => {
-                throw new Error("recover requires agent-id.");
-              })(),
-            runTimeoutMs,
-            workflowId:
-              parsed.values["workflow-id"] ??
-              (() => {
-                throw new Error("recover requires workflow-id.");
+                throw new Error("inspect-sandbox requires run-id.");
               })(),
           })
-        : await workflow({
-            ...common,
-            runTimeoutMs,
-          });
+        : action === "recover"
+          ? await recover({
+              ...common,
+              agentId:
+                parsed.values["agent-id"] ??
+                (() => {
+                  throw new Error("recover requires agent-id.");
+                })(),
+              runTimeoutMs,
+              workflowId:
+                parsed.values["workflow-id"] ??
+                (() => {
+                  throw new Error("recover requires workflow-id.");
+                })(),
+            })
+          : action === "sandbox"
+            ? await sandbox({
+                ...common,
+                runTimeoutMs,
+              })
+            : await workflow({
+                ...common,
+                runTimeoutMs,
+              });
   process.stdout.write(`${JSON.stringify(report)}\n`);
   return typeof report === "object" && report !== null && Reflect.get(report, "ok") === true
     ? 0
