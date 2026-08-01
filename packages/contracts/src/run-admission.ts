@@ -9,6 +9,7 @@ import {
 
 import {
   admittedSkillProvenanceSchema,
+  agentRuntimeToolIdSchema,
   agentRuntimePlanSchema,
   crewAgentRuntimeConfigSchema,
 } from "./agent-runtime.js";
@@ -542,6 +543,7 @@ const runStateTimelineEventSchema = z
     ]),
     occurredAt: z.iso.datetime(),
     provider: toolProviderFailureSchema.optional(),
+    runtimeToolId: agentRuntimeToolIdSchema.optional(),
     toolCallId: toolCallIdSchema.optional(),
   })
   .superRefine((event, context) => {

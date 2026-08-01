@@ -823,9 +823,18 @@ describe("CrewAgent admitted execution", () => {
     expect(finished.usage?.toolCalls).toEqual({ limit: 2, used: 1 });
     expect(finished.timeline).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ event: "tool.execution_reserved" }),
-        expect.objectContaining({ event: "tool.execution_dispatched" }),
-        expect.objectContaining({ event: "tool.execution_completed" }),
+        expect.objectContaining({
+          event: "tool.execution_reserved",
+          runtimeToolId: "sandbox.code",
+        }),
+        expect.objectContaining({
+          event: "tool.execution_dispatched",
+          runtimeToolId: "sandbox.code",
+        }),
+        expect.objectContaining({
+          event: "tool.execution_completed",
+          runtimeToolId: "sandbox.code",
+        }),
       ]),
     );
     const session = env.CREW_SESSION.getByName(
@@ -900,11 +909,17 @@ describe("CrewAgent admitted execution", () => {
     expect(finished.usage?.toolCalls).toEqual({ limit: 2, used: 2 });
     expect(finished.timeline).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ event: "tool.execution_reserved" }),
-        expect.objectContaining({ event: "tool.execution_dispatched" }),
-        expect.objectContaining({ event: "tool.execution_completed" }),
+        expect.objectContaining({ event: "tool.execution_reserved", runtimeToolId: "web.search" }),
+        expect.objectContaining({ event: "tool.execution_dispatched", runtimeToolId: "web.fetch" }),
       ]),
     );
+    expect(
+      finished.timeline.flatMap((event) =>
+        event.event === "tool.execution_completed" && "runtimeToolId" in event
+          ? [event.runtimeToolId]
+          : [],
+      ),
+    ).toEqual(["web.search", "web.fetch"]);
     const session = env.CREW_SESSION.getByName(
       crewSessionObjectName({
         agentId: created.agent.id,

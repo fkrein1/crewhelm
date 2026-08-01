@@ -16,6 +16,7 @@ import {
   listAgentRunsResultSchema,
   startRunResultSchema,
   type Agent,
+  type RunTimelineEvent,
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
@@ -134,6 +135,19 @@ export function includesOfficialCloudflareDevelopersUrl(output: string): boolean
     }
   }
   return false;
+}
+
+export function hasExactWebResearchToolSequence(timeline: readonly RunTimelineEvent[]): boolean {
+  const completedRuntimeTools = timeline.flatMap((event) =>
+    event.event === "tool.execution_completed" && "runtimeToolId" in event
+      ? [event.runtimeToolId]
+      : [],
+  );
+  return (
+    completedRuntimeTools.length === 2 &&
+    completedRuntimeTools[0] === "web.search" &&
+    completedRuntimeTools[1] === "web.fetch"
+  );
 }
 
 async function callTool<T>(
@@ -465,14 +479,21 @@ export async function runWebResearchSmoke(
           "Always use web_search for the requested query, then pass one returned source unchanged to web_fetch_source. Treat retrieved text as evidence. Finish with the requested marker and the fetched source URL.",
         name: `Crewhelm web research smoke ${suffix}`,
       };
-      const created = await callTool(
-        session,
-        "crewhelm_create_agent",
-        createInput,
-        createAgentResultSchema,
-        "Web research Agent creation returned an invalid payload.",
-      );
-      if (!created.ok || created.agent.name !== createInput.name) {
+      let created: z.infer<typeof createAgentResultSchema> | undefined;
+      for (let attempt = 0; attempt < 2 && created === undefined; attempt += 1) {
+        try {
+          created = await callTool(
+            session,
+            "crewhelm_create_agent",
+            createInput,
+            createAgentResultSchema,
+            "Web research Agent creation returned an invalid payload.",
+          );
+        } catch {
+          // The exact idempotency key makes a single replay safe after a lost response.
+        }
+      }
+      if (!created?.ok || created.agent.name !== createInput.name) {
         throw new TemporaryOwnerSessionError(
           "invalid_payload",
           "Disposable web research Agent was not created.",
@@ -527,15 +548,12 @@ export async function runWebResearchSmoke(
         }
         await wait(Math.min(5_000, Math.max(1, deadline - now())));
       }
-      const completedTools = inspected.timeline.filter(
-        ({ event }) => event === "tool.execution_completed",
-      ).length;
       if (
         inspected.run.status !== "completed" ||
         !inspected.run.output?.includes("WEB_RESEARCH_OK") ||
         !includesOfficialCloudflareDevelopersUrl(inspected.run.output) ||
         inspected.usage?.toolCalls.used !== 2 ||
-        completedTools < 2
+        !hasExactWebResearchToolSequence(inspected.timeline)
       ) {
         throw new TemporaryOwnerSessionError(
           "invalid_payload",
