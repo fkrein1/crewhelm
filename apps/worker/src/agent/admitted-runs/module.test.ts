@@ -2586,6 +2586,37 @@ describe("CrewAgent admitted execution", () => {
     expect(inspected.ok ? inspected.run.output : undefined).toBeUndefined();
   });
 
+  it("bounds a model stream that produces no chunks before the Run deadline", async () => {
+    const authority = await authorityFor("crew-agent-stream-deadline-604");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const input = agentInput("crew-agent-stream-deadline-create-604");
+    const created = await controlPlane.createAgent(authority, {
+      ...input,
+      executionLimits: { ...input.executionLimits, maxDurationSeconds: 5 },
+    });
+    if (!created.ok) throw new Error("Expected stalled stream deadline Agent fixture.");
+
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-stream-deadline-run-604",
+      prompt: DEADLINE_TEST_PROMPT,
+    });
+    if (!started.ok) throw new Error("Expected stalled stream deadline Run fixture.");
+
+    await vi.waitFor(
+      async () => {
+        await expect(
+          controlPlane.inspectRun(authority, { runId: started.run.runId }),
+        ).resolves.toMatchObject({
+          ok: true,
+          run: { status: expect.stringMatching(/^(cancelled|failed)$/u) },
+        });
+      },
+      { interval: 100, timeout: 12_000 },
+    );
+  });
+
   it("propagates deadline cancellation failures for durable schedule retry", async () => {
     const authority = await authorityFor("crew-agent-605");
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);

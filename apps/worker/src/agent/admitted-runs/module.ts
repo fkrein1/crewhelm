@@ -1131,6 +1131,15 @@ export class CrewSession extends Think {
       super.inspectSubmission(capability.runId),
       this.#readRunTrace(capability.runId),
     ]);
+    const committedSessionStatusResult =
+      record.session === undefined
+        ? undefined
+        : z
+            .enum(["cancelled", "completed", "failed"])
+            .safeParse(await this.ctx.storage.get(sessionRunTerminalKey(capability.runId)));
+    const committedSessionStatus = committedSessionStatusResult?.success
+      ? committedSessionStatusResult.data
+      : undefined;
 
     if (submission === null) {
       return inspectAdmittedRunResultSchema.parse({
@@ -1141,7 +1150,7 @@ export class CrewSession extends Think {
           createdAt: new Date(record.createdAt).toISOString(),
           runId: capability.runId,
           ...(record.session === undefined ? {} : { session: record.session }),
-          status: Date.now() >= record.deadlineAt ? "failed" : "queued",
+          status: committedSessionStatus ?? (Date.now() >= record.deadlineAt ? "failed" : "queued"),
         },
         trace,
       });
@@ -1152,10 +1161,11 @@ export class CrewSession extends Think {
     const outputPending = output?.state === "pending";
     const frameworkStatus = outputPending ? "running" : publicRunStatus(submission.status);
     const status =
-      frameworkStatus === "completed" &&
+      committedSessionStatus ??
+      (frameworkStatus === "completed" &&
       trace.some((event) => event.event === "tool.authorization_blocked")
         ? "failed"
-        : frameworkStatus;
+        : frameworkStatus);
 
     return inspectAdmittedRunResultSchema.parse({
       ok: true,
@@ -1297,6 +1307,7 @@ export class CrewSession extends Think {
     this.#approvalTurnMetadata = {
       budgetReservation: record.budgetReservation,
       configuration: record.configuration,
+      deadlineAt: record.deadlineAt,
       promptCharacters: record.promptCharacters,
       promptDigest: record.promptDigest,
       runId: capability.runId,
@@ -1340,16 +1351,58 @@ export class CrewSession extends Think {
       return;
     }
 
+    if (record.session !== undefined) {
+      const committed = z
+        .enum(["cancelled", "completed", "failed"])
+        .safeParse(await this.ctx.storage.get(sessionRunTerminalKey(request.data.runId)));
+
+      if (committed.success) {
+        await this.#completeSessionRun(record, request.data.runId);
+        return;
+      }
+    }
+
     const submission = await super.inspectSubmission(request.data.runId);
 
-    if (
-      submission === null ||
-      ["aborted", "completed", "error", "skipped"].includes(submission.status)
-    ) {
+    if (submission === null) {
+      if (record.session !== undefined) {
+        await this.ctx.storage.put(sessionRunTerminalKey(request.data.runId), "failed");
+        await this.#completeSessionRun(record, request.data.runId);
+      }
+      return;
+    }
+
+    if (["aborted", "completed", "error", "skipped"].includes(submission.status)) {
+      if (record.session !== undefined) {
+        const approvalRecords = await this.ctx.storage.list({
+          prefix: toolApprovalPrefix(request.data.runId),
+        });
+        const output =
+          submission.status === "completed" ? this.#readRunOutput(request.data.runId) : undefined;
+        const trace = await this.#readRunTrace(request.data.runId);
+        const terminalStatus: Extract<Run["status"], "cancelled" | "completed" | "failed"> =
+          approvalRecords.size > 0 || output?.state === "pending"
+            ? "cancelled"
+            : submission.status === "completed" &&
+                !trace.some((event) => event.event === "tool.authorization_blocked")
+              ? "completed"
+              : submission.status === "aborted"
+                ? "cancelled"
+                : "failed";
+
+        await Promise.all([...approvalRecords.keys()].map((key) => this.ctx.storage.delete(key)));
+        await this.ctx.storage.put(sessionRunTerminalKey(request.data.runId), terminalStatus);
+        await this.#completeSessionRun(record, request.data.runId);
+      }
       return;
     }
 
     await this.cancelAdmittedSubmission(request.data.runId, "Crewhelm run deadline exceeded.");
+
+    if (record.session !== undefined) {
+      await this.ctx.storage.put(sessionRunTerminalKey(request.data.runId), "cancelled");
+      await this.#completeSessionRun(record, request.data.runId);
+    }
   }
 
   async syncAgentInbox(input: unknown): Promise<void> {
@@ -1645,6 +1698,7 @@ export class CrewSession extends Think {
         ? []
         : this.#activeToolAdapters().map((adapter) => adapter.name),
       instructions: crewAgentSystemPrompt(configuration),
+      chatStreamStallTimeoutMs: Math.max(1, metadata.deadlineAt - Date.now()),
       maxOutputTokens: metadata.budgetReservation.maxOutputTokens,
       maxRetries: 0,
       maxSteps: approvalContinuation ? 1 : metadata.budgetReservation.maxTurns,
@@ -2229,6 +2283,7 @@ export class CrewSession extends Think {
         crewhelmRun: {
           budgetReservation: record.budgetReservation,
           configuration: record.configuration,
+          deadlineAt: record.deadlineAt,
           promptCharacters: record.promptCharacters,
           promptDigest: record.promptDigest,
           runId,

@@ -1,6 +1,6 @@
 ---
 name: crewhelm-black-box-testing
-description: Run an optional live Crewhelm rehearsal through public OAuth and MCP when the user explicitly asks for black-box, remote E2E, smoke, or release-confidence testing. Do not use for routine implementation or deterministic CI.
+description: Run an optional live Crewhelm rehearsal through public MCP, with separate periodic OAuth coverage, when the user explicitly asks for black-box, remote E2E, smoke, or release-confidence testing. Do not use for routine implementation or deterministic CI.
 ---
 
 # Crewhelm black-box testing
@@ -10,15 +10,14 @@ client uses. This supplements deterministic tests; it never replaces them.
 
 ## Standard target
 
-Repository rehearsals use `crewhelm.testing.installation.json`. The explicit request to run this
+Repository rehearsals use `crewhelm.testing.installation.json`. An explicit request to run this
 skill authorizes `crewhelm up` against that dedicated installation so the deployed Worker matches
-the current packaged build. It also authorizes the ephemeral Crewhelm rehearsal OAuth client to
-request and approve temporary owner access on `crewhelm-testing`, including Full control when the
-requested public MCP journey requires mutations. No additional consent pause is required for that
-exact test installation, client type, and bounded rehearsal scope. It does not authorize production
-or access through a different account, client, installation, or broader scope.
+the packaged build. It also authorizes the repository rehearsal client to use saved, rotating Full
+control owner access for bounded public MCP journeys on `crewhelm-testing`. No additional consent
+pause is required for that exact installation, client type, and scenario. It does not authorize
+production, another account, another installation, or broader scope.
 
-Before any OAuth, MCP, or mutating call:
+Before any MCP or mutating call:
 
 1. Run the relevant deterministic checks and `pnpm build`.
 2. Run:
@@ -32,59 +31,98 @@ Before any OAuth, MCP, or mutating call:
 3. Verify the report names `crewhelm-testing`, reports
    `https://crewhelm-testing.fkrein.workers.dev`, passes public diagnosis, and is aligned to the
    packaged fingerprint. Build logs are not target evidence.
-4. Pass `--installation crewhelm.testing.installation.json` to every installation-backed CLI
-   command. Do not retype the endpoint. If a command also receives `--endpoint`, the CLI must reject
-   any mismatch before network access.
-5. Never use an ambient MCP connector unless its exact origin is visible and equals the installation
-   metadata. A generic connector name, cached schema, or familiar account is not origin proof.
+4. Pass `--installation crewhelm.testing.installation.json` to every installation-backed command.
+   Do not retype the endpoint. A supplied endpoint must be rejected on any mismatch before network
+   access.
+5. Never use an ambient MCP connector unless its visible exact origin equals the installation
+   metadata. A generic name, cached schema, or familiar account is not origin proof.
+
+## Access lanes
+
+Routine feature rehearsals use the saved credential through
+`scripts/crewhelm-feature-rehearsal.ts`; they do not repeat browser authorization. The credential is
+origin-bound, ignored by Git, mode 0600, and rotated before every session. Tokens never appear in
+output, and each 15-minute access token is revoked and verified before exit.
+
+Run the durable Workflow journey without a browser:
+
+```sh
+pnpm exec tsx scripts/crewhelm-feature-rehearsal.ts workflow \
+  --installation crewhelm.testing.installation.json \
+  --credential .crewhelm-rehearsal-credential.json
+```
+
+The journey polls no faster than the public MCP rate-limit budget allows. If a prior attempt exits
+with retained exact fixture IDs, resume cleanup rather than creating another fixture:
+
+```sh
+pnpm exec tsx scripts/crewhelm-feature-rehearsal.ts recover \
+  --installation crewhelm.testing.installation.json \
+  --credential .crewhelm-rehearsal-credential.json \
+  --agent-id '<exact agentId>' \
+  --workflow-id '<exact workflowId>'
+```
+
+Recovery is exact, idempotent, browser-free, and reports bounded state and failure details without
+tokens. Do not use discovery heuristics when the exact IDs are available.
+
+Create or recover the credential only as an occasional combined authentication check:
+
+```sh
+pnpm exec tsx scripts/crewhelm-feature-rehearsal.ts authorize \
+  --installation crewhelm.testing.installation.json \
+  --credential .crewhelm-rehearsal-credential.json \
+  --browser codex
+```
+
+Prefer the Codex browser. If its URL policy blocks the signed OAuth handoff, `--browser system` is
+explicitly allowed for this combined check on the exact standard target. It opens the system
+browser without printing the signed URL. Do not use it for another target without new consent.
+
+Run combined auth when authentication changed, the credential is absent or invalid, refresh became
+ambiguous, or release confidence explicitly includes auth. A saved refresh credential is durable
+testing authority: keep it only on the trusted local machine and never copy, print, inspect, or
+commit it. The user's rehearsal request is consent; ambient sign-in or the credential file alone is
+not.
 
 ## Guardrails
 
-- Treat the rehearsal as sensitive. State the target installation, exact scenario, mutations,
-  cleanup, and acceptance evidence before running it.
-- Use the standard dedicated test installation unless the user explicitly authorizes another
-  target. Production requires separate explicit authorization.
-- Load secrets only through the repository's ignored environment file. Never print values, OAuth
-  codes, signed URLs, tokens, or provider payloads.
-- Use `--browser codex` for installation-backed CLI authorization. Custom harnesses write the
-  short-lived HTTPS authorization target to a unique mode-0600 temporary file, open it in a new
-  in-app tab, and delete the file immediately. Never print the target or use the system browser.
+- State the exact target, scenario, mutations, cleanup, and acceptance evidence before live work.
+- Use the dedicated test installation unless the user explicitly authorizes another target.
+- Load infrastructure secrets only through the ignored repository environment file. Never print
+  secret values, OAuth codes, signed URLs, tokens, or provider payloads.
 - On authorization pages, inspect only scoped visible text and controls. Do not capture a full DOM
   snapshot containing signed links.
-- An explicit request to run this skill approves the standard target's ephemeral rehearsal client
-  and bounded temporary scope described above; ambient sign-in alone is not consent. Pause for any
-  authority change outside that grant. Use temporary owner access and require verified token
-  revocation.
 - Exercise public OAuth and MCP only. Do not substitute direct Durable Object, D1, R2, or provider
   writes for black-box behavior.
-- Keep fixtures unique, bounded, and disposable. Record retained immutable evidence when the
-  product intentionally has no delete operation.
-- Run one live session per installation. Do not start a rescue or parallel session while another
-  session is polling. Keep request, time, fleet-capacity, and token-lifetime headroom reserved for
-  cleanup and revocation.
+- Keep fixtures unique, bounded, disposable, and within existing budgets. Record retained immutable
+  evidence only when the product intentionally has no delete operation.
+- Run one live session per installation. Preserve request, time, fleet-capacity, and access-token
+  headroom for cleanup and revocation.
 
 ## Rehearsal
 
-1. Complete the standard-target preflight and capture the stable fingerprint.
+1. Complete target preflight and capture the stable fingerprint.
 2. Capture a read-only baseline, including affected capacity and unresolved recovery state.
-3. Exercise the feature's happy path through public CLI, OAuth, and MCP.
-4. Exercise idempotent replay, one meaningful denial or boundary, and the documented recovery path.
-5. Read the exact resulting resource and verify compact discovery does not leak detailed content.
-6. Clean up through public product operations and compare the final state with the baseline.
-7. Verify temporary access revocation.
+3. Exercise the feature happy path through public CLI and MCP using saved owner access.
+4. Exercise idempotent replay, one meaningful denial or boundary, and documented recovery.
+5. Read the exact result and verify compact discovery does not leak detailed content.
+6. Clean up through public product operations and compare final state with the baseline.
+7. Verify short-lived access-token revocation. Retain the rotating refresh credential for later
+   rehearsals unless the user asks to retire autonomous testing access.
 
 If the rehearsal exposes a product defect, stop the scenario. Reproduce it, fix it with
 `crewhelm-development`, verify and redeploy the exact branch, then restart the rehearsal.
 
-For a light rehearsal, stop after preflight, public diagnosis, and at most one bounded journey.
-Create no provider effect unless the requested scenario requires it. Target five minutes while
-preserving the same origin, cleanup, and revocation requirements.
+For a light rehearsal, stop after preflight, public diagnosis, and one bounded journey. Create no
+provider effect unless required. Target five minutes while preserving origin, cleanup, and
+short-lived access revocation.
 
 ## Evidence
 
-Report the endpoint, fingerprint, checks performed, resource IDs, before/after counts, terminal
-state, cleanup or retained evidence, and token revocation. Separate product failures from harness or
-browser failures.
+Report the endpoint, fingerprint, checks, resource IDs, before/after counts, terminal state, cleanup
+or retained evidence, access-token revocation, and whether combined auth was run or reused. Never
+report credential contents. Separate product failures from harness, browser, and provider failures.
 
-Document only durable behavior or operational decisions that are not quickly inferable from code.
-Describe the current system concisely; omit change history. Each word should carry its weight.
+Document only durable behavior or operational decisions not quickly inferable from code. Keep the
+current system concise; omit change history.

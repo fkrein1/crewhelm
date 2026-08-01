@@ -945,6 +945,8 @@ export class OwnerControlPlane extends DurableObject {
     this.#runAdmissions.cleanup(currentTime);
     await this.#workflows.cleanup(currentTime);
     await this.#workflows.recoverQueued();
+    await this.#workflows.recoverCancelling();
+    await this.#workflows.recoverActive();
     const dueSchedules = this.#agentSchedules.claimDue(currentTime);
     const dispatches = await Promise.allSettled(
       dueSchedules.map((schedule) => this.#dispatchScheduledRun(schedule, currentTime)),

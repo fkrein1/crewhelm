@@ -24,6 +24,7 @@
     "apps/cli/**/*.ts",
     "packages/**/*.ts",
     "scripts/**/*.mjs",
+    "scripts/**/*.ts",
     "test/**/*.ts",
     "vitest.config.ts"
   ]
