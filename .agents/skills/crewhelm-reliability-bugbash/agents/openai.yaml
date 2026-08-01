@@ -1,4 +1,4 @@
 interface:
   display_name: "Crewhelm reliability bug bash"
   short_description: "Explore and repair live Crewhelm failures."
-  default_prompt: "Use $crewhelm-reliability-bugbash to investigate [feature, journey, change, failure mode, or concern], fix reproducible defects, and autonomously open focused draft PRs for related fixes."
+  default_prompt: "Use $crewhelm-reliability-bugbash to investigate [feature, journey, change, failure mode, or concern], repair reproducible defects, verify cleanup, and report evidence."
