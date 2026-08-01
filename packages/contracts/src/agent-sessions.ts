@@ -96,7 +96,11 @@ export const deleteAgentSessionInputSchema = z.strictObject({
 
 export const manageAgentSessionsInputSchema = z
   .strictObject({
-    action: z.enum(["delete", "inspect", "list"]),
+    action: z
+      .enum(["delete", "inspect", "list"])
+      .describe(
+        "Choose one action and send only its fields: delete(agentId, sessionId, expectedBranchRevision, idempotencyKey); inspect(agentId, sessionId); list(agentId, cursor?, limit?).",
+      ),
     agentId: agentIdSchema,
     cursor: sessionIdSchema.optional(),
     expectedBranchRevision: branchRevisionSchema.optional(),
@@ -142,7 +146,11 @@ export const manageAgentSessionsInputSchema = z
 
 export const browseAgentSessionsInputSchema = z
   .strictObject({
-    action: z.enum(["inspect", "list"]),
+    action: z
+      .enum(["inspect", "list"])
+      .describe(
+        "Choose one action and send only its fields: inspect(agentId, sessionId); list(agentId, cursor?, limit?).",
+      ),
     agentId: agentIdSchema,
     cursor: sessionIdSchema.optional(),
     limit: z.number().int().min(1).max(MAXIMUM_FLEET_LIST_ITEMS).optional(),

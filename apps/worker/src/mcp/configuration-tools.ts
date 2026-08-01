@@ -36,6 +36,7 @@ import { controlPlaneToolResult } from "./tool-result.js";
 
 export const MCP_GET_CONFIGURATION_TOOL_NAME = "crewhelm_get_config";
 export const MCP_CONFIGURE_TOOL_NAME = "crewhelm_configure";
+
 const previewFleetConfigurationInputSchema = z.strictObject({
   expectedRevision: fleetConfigurationRevisionNumberSchema.describe(
     "Current revision returned by crewhelm_get_config; stale revisions are rejected.",
@@ -70,20 +71,26 @@ const configureInputSchema = z
       .describe("Current revision returned by crewhelm_get_config for a fleet preview.")
       .optional(),
     idempotencyKey: agentMutationIdempotencyKeySchema
-      .describe("Required for an exact Skill apply retry; omit in preview mode.")
+      .describe("Required for an exact non-fleet apply retry; omit in preview mode.")
       .optional(),
     mode: z
       .enum(["preview", "apply"])
-      .describe("Preview first; apply is available only for Skills."),
-    patch: fleetConfigurationPatchSchema.optional(),
-    target: z.discriminatedUnion("kind", [
-      previewFleetConfigurationInputSchema.shape.target,
-      publishSkillInputSchema.shape.target,
-      retireSkillInputSchema.shape.target,
-      publishAgentBlueprintInputSchema.shape.target,
-      retireAgentBlueprintInputSchema.shape.target,
-      instantiateAgentBlueprintInputSchema.shape.target,
-    ]),
+      .describe(
+        "Preview first. Fleet accepts preview(target, expectedRevision, patch) only. Other targets accept preview(target) or apply(target, idempotencyKey).",
+      ),
+    patch: fleetConfigurationPatchSchema
+      .optional()
+      .describe("Required only for a fleet preview; omit for every other target."),
+    target: z
+      .discriminatedUnion("kind", [
+        previewFleetConfigurationInputSchema.shape.target,
+        publishSkillInputSchema.shape.target,
+        retireSkillInputSchema.shape.target,
+        publishAgentBlueprintInputSchema.shape.target,
+        retireAgentBlueprintInputSchema.shape.target,
+        instantiateAgentBlueprintInputSchema.shape.target,
+      ])
+      .describe("Choose one exact target kind and provide only that target's fields."),
   })
   .superRefine((input, context) => {
     if (input.target.kind === "fleet") {
@@ -111,21 +118,21 @@ const configureInputSchema = z
     if (input.expectedRevision !== undefined || input.patch !== undefined) {
       context.addIssue({
         code: "custom",
-        message: "Skill changes do not accept fleet revision or patch fields.",
+        message: "Non-fleet changes do not accept fleet revision or patch fields.",
       });
     }
 
     if (input.mode === "apply" && input.idempotencyKey === undefined) {
       context.addIssue({
         code: "custom",
-        message: "Skill apply mode requires an idempotency key.",
+        message: "Non-fleet apply mode requires an idempotency key.",
       });
     }
 
     if (input.mode === "preview" && input.idempotencyKey !== undefined) {
       context.addIssue({
         code: "custom",
-        message: "Skill preview mode does not accept an idempotency key.",
+        message: "Non-fleet preview mode does not accept an idempotency key.",
       });
     }
   });

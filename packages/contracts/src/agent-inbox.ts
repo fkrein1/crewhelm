@@ -105,7 +105,9 @@ const agentInboxFilterFields = {
 export const agentInboxInputSchema = z.strictObject({
   action: z
     .enum(["acknowledge", "list", "overview"])
-    .describe("Summarize or list the inbox, or acknowledge one exact non-approval item version."),
+    .describe(
+      "Choose one action and send only its fields: acknowledge(itemId, version); list(agentId?, cursor?, includeAcknowledged?, kinds?, limit?, needsAction?, occurredAfter?, severities?); overview(agentId?, includeAcknowledged?, kinds?, needsAction?, occurredAfter?, severities?).",
+    ),
   ...agentInboxFilterFields,
   cursor: agentInboxItemIdSchema
     .optional()
@@ -119,7 +121,7 @@ export const agentInboxInputSchema = z.strictObject({
     .min(1)
     .max(MAXIMUM_AGENT_INBOX_ITEMS)
     .optional()
-    .describe("Maximum compact items to return; defaults to 10."),
+    .describe("Maximum compact list items to return; defaults to 10."),
   version: agentInboxItemVersionSchema
     .optional()
     .describe("Exact item version to acknowledge; omitted for overview and list."),

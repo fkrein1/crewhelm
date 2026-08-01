@@ -22,7 +22,33 @@ retain authority.
 Growing fleet lists return at most 25 compact summaries and stay within a 16 KiB serialized
 response budget. Exact get and inspect tools retain detailed configuration, grants, prompts,
 outputs, and timelines. The authenticated MCP catalog is also held to explicit CI budgets for tool
-count and serialized input-schema size.
+count, serialized input-schema size, and the complete model-visible catalog including server
+instructions and tool descriptions. These are review ceilings rather than protocol limits.
+
+Crewhelm keeps its bounded, security-sensitive product operations as directly callable tools.
+Names and descriptions carry task vocabulary for host-side progressive discovery, while compact
+server instructions explain when to search for the surface. Compound lifecycle tools advertise a
+plain object with an `action` field whose description gives the exact per-action field signatures;
+runtime validation rejects fields from the wrong action. This deliberately avoids requiring JSON
+Schema composition support from every MCP-to-model adapter.
+
+Progressive discovery is primarily a host concern: an MCP host can fetch `tools/list`, retain the
+catalog outside model context, and inject only relevant definitions. Crewhelm therefore optimizes
+for this path without making it mandatory. The 35-tool, 64 KiB input-schema, and 72 KiB complete
+catalog ceilings remain explicit, and increases require evidence that the extra surface improves
+selection or execution accuracy. See the MCP guidance on
+[progressive discovery](https://modelcontextprotocol.io/docs/develop/clients/client-best-practices).
+
+Server-side search and code execution are reserved for mechanically large API surfaces where a
+fixed catalog cannot fit in context and a sandbox can enforce network and authorization boundaries.
+They do not replace deterministic Crewhelm handlers for durable or authority-changing operations.
+The external integration journey already applies progressive disclosure: search providers, search
+their actions, attach exact versions to one Agent revision, then execute through the admitted Agent
+runtime. This follows the useful part of Cloudflare's
+[search-and-execute pattern](https://developers.cloudflare.com/agents/model-context-protocol/codemode/)
+without exposing arbitrary code execution for the Crewhelm control plane.
+Native web search and fetch follow the same catalog discipline: MCP discovers them as bounded Agent
+capability modules, and only an admitted Run receives their exact runtime tools.
 
 Recovery detail is opt-in and bounded: run inspection pages its timeline and can include usage;
 exact connection reads include lifecycle events; status can include recent audit events. Ambiguous
