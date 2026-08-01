@@ -1,5 +1,6 @@
 import {
   agentModelSchema,
+  admittedBriefContextContentSchema,
   crewAgentRuntimeConfigSchema,
   ownerClientIdSchema,
   pendingToolApprovalSchema,
@@ -201,6 +202,7 @@ const persistedCrewAgentRuntimeConfigSchema = z.preprocess((value) => {
 
 export const admittedRunRecordSchema = z.strictObject({
   budgetReservation: persistedRunBudgetReservationSchema,
+  briefContext: admittedBriefContextContentSchema.optional(),
   cleanupAt: z.number().int().positive(),
   clientId: ownerClientIdSchema,
   configuration: persistedCrewAgentRuntimeConfigSchema,
@@ -230,6 +232,7 @@ export const admittedRunRecordSchema = z.strictObject({
 export const admittedTurnMetadataSchema = z.strictObject({
   crewhelmRun: z.strictObject({
     budgetReservation: persistedRunBudgetReservationSchema,
+    briefContext: admittedBriefContextContentSchema.optional(),
     configuration: persistedCrewAgentRuntimeConfigSchema,
     deadlineAt: z.number().int().positive().default(1),
     promptCharacters: z.number().int().positive(),

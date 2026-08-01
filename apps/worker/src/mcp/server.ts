@@ -19,6 +19,7 @@ import { availableAgentCapabilityPrerequisites } from "../agent-capabilities/reg
 import { readBoundedPostRequest } from "../http/request-body.js";
 import { recordIntegrationProviderResponse } from "../observability/integrations.js";
 import { registerAgentTools } from "./agent-tools.js";
+import { MCP_BRIEFS_TOOL_NAME, registerBriefTools } from "./brief-tools.js";
 import { registerConnectionTools } from "./connection-tools.js";
 import { registerConnectionAttachmentTools } from "./connection-attachment-tools.js";
 import {
@@ -45,6 +46,7 @@ import { controlPlaneToolResult } from "./tool-result.js";
 import { MCP_AGENT_WORKFLOWS_TOOL_NAME, registerWorkflowTools } from "./workflow-tools.js";
 
 export { MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME } from "./connection-attachment-tools.js";
+export { MCP_BRIEFS_TOOL_NAME };
 export { MCP_CONFIGURE_TOOL_NAME, MCP_GET_CONFIGURATION_TOOL_NAME };
 export {
   MCP_CREATE_AGENT_TOOL_NAME,
@@ -89,7 +91,7 @@ export {
 
 const MAX_MCP_BODY_BYTES = 512 * 1024;
 export const MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES = 64 * 1_024;
-export const MCP_TOOL_COUNT_BUDGET = 33;
+export const MCP_TOOL_COUNT_BUDGET = 34;
 const MCP_SERVER_INFO = {
   name: "crewhelm",
   version: "0.1.0",
@@ -177,6 +179,7 @@ function createMcpServer(
 
   registerConfigurationTools(server, context);
   registerAgentTools(server, context);
+  registerBriefTools(server, context);
   registerRunTools(server, context);
   registerSessionTools(server, context);
   registerWorkflowTools(server, context);

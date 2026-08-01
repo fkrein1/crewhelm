@@ -13,6 +13,7 @@ import {
   crewAgentRuntimeConfigSchema,
   crewAgentSystemPrompt,
   redeemRunReceiverCapabilityResultSchema,
+  releaseRunBriefContextInputSchema,
   runBudgetReservationSchema,
   agentRuntimePlanSchema,
   runAdmissionNonceSchema,
@@ -23,6 +24,8 @@ import {
   verifyActiveRunAdmissionResultSchema,
   verifyRunAdmissionResultSchema,
   type ConfirmRunAdmissionResult,
+  type AdmittedBriefContext,
+  type BriefReference,
   type CreateRunAdmissionResult,
   type CrewAgentRuntimeConfig,
   type FleetConfiguration,
@@ -57,6 +60,7 @@ import { AI_GATEWAY_CAPABILITY_ID } from "../../agent-capabilities/ai-gateway.js
 import { agentCapabilityRegistry } from "../../agent-capabilities/registry.js";
 import { WORKERS_AI_CAPABILITY_ID } from "../../agent-capabilities/workers-ai.js";
 import { recordExecutionEvent } from "../../observability/execution.js";
+import type { Briefs } from "../briefs/index.js";
 import type { Skills } from "../skills/index.js";
 import {
   agentRevisions,
@@ -164,6 +168,7 @@ function sameRuntimePlan(left: unknown, right: unknown): boolean {
 }
 
 function createBudgetReservation(input: {
+  briefContextCharacters: number;
   configuration: FleetConfiguration;
   executionLimits: CrewAgentRuntimeConfig["executionLimits"];
   promptCharacters: number;
@@ -210,7 +215,10 @@ function createBudgetReservation(input: {
     maxDurationSeconds: effectiveExecutionLimits.maxDurationSeconds,
     maxInputCharacters: Math.min(
       MAXIMUM_RUN_INPUT_CHARACTERS,
-      input.systemPromptCharacters + input.promptCharacters + MAXIMUM_SESSION_CONTEXT_CHARACTERS,
+      input.systemPromptCharacters +
+        input.briefContextCharacters +
+        input.promptCharacters +
+        MAXIMUM_SESSION_CONTEXT_CHARACTERS,
     ),
     maxModelCalls,
     maxOutputTokens: Math.min(
@@ -228,6 +236,9 @@ function createBudgetReservation(input: {
 
 function canonicalRequest(input: {
   agentId: string;
+  briefContext?:
+    | { characters: number; digest: string; references: unknown[]; sizeBytes: number }
+    | undefined;
   continuation?:
     | { branchId: string; expectedBranchRevision: number; sessionId: string }
     | undefined;
@@ -240,6 +251,7 @@ function canonicalRequest(input: {
 }): string {
   return JSON.stringify({
     agentId: input.agentId,
+    ...(input.briefContext === undefined ? {} : { briefContext: input.briefContext }),
     ...(input.continuation === undefined ? {} : { continuation: input.continuation }),
     expectedRevision: input.expectedRevision,
     ...(input.expectedFleetRevision === null
@@ -254,6 +266,7 @@ function canonicalRequest(input: {
 
 export class RunAdmissions {
   readonly #availableCapabilityPrerequisites: ReadonlySet<string>;
+  readonly #briefs: Briefs;
   readonly #currentFleetConfiguration: () => FleetConfiguration;
   readonly #database: ControlPlaneDatabase;
   readonly #objectName: string | undefined;
@@ -266,6 +279,7 @@ export class RunAdmissions {
     storage: DurableObjectStorage,
     currentFleetConfiguration: () => FleetConfiguration,
     skills: Skills,
+    briefs: Briefs,
     availableCapabilityPrerequisites: ReadonlySet<string>,
   ) {
     this.#availableCapabilityPrerequisites = availableCapabilityPrerequisites;
@@ -274,6 +288,7 @@ export class RunAdmissions {
     this.#objectName = objectName;
     this.#storage = storage;
     this.#skills = skills;
+    this.#briefs = briefs;
   }
 
   async create(authority: OwnerAuthority, input: unknown): Promise<CreateRunAdmissionResult> {
@@ -359,6 +374,7 @@ export class RunAdmissions {
           permit: this.#permit({
             agentId: existing.agentId,
             agentRevision: existing.agentRevision,
+            ...(existing.briefContext === null ? {} : { briefContext: existing.briefContext }),
             budgetReservation: existing.budgetReservation,
             clientId: existing.clientId,
             expiresAt: existing.expiresAt,
@@ -372,6 +388,10 @@ export class RunAdmissions {
           }),
           state: "issued",
         });
+      }
+
+      if (!this.#briefs.validateFrozen(request.data.briefContext, transaction)) {
+        return this.#deniedRequest("brief_unavailable");
       }
 
       const agent = transaction
@@ -453,7 +473,12 @@ export class RunAdmissions {
           ? 0
           : MAXIMUM_AGENT_SKILL_CONTEXT_CHARACTERS);
 
-      if (systemPromptCharacters + request.data.promptCharacters > MAXIMUM_RUN_INPUT_CHARACTERS) {
+      if (
+        systemPromptCharacters +
+          (request.data.briefContext?.characters ?? 0) +
+          request.data.promptCharacters >
+        MAXIMUM_RUN_INPUT_CHARACTERS
+      ) {
         return this.#deniedRequest("capability_unavailable");
       }
 
@@ -468,6 +493,7 @@ export class RunAdmissions {
       }
 
       const budgetReservation = createBudgetReservation({
+        briefContextCharacters: request.data.briefContext?.characters ?? 0,
         configuration: fleetConfiguration,
         executionLimits: agent.executionLimits,
         promptCharacters: request.data.promptCharacters,
@@ -482,6 +508,7 @@ export class RunAdmissions {
         .values({
           agentId: request.data.agentId,
           agentRevision: agent.currentRevision,
+          briefContext: request.data.briefContext ?? null,
           cleanupAt,
           clientId: authority.clientId,
           createdAt: currentTime,
@@ -514,6 +541,9 @@ export class RunAdmissions {
         permit: this.#permit({
           agentId: request.data.agentId,
           agentRevision: agent.currentRevision,
+          ...(request.data.briefContext === undefined
+            ? {}
+            : { briefContext: request.data.briefContext }),
           budgetReservation,
           clientId: authority.clientId,
           expiresAt,
@@ -539,6 +569,34 @@ export class RunAdmissions {
     }
 
     return result;
+  }
+
+  replayBriefContext(
+    authority: OwnerAuthority,
+    input: { agentId: string; briefs: BriefReference[] | undefined; idempotencyKey: string },
+  ):
+    | { context: AdmittedBriefContext | undefined; outcome: "replay" }
+    | { outcome: "conflict" | "materialize" } {
+    const row = this.#database
+      .select()
+      .from(runAdmissions)
+      .where(
+        and(
+          eq(runAdmissions.clientId, authority.clientId),
+          eq(runAdmissions.idempotencyKey, input.idempotencyKey),
+        ),
+      )
+      .get();
+    if (row === undefined) return { outcome: "materialize" };
+    const supplied = input.briefs ?? [];
+    const retained =
+      row.briefContext?.references.map(({ id, revision }) => ({ id, revision })) ?? [];
+    if (row.agentId !== input.agentId || JSON.stringify(supplied) !== JSON.stringify(retained)) {
+      return { outcome: "conflict" };
+    }
+    return row.status === "issued"
+      ? { outcome: "materialize" }
+      : { context: row.briefContext ?? undefined, outcome: "replay" };
   }
 
   requestCancellation(
@@ -892,6 +950,7 @@ export class RunAdmissions {
         row.modelCallsConsumed >= row.budgetReservation.maxModelCalls ||
         row.agentId !== request.data.agentId ||
         row.agentRevision !== request.data.agentRevision ||
+        JSON.stringify(row.briefContext) !== JSON.stringify(request.data.briefContext ?? null) ||
         row.clientId !== request.data.clientId ||
         row.idempotencyKey !== request.data.idempotencyKey ||
         row.promptDigest !== request.data.promptDigest ||
@@ -951,6 +1010,7 @@ export class RunAdmissions {
       row.cleanupAt <= currentTime ||
       row.agentId !== capability.data.agentId ||
       row.agentRevision !== capability.data.agentRevision ||
+      JSON.stringify(row.briefContext) !== JSON.stringify(capability.data.briefContext ?? null) ||
       row.idempotencyKey !== capability.data.idempotencyKey ||
       row.promptDigest !== capability.data.promptDigest ||
       row.scheduleRevision !== capability.data.scheduleRevision ||
@@ -1078,6 +1138,22 @@ export class RunAdmissions {
     });
   }
 
+  async releaseBriefContext(input: unknown): Promise<boolean> {
+    const request = releaseRunBriefContextInputSchema.safeParse(input);
+    if (!request.success || request.data.ownerKey !== this.#objectName) return false;
+    const row = this.#admission(this.#database, request.data.runId);
+    if (row === undefined) return true;
+    if (row.agentId !== request.data.agentId) return false;
+    this.#database
+      .update(runAdmissions)
+      .set({ briefContext: null })
+      .where(eq(runAdmissions.runId, request.data.runId))
+      .run();
+    const alarm = await this.#storage.getAlarm();
+    if (alarm === null || alarm > Date.now()) await this.#storage.setAlarm(Date.now());
+    return true;
+  }
+
   nextCleanupAt(): number | null {
     const expiry =
       this.#database
@@ -1089,6 +1165,7 @@ export class RunAdmissions {
       this.#database
         .select({ value: min(runAdmissions.cleanupAt) })
         .from(runAdmissions)
+        .where(isNull(runAdmissions.briefContext))
         .get()?.value ?? null;
 
     if (expiry === null) {
@@ -1111,7 +1188,7 @@ export class RunAdmissions {
     const expiredRunIds = database
       .select({ runId: runAdmissions.runId })
       .from(runAdmissions)
-      .where(lte(runAdmissions.cleanupAt, currentTime))
+      .where(and(lte(runAdmissions.cleanupAt, currentTime), isNull(runAdmissions.briefContext)))
       .all()
       .map((row) => row.runId);
 
@@ -1282,6 +1359,7 @@ export class RunAdmissions {
       row.runId === permit.runId &&
       row.agentId === permit.agentId &&
       row.agentRevision === permit.agentRevision &&
+      JSON.stringify(row.briefContext) === JSON.stringify(permit.briefContext ?? null) &&
       row.promptDigest === permit.promptDigest &&
       row.scheduleRevision === permit.scheduleRevision &&
       row.trigger === permit.trigger &&
@@ -1309,6 +1387,7 @@ export class RunAdmissions {
   #permit(input: {
     agentId: string;
     agentRevision: number;
+    briefContext?: RunAdmissionPermit["briefContext"];
     budgetReservation: RunAdmissionPermit["budgetReservation"];
     clientId: string;
     expiresAt: number | string;
@@ -1323,6 +1402,7 @@ export class RunAdmissions {
     return runAdmissionPermitSchema.parse({
       agentId: input.agentId,
       agentRevision: input.agentRevision,
+      ...(input.briefContext === undefined ? {} : { briefContext: input.briefContext }),
       budgetReservation: input.budgetReservation,
       clientId: input.clientId,
       expiresAt:

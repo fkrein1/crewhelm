@@ -7,6 +7,7 @@ import type {
   AgentExecutionLimits,
   AgentScheduleConfiguration,
   AgentWorkflowAggregateBudget,
+  AdmittedBriefContext,
   ComposioToolCapabilityGrant,
   ConnectionAuthorizationOutcome,
   FleetConfigurationData,
@@ -14,6 +15,7 @@ import type {
   RunSession,
   SkillProvenance,
   SkillWarning,
+  WorkflowDeliverable,
 } from "@crewhelm/contracts";
 import {
   check,
@@ -458,6 +460,7 @@ export const agentWorkflows = sqliteTable(
     requestDigest: text("request_digest").notNull(),
     agentId: text("agent_id").notNull(),
     agentRevision: integer("agent_revision").notNull(),
+    briefContext: text("brief_context", { mode: "json" }).$type<AdmittedBriefContext | null>(),
     fleetRevision: integer("fleet_revision").notNull(),
     objective: text("objective").notNull(),
     budget: text("budget", { mode: "json" }).$type<AgentWorkflowAggregateBudget>().notNull(),
@@ -474,6 +477,7 @@ export const agentWorkflows = sqliteTable(
       enum: [
         "agent_unavailable",
         "budget_exhausted",
+        "brief_unavailable",
         "capability_unavailable",
         "coordinator_failed",
         "model_unavailable",
@@ -485,6 +489,8 @@ export const agentWorkflows = sqliteTable(
     failureStageIndex: integer("failure_stage_index"),
     cancellationRequestedAt: integer("cancellation_requested_at"),
     deletingAt: integer("deleting_at"),
+    deliverable: text("deliverable", { mode: "json" }).$type<WorkflowDeliverable | null>(),
+    deliverableObjectKey: text("deliverable_object_key"),
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull(),
     completedAt: integer("completed_at"),
@@ -507,6 +513,19 @@ export const agentWorkflows = sqliteTable(
     check("agent_workflows_objective_length", sql`length(${table.objective}) BETWEEN 1 AND 4096`),
     check("agent_workflows_budget_json", sql`json_valid(${table.budget})`),
     check(
+      "agent_workflows_brief_context_json",
+      sql`${table.briefContext} IS NULL OR json_valid(${table.briefContext})`,
+    ),
+    check(
+      "agent_workflows_deliverable_json",
+      sql`${table.deliverable} IS NULL OR json_valid(${table.deliverable})`,
+    ),
+    check(
+      "agent_workflows_deliverable_state",
+      sql`(${table.deliverable} IS NULL AND ${table.deliverableObjectKey} IS NULL)
+        OR (${table.deliverable} IS NOT NULL AND ${table.deliverableObjectKey} IS NOT NULL)`,
+    ),
+    check(
       "agent_workflows_status",
       sql`${table.status} IN ('queued', 'running', 'waiting', 'cancelling', 'completed', 'failed', 'cancelled')`,
     ),
@@ -527,7 +546,7 @@ export const agentWorkflows = sqliteTable(
     check(
       "agent_workflows_failure",
       sql`(${table.failureCode} IS NULL AND ${table.failureStageIndex} IS NULL)
-        OR (${table.failureCode} IN ('agent_unavailable', 'budget_exhausted', 'capability_unavailable', 'coordinator_failed', 'model_unavailable', 'revision_conflict', 'run_failed', 'workflow_unavailable')
+        OR (${table.failureCode} IN ('agent_unavailable', 'brief_unavailable', 'budget_exhausted', 'capability_unavailable', 'coordinator_failed', 'model_unavailable', 'revision_conflict', 'run_failed', 'workflow_unavailable')
           AND ${table.failureStageIndex} BETWEEN 0 AND ${table.stageCount} - 1)`,
     ),
     check("agent_workflows_created_at_positive", sql`${table.createdAt} > 0`),
@@ -629,6 +648,98 @@ export const agentWorkflowDeletions = sqliteTable(
       "agent_workflow_deletions_cleanup_after_deletion",
       sql`${table.cleanupAt} > ${table.deletedAt}`,
     ),
+  ],
+);
+
+export const briefs = sqliteTable(
+  "briefs",
+  {
+    briefId: text("brief_id").primaryKey(),
+    currentRevision: integer("current_revision").notNull(),
+    name: text("name").notNull(),
+    status: text("status", { enum: ["active", "deleting"] }).notNull(),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+    deletingAt: integer("deleting_at"),
+  },
+  (table) => [
+    index("briefs_status_id").on(table.status, table.briefId),
+    uniqueIndex("briefs_active_name")
+      .on(table.name)
+      .where(sql`${table.status} = 'active'`),
+    check("briefs_current_revision_positive", sql`${table.currentRevision} > 0`),
+    check("briefs_status", sql`${table.status} IN ('active', 'deleting')`),
+    check("briefs_created_at_positive", sql`${table.createdAt} > 0`),
+    check("briefs_updated_after_creation", sql`${table.updatedAt} >= ${table.createdAt}`),
+    check(
+      "briefs_state",
+      sql`(${table.status} = 'active' AND ${table.deletingAt} IS NULL)
+        OR (${table.status} = 'deleting' AND ${table.deletingAt} IS NOT NULL
+          AND ${table.deletingAt} >= ${table.createdAt})`,
+    ),
+  ],
+);
+
+export const briefVersions = sqliteTable(
+  "brief_versions",
+  {
+    briefId: text("brief_id").notNull(),
+    revision: integer("revision").notNull(),
+    digest: text("digest").notNull(),
+    mediaType: text("media_type", {
+      enum: ["application/json", "text/markdown", "text/plain"],
+    }).notNull(),
+    objectKey: text("object_key").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.briefId, table.revision] }),
+    foreignKey({ columns: [table.briefId], foreignColumns: [briefs.briefId] }).onDelete("cascade"),
+    check("brief_versions_revision_positive", sql`${table.revision} > 0`),
+    check("brief_versions_digest_length", sql`length(${table.digest}) = 64`),
+    check(
+      "brief_versions_media_type",
+      sql`${table.mediaType} IN ('application/json', 'text/markdown', 'text/plain')`,
+    ),
+    check("brief_versions_size_bytes", sql`${table.sizeBytes} BETWEEN 1 AND 32768`),
+    check("brief_versions_created_at_positive", sql`${table.createdAt} > 0`),
+  ],
+);
+
+export const briefMutations = sqliteTable(
+  "brief_mutations",
+  {
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    operation: text("operation", { enum: ["create", "revise"] }).notNull(),
+    briefId: text("brief_id").notNull(),
+    revision: integer("revision").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.clientId, table.idempotencyKey] }),
+    check("brief_mutations_request_digest_length", sql`length(${table.requestDigest}) = 43`),
+    check("brief_mutations_operation", sql`${table.operation} IN ('create', 'revise')`),
+    check("brief_mutations_revision_positive", sql`${table.revision} > 0`),
+  ],
+);
+
+export const briefDeletions = sqliteTable(
+  "brief_deletions",
+  {
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    briefId: text("brief_id").notNull().unique(),
+    expectedRevision: integer("expected_revision").notNull(),
+    deletedAt: integer("deleted_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.clientId, table.idempotencyKey] }),
+    check("brief_deletions_request_digest_length", sql`length(${table.requestDigest}) = 43`),
+    check("brief_deletions_revision_positive", sql`${table.expectedRevision} > 0`),
+    check("brief_deletions_deleted_at_positive", sql`${table.deletedAt} > 0`),
   ],
 );
 
@@ -758,6 +869,7 @@ export const runAdmissions = sqliteTable(
     runId: text("run_id").notNull(),
     agentId: text("agent_id").notNull(),
     agentRevision: integer("agent_revision").notNull(),
+    briefContext: text("brief_context", { mode: "json" }).$type<AdmittedBriefContext | null>(),
     prompt: text("prompt"),
     promptDigest: text("prompt_digest").notNull(),
     scheduleRevision: integer("schedule_revision"),
@@ -793,6 +905,10 @@ export const runAdmissions = sqliteTable(
       .where(sql`${table.status} = 'issued'`),
     check("run_admissions_request_digest_length", sql`length(${table.requestDigest}) = 43`),
     check("run_admissions_agent_revision_positive", sql`${table.agentRevision} > 0`),
+    check(
+      "run_admissions_brief_context_json",
+      sql`${table.briefContext} IS NULL OR json_valid(${table.briefContext})`,
+    ),
     check(
       "run_admissions_prompt_length",
       sql`${table.prompt} IS NULL OR length(${table.prompt}) BETWEEN 1 AND 16384`,
@@ -1422,6 +1538,10 @@ export const controlPlaneSchema = {
   agentUpdates,
   agents,
   auditEvents,
+  briefDeletions,
+  briefMutations,
+  briefVersions,
+  briefs,
   capabilityGrants,
   connectionAuthorizationReturns,
   connectionLinkRequests,

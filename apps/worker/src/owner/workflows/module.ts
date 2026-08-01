@@ -25,6 +25,7 @@ import {
   runIdSchema,
   startAgentWorkflowInputSchema,
   startAgentWorkflowResultSchema,
+  workflowDeliverableSchema,
   type AgentWorkflowStatus,
   type AgentWorkflowSummary,
   type CancelAgentWorkflowResult,
@@ -37,6 +38,7 @@ import {
   type OwnerAuthority,
   type StartAgentWorkflowInput,
   type StartAgentWorkflowResult,
+  type AdmittedBriefContext,
 } from "@crewhelm/contracts";
 import { and, asc, count, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
@@ -45,6 +47,7 @@ import * as z from "zod";
 import { digestRunPrompt } from "../../agent/admitted-runs/index.js";
 import type { CrewAgent } from "../../agent/session-directory.js";
 import type { AgentChannel } from "../agent-channel/index.js";
+import type { Briefs } from "../briefs/index.js";
 import {
   agentRevisions,
   agents,
@@ -52,6 +55,7 @@ import {
   agentWorkflowStages,
   agentWorkflows,
   auditEvents,
+  runAdmissions,
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
 
@@ -69,7 +73,9 @@ const ACTIVE_WORKFLOW_STATUSES = [
 ] as const satisfies readonly AgentWorkflowStatus[];
 const TERMINAL_WORKFLOW_STATUSES = ["completed", "failed", "cancelled"] as const;
 const RECOVERY_DELAY_MS = 5_000;
+const DELIVERABLE_RECOVERY_LEASE_MS = 30_000;
 const WORKFLOW_DELETION_INTENT_PREFIX = "crewhelm:agent-workflow-deletion:";
+const WORKFLOW_DELIVERABLE_INTENT_PREFIX = "crewhelm:agent-workflow-deliverable:";
 
 const workflowDeletionIntentSchema = z.strictObject({
   clientId: z.string().min(1),
@@ -78,6 +84,14 @@ const workflowDeletionIntentSchema = z.strictObject({
   workflowId: agentWorkflowIdSchema,
 });
 type WorkflowDeletionIntent = z.infer<typeof workflowDeletionIntentSchema>;
+
+const workflowDeliverableIntentSchema = z.strictObject({
+  deliverable: workflowDeliverableSchema,
+  objectKey: z.string().min(1).max(512),
+  recoverAfter: z.number().int().positive().safe(),
+  workflowId: agentWorkflowIdSchema,
+});
+type WorkflowDeliverableIntent = z.infer<typeof workflowDeliverableIntentSchema>;
 
 function encodeBase64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -103,6 +117,10 @@ function workflowId(): string {
 
 function workflowDeletionIntentKey(id: string): string {
   return `${WORKFLOW_DELETION_INTENT_PREFIX}${id}`;
+}
+
+function workflowDeliverableIntentKey(id: string): string {
+  return `${WORKFLOW_DELIVERABLE_INTENT_PREFIX}${id}`;
 }
 
 function denied(code: FailureCode): Extract<StartAgentWorkflowResult, { ok: false }> {
@@ -154,6 +172,7 @@ function stageProjection(stage: StoredStage, includePrompt: boolean) {
 export class AgentWorkflows {
   readonly #agentChannel: AgentChannel;
   readonly #crewAgents: DurableObjectNamespace<CrewAgent>;
+  readonly #briefs: Briefs;
   readonly #currentFleetConfiguration: () => FleetConfiguration;
   readonly #database: Database;
   readonly #objectName: string | undefined;
@@ -165,9 +184,11 @@ export class AgentWorkflows {
     storage: DurableObjectStorage,
     crewAgents: DurableObjectNamespace<CrewAgent>,
     agentChannel: AgentChannel,
+    briefs: Briefs,
     currentFleetConfiguration: () => FleetConfiguration,
   ) {
     this.#agentChannel = agentChannel;
+    this.#briefs = briefs;
     this.#crewAgents = crewAgents;
     this.#currentFleetConfiguration = currentFleetConfiguration;
     this.#database = database;
@@ -183,6 +204,35 @@ export class AgentWorkflows {
     }
 
     const digest = await requestDigest(request.data);
+    const replay = this.#startReplay(authority, request.data.idempotencyKey, digest);
+    if (replay !== null) {
+      if ("error" in replay) return replay;
+      await this.#scheduleRecovery(replay.row.cleanupAt);
+      await this.#ensureStarted(replay.row);
+      const current = this.#workflow(replay.row.workflowId) ?? replay.row;
+      return startAgentWorkflowResultSchema.parse({
+        created: false,
+        ok: true,
+        workflow: this.#summary(current),
+      });
+    }
+
+    const materialized = await this.#briefs.materialize(request.data.briefs);
+
+    if (!materialized.ok) {
+      return denied(materialized.code);
+    }
+
+    const briefContext: AdmittedBriefContext | undefined =
+      materialized.context === undefined
+        ? undefined
+        : {
+            characters: materialized.context.characters,
+            digest: materialized.context.digest,
+            references: materialized.context.references,
+            sizeBytes: materialized.context.sizeBytes,
+          };
+
     const promptDigests = await Promise.all(
       request.data.stages.map((stage, stageIndex) =>
         digestRunPrompt(
@@ -196,7 +246,7 @@ export class AgentWorkflows {
     const currentTime = Date.now();
     const fleet = this.#currentFleetConfiguration();
     const result = this.#database.transaction((transaction) => {
-      const replay = transaction
+      const concurrentReplay = transaction
         .select()
         .from(agentWorkflows)
         .where(
@@ -207,9 +257,9 @@ export class AgentWorkflows {
         )
         .get();
 
-      if (replay !== undefined) {
-        return replay.requestDigest === digest
-          ? { created: false as const, row: replay }
+      if (concurrentReplay !== undefined) {
+        return concurrentReplay.requestDigest === digest
+          ? { created: false as const, row: concurrentReplay }
           : denied("idempotency_conflict");
       }
 
@@ -228,6 +278,10 @@ export class AgentWorkflows {
         return denied(
           deletedReplay.startRequestDigest === digest ? "workflow_deleted" : "idempotency_conflict",
         );
+      }
+
+      if (!this.#briefs.validateFrozen(briefContext, transaction)) {
+        return denied("brief_unavailable");
       }
 
       const agent = transaction
@@ -305,6 +359,7 @@ export class AgentWorkflows {
         .values({
           agentId: request.data.agentId,
           agentRevision: agent.currentRevision,
+          briefContext: briefContext ?? null,
           budget,
           cleanupAt,
           clientId: authority.clientId,
@@ -421,7 +476,7 @@ export class AgentWorkflows {
     });
   }
 
-  inspect(input: unknown): InspectAgentWorkflowResult {
+  async inspect(input: unknown): Promise<InspectAgentWorkflowResult> {
     const request = inspectAgentWorkflowInputSchema.safeParse(input);
     if (!request.success) {
       return {
@@ -444,10 +499,34 @@ export class AgentWorkflows {
 
     const stages = this.#stages(row.workflowId);
 
+    let deliverableContent: string | undefined;
+
+    if (
+      request.data.includeDeliverable &&
+      row.deliverable !== null &&
+      row.deliverableObjectKey !== null
+    ) {
+      const content = await this.#briefs.readWorkflowDeliverable(
+        row.deliverableObjectKey,
+        row.deliverable,
+      );
+
+      if (content === null) {
+        return {
+          error: { code: "workflow_unavailable", message: "Agent workflow request denied." },
+          ok: false,
+        };
+      }
+
+      deliverableContent = content;
+    }
+
     return inspectAgentWorkflowResultSchema.parse({
       ok: true,
       workflow: agentWorkflowSchema.parse({
         ...this.#summary(row),
+        deliverable: row.deliverable,
+        ...(deliverableContent === undefined ? {} : { deliverableContent }),
         objective: row.objective,
         session: row.session,
         stages: stages.map((stage) => stageProjection(stage, request.data.includePrompts)),
@@ -574,10 +653,36 @@ export class AgentWorkflows {
     row = reserved;
 
     const authority = this.#runtimeAuthority(row);
+    const materializedBriefs = await this.#briefs.materialize(
+      row.briefContext?.references.map(({ id, revision }) => ({ id, revision })),
+    );
+
+    if (
+      !materializedBriefs.ok ||
+      JSON.stringify(
+        materializedBriefs.context === undefined
+          ? null
+          : {
+              characters: materializedBriefs.context.characters,
+              digest: materializedBriefs.context.digest,
+              references: materializedBriefs.context.references,
+              sizeBytes: materializedBriefs.context.sizeBytes,
+            },
+      ) !== JSON.stringify(row.briefContext)
+    ) {
+      this.#failBeforeDispatch(row, stage, "brief_unavailable");
+      await this.#scheduleRecovery(Math.max(row.cleanupAt, Date.now()));
+      return dispatchAgentWorkflowStageResultSchema.parse(denied("brief_unavailable"));
+    }
     const started = await this.#agentChannel.start(
       authority,
       {
         agentId: row.agentId,
+        ...(row.briefContext === null
+          ? {}
+          : {
+              briefs: row.briefContext.references.map(({ id, revision }) => ({ id, revision })),
+            }),
         ...(row.session === null ? {} : { continuation: continuationFromRunSession(row.session) }),
         expectedRevision: row.agentRevision,
         idempotencyKey: `workflow.${row.workflowId}.${stage.stageIndex}`,
@@ -784,6 +889,57 @@ export class AgentWorkflows {
     }
 
     const runStatus = inspected.run.status;
+    const isFinalCompletedStage =
+      runStatus === "completed" && stage.stageIndex === row.stageCount - 1;
+    const finalOutputMissing = isFinalCompletedStage && inspected.run.output === undefined;
+    const deliverablePrepared =
+      isFinalCompletedStage && inspected.run.output !== undefined
+        ? await this.#briefs.prepareWorkflowDeliverable({
+            content: inspected.run.output,
+            createdAt: inspected.run.completedAt ?? new Date().toISOString(),
+            runId: request.data.runId,
+            stageIndex: stage.stageIndex,
+            truncated: inspected.run.outputTruncated ?? false,
+            workflowId: row.workflowId,
+          })
+        : undefined;
+
+    if (deliverablePrepared !== undefined && !deliverablePrepared.ok) {
+      return completeAgentWorkflowStageResultSchema.parse(denied("workflow_unavailable"));
+    }
+
+    let deliverableIntent: WorkflowDeliverableIntent | undefined;
+    if (deliverablePrepared?.ok) {
+      const proposed = workflowDeliverableIntentSchema.parse({
+        deliverable: deliverablePrepared.deliverable,
+        objectKey: deliverablePrepared.objectKey,
+        recoverAfter: Date.now() + DELIVERABLE_RECOVERY_LEASE_MS,
+        workflowId: row.workflowId,
+      });
+      deliverableIntent = await this.#storage.transaction(async (storage) => {
+        const key = workflowDeliverableIntentKey(row.workflowId);
+        const existing = workflowDeliverableIntentSchema.safeParse(await storage.get(key));
+        if (existing.success) {
+          if (
+            existing.data.objectKey !== proposed.objectKey ||
+            JSON.stringify(existing.data.deliverable) !== JSON.stringify(proposed.deliverable)
+          ) {
+            return undefined;
+          }
+        }
+        await storage.put(key, proposed);
+        return proposed;
+      });
+      if (deliverableIntent === undefined) {
+        return completeAgentWorkflowStageResultSchema.parse(denied("workflow_unavailable"));
+      }
+      await this.#scheduleRecovery(deliverableIntent.recoverAfter);
+      const committed = await this.#briefs.commitWorkflowDeliverable(deliverablePrepared);
+      if (!committed.ok) {
+        return completeAgentWorkflowStageResultSchema.parse(denied("workflow_unavailable"));
+      }
+    }
+
     const finalized = this.#database.transaction((transaction) => {
       const current = transaction
         .select()
@@ -803,6 +959,10 @@ export class AgentWorkflows {
       if (current === undefined || currentStage?.runId !== request.data.runId) return undefined;
       if (isTerminalWorkflowStatus(current.status)) {
         return {
+          deliverableAttached:
+            deliverablePrepared?.ok === true &&
+            current.deliverableObjectKey === deliverablePrepared.objectKey &&
+            JSON.stringify(current.deliverable) === JSON.stringify(deliverablePrepared.deliverable),
           status:
             currentStage.status === "completed"
               ? ("completed" as const)
@@ -817,7 +977,7 @@ export class AgentWorkflows {
       const cancelled = current.cancellationRequestedAt !== null || runStatus === "cancelled";
       const workflowStatus: AgentWorkflowStatus = cancelled
         ? "cancelled"
-        : runStatus === "failed"
+        : runStatus === "failed" || finalOutputMissing
           ? "failed"
           : stage.stageIndex === current.stageCount - 1
             ? "completed"
@@ -844,8 +1004,19 @@ export class AgentWorkflows {
           completedStages: current.completedStages + (stageStatus === "completed" ? 1 : 0),
           currentRunId: null,
           currentStageIndex: null,
-          failureCode: runStatus === "failed" ? "run_failed" : null,
-          failureStageIndex: runStatus === "failed" ? stage.stageIndex : null,
+          ...(workflowStatus === "completed" && deliverablePrepared?.ok
+            ? {
+                deliverable: deliverablePrepared.deliverable,
+                deliverableObjectKey: deliverablePrepared.objectKey,
+              }
+            : {}),
+          failureCode:
+            runStatus === "failed"
+              ? "run_failed"
+              : finalOutputMissing
+                ? "workflow_unavailable"
+                : null,
+          failureStageIndex: runStatus === "failed" || finalOutputMissing ? stage.stageIndex : null,
           status: workflowStatus,
           updatedAt,
           workflowRevision: sql`${agentWorkflows.workflowRevision} + 1`,
@@ -861,11 +1032,19 @@ export class AgentWorkflows {
           subjectId: row.workflowId,
         })
         .run();
-      return { status: stageStatus, workflowStatus };
+      return {
+        deliverableAttached: workflowStatus === "completed" && deliverablePrepared?.ok === true,
+        status: stageStatus,
+        workflowStatus,
+      };
     });
 
     if (finalized === undefined) {
+      if (deliverableIntent !== undefined) await this.#settleDeliverableIntent(deliverableIntent);
       return completeAgentWorkflowStageResultSchema.parse(denied("workflow_busy"));
+    }
+    if (deliverableIntent !== undefined) {
+      await this.#settleDeliverableIntent(deliverableIntent, finalized.deliverableAttached);
     }
     if (isTerminalWorkflowStatus(finalized.workflowStatus)) {
       await this.#scheduleRecovery(Math.max(row.cleanupAt, Date.now()));
@@ -873,9 +1052,10 @@ export class AgentWorkflows {
       await this.#scheduleRecovery(Date.now() + RECOVERY_DELAY_MS);
     }
 
+    const { deliverableAttached: _deliverableAttached, ...completion } = finalized;
     return completeAgentWorkflowStageResultSchema.parse({
       ok: true,
-      ...finalized,
+      ...completion,
     });
   }
 
@@ -1273,6 +1453,7 @@ export class AgentWorkflows {
   }
 
   async cleanup(currentTime: number): Promise<void> {
+    await this.#recoverDeliverableIntents(currentTime);
     await this.#recoverDeletionIntents();
     this.#database
       .delete(agentWorkflowDeletions)
@@ -1426,6 +1607,46 @@ export class AgentWorkflows {
     }
   }
 
+  async #recoverDeliverableIntents(currentTime: number): Promise<void> {
+    const intents = await this.#storage.list({
+      limit: 25,
+      prefix: WORKFLOW_DELIVERABLE_INTENT_PREFIX,
+    });
+
+    let nextRecoveryAt: number | undefined;
+    for (const [, value] of intents) {
+      const parsed = workflowDeliverableIntentSchema.safeParse(value);
+      if (!parsed.success) continue;
+      if (parsed.data.recoverAfter > currentTime) {
+        nextRecoveryAt = Math.min(
+          nextRecoveryAt ?? parsed.data.recoverAfter,
+          parsed.data.recoverAfter,
+        );
+        continue;
+      }
+      const row = this.#workflow(parsed.data.workflowId);
+      const attached =
+        row?.deliverableObjectKey === parsed.data.objectKey &&
+        JSON.stringify(row.deliverable) === JSON.stringify(parsed.data.deliverable);
+      await this.#settleDeliverableIntent(parsed.data, attached);
+    }
+    if (nextRecoveryAt !== undefined) await this.#scheduleRecovery(nextRecoveryAt);
+  }
+
+  async #settleDeliverableIntent(
+    intent: WorkflowDeliverableIntent,
+    attached = false,
+  ): Promise<void> {
+    if (
+      attached ||
+      (await this.#briefs.deleteWorkflowDeliverable(intent.objectKey, intent.deliverable))
+    ) {
+      await this.#storage.delete(workflowDeliverableIntentKey(intent.workflowId));
+      return;
+    }
+    await this.#scheduleRecovery(Date.now() + RECOVERY_DELAY_MS);
+  }
+
   async #finishDeletion(intent: WorkflowDeletionIntent, row: StoredWorkflow): Promise<boolean> {
     let phase = "session_delete";
     try {
@@ -1447,12 +1668,38 @@ export class AgentWorkflows {
         }
       }
 
+      const stageRunIds = this.#stages(row.workflowId).flatMap((stage) =>
+        stage.runId === null ? [] : [stage.runId],
+      );
+      if (stageRunIds.length > 0) {
+        this.#database
+          .update(runAdmissions)
+          .set({ briefContext: null })
+          .where(inArray(runAdmissions.runId, stageRunIds))
+          .run();
+      }
+
       phase = "runtime_delete";
       if (
         !(await this.#agent(row).deleteAgentTaskWorkflow({
           ownerKey: this.#objectName,
           workflowId: row.workflowId,
         }))
+      ) {
+        console.warn({
+          event: "crewhelm.workflow.recovery",
+          outcome: "deferred",
+          phase,
+          workflowId: row.workflowId,
+        });
+        return false;
+      }
+
+      phase = "deliverable_delete";
+      if (
+        row.deliverable !== null &&
+        row.deliverableObjectKey !== null &&
+        !(await this.#briefs.deleteWorkflowDeliverable(row.deliverableObjectKey, row.deliverable))
       ) {
         console.warn({
           event: "crewhelm.workflow.recovery",
@@ -1583,6 +1830,7 @@ export class AgentWorkflows {
     const completedAt = Date.now();
     const failureCode: StoredFailureCode =
       code === "agent_unavailable" ||
+      code === "brief_unavailable" ||
       code === "budget_exhausted" ||
       code === "capability_unavailable" ||
       code === "model_unavailable" ||
@@ -1689,6 +1937,7 @@ export class AgentWorkflows {
     return agentWorkflowSummarySchema.parse({
       agentId: row.agentId,
       agentRevision: row.agentRevision,
+      briefs: row.briefContext?.references ?? [],
       budget: row.budget,
       completedAt: row.completedAt === null ? null : new Date(row.completedAt).toISOString(),
       completedStages: row.completedStages,
@@ -1718,6 +1967,35 @@ export class AgentWorkflows {
       .from(agentWorkflows)
       .where(eq(agentWorkflows.workflowId, id))
       .get();
+  }
+
+  #startReplay(authority: OwnerAuthority, idempotencyKey: string, digest: string) {
+    const replay = this.#database
+      .select()
+      .from(agentWorkflows)
+      .where(
+        and(
+          eq(agentWorkflows.clientId, authority.clientId),
+          eq(agentWorkflows.idempotencyKey, idempotencyKey),
+        ),
+      )
+      .get();
+    if (replay !== undefined) {
+      return replay.requestDigest === digest ? { row: replay } : denied("idempotency_conflict");
+    }
+    const deleted = this.#database
+      .select()
+      .from(agentWorkflowDeletions)
+      .where(
+        and(
+          eq(agentWorkflowDeletions.startClientId, authority.clientId),
+          eq(agentWorkflowDeletions.startIdempotencyKey, idempotencyKey),
+        ),
+      )
+      .get();
+    return deleted === undefined
+      ? null
+      : denied(deleted.startRequestDigest === digest ? "workflow_deleted" : "idempotency_conflict");
   }
 
   #stage(id: string, stageIndex: number): StoredStage | undefined {

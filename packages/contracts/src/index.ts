@@ -4,6 +4,7 @@ export * from "./agent-workflows.js";
 export * from "./agent-capabilities.js";
 export * from "./agent-blueprint-identity.js";
 export * from "./agent-blueprints.js";
+export * from "./briefs.js";
 export * from "./agent-inbox.js";
 export * from "./agent-schedules.js";
 export * from "./audit.js";

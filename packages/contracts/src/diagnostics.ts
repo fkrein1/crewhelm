@@ -35,6 +35,8 @@ export const agentInboxDeferredReasonSchema = z.enum([
   "agent_not_found",
   "agent_unavailable",
   "budget_exhausted",
+  "brief_context_too_large",
+  "brief_unavailable",
   "capability_unavailable",
   "dispatch_exception",
   "idempotency_conflict",

@@ -113,7 +113,16 @@ mapping. Stage-specific event types and idempotent completion make duplicate or 
 Coordinator failure marks the owner projection failed and prevents later stages; an already
 admitted bounded Run may finish, but cannot authorize another stage. Cancellation is revision-bound
 and propagates to the active Run. Terminal deletion removes the isolated Session and retained
-correlated execution data before the Workflow projection disappears.
+correlated execution data before the Workflow projection disappears. Explicit Brief inputs are
+stored as immutable R2 revisions with owner-local metadata. Admission verifies their media type,
+size, digest, and deterministic rendering before freezing aggregate context into the Run or
+Workflow record. The Session accepts only the exact frozen payload and treats it as untrusted data,
+so its text cannot grant tools or authority. A successful final stage produces one bounded,
+digest-verified deliverable; default projections omit its content, and deletion removes it before
+the Workflow projection. A durable pre-upload intent makes final-output attachment recoverable:
+cancellation or failure deletes an unattached object, while an attached digest is retained until
+normal Workflow deletion. Session Run cleanup redacts raw Brief blocks from retained turn metadata
+and then acknowledges the deletion boundary before the owner reference may expire.
 
 Tool execution rechecks the Agent lifecycle, current immutable grant, connection, effect, target,
 approval, and budget before issuing a single-use adapter permit. Disabling an Agent or revoking a

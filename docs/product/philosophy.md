@@ -17,7 +17,9 @@ used across the public site, browser handoffs, CLI, and future product surfaces.
   behind deterministic policy and recovery contracts.
 - **Outcomes outlive the chat.** A durable Workflow carries one known multi-step objective across
   ordered bounded Runs, so an owner can leave the MCP conversation and return to exact progress,
-  recovery, or a terminal result.
+  recovery, or one clear final deliverable.
+- **Context is explicit.** Briefs let an owner attach exact versioned reference material without
+  pasting it into every prompt. Capabilities remain on the Agent; inputs remain on the work.
 - **Composio is the integration plane.** Crewhelm uses its catalog, authentication, and execution
   instead of rebuilding provider adapters.
 - **Recipes are the eventual sharing unit.** Once the operating model is mature, a recipe will
@@ -42,6 +44,11 @@ The product should feel like asking an agent to own an outcome, not programming 
 Use a direct Run for one bounded turn. Use a Workflow when the outcome already has a small ordered
 plan that must survive disconnects. Crewhelm keeps internal Runs inspectable for diagnosis without
 making the owner reconstruct them to understand progress.
+
+The MCP experience should make the distinction obvious: configure Skills and integrations on the
+Agent when they change how it works; attach exact Brief revisions when a particular Run or Workflow
+needs context. List and inspection stay compact, content is fetched only on demand, and a completed
+Workflow presents its final deliverable without asking the owner to find the last internal Run.
 
 ## Current non-goals
 

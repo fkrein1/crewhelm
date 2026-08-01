@@ -122,6 +122,14 @@ export const controlPlaneStatusSchema = z.strictObject({
     runs: z.strictObject({
       active: z.number().int().nonnegative().safe(),
     }),
+    briefs: z
+      .strictObject({
+        active: z.number().int().nonnegative().safe(),
+        storedBytes: z.number().int().nonnegative().safe(),
+        total: z.number().int().nonnegative().safe(),
+        versions: z.number().int().nonnegative().safe(),
+      })
+      .optional(),
     workflows: z
       .strictObject({
         active: z.number().int().nonnegative().safe(),

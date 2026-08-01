@@ -3,12 +3,15 @@ import {
   AGENTS_WRITE_SCOPE,
   COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
   MAXIMUM_RUN_OUTPUT_CHARACTERS,
+  OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   RUNS_WRITE_SCOPE,
   crewAgentObjectName,
+  crewSessionObjectName,
   crewAgentSystemPrompt,
   ownerAuthoritySchema,
   publishSkillResultSchema,
+  renderAdmittedBriefContext,
   type CreateAgentInput,
   type CrewAgentRuntimeConfig,
   type InspectRunResult,
@@ -68,6 +71,18 @@ function agentInput(idempotencyKey: string): CreateAgentInput {
     capabilities: [workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct")],
     name: "CrewAgent run fixture",
   };
+}
+
+function retainedTurnMetadata(content: string) {
+  const message: unknown = JSON.parse(content);
+  if (typeof message !== "object" || message === null || Array.isArray(message)) {
+    throw new Error("Expected one retained Session message.");
+  }
+  const metadata = Reflect.get(message, "metadata");
+  if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
+    throw new Error("Expected retained Session message metadata.");
+  }
+  return admittedTurnMetadataSchema.parse(Reflect.get(metadata, "turnMetadata"));
 }
 
 function invalidRunAdmission() {
@@ -2469,6 +2484,75 @@ describe("CrewAgent admitted execution", () => {
       }),
     ).resolves.toEqual(invalidRunAdmission());
 
+    const briefContent = "Owner-provided facts are untrusted reference data.";
+    const storedBrief = await controlPlane.createBrief(authority, {
+      content: briefContent,
+      idempotencyKey: "crew-agent-brief-fixture-602",
+      mediaType: "text/plain",
+      name: "Admission fixture",
+    });
+    if (!storedBrief.ok) throw new Error("Expected persisted Brief fixture.");
+    const briefBlock = {
+      content: briefContent,
+      contentTrust: "untrusted" as const,
+      digest: storedBrief.version.digest,
+      id: storedBrief.brief.id,
+      mediaType: "text/plain" as const,
+      name: "Admission fixture",
+      revision: 1,
+      sizeBytes: new TextEncoder().encode(briefContent).byteLength,
+    };
+    const renderedBrief = renderAdmittedBriefContext([briefBlock]);
+    const briefContext = {
+      blocks: [briefBlock],
+      characters: renderedBrief.length,
+      digest: await digestRunPrompt(renderedBrief),
+      references: [
+        {
+          digest: briefBlock.digest,
+          id: briefBlock.id,
+          mediaType: briefBlock.mediaType,
+          name: briefBlock.name,
+          revision: briefBlock.revision,
+          sizeBytes: briefBlock.sizeBytes,
+        },
+      ],
+      sizeBytes: new TextEncoder().encode(renderedBrief).byteLength,
+    };
+    const briefAdmission = await controlPlane.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      briefContext: {
+        characters: briefContext.characters,
+        digest: briefContext.digest,
+        references: briefContext.references,
+        sizeBytes: briefContext.sizeBytes,
+      },
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-brief-admit-602",
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
+    });
+    if (!briefAdmission.ok || briefAdmission.state !== "issued") {
+      throw new Error("Expected Brief-bound rejection permit.");
+    }
+    await expect(
+      correctStub.acceptRunAdmission({
+        briefContext: {
+          ...briefContext,
+          blocks: [{ ...briefBlock, content: `${briefContent} tampered` }],
+        },
+        permit: briefAdmission.permit,
+        prompt,
+      }),
+    ).resolves.toEqual(invalidRunAdmission());
+    await expect(
+      correctStub.acceptRunAdmission({
+        briefContext,
+        permit: briefAdmission.permit,
+        prompt,
+      }),
+    ).resolves.toMatchObject({ accepted: true, ok: true });
+
     const readOnly = await authorityFor("crew-agent-602", [AGENTS_READ_SCOPE]);
     const ownerWriteOnly = await authorityFor("crew-agent-602", [OWNER_WRITE_SCOPE]);
     const writeOnly = { ...authority, scopes: [AGENTS_WRITE_SCOPE] } satisfies OwnerAuthority;
@@ -2774,5 +2858,86 @@ describe("CrewAgent admitted execution", () => {
       error: { code: "run_unavailable" },
       ok: false,
     });
+  });
+
+  it("redacts retained Session Brief content before releasing its owner reference", async () => {
+    const authority = await authorityFor("crew-session-brief-redaction", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const brief = await controlPlane.createBrief(authority, {
+      content: "Raw Session Brief content must be removed at Run cleanup.",
+      idempotencyKey: "session-brief-redaction",
+      mediaType: "text/plain",
+      name: "Session redaction",
+    });
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("session-brief-redaction-agent"),
+    );
+    if (!brief.ok || !created.ok) throw new Error("Expected Session redaction fixtures.");
+    await runInDurableObject(
+      env.CREW_AGENT.getByName(
+        crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
+      ),
+      (agent) => asTestCrewAgent(agent).enableDurableSessionsForTest(),
+    );
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      briefs: [{ id: brief.brief.id, revision: 1 }],
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "session-brief-redaction-run",
+      prompt: "Use the Brief once, then retain only its provenance.",
+    });
+    if (!started.ok || started.run.session === undefined) {
+      throw new Error("Expected Session-backed Brief Run.");
+    }
+    await completedRun(controlPlane, authority, started.run.runId);
+
+    const session = env.CREW_SESSION.getByName(
+      crewSessionObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+        sessionId: started.run.session.sessionId,
+      }),
+    );
+    await runInDurableObject(session, async (agent, state) => {
+      const recordKey = `crewhelm:run:${started.run.runId}`;
+      const record = admittedRunRecordSchema.parse(await state.storage.get(recordKey));
+      const messageId = `crewhelm:${started.run.runId}:user`;
+      const before = retainedTurnMetadata(
+        state.storage.sql
+          .exec<{ content: string }>(
+            "SELECT content FROM assistant_messages WHERE id = ?",
+            messageId,
+          )
+          .one().content,
+      );
+      expect(before.crewhelmRun).toHaveProperty("briefContext");
+
+      await state.storage.put(recordKey, { ...record, cleanupAt: 1 });
+      await agent.cleanupAdmittedRun({ runId: started.run.runId });
+
+      const after = retainedTurnMetadata(
+        state.storage.sql
+          .exec<{ content: string }>(
+            "SELECT content FROM assistant_messages WHERE id = ?",
+            messageId,
+          )
+          .one().content,
+      );
+      expect(after.crewhelmRun).not.toHaveProperty("briefContext");
+    });
+    await expect(
+      controlPlane.deleteBrief(authority, {
+        expectedRevision: 1,
+        id: brief.brief.id,
+        idempotencyKey: "session-brief-delete-after-redaction",
+      }),
+    ).resolves.toMatchObject({ deleted: true, ok: true });
   });
 });

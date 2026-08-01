@@ -34,11 +34,18 @@ input-shaped handoffs: a Run continuation can be passed unchanged into a manual 
 Workflow returns its stable ID and revision for compact list, exact inspection, cancellation, or
 terminal deletion.
 
+Agent revisions answer how work is performed: Skills and integration grants are configured there.
+Brief revisions answer which owner-provided context is admitted to one Run or Workflow. The single
+`crewhelm_briefs` lifecycle tool returns compact metadata for discovery and requires an exact ID and
+revision to read content. Attaching a Brief never requires the MCP client to fetch and resend it.
+
 One `crewhelm_agent_workflows` tool groups the small Workflow lifecycle instead of exposing
 coordinator internals. Its start action accepts one objective and two to eight ordered bounded
 stages. List and default inspection omit frozen prompts; exact inspection includes them only when
 explicitly requested. This makes durable multi-step work discoverable without turning the MCP
 catalog into a graph-building API or forcing clients to fetch every Run transcript.
+Completed Workflow inspection similarly returns compact final-deliverable metadata by default and
+includes content only when `includeDeliverable` is explicitly requested.
 
 The owner inbox is the polling surface for operational attention; Crewhelm neither broadcasts nor
 model-classifies its events. Fleet status exposes attention counts and age so clients can avoid
