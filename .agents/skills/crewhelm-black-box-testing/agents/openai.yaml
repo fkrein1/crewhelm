@@ -1,4 +1,0 @@
-interface:
-  display_name: "Crewhelm black-box testing"
-  short_description: "Run opt-in remote Crewhelm rehearsals."
-  default_prompt: "Use $crewhelm-black-box-testing to run a bounded public-MCP rehearsal against the dedicated test installation, verify recovery and cleanup, and report evidence without exposing credentials."

@@ -559,23 +559,27 @@ describe("repository foundation", () => {
   it("parses and constrains repository agent instructions", async () => {
     const instructions = await read("AGENTS.md");
     const context = await read("CONTEXT.md");
-    const skill = await read(".agents/skills/crewhelm-development/SKILL.md");
+    const skill = await read(".agents/skills/crewhelm-delivery/SKILL.md");
+    const liveValidationSkill = await read(".agents/skills/crewhelm-live-validation/SKILL.md");
+    const resilienceReviewSkill = await read(".agents/skills/crewhelm-resilience-review/SKILL.md");
     const productPhilosophy = await read("docs/product/philosophy.md");
     const systemArchitecture = await read("docs/architecture/system.md");
     const engineeringDesign = await read("docs/engineering/design.md");
     const securityInvariants = await read("docs/security/invariants.md");
     const frontmatter = parseFrontmatter(skill);
     const metadata = parseYamlObject(
-      await read(".agents/skills/crewhelm-development/agents/openai.yaml"),
+      await read(".agents/skills/crewhelm-delivery/agents/openai.yaml"),
     );
 
-    expect(instructions).toContain(".agents/skills/crewhelm-development/SKILL.md");
+    expect(instructions).toContain(".agents/skills/crewhelm-delivery/SKILL.md");
     expect(context).not.toHaveLength(0);
     expect(productPhilosophy).not.toHaveLength(0);
     expect(systemArchitecture).not.toHaveLength(0);
     expect(engineeringDesign).not.toHaveLength(0);
     expect(securityInvariants).not.toHaveLength(0);
-    expect(frontmatter["name"]).toBe("crewhelm-development");
+    expect(frontmatter["name"]).toBe("crewhelm-delivery");
+    expect(parseFrontmatter(liveValidationSkill)["name"]).toBe("crewhelm-live-validation");
+    expect(parseFrontmatter(resilienceReviewSkill)["name"]).toBe("crewhelm-resilience-review");
 
     const description = frontmatter["description"];
     expect(description).toEqual(expect.any(String));
@@ -587,8 +591,8 @@ describe("repository foundation", () => {
     expect(description.length).toBeLessThanOrEqual(1024);
     expect(metadata).toMatchObject({
       interface: {
-        display_name: "Crewhelm Development",
-        short_description: "Ship small, verified Crewhelm changes",
+        display_name: "Crewhelm delivery",
+        short_description: "Deliver secure, reviewed Crewhelm slices",
       },
     });
   });

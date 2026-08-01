@@ -1,9 +1,9 @@
 ---
-name: crewhelm-black-box-testing
-description: Run an optional live Crewhelm rehearsal through public MCP, with separate periodic OAuth coverage, when the user explicitly asks for black-box, remote E2E, smoke, or release-confidence testing. Do not use for routine implementation or deterministic CI.
+name: crewhelm-live-validation
+description: Validate Crewhelm behavior live through public CLI and MCP on the dedicated test installation. Use when the user asks for live validation, smoke testing, remote E2E, release confidence, or explicitly authorizes test deployment for live evidence required by crewhelm-delivery. Do not use for deterministic CI or production testing.
 ---
 
-# Crewhelm black-box testing
+# Crewhelm live validation
 
 Prove a requested feature against a dedicated test installation using the same public surfaces a
 client uses. This supplements deterministic tests; it never replaces them.
@@ -95,7 +95,7 @@ not.
 - On authorization pages, inspect only scoped visible text and controls. Do not capture a full DOM
   snapshot containing signed links.
 - Exercise public OAuth and MCP only. Do not substitute direct Durable Object, D1, R2, or provider
-  writes for black-box behavior.
+  writes for public live behavior.
 - Keep fixtures unique, bounded, disposable, and within existing budgets. Record retained immutable
   evidence only when the product intentionally has no delete operation.
 - Run one live session per installation. Preserve request, time, fleet-capacity, and access-token
@@ -113,7 +113,7 @@ not.
    rehearsals unless the user asks to retire autonomous testing access.
 
 If the rehearsal exposes a product defect, stop the scenario. Reproduce it, fix it with
-`crewhelm-development`, verify and redeploy the exact branch, then restart the rehearsal.
+`crewhelm-delivery`, verify and redeploy the exact branch, then restart the rehearsal.
 
 For a light rehearsal, stop after preflight, public diagnosis, and one bounded journey. Create no
 provider effect unless required. Target five minutes while preserving origin, cleanup, and

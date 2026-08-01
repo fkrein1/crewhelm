@@ -1,0 +1,4 @@
+interface:
+  display_name: "Crewhelm resilience review"
+  short_description: "Explore and repair live reliability risks"
+  default_prompt: "Use $crewhelm-resilience-review to investigate [feature, journey, change, failure mode, or concern], repair reproducible defects, and verify cleanup."
