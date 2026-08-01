@@ -338,7 +338,7 @@ export async function runBraveWebSearch(input: {
   try {
     const response = await (input.fetchImplementation ?? fetch)(endpoint, {
       headers: { Accept: "application/json", "X-Subscription-Token": input.apiKey },
-      redirect: "error",
+      redirect: "manual",
       signal: bounded.signal,
     });
     if (!response.ok) throw new WebResearchExecutionError("provider_failed", response.status);
