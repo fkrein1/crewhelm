@@ -25,6 +25,7 @@ import {
   type FleetConfigurationPatch,
   type GetFleetConfigurationResult,
   type OwnerAuthority,
+  type RunnableAgentModel,
 } from "@crewhelm/contracts";
 import { and, eq } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
@@ -95,9 +96,14 @@ export function deniedFleetConfiguration(code: Failure["error"]["code"]): Failur
 
 export class FleetConfigurations {
   readonly #database: Database;
+  readonly #initialDefaultModel: RunnableAgentModel;
 
-  constructor(database: Database) {
+  constructor(
+    database: Database,
+    initialDefaultModel: RunnableAgentModel = DEFAULT_RUNNABLE_AGENT_MODEL,
+  ) {
     this.#database = database;
+    this.#initialDefaultModel = initialDefaultModel;
   }
 
   currentData(): FleetConfigurationData {
@@ -313,7 +319,7 @@ export class FleetConfigurations {
       },
       models: {
         allowed: [...RUNNABLE_AGENT_MODELS].toSorted(),
-        default: DEFAULT_RUNNABLE_AGENT_MODEL,
+        default: this.#initialDefaultModel,
       },
       retention: defaultFleetRetention,
       schedules: {

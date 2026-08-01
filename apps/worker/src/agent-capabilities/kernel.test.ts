@@ -6,6 +6,7 @@ import {
   DEFAULT_FLEET_MAXIMUM_TOOL_CALLS_PER_TOOL_PER_RUN,
   DEFAULT_FLEET_MAXIMUM_TOOL_CONCURRENCY_PER_GRANT,
   DEFAULT_FLEET_MINIMUM_SCHEDULE_INTERVAL_SECONDS,
+  DEFAULT_AI_GATEWAY_AGENT_MODEL,
   RUNNABLE_AGENT_MODELS,
   defaultFleetCapacity,
   defaultFleetExecutionLimits,
@@ -17,6 +18,10 @@ import { describe, expect, it } from "vitest";
 import * as z from "zod";
 
 import { AgentCapabilityRegistry, type AgentCapabilityModule } from "./kernel.js";
+import {
+  availableAgentCapabilityPrerequisites,
+  defaultAgentModelForPrerequisites,
+} from "./registry.js";
 import {
   AI_GATEWAY_PREREQUISITE,
   aiGatewayCapabilityConfiguration,
@@ -90,6 +95,18 @@ function contextModule(id = "context.test"): AgentCapabilityModule<{ text: strin
 }
 
 describe("Agent capability registry", () => {
+  it("defaults budgeted Gateway installations to Luna and keeps the Workers AI fallback", () => {
+    expect(
+      defaultAgentModelForPrerequisites(availableAgentCapabilityPrerequisites("crewhelm")),
+    ).toBe(DEFAULT_AI_GATEWAY_AGENT_MODEL);
+    expect(defaultAgentModelForPrerequisites(availableAgentCapabilityPrerequisites())).toBe(
+      "@cf/zai-org/glm-4.7-flash",
+    );
+    expect(defaultAgentModelForPrerequisites(availableAgentCapabilityPrerequisites("   "))).toBe(
+      "@cf/zai-org/glm-4.7-flash",
+    );
+  });
+
   it("compiles an AI Gateway profile with bounded fallbacks and sampling controls", () => {
     const registry = new AgentCapabilityRegistry([aiGatewayCapabilityModule]);
     const result = registry.compile(

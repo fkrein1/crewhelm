@@ -18,12 +18,14 @@ export const AI_GATEWAY_AGENT_MODELS = [
   "openai/gpt-5.6-terra",
 ] as const;
 
+export const DEFAULT_AI_GATEWAY_AGENT_MODEL = "openai/gpt-5.6-luna";
+
 export const RUNNABLE_AGENT_MODELS = [
   ...WORKERS_AI_AGENT_MODELS,
   ...AI_GATEWAY_AGENT_MODELS,
 ] as const;
 
-export const DEFAULT_RUNNABLE_AGENT_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
+export const DEFAULT_RUNNABLE_AGENT_MODEL = "@cf/zai-org/glm-4.7-flash";
 export const MAXIMUM_INFERENCE_FALLBACKS = 2;
 
 export const workersAiAgentModelSchema = z.enum(WORKERS_AI_AGENT_MODELS);

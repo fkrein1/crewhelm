@@ -1,3 +1,9 @@
+import {
+  DEFAULT_AI_GATEWAY_AGENT_MODEL,
+  DEFAULT_RUNNABLE_AGENT_MODEL,
+  type RunnableAgentModel,
+} from "@crewhelm/contracts";
+
 import { AI_GATEWAY_PREREQUISITE, aiGatewayCapabilityModule } from "./ai-gateway.js";
 import { AgentCapabilityRegistry } from "./kernel.js";
 import { skillsCapabilityModule } from "./skills.js";
@@ -17,6 +23,14 @@ export function availableAgentCapabilityPrerequisites(
     ...(sandboxAvailable ? ["cloudflare.sandbox"] : []),
     ...(braveSearchAvailable ? [BRAVE_SEARCH_PREREQUISITE] : []),
   ]);
+}
+
+export function defaultAgentModelForPrerequisites(
+  prerequisites: ReadonlySet<string>,
+): RunnableAgentModel {
+  return prerequisites.has(AI_GATEWAY_PREREQUISITE)
+    ? DEFAULT_AI_GATEWAY_AGENT_MODEL
+    : DEFAULT_RUNNABLE_AGENT_MODEL;
 }
 
 export const agentCapabilityRegistry = new AgentCapabilityRegistry([
