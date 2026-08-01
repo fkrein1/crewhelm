@@ -48,6 +48,11 @@ npx @crewhelm/cli@beta up
 non-secret coordinates in `crewhelm.installation.json`; see
 `crewhelm.installation.example.json` for the shape.
 
+Bounded Agent code execution is optional because Cloudflare Containers require Workers Paid. Add
+`--sandbox` to `crewhelm up` to provision it; repeat upgrades remember that choice. Without it,
+the capability catalog explains that Sandbox is unavailable and the rest of Crewhelm remains
+usable on the Free plan.
+
 ### Guided setup
 
 - **Connect.** Create a private GitHub App and securely enter the Worker URL and Composio project

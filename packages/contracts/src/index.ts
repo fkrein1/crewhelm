@@ -20,6 +20,7 @@ export * from "./integrations.js";
 export * from "./inference.js";
 export * from "./recovery.js";
 export * from "./run-admission.js";
+export * from "./runtime-tool-execution.js";
 export * from "./schedule-revision.js";
 export * from "./skills.js";
 export * from "./tool-execution.js";

@@ -26,10 +26,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   BLOCKED_CREW_AGENT_AUTHORITY_METHODS,
   CrewAgent,
+  type CrewSession,
   isToolExecutionPermitFresh,
 } from "./module.js";
 import { deriveOwnerKey } from "../../owner/identity.js";
 import { skillsCapabilityConfiguration } from "../../agent-capabilities/skills.js";
+import { sandboxCodeCapabilityConfiguration } from "../../agent-capabilities/sandbox-code.js";
 import { workersAiCapabilityConfiguration } from "../../agent-capabilities/workers-ai.js";
 import { OwnerControlPlane } from "../../owner/durable-object.js";
 import { digestRunPrompt } from "./protocol.js";
@@ -37,11 +39,14 @@ import { admittedRunRecordSchema, admittedTurnMetadataSchema } from "./schema.js
 import {
   DEADLINE_TEST_PROMPT,
   LARGE_TEST_PROMPT,
+  SANDBOX_LIMIT_TEST_PROMPT,
+  SANDBOX_TEST_PROMPT,
   SLOW_TEST_PROMPT,
   TEST_REPLY,
   TOOL_RESULT_FALLBACK_TEST_PROMPT,
   TOOL_TEST_PROMPT,
   TestCrewAgent,
+  TestCrewSession,
 } from "./test-agent.js";
 
 async function authorityFor(
@@ -403,6 +408,14 @@ function asTestCrewAgent(agent: CrewAgent): TestCrewAgent {
   return agent;
 }
 
+function asTestCrewSession(session: CrewSession): TestCrewSession {
+  if (!(session instanceof TestCrewSession)) {
+    throw new Error("Expected the test CrewSession implementation.");
+  }
+
+  return session;
+}
+
 function callMethod(instance: object, method: string, ...args: unknown[]): unknown {
   const candidate: unknown = Reflect.get(instance, method);
 
@@ -745,6 +758,161 @@ describe("CrewAgent admitted execution", () => {
     await expect(controlPlane.inspectRun(authority, { runId: started.run.runId })).resolves.toEqual(
       finished,
     );
+  });
+
+  it("runs the exact admitted Sandbox tool through an isolated CrewSession", async () => {
+    const authority = await authorityFor("crew-session-sandbox");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(authority, {
+      ...agentInput("crew-session-sandbox-agent"),
+      capabilities: [
+        workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct"),
+        sandboxCodeCapabilityConfiguration({
+          languages: ["python"],
+          maxCodeBytes: 4_096,
+          maxDurationMs: 5_000,
+          maxOutputBytes: 16_384,
+        }),
+      ].toSorted((left, right) => left.id.localeCompare(right.id)),
+      executionLimits: {
+        maxDurationSeconds: 45,
+        maxModelTokens: 2_000,
+        maxToolCalls: 2,
+        maxTurns: 4,
+      },
+    });
+
+    if (!created.ok) {
+      throw new Error("Expected Sandbox-enabled Agent.");
+    }
+
+    await runInDurableObject(
+      env.CREW_AGENT.getByName(
+        crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
+      ),
+      (agent) => asTestCrewAgent(agent).enableDurableSessionsForTest(),
+    );
+
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-session-sandbox-run",
+      prompt: SANDBOX_TEST_PROMPT,
+    });
+
+    if (!started.ok || started.run.session === undefined) {
+      throw new Error("Expected an isolated Sandbox session run.");
+    }
+
+    const finished = await vi.waitFor(
+      async () => {
+        const result = await controlPlane.inspectRun(authority, { runId: started.run.runId });
+        expect(result).toMatchObject({
+          ok: true,
+          run: { runId: started.run.runId, status: "completed" },
+        });
+        if (!result.ok) throw new Error("Expected completed Sandbox run.");
+        return result;
+      },
+      { interval: 25, timeout: 5_000 },
+    );
+
+    expect(finished.usage?.toolCalls).toEqual({ limit: 2, used: 1 });
+    expect(finished.timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event: "tool.execution_reserved" }),
+        expect.objectContaining({ event: "tool.execution_dispatched" }),
+        expect.objectContaining({ event: "tool.execution_completed" }),
+      ]),
+    );
+    const session = env.CREW_SESSION.getByName(
+      crewSessionObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+        sessionId: started.run.session.sessionId,
+      }),
+    );
+
+    await runInDurableObject(session, (instance) => {
+      expect(asTestCrewSession(instance).sandboxExecutionsForTest()).toEqual([
+        { code: "print(6 * 7)", language: "python" },
+      ]);
+    });
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      const rows = [
+        ...state.storage.sql.exec(
+          "SELECT status, output_bytes FROM runtime_tool_executions WHERE run_id = ?",
+          started.run.runId,
+        ),
+      ];
+      expect(rows).toEqual([expect.objectContaining({ status: "completed" })]);
+    });
+  });
+
+  it("records a Sandbox policy limit as a failed tool while the Run continues", async () => {
+    const authority = await authorityFor("crew-session-sandbox-limit");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(authority, {
+      ...agentInput("crew-session-sandbox-limit-agent"),
+      capabilities: [
+        workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct"),
+        sandboxCodeCapabilityConfiguration({
+          languages: ["python"],
+          maxCodeBytes: 4_096,
+          maxDurationMs: 5_000,
+          maxOutputBytes: 16_384,
+        }),
+      ].toSorted((left, right) => left.id.localeCompare(right.id)),
+      executionLimits: {
+        maxDurationSeconds: 45,
+        maxModelTokens: 2_000,
+        maxToolCalls: 2,
+        maxTurns: 4,
+      },
+    });
+
+    if (!created.ok) throw new Error("Expected Sandbox-enabled Agent.");
+    await runInDurableObject(
+      env.CREW_AGENT.getByName(
+        crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
+      ),
+      (agent) => asTestCrewAgent(agent).enableDurableSessionsForTest(),
+    );
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-session-sandbox-limit-run",
+      prompt: SANDBOX_LIMIT_TEST_PROMPT,
+    });
+
+    if (!started.ok) throw new Error("Expected bounded Sandbox limit Run.");
+    const finished = await vi.waitFor(
+      async () => {
+        const result = await controlPlane.inspectRun(authority, { runId: started.run.runId });
+        expect(result).toMatchObject({ ok: true, run: { status: "completed" } });
+        if (!result.ok) throw new Error("Expected completed Sandbox limit Run.");
+        return result;
+      },
+      { interval: 25, timeout: 5_000 },
+    );
+
+    expect(finished.timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event: "tool.execution_reserved" }),
+        expect.objectContaining({ event: "tool.execution_dispatched" }),
+        expect.objectContaining({ event: "tool.execution_failed" }),
+      ]),
+    );
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      expect(
+        state.storage.sql
+          .exec<{ status: string }>(
+            "SELECT status FROM runtime_tool_executions WHERE run_id = ?",
+            started.run.runId,
+          )
+          .one(),
+      ).toEqual({ status: "failed" });
+    });
   });
 
   it("preserves same-millisecond provider-neutral inference evidence", async () => {

@@ -15,6 +15,9 @@ used across the public site, browser handoffs, CLI, and future product surfaces.
   own durable control and execution.
 - **Framework power stays reachable.** Crewhelm preserves useful Agents and Think capabilities
   behind deterministic policy and recovery contracts.
+- **Tools improve outcomes.** Code, search, fetch, and future runtime capabilities are bounded
+  reasoning tools an Agent can choose when useful—not separate Agent personas or workflows the
+  owner must orchestrate.
 - **Outcomes outlive the chat.** A durable Workflow carries one known multi-step objective across
   ordered bounded Runs, so an owner can leave the MCP conversation and return to exact progress,
   recovery, or one clear final deliverable.

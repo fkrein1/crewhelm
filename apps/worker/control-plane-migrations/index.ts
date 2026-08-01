@@ -22,6 +22,8 @@ import migration20 from "./0020_expand_inference_profiles.sql";
 import migration21 from "./0021_futuristic_adam_destine.sql";
 import migration22 from "./0022_adorable_marrow.sql";
 import migration23 from "./0023_abnormal_sister_grimm.sql";
+import migration24 from "./0024_broad_micromacro.sql";
+import migration25 from "./0025_charming_squadron_supreme.sql";
 
 export const controlPlaneMigrations = [
   {
@@ -143,6 +145,16 @@ export const controlPlaneMigrations = [
     name: "0023_abnormal_sister_grimm",
     sql: migration23,
     version: 24,
+  },
+  {
+    name: "0024_broad_micromacro",
+    sql: migration24,
+    version: 25,
+  },
+  {
+    name: "0025_charming_squadron_supreme",
+    sql: migration25,
+    version: 26,
   },
 ] as const;
 

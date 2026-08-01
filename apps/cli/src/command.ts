@@ -31,6 +31,7 @@ function formatUpHelp(style: CliTextStyle): string {
 ${style.accentStrong("Examples:")}
   ${style.accent("$ crewhelm up")}
   ${style.accent("$ crewhelm up --endpoint https://crewhelm.example --ai-budget-usd 5")}
+  ${style.accent("$ crewhelm up --sandbox")} ${style.muted("# requires Cloudflare Workers Paid")}
   ${style.accent("$ crewhelm up --browser codex")}
 
 ${style.accentStrong("Automation:")}
@@ -126,6 +127,7 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
     json: z.boolean(),
     kind: z.literal("up"),
     origin: bootstrapOptionsSchema.shape.origin.optional(),
+    sandboxEnabled: bootstrapOptionsSchema.shape.sandboxEnabled,
     setupGitHub: z.boolean(),
     timeoutMs: bootstrapOptionsSchema.shape.timeoutMs,
     workerName: bootstrapOptionsSchema.shape.workerName.optional(),
@@ -217,6 +219,7 @@ interface UpCommandOptions {
   endpoint?: string;
   installation: string;
   json?: boolean;
+  sandbox?: boolean;
   setupGithub?: boolean;
   timeoutMs: string;
   workerName?: string;
@@ -406,6 +409,7 @@ function createCliProgram(
     .option("--database-name <name>", "D1 database name")
     .option("--database-id <uuid>", "existing D1 database identifier")
     .option("--ai-budget-usd <dollars>", "daily AI Gateway hard spend limit")
+    .option("--sandbox", "enable bounded Agent code execution (requires Workers Paid)")
     .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")
     .option("--json", "write one machine-readable JSON result")
     .addHelpText("after", formatUpHelp(style))
@@ -422,6 +426,7 @@ function createCliProgram(
           json: options.json === true,
           kind: "up",
           origin: parseOrigin(options.endpoint, "up"),
+          sandboxEnabled: options.sandbox === true,
           setupGitHub: options.setupGithub === true,
           timeoutMs: Number(options.timeoutMs),
           workerName: options.workerName,

@@ -163,11 +163,21 @@ async function createDeploymentAssetsDirectory(): Promise<string> {
           { class_name: "OwnerControlPlane", name: "OWNER_CONTROL_PLANE" },
           { class_name: "CrewAgent", name: "CREW_AGENT" },
           { class_name: "CrewSession", name: "CREW_SESSION" },
+          { class_name: "CrewhelmSandbox", name: "CODE_SANDBOX" },
         ],
       },
+      containers: [
+        {
+          class_name: "CrewhelmSandbox",
+          image: "docker.io/cloudflare/sandbox:0.12.4-python",
+          instance_type: "lite",
+          max_instances: 5,
+        },
+      ],
       exports: {
         CrewAgent: { storage: "sqlite", type: "durable-object" },
         CrewSession: { storage: "sqlite", type: "durable-object" },
+        CrewhelmSandbox: { storage: "sqlite", type: "durable-object" },
         OwnerControlPlane: { storage: "sqlite", type: "durable-object" },
       },
       main: "./index.js",
@@ -360,6 +370,10 @@ describe("Crewhelm CLI", () => {
     expect(
       parseCli(["doctor", "--endpoint", "https://crewhelm.example", "--no-color"]),
     ).toMatchObject({ kind: "doctor" });
+    expect(parseCli(["up", "--endpoint", "https://crewhelm.example", "--sandbox"])).toMatchObject({
+      kind: "up",
+      sandboxEnabled: true,
+    });
   });
 
   it.each([

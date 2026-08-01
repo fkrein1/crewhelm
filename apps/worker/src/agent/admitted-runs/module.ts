@@ -54,8 +54,15 @@ import {
   type ToolAuthorizationTimelineEvent,
   type AdmittedBriefContext,
   type AdmittedBriefContextContent,
+  classifiedSandboxCodeActionSchema,
+  completeRuntimeToolExecutionResultSchema,
+  dispatchRuntimeToolExecutionResultSchema,
+  reserveRuntimeToolExecutionResultSchema,
+  type SandboxCodeRuntimeTool,
+  type RuntimeToolExecutionPermit,
 } from "@crewhelm/contracts";
 import { createComposioRuntime } from "@crewhelm/composio";
+import { getSandbox, type ExecutionResult } from "@cloudflare/sandbox";
 import {
   Think,
   Session,
@@ -99,6 +106,11 @@ import {
 import { createInferenceFallbackModel, type InferenceAttemptEvent } from "./inference-fallback.js";
 import { digestRunPrompt, digestToolInput } from "./protocol.js";
 import {
+  runBoundedSandboxCleanup,
+  runBoundedSandboxCode,
+  sandboxContainerTimeouts,
+} from "./sandbox-code-execution.js";
+import {
   agentInboxProjectionOutboxSchema,
   admittedRunRecordSchema,
   admittedTurnMetadataSchema,
@@ -122,6 +134,7 @@ const INBOX_PROJECTION_SAFETY_WAKEUP_MS = 1_000;
 const MAXIMUM_RUN_OUTPUT_PARTS = 256;
 const EXECUTION_OUTCOME_PREFIX = "[execute tool]";
 const EXECUTION_OUTCOME_MARKER = " Outcome: ";
+const SANDBOX_CODE_TOOL_NAME = "sandbox_run_code";
 const INVALID_RUN_ADMISSION = {
   error: {
     code: "invalid_admission",
@@ -295,6 +308,39 @@ async function canonicalToolCallId(runId: string, toolCallId: string): Promise<s
 
 function isoTimestamp(timestamp: number | undefined): string | undefined {
   return timestamp === undefined ? undefined : new Date(timestamp).toISOString();
+}
+
+function truncateUtf8(value: string, maximumBytes: number): { text: string; truncated: boolean } {
+  const encoded = new TextEncoder().encode(value);
+
+  if (encoded.byteLength <= maximumBytes) {
+    return { text: value, truncated: false };
+  }
+
+  return {
+    text: new TextDecoder().decode(encoded.slice(0, maximumBytes)).replace(/\uFFFD$/, ""),
+    truncated: true,
+  };
+}
+
+function compactSandboxExecution(result: ExecutionResult, maximumBytes: number) {
+  const sections = [
+    ...result.logs.stdout.map((line) => `[stdout] ${line}`),
+    ...result.logs.stderr.map((line) => `[stderr] ${line}`),
+    ...result.results.flatMap((item) => [
+      ...(item.text === undefined ? [] : [item.text]),
+      ...(item.markdown === undefined ? [] : [item.markdown]),
+      ...(item.json === undefined ? [] : [JSON.stringify(item.json)]),
+    ]),
+    ...(result.error === undefined ? [] : [`[${result.error.name}] ${result.error.message}`]),
+  ];
+  const output = truncateUtf8(sections.join("\n"), Math.max(1, maximumBytes - 256));
+
+  return {
+    ok: result.error === undefined,
+    output: output.text,
+    truncated: output.truncated,
+  };
 }
 
 function resultPreview(message: UIMessage): string | null {
@@ -1717,24 +1763,43 @@ export class CrewSession extends Think {
 
   override getActions(): Record<string, Action> {
     const adapters = this.#activeToolAdapters();
+    const actions: Array<readonly [string, Action]> = adapters.map((adapter) => [
+      adapter.name,
+      defineAction({
+        approval: requiresToolApproval(adapter.grant),
+        approvalRisk: adapter.grant.effect === "destructive" ? "high" : "medium",
+        approvalSummary: adapter.approvalSummary,
+        description: adapter.description,
+        execute: (input, context) => this.#executeTool(adapter, input, context),
+        inputSchema: adapter.inputSchema,
+        kind: requiresToolApproval(adapter.grant) ? "durable-pause" : "server",
+        name: adapter.name,
+        permissions: [adapter.grant.grantId],
+        timeoutMs: adapter.grant.limits.maxDurationMs,
+      }),
+    ]);
+    const sandboxTool = this.#activeSandboxCodeTool();
 
-    return Object.fromEntries(
-      adapters.map((adapter) => [
-        adapter.name,
+    if (sandboxTool !== undefined) {
+      actions.push([
+        SANDBOX_CODE_TOOL_NAME,
         defineAction({
-          approval: requiresToolApproval(adapter.grant),
-          approvalRisk: adapter.grant.effect === "destructive" ? "high" : "medium",
-          approvalSummary: adapter.approvalSummary,
-          description: adapter.description,
-          execute: (input, context) => this.#executeTool(adapter, input, context),
-          inputSchema: adapter.inputSchema,
-          kind: requiresToolApproval(adapter.grant) ? "durable-pause" : "server",
-          name: adapter.name,
-          permissions: [adapter.grant.grantId],
-          timeoutMs: adapter.grant.limits.maxDurationMs,
+          approval: false,
+          approvalRisk: "low",
+          approvalSummary: "Run bounded code",
+          description:
+            "Run a short Python or JavaScript calculation in an isolated, no-network sandbox. Use for math, parsing, transformations, or checking reasoning; it has no Crewhelm credentials, package-installation workflow, or durable files.",
+          execute: (input, context) => this.#executeSandboxCode(sandboxTool, input, context),
+          inputSchema: this.#sandboxCodeInputSchema(sandboxTool),
+          kind: "server",
+          name: SANDBOX_CODE_TOOL_NAME,
+          permissions: [sandboxTool.id],
+          timeoutMs: sandboxTool.limits.maxDurationMs,
         }),
-      ]),
-    );
+      ]);
+    }
+
+    return Object.fromEntries(actions);
   }
 
   override beforeTurn(context?: TurnContext): TurnConfig {
@@ -1778,7 +1843,10 @@ export class CrewSession extends Think {
     return {
       activeTools: approvalContinuation
         ? []
-        : this.#activeToolAdapters().map((adapter) => adapter.name),
+        : [
+            ...this.#activeToolAdapters().map((adapter) => adapter.name),
+            ...(this.#activeSandboxCodeTool() === undefined ? [] : [SANDBOX_CODE_TOOL_NAME]),
+          ],
       instructions,
       chatStreamStallTimeoutMs: Math.max(1, metadata.deadlineAt - Date.now()),
       maxOutputTokens: metadata.budgetReservation.maxOutputTokens,
@@ -1814,7 +1882,10 @@ export class CrewSession extends Think {
       if (reference !== undefined) {
         return {
           allowed: true,
-          grantedPermissions: reference.budgetReservation.toolGrants.map((grant) => grant.grantId),
+          grantedPermissions: [
+            ...reference.budgetReservation.toolGrants.map((grant) => grant.grantId),
+            ...(reference.budgetReservation.runtimePlan.tools ?? []).map((tool) => tool.id),
+          ],
         };
       }
     } catch {
@@ -2020,14 +2091,40 @@ export class CrewSession extends Think {
     context: ActionAuthorizationContext,
   ): Promise<ActionAuthorizationDecision> {
     const startedAt = performance.now();
-    const adapter = this.#activeToolAdapters().find(
-      (candidate) => candidate.name === context.action,
-    );
+    const sandboxTool =
+      context.action === SANDBOX_CODE_TOOL_NAME ? this.#activeSandboxCodeTool() : undefined;
     const reference = await this.#activeRunReference();
     const toolCallId =
       reference === undefined
         ? undefined
         : await canonicalToolCallId(reference.runId, context.toolCallId);
+
+    if (sandboxTool !== undefined) {
+      const input = this.#sandboxCodeInputSchema(sandboxTool).safeParse(context.input);
+      const allowed =
+        reference !== undefined &&
+        toolCallId !== undefined &&
+        input.success &&
+        context.requiredPermissions.length === 1 &&
+        context.requiredPermissions[0] === sandboxTool.id;
+
+      if (reference !== undefined && toolCallId !== undefined) {
+        await this.#recordToolAuthorization({
+          checkpoint: "action_authorization",
+          outcome: allowed ? "allowed" : "blocked",
+          ...(allowed ? {} : { reason: "action_invalid" }),
+          runId: reference.runId,
+          startedAt,
+          toolCallId,
+        });
+      }
+
+      return allowed;
+    }
+
+    const adapter = this.#activeToolAdapters().find(
+      (candidate) => candidate.name === context.action,
+    );
 
     if (
       reference === undefined ||
@@ -2221,14 +2318,45 @@ export class CrewSession extends Think {
 
   override async beforeToolCall(context: ToolCallContext): Promise<ToolCallDecision> {
     const startedAt = performance.now();
-    const adapter = this.#activeToolAdapters().find(
-      (candidate) => candidate.name === context.toolName,
-    );
+    const sandboxTool =
+      context.toolName === SANDBOX_CODE_TOOL_NAME ? this.#activeSandboxCodeTool() : undefined;
     const reference = await this.#activeRunReference();
     const toolCallId =
       reference === undefined
         ? undefined
         : await canonicalToolCallId(reference.runId, context.toolCallId);
+
+    if (sandboxTool !== undefined) {
+      const input = z
+        .strictObject({
+          code: z.string().min(1),
+          language: z.enum(["javascript", "python"]),
+        })
+        .safeParse(context.input);
+      const valid =
+        reference !== undefined &&
+        toolCallId !== undefined &&
+        input.success &&
+        sandboxTool.languages.includes(input.data.language) &&
+        new TextEncoder().encode(input.data.code).byteLength <= sandboxTool.limits.maxCodeBytes;
+
+      if (reference !== undefined && toolCallId !== undefined) {
+        await this.#recordToolAuthorization({
+          checkpoint: "pre_execution",
+          outcome: valid ? "allowed" : "blocked",
+          ...(valid ? {} : { reason: "action_invalid" }),
+          runId: reference.runId,
+          startedAt,
+          toolCallId,
+        });
+      }
+
+      return valid ? { action: "allow" } : { action: "block", reason: "Tool execution denied." };
+    }
+
+    const adapter = this.#activeToolAdapters().find(
+      (candidate) => candidate.name === context.toolName,
+    );
 
     if (adapter === undefined || reference === undefined || toolCallId === undefined) {
       if (reference !== undefined && toolCallId !== undefined) {
@@ -2529,6 +2657,227 @@ export class CrewSession extends Think {
       sessionRunTerminalKey(request.data.runId),
     ]);
     return true;
+  }
+
+  #activeSandboxCodeTool(): SandboxCodeRuntimeTool | undefined {
+    const tools = this.#activeRuntimeConfig().runtimePlan.tools ?? [];
+    const sandboxTools = tools.filter(
+      (candidate): candidate is SandboxCodeRuntimeTool => candidate.kind === "sandbox-code",
+    );
+
+    if (sandboxTools.length > 1) {
+      throw new Error("CrewAgent admitted runtime tool registry is invalid.");
+    }
+
+    return sandboxTools[0];
+  }
+
+  #sandboxCodeInputSchema(runtimeTool: SandboxCodeRuntimeTool) {
+    return z.strictObject({
+      code: z
+        .string()
+        .min(1)
+        .max(runtimeTool.limits.maxCodeBytes)
+        .refine(
+          (code) => new TextEncoder().encode(code).byteLength <= runtimeTool.limits.maxCodeBytes,
+          "Code exceeds the admitted byte limit.",
+        ),
+      language: z
+        .enum(["javascript", "python"])
+        .refine((language) => runtimeTool.languages.includes(language)),
+    });
+  }
+
+  protected async runSandboxCode(input: {
+    code: string;
+    language: "javascript" | "python";
+    permit: RuntimeToolExecutionPermit;
+    signal: AbortSignal;
+  }): Promise<ExecutionResult> {
+    if (this.env.CODE_SANDBOX === undefined) {
+      throw new Error("Sandbox runtime is unavailable.");
+    }
+
+    const sandbox = getSandbox(this.env.CODE_SANDBOX, input.permit.action.toolCallId, {
+      containerTimeouts: sandboxContainerTimeouts(input.permit.constraints.maxDurationMs),
+      labels: {
+        runId: input.permit.action.runId,
+        tool: input.permit.action.tool.id,
+      },
+      sleepAfter: "1m",
+      transport: "rpc",
+    });
+    const cleanup = () => sandbox.destroyAndPurge();
+
+    try {
+      return await runBoundedSandboxCode({
+        cleanupAfterLateOpen: cleanup,
+        code: input.code,
+        maximumStreamBytes: input.permit.constraints.maxOutputBytes,
+        openStream: () => sandbox.runCodeStream(input.code, { language: input.language }),
+        signal: input.signal,
+        timeoutMs: input.permit.constraints.maxDurationMs,
+        trackLateCleanup: (lateCleanup) => {
+          this.ctx.waitUntil(lateCleanup.catch(() => undefined));
+        },
+      });
+    } finally {
+      await runBoundedSandboxCleanup({
+        cleanup,
+        timeoutMs: 1_000,
+        trackLateCleanup: (lateCleanup) => {
+          this.ctx.waitUntil(lateCleanup);
+        },
+      });
+    }
+  }
+
+  async #executeSandboxCode(
+    runtimeTool: SandboxCodeRuntimeTool,
+    input: { code: string; language: "javascript" | "python" },
+    context: { signal: AbortSignal; toolCallId: string },
+  ): Promise<unknown> {
+    const reference = await this.#activeRunReference();
+
+    if (
+      reference === undefined ||
+      !runtimeTool.languages.includes(input.language) ||
+      new TextEncoder().encode(input.code).byteLength > runtimeTool.limits.maxCodeBytes
+    ) {
+      throw new Error("Runtime tool execution denied.");
+    }
+
+    const action = classifiedSandboxCodeActionSchema.parse({
+      agentId: reference.agentId,
+      agentRevision: reference.agentRevision,
+      codeDigest: await digestToolInput({ code: input.code }),
+      language: input.language,
+      ownerKey: reference.ownerKey,
+      runId: reference.runId,
+      tool: runtimeTool,
+      toolCallId: await canonicalToolCallId(reference.runId, context.toolCallId),
+    });
+    let reservationResult: unknown;
+
+    try {
+      reservationResult = await this.env.OWNER_CONTROL_PLANE.getByName(
+        reference.ownerKey,
+      ).reserveRuntimeToolExecution({ ...reference, action });
+    } catch {
+      throw new Error("Runtime tool execution denied.");
+    }
+
+    const reservation = reserveRuntimeToolExecutionResultSchema.safeParse(reservationResult);
+
+    if (!reservation.success || !reservation.data.ok) {
+      throw new Error("Runtime tool execution denied.");
+    }
+
+    const permit = reservation.data.permit;
+
+    if (
+      JSON.stringify(permit.action) !== JSON.stringify(action) ||
+      !isToolExecutionPermitFresh(permit)
+    ) {
+      throw new Error("Runtime tool execution denied.");
+    }
+
+    await this.#recordRunTraceEvent(
+      reference.runId,
+      runTimelineEventSchema.parse({
+        event: "tool.execution_reserved",
+        occurredAt: new Date().toISOString(),
+        toolCallId: action.toolCallId,
+      }),
+    );
+    const dispatch = dispatchRuntimeToolExecutionResultSchema.safeParse(
+      await this.env.OWNER_CONTROL_PLANE.getByName(reference.ownerKey).dispatchRuntimeToolExecution(
+        {
+          permit,
+        },
+      ),
+    );
+
+    if (!dispatch.success || !dispatch.data.ok || !dispatch.data.dispatched) {
+      await this.#completeRuntimeTool(permit, 0, "failed");
+      throw new Error("Runtime tool execution denied.");
+    }
+
+    await this.#recordRunTraceEvent(
+      reference.runId,
+      runTimelineEventSchema.parse({
+        event: "tool.execution_dispatched",
+        occurredAt: new Date().toISOString(),
+        toolCallId: action.toolCallId,
+      }),
+    );
+    let output: unknown;
+    let outputBytes = 0;
+    let status: "completed" | "failed" | "unknown" = "unknown";
+
+    try {
+      const execution = await this.runSandboxCode({
+        code: input.code,
+        language: input.language,
+        permit,
+        signal: context.signal,
+      });
+      output = compactSandboxExecution(execution, permit.constraints.maxOutputBytes);
+      const serialized = JSON.stringify(output);
+
+      if (serialized === undefined) {
+        throw new Error("Runtime tool result is not serializable.");
+      }
+
+      outputBytes = new TextEncoder().encode(serialized).byteLength;
+      const boundedFailure =
+        execution.error?.name === "OutputLimitError" || execution.error?.name === "TimeoutError";
+      status = boundedFailure
+        ? "failed"
+        : outputBytes <= permit.constraints.maxOutputBytes
+          ? "completed"
+          : "unknown";
+    } catch {
+      output = undefined;
+      status = "failed";
+    }
+
+    const completed = await this.#completeRuntimeTool(permit, outputBytes, status);
+    const recordedStatus = completed ? status : "unknown";
+
+    await this.#recordRunTraceEvent(
+      reference.runId,
+      runTimelineEventSchema.parse({
+        event: `tool.execution_${recordedStatus}`,
+        occurredAt: new Date().toISOString(),
+        toolCallId: action.toolCallId,
+      }),
+    );
+
+    if (!completed || status !== "completed") {
+      throw new Error("Runtime tool execution failed.");
+    }
+    return output;
+  }
+
+  async #completeRuntimeTool(
+    permit: RuntimeToolExecutionPermit,
+    outputBytes: number,
+    status: "completed" | "failed" | "unknown",
+  ): Promise<boolean> {
+    let result: unknown;
+
+    try {
+      result = await this.env.OWNER_CONTROL_PLANE.getByName(
+        permit.action.ownerKey,
+      ).completeRuntimeToolExecution({ outcome: { outputBytes, status }, permit });
+    } catch {
+      return false;
+    }
+
+    const completed = completeRuntimeToolExecutionResultSchema.safeParse(result);
+
+    return completed.success && completed.data.ok && completed.data.completed;
   }
 
   protected createToolAdapter(

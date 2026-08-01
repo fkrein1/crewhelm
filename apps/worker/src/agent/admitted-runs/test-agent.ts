@@ -7,6 +7,7 @@ import {
   type ComposioToolCapabilityGrant,
 } from "@crewhelm/contracts";
 import type { ThinkModel } from "@cloudflare/think";
+import type { ExecutionResult } from "@cloudflare/sandbox";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import * as z from "zod";
 
@@ -23,6 +24,8 @@ const TOOL_TEST_PROMPT = "Use the exact admitted test tool.";
 const TOOL_RESULT_FALLBACK_TEST_PROMPT =
   "Use the exact admitted test tool without a final model response.";
 const TEST_TOOL_NAME = "projectToolkitReadItem";
+const SANDBOX_TEST_PROMPT = "Use the bounded Sandbox to calculate six times seven.";
+const SANDBOX_LIMIT_TEST_PROMPT = "Use the bounded Sandbox and exercise its execution limit.";
 
 interface TestModelCall {
   maxOutputTokens: number | undefined;
@@ -313,6 +316,7 @@ export class TestCrewSession extends CrewSession {
   #failDeletionResponse = false;
   #releaseDeletion: (() => void) | undefined;
   readonly #modelCalls: TestModelCall[] = [];
+  readonly #sandboxExecutions: Array<{ code: string; language: string }> = [];
   readonly #model = new MockLanguageModelV4({
     doGenerate: async () => ({
       content: [{ text: TEST_REPLY, type: "text" }],
@@ -329,6 +333,39 @@ export class TestCrewSession extends CrewSession {
         prompt: structuredClone(options.prompt),
         toolCount: options.tools?.length ?? 0,
       });
+      const serializedPrompt = JSON.stringify(options.prompt);
+
+      if (
+        (serializedPrompt.includes(SANDBOX_TEST_PROMPT) ||
+          serializedPrompt.includes(SANDBOX_LIMIT_TEST_PROMPT)) &&
+        (JSON.stringify(options.tools) ?? "").includes("sandbox_run_code") &&
+        this.#sandboxExecutions.length === 0
+      ) {
+        const code = serializedPrompt.includes(SANDBOX_LIMIT_TEST_PROMPT)
+          ? "policy-limit"
+          : "print(6 * 7)";
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: "stream-start", warnings: [] },
+              {
+                input: JSON.stringify({ code, language: "python" }),
+                toolCallId: "framework-sandbox-call-42",
+                toolName: "sandbox_run_code",
+                type: "tool-call",
+              },
+              {
+                finishReason: { raw: "tool-calls", unified: "tool-calls" },
+                type: "finish",
+                usage: {
+                  inputTokens: { cacheRead: 0, cacheWrite: 0, noCache: 8, total: 8 },
+                  outputTokens: { reasoning: 0, text: 1, total: 1 },
+                },
+              },
+            ],
+          }),
+        };
+      }
 
       return {
         stream: simulateReadableStream({
@@ -360,6 +397,39 @@ export class TestCrewSession extends CrewSession {
 
   modelCallsForTest(): TestModelCall[] {
     return structuredClone(this.#modelCalls);
+  }
+
+  sandboxExecutionsForTest(): Array<{ code: string; language: string }> {
+    return structuredClone(this.#sandboxExecutions);
+  }
+
+  protected override runSandboxCode(input: {
+    code: string;
+    language: "javascript" | "python";
+    signal: AbortSignal;
+  }): Promise<ExecutionResult> {
+    if (input.signal.aborted) {
+      return Promise.reject(new Error("Test Sandbox was cancelled."));
+    }
+
+    this.#sandboxExecutions.push({ code: input.code, language: input.language });
+    if (input.code === "policy-limit") {
+      return Promise.resolve({
+        code: input.code,
+        error: {
+          message: "Sandbox execution timed out.",
+          name: "TimeoutError",
+          traceback: [],
+        },
+        logs: { stderr: [], stdout: [] },
+        results: [],
+      });
+    }
+    return Promise.resolve({
+      code: input.code,
+      logs: { stderr: [], stdout: ["42"] },
+      results: [],
+    });
   }
 
   completeBeforeNextCancellationForTest(): void {
@@ -451,6 +521,8 @@ export {
   DEADLINE_TEST_PROMPT,
   LARGE_TEST_PROMPT,
   REJECTED_SESSION_PROMPT,
+  SANDBOX_LIMIT_TEST_PROMPT,
+  SANDBOX_TEST_PROMPT,
   SLOW_TEST_PROMPT,
   TEST_REPLY,
   TOOL_RESULT_FALLBACK_TEST_PROMPT,

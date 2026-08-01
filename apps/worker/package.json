@@ -10,6 +10,7 @@
   "dependencies": {
     "@ai-sdk/provider": "4.0.3",
     "@better-auth/oauth-provider": "1.7.0-beta.10",
+    "@cloudflare/sandbox": "0.12.4",
     "@cloudflare/think": "0.15.0",
     "@crewhelm/composio": "workspace:*",
     "@crewhelm/contracts": "workspace:*",

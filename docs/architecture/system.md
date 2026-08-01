@@ -19,6 +19,7 @@ flowchart LR
     Workflow --> Owner
     Agent --> Session["CrewSession / Think"]
     Session -. optional .-> Gateway["Dedicated AI Gateway"]
+    Session -. admitted native tool .-> Sandbox["Ephemeral no-egress Sandbox"]
     Worker --> Catalog["Composio catalog and Connect Links"]
     Session --> Gate["ToolGate and execution reservation"]
     Gate --> Composio["Trusted adapter / Composio"]
@@ -40,6 +41,7 @@ through the Agent object during migration.
 | `CrewAgent`         | Workflow and Session discovery, branch revisions, retention, deletion, and exact event and Run routing                                                             |
 | `AgentTaskWorkflow` | Durable ordering of identifiers and stage events; no prompts, bearer authority, provider access, or policy decisions                                               |
 | `CrewSession`       | One conversation's Think transcript, submissions, output, deadlines, and approval waits                                                                            |
+| Sandbox container   | One runtime-tool call's ephemeral process and filesystem; never owner authority or credentials; its backing Durable Object is purged after teardown                |
 | AI Gateway          | Optional installation-wide hard spend ceiling and model-call cost metadata                                                                                         |
 | Composio            | Connected-account credentials and refresh                                                                                                                          |
 
@@ -74,6 +76,14 @@ retained turn metadata; the owner keeps its Brief reference until the Session ac
 redaction has completed.
 
 Runs and tool calls are bound to the admitted Agent and fleet-configuration revisions.
+An Agent capability module may contribute a native runtime-tool descriptor, but only the owner
+control plane can freeze it into a Run plan and reserve its shared tool-call budget. `CrewSession`
+redeems a short-lived permit for the exact call, dispatches through a Crewhelm-owned adapter, and
+records completion or uncertainty. The first native tool, `sandbox.code`, creates one isolated
+container per call, blocks network egress, exposes no Crewhelm credentials, returns only bounded
+textual output, and destroys the container after execution. The owner ledger retains the exact
+container identity and repeats cleanup across the bounded late-open window before releasing the
+Run's storage target.
 Configuration changes invalidate unconsumed authority. The optional AI Gateway provides the
 fleet-wide dollar ceiling. The
 [threat model](../security/threat-model.md#observability-and-deployment) defines telemetry and
@@ -87,6 +97,8 @@ cost-reconciliation controls.
 | Agent definitions and revisions       | `owner/agents/`              |
 | Agent capability registry and plans   | `agent-capabilities/`        |
 | Run admission, budgets, and execution | `owner/runs/`                |
+| Native runtime-tool adapters          | `agent/admitted-runs/`       |
+| Sandbox container boundary            | `sandbox.ts`                 |
 | Recurring Agent schedules             | `owner/schedules/`           |
 | Durable Workflow plans and projection | `owner/workflows/`           |
 | Cloudflare Workflow coordination      | `agent-workflows/`           |
@@ -120,7 +132,9 @@ branding, stylesheet assets, and terminal color roles.
    bounded transcript snapshot, and only then submits inference.
    Discovery, session coordinates, and configuration grant no execution authority.
 4. `ToolGate` rechecks the grant, policy, connection, effect, approval, and budget before Composio
-   dispatch. Ambiguous mutations remain blocked until reconciled.
+   dispatch. A native runtime tool instead redeems a narrow owner-issued permit for its exact
+   admitted descriptor, input digest, and shared call budget before its Crewhelm adapter runs.
+   Ambiguous dispatches remain blocked or recorded unknown until recovery.
 5. Schedules and Workflow stages use the same admission path. A Workflow stage is admitted only
    from its exact frozen owner record and continues the exact Workflow Session; duplicate terminal
    events and retries cannot advance a different stage.

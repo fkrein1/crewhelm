@@ -274,6 +274,7 @@ function coordinatesFromInstallation(installation: Installation) {
     databaseId: installation.databaseId,
     databaseName: installation.databaseName,
     origin: installation.origin,
+    ...(installation.sandboxEnabled === true ? { sandboxEnabled: true } : {}),
     workerName: installation.workerName,
   });
 }
@@ -736,6 +737,7 @@ function bootstrapOptions(
     databaseId: coordinates.databaseId,
     databaseName: coordinates.databaseName,
     origin: options.origin,
+    ...(coordinates.sandboxEnabled === true ? { sandboxEnabled: true } : {}),
     setupGitHub: false,
     timeoutMs: options.timeoutMs,
     workerName: coordinates.workerName,

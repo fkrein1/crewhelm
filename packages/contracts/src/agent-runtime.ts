@@ -20,6 +20,39 @@ import { sha256DigestSchema } from "./capabilities.js";
 
 export const MAXIMUM_AGENT_SKILLS = 8;
 export const MAXIMUM_AGENT_SKILL_CONTEXT_CHARACTERS = 8 * 1_024;
+export const MAXIMUM_AGENT_RUNTIME_TOOLS = 16;
+export const MAXIMUM_SANDBOX_CODE_BYTES = 16 * 1_024;
+export const MAXIMUM_SANDBOX_DURATION_MS = 30_000;
+export const MAXIMUM_SANDBOX_OUTPUT_BYTES = 128 * 1_024;
+
+export const sandboxCodeLanguageSchema = z.enum(["javascript", "python"]);
+
+export const sandboxCodeRuntimeToolSchema = z.strictObject({
+  effect: z.literal("local-compute"),
+  id: z.literal("sandbox.code"),
+  kind: z.literal("sandbox-code"),
+  languages: z
+    .array(sandboxCodeLanguageSchema)
+    .min(1)
+    .max(2)
+    .refine(
+      (languages) =>
+        languages.every(
+          (language, index) => index === 0 || (languages[index - 1] ?? "") < language,
+        ),
+      "Expected unique Sandbox languages in canonical order.",
+    ),
+  limits: z.strictObject({
+    maxCodeBytes: z.number().int().min(1).max(MAXIMUM_SANDBOX_CODE_BYTES),
+    maxDurationMs: z.number().int().min(1).max(MAXIMUM_SANDBOX_DURATION_MS),
+    maxOutputBytes: z.number().int().min(1_024).max(MAXIMUM_SANDBOX_OUTPUT_BYTES),
+  }),
+  moduleId: agentCapabilityModuleIdSchema,
+  network: z.literal("none"),
+  schemaVersion: agentCapabilitySchemaVersionSchema,
+});
+
+export const agentRuntimeToolSchema = z.discriminatedUnion("kind", [sandboxCodeRuntimeToolSchema]);
 
 export const agentSkillReferenceSchema = z.strictObject({
   id: skillIdSchema,
@@ -110,6 +143,15 @@ export const agentRuntimePlanSchema = z.strictObject({
         8 * 1_024,
       "System-context contributions exceed the runtime prompt budget.",
     ),
+  tools: z
+    .array(agentRuntimeToolSchema)
+    .max(MAXIMUM_AGENT_RUNTIME_TOOLS)
+    .default([])
+    .refine(
+      (tools) =>
+        tools.every((tool, index) => index === 0 || (tools[index - 1]?.id ?? "") < tool.id),
+      "Expected unique runtime tools in canonical ID order.",
+    ),
 });
 
 export const crewAgentRuntimeConfigSchema = z.strictObject({
@@ -125,6 +167,9 @@ export const crewAgentRuntimeConfigSchema = z.strictObject({
 });
 
 export type AgentRuntimePlan = z.infer<typeof agentRuntimePlanSchema>;
+export type AgentRuntimeTool = z.infer<typeof agentRuntimeToolSchema>;
+export type SandboxCodeLanguage = z.infer<typeof sandboxCodeLanguageSchema>;
+export type SandboxCodeRuntimeTool = z.infer<typeof sandboxCodeRuntimeToolSchema>;
 export type CrewAgentRuntimeConfig = z.infer<typeof crewAgentRuntimeConfigSchema>;
 export type AdmittedSkillInstructions = z.infer<typeof admittedSkillInstructionsSchema>;
 export type AdmittedSkillProvenance = z.infer<typeof admittedSkillProvenanceSchema>;

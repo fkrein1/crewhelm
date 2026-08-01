@@ -173,7 +173,10 @@ function createMcpServer(
   const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
   const context = {
     authority,
-    availableAgentCapabilityPrerequisites: availableAgentCapabilityPrerequisites(env.AI_GATEWAY_ID),
+    availableAgentCapabilityPrerequisites: availableAgentCapabilityPrerequisites(
+      env.AI_GATEWAY_ID,
+      env.CODE_SANDBOX !== undefined,
+    ),
     controlPlane,
   };
 

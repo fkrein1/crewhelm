@@ -6,6 +6,7 @@
   "databaseId": "00000000-0000-4000-8000-000000000000",
   "databaseName": "crewhelm-auth",
   "origin": "https://crewhelm.example.workers.dev",
+  "sandboxEnabled": true,
   "skillBucketName": "crewhelm-skills",
   "updatedAt": "2026-01-01T00:00:00.000Z",
   "workerName": "crewhelm"

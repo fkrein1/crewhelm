@@ -96,6 +96,24 @@ Agent capability configuration is inert owner input until its statically registe
 validates prerequisites and contributes to the admitted runtime plan. Modules may require grants;
 they cannot create authority.
 
+Native runtime tools are closed, statically registered capability contributions. The admitted plan
+binds the exact adapter identity and limits; a model-generated call supplies data only. The owner
+control plane rechecks the active Run, Agent revision, fleet revision, duplicate loop bound, and
+shared tool-call budget before issuing a five-second permit bound to the input digest. Reservation,
+dispatch, completion, failure, and uncertainty are durable audit transitions.
+
+Sandbox code uses one Crewhelm-managed Cloudflare Sandbox container per call. Outbound networking
+is disabled by the container class, no Crewhelm or provider credentials are injected, output is
+reduced to bounded text, and the container is destroyed after the call. Its process and filesystem
+are untrusted and ephemeral. Crewhelm arms an alarm before teardown, then purges the per-call
+Durable Object's keys, schedules, runtime metadata, and alarm; an interrupted teardown retries from
+that marker. The owner ledger retains the exact Sandbox ID and repeats idempotent purges through a
+bounded horizon longer than the SDK's maximum late-open window; Run retention is not released until
+one of those final purges succeeds. A dispatched call that does not durably complete is recorded
+unknown; Crewhelm does not silently repeat it. Because native Sandbox computation has no external
+effect, its audit evidence otherwise follows ordinary Run retention and does not enter the
+external-effect reconciliation queue.
+
 Skill contents are untrusted owner input. R2 stores immutable package versions; owner-local SQLite
 stores only compact metadata and digests. Exact reads verify both before returning files. Publishing
 or retiring a Skill grants no runtime capability, and `scripts/` remains inert.

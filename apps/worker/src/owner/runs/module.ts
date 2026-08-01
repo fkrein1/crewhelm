@@ -70,6 +70,7 @@ import {
   capabilityGrants as storedCapabilityGrants,
   connections,
   runAdmissions,
+  runtimeToolExecutions,
   toolApprovals,
   toolExecutions,
   type ControlPlaneDatabaseSchema,
@@ -201,7 +202,12 @@ function createBudgetReservation(input: {
       ),
     0,
   );
-  const maxToolCalls = Math.min(effectiveExecutionLimits.maxToolCalls, grantedToolCalls);
+  const admittedRuntimeToolCalls =
+    (input.runtimePlan.tools?.length ?? 0) > 0 ? effectiveExecutionLimits.maxToolCalls : 0;
+  const maxToolCalls = Math.min(
+    effectiveExecutionLimits.maxToolCalls,
+    grantedToolCalls + admittedRuntimeToolCalls,
+  );
   const maxTurns = Math.min(effectiveExecutionLimits.maxTurns, maxToolCalls + 1);
   const baseModelCalls = Math.min(effectiveExecutionLimits.maxTurns, maxTurns + maxToolCalls);
   const maxModelCalls = Math.min(
@@ -1196,7 +1202,10 @@ export class RunAdmissions {
       return;
     }
 
-    const unresolvedRunIds = new Set(
+    // Only externally observable effects extend retention for outcome reconciliation. Native
+    // runtime tools are side-effect-free local compute, so an unknown outcome alone does not
+    // extend retention; exact per-call Sandbox cleanup must still be confirmed before deletion.
+    const unresolvedExternalRunIds = new Set(
       database
         .select({ runId: toolExecutions.runId })
         .from(toolExecutions)
@@ -1206,8 +1215,22 @@ export class RunAdmissions {
         .all()
         .map((row) => row.runId),
     );
-    const retainedRunIds = [...unresolvedRunIds];
-    const safeToDeleteRunIds = expiredRunIds.filter((runId) => !unresolvedRunIds.has(runId));
+    for (const row of database
+      .select({ runId: runtimeToolExecutions.runId })
+      .from(runtimeToolExecutions)
+      .where(
+        and(
+          inArray(runtimeToolExecutions.runId, expiredRunIds),
+          isNull(runtimeToolExecutions.cleanupAt),
+        ),
+      )
+      .all()) {
+      unresolvedExternalRunIds.add(row.runId);
+    }
+    const retainedRunIds = [...unresolvedExternalRunIds];
+    const safeToDeleteRunIds = expiredRunIds.filter(
+      (runId) => !unresolvedExternalRunIds.has(runId),
+    );
 
     if (retainedRunIds.length > 0) {
       database
@@ -1227,6 +1250,10 @@ export class RunAdmissions {
       database
         .delete(toolExecutions)
         .where(inArray(toolExecutions.runId, safeToDeleteRunIds))
+        .run();
+      database
+        .delete(runtimeToolExecutions)
+        .where(inArray(runtimeToolExecutions.runId, safeToDeleteRunIds))
         .run();
       database.delete(runAdmissions).where(inArray(runAdmissions.runId, safeToDeleteRunIds)).run();
     }

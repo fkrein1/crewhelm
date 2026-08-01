@@ -27,6 +27,10 @@ export default defineConfig({
         },
         d1Databases: ["AUTH_DB"],
         durableObjects: {
+          CODE_SANDBOX: {
+            className: "TestCodeSandbox",
+            useSQLite: true,
+          },
           CREW_AGENT: {
             className: "TestCrewAgent",
             useSQLite: true,

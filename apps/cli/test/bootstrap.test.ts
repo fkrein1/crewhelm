@@ -82,21 +82,18 @@ const stagedConfigSchema = z.looseObject({
   ai: z.looseObject({ binding: z.literal("AI") }),
   d1_databases: z.tuple([z.looseObject({ database_id: z.uuid() })]),
   durable_objects: z.looseObject({
-    bindings: z.tuple([
-      z.looseObject({
-        class_name: z.literal("OwnerControlPlane"),
-        name: z.literal("OWNER_CONTROL_PLANE"),
-      }),
-      z.looseObject({
-        class_name: z.literal("CrewAgent"),
-        name: z.literal("CREW_AGENT"),
-      }),
-      z.looseObject({
-        class_name: z.literal("CrewSession"),
-        name: z.literal("CREW_SESSION"),
-      }),
-    ]),
+    bindings: z.array(z.looseObject({ class_name: z.string(), name: z.string() })),
   }),
+  containers: z
+    .tuple([
+      z.looseObject({
+        class_name: z.literal("CrewhelmSandbox"),
+        image: z.literal("docker.io/cloudflare/sandbox:0.12.4-python"),
+        instance_type: z.literal("lite"),
+        max_instances: z.literal(5),
+      }),
+    ])
+    .optional(),
   observability: z.looseObject({
     logs: z.looseObject({ invocation_logs: z.literal(false) }),
     traces: z.looseObject({ enabled: z.literal(false) }),
@@ -273,14 +270,27 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
           { class_name: "OwnerControlPlane", name: "OWNER_CONTROL_PLANE" },
           { class_name: "CrewAgent", name: "CREW_AGENT" },
           { class_name: "CrewSession", name: "CREW_SESSION" },
+          { class_name: "CrewhelmSandbox", name: "CODE_SANDBOX" },
         ],
       },
+      containers: [
+        {
+          class_name: "CrewhelmSandbox",
+          image: "docker.io/cloudflare/sandbox:0.12.4-python",
+          instance_type: "lite",
+          max_instances: 5,
+        },
+      ],
       exports: {
         CrewAgent: {
           storage: "sqlite",
           type: "durable-object",
         },
         CrewSession: {
+          storage: "sqlite",
+          type: "durable-object",
+        },
+        CrewhelmSandbox: {
           storage: "sqlite",
           type: "durable-object",
         },
@@ -439,6 +449,7 @@ function recoveryWrangler({
   workerExports = {
     CrewAgent: { storage: "sqlite", type: "durable-object" },
     CrewSession: { storage: "sqlite", type: "durable-object" },
+    CrewhelmSandbox: { storage: "sqlite", type: "durable-object" },
     OwnerControlPlane: { storage: "sqlite", type: "durable-object" },
   },
 }: {
@@ -628,6 +639,37 @@ describe("Cloudflare bootstrap", () => {
         "deployment",
         "deployment",
       ]);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("recovers and preserves an existing paid Sandbox binding", async () => {
+    const fixture = await createDeploymentAssets();
+    const persist = vi.fn<(installation: unknown) => Promise<void>>(async () => {});
+    const dependencies = {
+      ...createDependencies(
+        fixture.assets,
+        recoveryWrangler({
+          bindings: [
+            { database_id: DATABASE_ID, name: "AUTH_DB", type: "d1" },
+            { name: "AI_GATEWAY_ID", text: OPTIONS.workerName, type: "plain_text" },
+            {
+              name: "CREWHELM_DEPLOYMENT_FINGERPRINT",
+              text: "a".repeat(64),
+              type: "plain_text",
+            },
+            { name: "PUBLIC_ORIGIN", text: OPTIONS.origin.origin, type: "plain_text" },
+            { name: "CODE_SANDBOX", type: "durable_object_namespace" },
+          ],
+        }),
+      ),
+      recoverExistingInstallation: { persist },
+    };
+
+    try {
+      await expect(bootstrapDeployment(OPTIONS, dependencies)).resolves.toMatchObject({ ok: true });
+      expect(persist).toHaveBeenCalledWith(expect.objectContaining({ sandboxEnabled: true }));
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
     }
@@ -1347,6 +1389,35 @@ describe("Cloudflare bootstrap", () => {
     }
   });
 
+  it("keeps paid Sandbox infrastructure out of the default deployment", async () => {
+    const fixture = await createDeploymentAssets();
+    const baseRunner = successfulReuseWrangler();
+    let stagedConfig: Record<string, unknown> | undefined;
+    const runWrangler: RunWrangler = async (arguments_, options) => {
+      if (arguments_[0] === "deploy") {
+        const configIndex = arguments_.indexOf("--config");
+        const configPath = configIndex === -1 ? undefined : arguments_[configIndex + 1];
+        if (configPath) stagedConfig = JSON.parse(await readFile(configPath, "utf8"));
+      }
+      return baseRunner(arguments_, options);
+    };
+
+    try {
+      await expect(
+        bootstrapDeployment(REUSE_OPTIONS, createDependencies(fixture.assets, runWrangler)),
+      ).resolves.toMatchObject({ ok: true });
+      expect(stagedConfig).toBeDefined();
+      expect(stagedConfig).not.toHaveProperty("containers");
+      expect(stagedConfig).not.toHaveProperty("exports.CrewhelmSandbox");
+      expect(stagedConfig).not.toHaveProperty(
+        "durable_objects.bindings",
+        expect.arrayContaining([expect.objectContaining({ name: "CODE_SANDBOX" })]),
+      );
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
   it("refuses to adopt an existing Worker for a fresh installation", async () => {
     const fixture = await createDeploymentAssets();
 
@@ -1721,7 +1792,10 @@ describe("Cloudflare bootstrap", () => {
       });
       const allWranglerCalls = vi.fn<RunWrangler>(dependencies.runWrangler);
       dependencies.runWrangler = allWranglerCalls;
-      const report = await bootstrapDeployment(REUSE_OPTIONS, dependencies);
+      const report = await bootstrapDeployment(
+        { ...REUSE_OPTIONS, sandboxEnabled: true },
+        dependencies,
+      );
 
       expect(report.ok).toBe(true);
       expect(report.aiGateway).toEqual({ enabled: false });
@@ -1737,6 +1811,15 @@ describe("Cloudflare bootstrap", () => {
         { class_name: "OwnerControlPlane", name: "OWNER_CONTROL_PLANE" },
         { class_name: "CrewAgent", name: "CREW_AGENT" },
         { class_name: "CrewSession", name: "CREW_SESSION" },
+        { class_name: "CrewhelmSandbox", name: "CODE_SANDBOX" },
+      ]);
+      expect(stagedConfig?.containers).toEqual([
+        {
+          class_name: "CrewhelmSandbox",
+          image: "docker.io/cloudflare/sandbox:0.12.4-python",
+          instance_type: "lite",
+          max_instances: 5,
+        },
       ]);
       expect(stagedConfig?.workflows).toEqual([
         {

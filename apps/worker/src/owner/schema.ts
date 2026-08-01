@@ -1193,6 +1193,83 @@ export const toolExecutions = sqliteTable(
   ],
 );
 
+export const runtimeToolExecutions = sqliteTable(
+  "runtime_tool_executions",
+  {
+    toolCallId: text("tool_call_id").primaryKey(),
+    runId: text("run_id").notNull(),
+    toolId: text("tool_id").notNull(),
+    actionDigest: text("action_digest").notNull(),
+    inputDigest: text("input_digest").notNull(),
+    nonceDigest: text("nonce_digest").notNull(),
+    status: text("status", {
+      enum: ["reserved", "completed", "failed", "unknown"],
+    }).notNull(),
+    outputBytes: integer("output_bytes"),
+    expiresAt: integer("expires_at").notNull(),
+    startedAt: integer("started_at").notNull(),
+    dispatchedAt: integer("dispatched_at"),
+    completedAt: integer("completed_at"),
+    cleanupAt: integer("cleanup_at"),
+    cleanupRetryAt: integer("cleanup_retry_at").notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.runId],
+      foreignColumns: [runAdmissions.runId],
+    }).onDelete("restrict"),
+    index("runtime_tool_executions_run").on(table.runId, table.startedAt),
+    index("runtime_tool_executions_expiry").on(table.status, table.expiresAt),
+    index("runtime_tool_executions_run_input").on(table.runId, table.toolId, table.inputDigest),
+    check("runtime_tool_executions_action_digest_length", sql`length(${table.actionDigest}) = 64`),
+    check("runtime_tool_executions_input_digest_length", sql`length(${table.inputDigest}) = 64`),
+    check("runtime_tool_executions_nonce_digest_length", sql`length(${table.nonceDigest}) = 43`),
+    check(
+      "runtime_tool_executions_status",
+      sql`${table.status} IN ('reserved', 'completed', 'failed', 'unknown')`,
+    ),
+    check(
+      "runtime_tool_executions_output_nonnegative",
+      sql`${table.outputBytes} IS NULL OR ${table.outputBytes} >= 0`,
+    ),
+    check("runtime_tool_executions_started_at_positive", sql`${table.startedAt} > 0`),
+    check(
+      "runtime_tool_executions_dispatched_at_positive",
+      sql`${table.dispatchedAt} IS NULL OR ${table.dispatchedAt} > 0`,
+    ),
+    check(
+      "runtime_tool_executions_dispatch_after_start",
+      sql`${table.dispatchedAt} IS NULL OR ${table.dispatchedAt} >= ${table.startedAt}`,
+    ),
+    check(
+      "runtime_tool_executions_expiry_after_start",
+      sql`${table.expiresAt} > ${table.startedAt}`,
+    ),
+    check(
+      "runtime_tool_executions_completion_after_dispatch",
+      sql`${table.completedAt} IS NULL
+        OR ${table.dispatchedAt} IS NULL
+        OR ${table.completedAt} >= ${table.dispatchedAt}`,
+    ),
+    check("runtime_tool_executions_cleanup_retry_positive", sql`${table.cleanupRetryAt} > 0`),
+    check(
+      "runtime_tool_executions_cleanup_after_start",
+      sql`${table.cleanupAt} IS NULL OR ${table.cleanupAt} >= ${table.startedAt}`,
+    ),
+    check(
+      "runtime_tool_executions_state",
+      sql`(
+        (${table.status} = 'reserved'
+          AND ${table.outputBytes} IS NULL
+          AND ${table.completedAt} IS NULL)
+        OR (${table.status} IN ('completed', 'failed', 'unknown')
+          AND ${table.outputBytes} IS NOT NULL
+          AND ${table.completedAt} IS NOT NULL)
+      )`,
+    ),
+  ],
+);
+
 export const auditEvents = sqliteTable(
   "audit_events",
   {
@@ -1554,6 +1631,7 @@ export const controlPlaneSchema = {
   integrationUsageEvents,
   integrationEnablementRequests,
   runAdmissions,
+  runtimeToolExecutions,
   skillMutations,
   skillObjects,
   skills,

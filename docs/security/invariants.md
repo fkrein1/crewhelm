@@ -39,4 +39,14 @@ the full block only while its admitted Run is retained; Run cleanup rewrites dur
 remove the block, and the owner reference cannot expire until the Session acknowledges that
 redaction.
 
+Native runtime tools are opt-in Agent capabilities, not ambient framework APIs. Admission freezes
+their exact implementation identity, supported inputs, effects, and limits. Each call revalidates
+the active owner, Agent and fleet revisions, consumes the Run's shared tool-call budget, and
+redeems a short-lived, input-bound permit. Sandbox code runs in a per-call ephemeral container with
+network egress disabled and no Crewhelm credentials. Only bounded textual output crosses back into
+the model context. Teardown purges the per-call Durable Object and arms alarm-based recovery before
+destruction; the owner ledger also repeats exact-ID purges through the Sandbox SDK's bounded
+late-open horizon before releasing Run retention. Timeout, dispatch uncertainty, and interrupted
+cleanup fail closed and remain auditable.
+
 No prompt-level instruction is an acceptable substitute for one of these controls.
