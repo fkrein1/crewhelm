@@ -68,6 +68,10 @@ describe("Crewhelm design foundation", () => {
     const siteMark = await readFile(
       new URL("../../../apps/site/public/crewhelm-mark.svg", import.meta.url),
     );
+    const siteLayout = await readFile(
+      new URL("../../../apps/site/src/layouts/SiteLayout.astro", import.meta.url),
+      "utf8",
+    );
 
     for (const path of Object.values(CREWHELM_LOGO_MARK_PATHS)) {
       expect(mark.toString()).toContain(`d="${path}"`);
@@ -76,6 +80,8 @@ describe("Crewhelm design foundation", () => {
     expect(siteFavicon).toEqual(favicon);
     expect(siteMark).toEqual(mark);
     expect(favicon).toEqual(mark);
+    expect(favicon.toString()).toContain("@media (prefers-color-scheme: dark)");
+    expect(siteLayout).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml" />');
     expect(createHash("sha256").update(lightMaster).digest("hex")).toBe(
       "1b3b315ab3edea768a1077152c12d6ddb24cae6431e21b95e4f707bcaf650f1f",
     );
