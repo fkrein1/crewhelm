@@ -80,6 +80,7 @@ import {
   MCP_LIST_INTEGRATION_AUTH_CONFIGS_TOOL_NAME,
   MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
   MCP_LIST_AGENT_RUNS_TOOL_NAME,
+  MCP_LIST_AGENT_SCHEDULES_TOOL_NAME,
   MCP_LIST_AGENTS_TOOL_NAME,
   MCP_LIST_CONNECTIONS_TOOL_NAME,
   MCP_LIST_UNRESOLVED_TOOL_EFFECTS_TOOL_NAME,
@@ -310,6 +311,7 @@ describe("authenticated MCP handler", () => {
     const scheduleReadTools = payload.result.tools.filter(
       (tool) =>
         tool.name === MCP_GET_AGENT_SCHEDULE_TOOL_NAME ||
+        tool.name === MCP_LIST_AGENT_SCHEDULES_TOOL_NAME ||
         tool.name === MCP_LIST_AGENT_RUNS_TOOL_NAME,
     );
 
@@ -331,6 +333,9 @@ describe("authenticated MCP handler", () => {
       openWorldHint: false,
       readOnlyHint: false,
     });
+    expect(configureScheduleTool?.description).toContain("scheduleId null");
+    expect(JSON.stringify(configureScheduleTool?.inputSchema)).toContain('"calendar"');
+    expect(JSON.stringify(configureScheduleTool?.inputSchema)).toContain('"timeZone"');
     expect(inboxTool?.annotations).toMatchObject({
       destructiveHint: false,
       idempotentHint: true,
@@ -375,7 +380,7 @@ describe("authenticated MCP handler", () => {
       description: expect.stringContaining("immutable"),
     });
     expect(JSON.stringify(briefsTool?.inputSchema)).toContain('"read"');
-    expect(scheduleReadTools).toHaveLength(2);
+    expect(scheduleReadTools).toHaveLength(3);
     expect(scheduleReadTools.every((tool) => tool.annotations.readOnlyHint)).toBe(true);
     expect(connectionLinkTool?.annotations).toMatchObject({
       destructiveHint: false,
@@ -1250,6 +1255,9 @@ describe("authenticated MCP handler", () => {
             throw new Error("do-not-reflect-this");
           },
           getAgentSchedule: async () => {
+            throw new Error("do-not-reflect-this");
+          },
+          listAgentSchedules: async () => {
             throw new Error("do-not-reflect-this");
           },
           getFleetConfiguration: async () => {
@@ -2826,6 +2834,7 @@ describe("authenticated MCP handler", () => {
           getAgent: unavailableControlPlane,
           getAgentRevision: unavailableControlPlane,
           getAgentSchedule: unavailableControlPlane,
+          listAgentSchedules: unavailableControlPlane,
           getAgentBlueprint: unavailableControlPlane,
           getFleetConfiguration: unavailableControlPlane,
           getSkill: unavailableControlPlane,
@@ -2961,6 +2970,7 @@ describe("authenticated MCP handler", () => {
           getAgentBlueprint: unavailableControlPlane,
           getAgentRevision: unavailableControlPlane,
           getAgentSchedule: unavailableControlPlane,
+          listAgentSchedules: unavailableControlPlane,
           getFleetConfiguration: unavailableControlPlane,
           getSkill: unavailableControlPlane,
           inspectRun: unavailableControlPlane,

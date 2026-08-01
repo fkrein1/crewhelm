@@ -81,6 +81,7 @@ export { MCP_AGENT_WORKFLOWS_TOOL_NAME };
 export {
   MCP_CONFIGURE_AGENT_SCHEDULE_TOOL_NAME,
   MCP_GET_AGENT_SCHEDULE_TOOL_NAME,
+  MCP_LIST_AGENT_SCHEDULES_TOOL_NAME,
 } from "./schedule-tools.js";
 export {
   MCP_BATCH_DISABLE_AGENTS_TOOL_NAME,
@@ -91,7 +92,7 @@ export {
 
 const MAX_MCP_BODY_BYTES = 512 * 1024;
 export const MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES = 64 * 1_024;
-export const MCP_TOOL_COUNT_BUDGET = 34;
+export const MCP_TOOL_COUNT_BUDGET = 35;
 const MCP_SERVER_INFO = {
   name: "crewhelm",
   version: "0.1.0",

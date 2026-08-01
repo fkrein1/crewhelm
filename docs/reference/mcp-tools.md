@@ -1689,7 +1689,7 @@ Attributes: write, destructive, idempotent, open-world.
 
 **Configure Crewhelm Agent schedule**
 
-Configure or pause one recurring schedule bound to an exact Crewhelm Agent revision.
+Create, update, or independently pause a named recurring responsibility bound to an exact Crewhelm Agent revision. Use scheduleId null to create another schedule, list schedules before exact updates, and update a paused schedule to reuse one of the eight bounded slots.
 
 Attributes: write, destructive, idempotent, closed-world.
 
@@ -1731,24 +1731,210 @@ Attributes: write, destructive, idempotent, closed-world.
     "schedule": {
       "anyOf": [
         {
-          "type": "object",
-          "properties": {
-            "intervalSeconds": {
-              "type": "integer",
-              "minimum": 60,
-              "maximum": 604800
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80,
+                  "description": "Short owner-facing name for this scheduled responsibility."
+                },
+                "prompt": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 16384,
+                  "description": "Bounded Run instruction used for every occurrence."
+                },
+                "trigger": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "intervalSeconds": {
+                          "type": "integer",
+                          "minimum": 60,
+                          "maximum": 604800,
+                          "description": "Elapsed seconds between Runs; the first Run occurs one interval after creation."
+                        },
+                        "type": {
+                          "type": "string",
+                          "const": "interval"
+                        }
+                      },
+                      "required": [
+                        "intervalSeconds",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "at": {
+                          "type": "string",
+                          "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
+                          "description": "Local wall-clock time in 24-hour HH:mm form."
+                        },
+                        "frequency": {
+                          "type": "string",
+                          "const": "daily"
+                        },
+                        "timeZone": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^(?:UTC|[A-Za-z0-9._+-]+(?:\\/[A-Za-z0-9._+-]+)+)$",
+                          "description": "IANA time zone used to preserve local wall-clock time across offset changes."
+                        },
+                        "type": {
+                          "type": "string",
+                          "const": "calendar"
+                        }
+                      },
+                      "required": [
+                        "at",
+                        "frequency",
+                        "timeZone",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "at": {
+                          "type": "string",
+                          "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
+                          "description": "Local wall-clock time in 24-hour HH:mm form."
+                        },
+                        "daysOfWeek": {
+                          "minItems": 1,
+                          "maxItems": 7,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "monday",
+                              "tuesday",
+                              "wednesday",
+                              "thursday",
+                              "friday",
+                              "saturday",
+                              "sunday"
+                            ]
+                          },
+                          "description": "Execution weekdays, unique and ordered Monday through Sunday."
+                        },
+                        "frequency": {
+                          "type": "string",
+                          "const": "weekly"
+                        },
+                        "timeZone": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^(?:UTC|[A-Za-z0-9._+-]+(?:\\/[A-Za-z0-9._+-]+)+)$",
+                          "description": "IANA time zone used to preserve local wall-clock time across offset changes."
+                        },
+                        "type": {
+                          "type": "string",
+                          "const": "calendar"
+                        }
+                      },
+                      "required": [
+                        "at",
+                        "daysOfWeek",
+                        "frequency",
+                        "timeZone",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "at": {
+                          "type": "string",
+                          "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
+                          "description": "Local wall-clock time in 24-hour HH:mm form."
+                        },
+                        "dayOfMonth": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 31,
+                          "description": "Local calendar day; months without this day are skipped."
+                        },
+                        "frequency": {
+                          "type": "string",
+                          "const": "monthly"
+                        },
+                        "timeZone": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^(?:UTC|[A-Za-z0-9._+-]+(?:\\/[A-Za-z0-9._+-]+)+)$",
+                          "description": "IANA time zone used to preserve local wall-clock time across offset changes."
+                        },
+                        "type": {
+                          "type": "string",
+                          "const": "calendar"
+                        }
+                      },
+                      "required": [
+                        "at",
+                        "dayOfMonth",
+                        "frequency",
+                        "timeZone",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "prompt",
+                "trigger"
+              ],
+              "additionalProperties": false
             },
-            "prompt": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 16384
+            {
+              "type": "object",
+              "properties": {
+                "intervalSeconds": {
+                  "type": "integer",
+                  "minimum": 60,
+                  "maximum": 604800
+                },
+                "prompt": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 16384
+                }
+              },
+              "required": [
+                "intervalSeconds",
+                "prompt"
+              ],
+              "additionalProperties": false,
+              "description": "Legacy interval schedule retained for compatible upgrades."
             }
-          },
-          "required": [
-            "intervalSeconds",
-            "prompt"
-          ],
-          "additionalProperties": false
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "scheduleId": {
+      "description": "Use null to create another schedule, an exact ID to update or pause it, or omit only for legacy singleton behavior.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^schedule_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
         },
         {
           "type": "null"
@@ -2286,7 +2472,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 **Get Crewhelm Agent schedule**
 
-Inspect one Agent schedule, its next dispatch time, and its most recent scheduled run.
+Inspect one exact Agent schedule, its next dispatch time, and its most recent scheduled run. Omit scheduleId only when the Agent has at most one schedule.
 
 Attributes: read-only, non-destructive, idempotent, closed-world.
 
@@ -2301,6 +2487,11 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
     "agentId": {
       "type": "string",
       "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "scheduleId": {
+      "description": "Exact schedule identity. Omit only when the Agent has at most one schedule.",
+      "type": "string",
+      "pattern": "^schedule_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     }
   },
   "required": [
@@ -2695,6 +2886,36 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
       ]
     }
   },
+  "additionalProperties": false
+}
+```
+
+</details>
+
+## `crewhelm_list_agent_schedules`
+
+**List Crewhelm Agent schedules**
+
+List every bounded recurring responsibility for one Agent, including exact IDs, trigger configuration, status, and next dispatch time.
+
+Attributes: read-only, non-destructive, idempotent, closed-world.
+
+<details>
+<summary>Input schema</summary>
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "agentId": {
+      "type": "string",
+      "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    }
+  },
+  "required": [
+    "agentId"
+  ],
   "additionalProperties": false
 }
 ```

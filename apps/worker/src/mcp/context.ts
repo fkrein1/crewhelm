@@ -30,6 +30,7 @@ export interface OwnerControlPlaneClient {
   listAgentRevisions(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgentBlueprints(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgentRuns(authorityInput: unknown, input: unknown): Promise<unknown>;
+  listAgentSchedules(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgentWorkflows?(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgentSessions?(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgents(authorityInput: unknown, input: unknown): Promise<unknown>;

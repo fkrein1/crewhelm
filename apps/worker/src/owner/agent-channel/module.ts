@@ -57,6 +57,7 @@ import { recordExecutionEvent } from "../../observability/execution.js";
 import {
   aiGatewayCalls,
   agentInboxItems,
+  agentScheduleRevisions,
   agents,
   auditEvents,
   capabilityGrants,
@@ -244,14 +245,15 @@ export class AgentChannel {
     prompt: string;
     reason: AgentInboxDeferredReason;
     retryAt: number | null;
+    scheduleId: string;
     scheduleRevision: number;
     scheduledAt: number;
   }): void {
     this.#inbox.recordDeferral(input);
   }
 
-  clearScheduledDeferral(agentId: string): void {
-    this.#inbox.clearDeferral(agentId);
+  clearScheduledDeferral(scheduleId: string): void {
+    this.#inbox.clearDeferral(scheduleId);
   }
 
   redeem(input: unknown): RedeemRunReceiverCapabilityResult {
@@ -832,6 +834,8 @@ export class AgentChannel {
     timeline: RunTimelineEvent[],
     input: { includeUsage: boolean; timelineCursor: number; timelineLimit: number },
   ): Extract<InspectRunResult, { ok: true }> {
+    const schedule = this.#runSchedule(admission);
+    const presentedRun: Run = schedule === undefined ? run : { ...run, schedule };
     const start = Math.min(input.timelineCursor, timeline.length);
     const page = timeline.slice(start, start + input.timelineLimit);
     const nextCursor = start + page.length < timeline.length ? start + page.length : null;
@@ -849,13 +853,13 @@ export class AgentChannel {
           .all()
       : [];
     const pendingUsage = gatewayCalls.some((call) => call.status === "pending");
-    const output = run.output ?? "";
+    const output = presentedRun.output ?? "";
 
     return inspectRunResultSchema.options[0].parse({
       ...(run.session === undefined
         ? {}
         : { continuation: continuationFromRunSession(run.session) }),
-      diagnosis: this.#diagnosis(admission, run, timeline),
+      diagnosis: this.#diagnosis(admission, presentedRun, timeline),
       briefs: admission.briefContext?.references ?? [],
       ok: true,
       request: { prompt: admission.prompt },
@@ -867,7 +871,7 @@ export class AgentChannel {
           truncated: run.outputTruncated ?? false,
         },
       },
-      run,
+      run: presentedRun,
       skills: this.#admissions.skillProvenance(admission),
       timeline: page,
       timelinePage: {
@@ -904,6 +908,27 @@ export class AgentChannel {
           }
         : null,
     });
+  }
+
+  #runSchedule(admission: StoredRunAdmission): Run["schedule"] {
+    if (admission.scheduleRevision === null) {
+      return undefined;
+    }
+
+    const revision = this.#database
+      .select({ id: agentScheduleRevisions.scheduleId })
+      .from(agentScheduleRevisions)
+      .where(
+        and(
+          eq(agentScheduleRevisions.agentId, admission.agentId),
+          eq(agentScheduleRevisions.revision, admission.scheduleRevision),
+        ),
+      )
+      .get();
+
+    return revision === undefined
+      ? undefined
+      : { id: revision.id, revision: admission.scheduleRevision };
   }
 
   #authoritativeRun(run: Run, authorizationTrace: RunTimelineEvent[]): Run {
@@ -1004,6 +1029,7 @@ export class AgentChannel {
 
     const { agentId, agentRevision } = storedAdmission;
     const agent = this.#agent(authority, storedAdmission);
+    const schedule = this.#runSchedule(storedAdmission);
 
     if (storedAdmission.cancellationRequestedAt !== null) {
       return startRunResultSchema.parse({
@@ -1017,6 +1043,7 @@ export class AgentChannel {
             ? {}
             : { completedAt: new Date(storedAdmission.cancelledAt).toISOString() }),
           runId,
+          ...(schedule === undefined ? {} : { schedule }),
           status: storedAdmission.cancelledAt === null ? "cancelling" : "cancelled",
           trigger: storedAdmission.trigger,
         },
@@ -1032,6 +1059,7 @@ export class AgentChannel {
           agentRevision,
           createdAt: new Date(storedAdmission.createdAt).toISOString(),
           runId,
+          ...(schedule === undefined ? {} : { schedule }),
           status: "failed",
           trigger: storedAdmission.trigger,
         },
@@ -1098,6 +1126,7 @@ export class AgentChannel {
     const run: Run = {
       ...inspected.run,
       createdAt: new Date(storedAdmission.createdAt).toISOString(),
+      ...(schedule === undefined ? {} : { schedule }),
       trigger: storedAdmission.trigger,
     };
 

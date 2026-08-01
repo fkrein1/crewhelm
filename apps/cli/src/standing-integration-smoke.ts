@@ -652,13 +652,22 @@ function validateActiveSchedule(
   agent: Agent,
   prompt: string,
 ): AgentSchedule {
+  const intervalSeconds =
+    schedule.configuration === null
+      ? null
+      : "intervalSeconds" in schedule.configuration
+        ? schedule.configuration.intervalSeconds
+        : schedule.configuration.trigger.type === "interval"
+          ? schedule.configuration.trigger.intervalSeconds
+          : null;
+
   if (
     schedule.agentId !== agent.id ||
     schedule.agentRevision !== agent.revision ||
     schedule.revision !== 1 ||
     schedule.status !== "active" ||
-    schedule.configuration?.intervalSeconds !== SCHEDULE_INTERVAL_SECONDS ||
-    schedule.configuration.prompt !== prompt ||
+    intervalSeconds !== SCHEDULE_INTERVAL_SECONDS ||
+    schedule.configuration?.prompt !== prompt ||
     schedule.nextRunAt === null
   ) {
     throw new TemporaryOwnerSessionError(
