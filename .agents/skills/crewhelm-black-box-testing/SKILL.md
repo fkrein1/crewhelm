@@ -19,7 +19,8 @@ production, another account, another installation, or broader scope.
 
 Before any MCP or mutating call:
 
-1. Run the relevant deterministic checks and `pnpm build`.
+1. Run the relevant deterministic checks, `pnpm build`, and `pnpm release:check` in sequence. The
+   rehearsal wrapper reads `apps/cli/dist/release.json`; do not start it from a build-only tree.
 2. Run:
 
    ```sh
@@ -117,6 +118,19 @@ If the rehearsal exposes a product defect, stop the scenario. Reproduce it, fix 
 For a light rehearsal, stop after preflight, public diagnosis, and one bounded journey. Create no
 provider effect unless required. Target five minutes while preserving origin, cleanup, and
 short-lived access revocation.
+
+### Repeated journeys
+
+When the user explicitly requests repetition or flake evidence, complete preflight and deployment
+once for the stable fingerprint, then run each journey sequentially. Repeat preflight after any
+code, package, or deployment change.
+
+Gate every next journey on a terminal report, exact fixture cleanup, capacity restored to the
+baseline, and verified access-token revocation. Stop at the first anomaly and recover its exact IDs
+before continuing. A failure before network access creates no live evidence and does not count as a
+repetition. Record each run's duration, checks, resource IDs, and final state. Report progress only
+at safe run boundaries; the wrapper emits phase evidence at completion, so do not infer whether
+silence is execution, polling, or cleanup.
 
 ## Evidence
 

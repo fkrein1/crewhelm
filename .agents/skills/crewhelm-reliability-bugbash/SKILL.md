@@ -59,7 +59,9 @@ with recent changes, risky transitions, or weakly understood behavior, then foll
 - Vary inputs and state when safe: denial, replay, stale versions, interruption, capacity, and
   recovery.
 - Inspect exact end state, operational discovery, errors, and recovery—not only command success.
-- Avoid repeating a passing path unless it supports a new hypothesis or verifies a fix.
+- Avoid repeating a passing path unless it supports a new hypothesis, verifies a fix, or the user
+  explicitly requests reliability or flake evidence. For requested repetition, keep the journey and
+  bounds fixed, follow the black-box skill's sequential gates, and record every independent result.
 - If one path needs user action, note it and continue other authorized work.
 
 Consider the hinted area sufficiently explored when its representative user path, a meaningful
