@@ -114,6 +114,15 @@ unknown; Crewhelm does not silently repeat it. Because native Sandbox computatio
 effect, its audit evidence otherwise follows ordinary Run retention and does not enter the
 external-effect reconciliation queue.
 
+Native web search sends only the admitted bounded query and provider controls to the configured
+search adapter; its credential never enters Agent storage, model input, results, traces, or errors.
+Results are normalized and filtered to public HTTPS URLs. A result carries a source handle signed
+for its exact normalized URL and active Run. Controlled fetch accepts that handle or one direct URL,
+then revalidates the initial URL and each manual redirect, rejects local names and non-public IP
+literals, limits textual media types, bytes, redirects, and time, strips active HTML, and returns a digest with bounded text.
+Retrieved text and metadata are hostile evidence. Public reads have no durable external effect, so
+an interrupted dispatch is recorded failed and is not silently replayed.
+
 Skill contents are untrusted owner input. R2 stores immutable package versions; owner-local SQLite
 stores only compact metadata and digests. Exact reads verify both before returning files. Publishing
 or retiring a Skill grants no runtime capability, and `scripts/` remains inert.

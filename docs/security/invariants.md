@@ -49,4 +49,16 @@ destruction; the owner ledger also repeats exact-ID purges through the Sandbox S
 late-open horizon before releasing Run retention. Timeout, dispatch uncertainty, and interrupted
 cleanup fail closed and remain auditable.
 
+Web search and controlled fetch do not grant ambient network authority. Search credentials remain
+in the Worker and normalized results contain public HTTPS URLs only. A search-result fetch redeems
+an HMAC source handle bound to the same active Run and exact normalized URL; an explicitly enabled
+fetch capability may instead read one direct URL. Initial targets and every redirect reject
+credentials, non-HTTPS schemes, nonstandard ports, local names, and
+private, loopback, link-local, reserved, or documentation IPv4 literals; IPv6 literals are denied
+conservatively while public DNS names remain supported. Media types, redirect count,
+response bytes, normalized output bytes, and wall time are frozen at admission and enforced before
+content enters model context. Cloudflare's `global_fetch_strictly_public` flag prevents global fetch
+from bypassing mapped Workers or zone security settings through direct origin routing. Retrieved
+content is evidence, never instructions or authority.
+
 No prompt-level instruction is an acceptable substitute for one of these controls.

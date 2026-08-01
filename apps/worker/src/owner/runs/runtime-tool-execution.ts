@@ -172,13 +172,14 @@ export class RuntimeToolExecutions {
           actionDigest,
           expiresAt: completionDeadline,
           cleanupRetryAt: completionDeadline + RUNTIME_TOOL_CLEANUP_GRACE_MS,
-          inputDigest: request.data.action.codeDigest,
+          inputDigest: request.data.action.inputDigest,
           nonceDigest: permitDigest,
           runId: request.data.runId,
           startedAt: evaluatedAt,
           status: "reserved",
           toolCallId: request.data.action.toolCallId,
           toolId: request.data.action.tool.id,
+          ...(request.data.action.tool.kind === "sandbox-code" ? {} : { cleanupAt: evaluatedAt }),
         })
         .run();
       transaction
@@ -360,11 +361,17 @@ export class RuntimeToolExecutions {
         return INVALID_RUNTIME_TOOL_EXECUTION;
       }
 
-      const status =
+      const completionExceededBounds =
         currentTime > row.expiresAt ||
-        request.data.outcome.outputBytes > request.data.permit.constraints.maxOutputBytes
-          ? "unknown"
-          : request.data.outcome.status;
+        request.data.outcome.outputBytes > request.data.permit.constraints.maxOutputBytes;
+      const status =
+        row.toolId === "sandbox.code"
+          ? completionExceededBounds
+            ? "unknown"
+            : request.data.outcome.status
+          : completionExceededBounds || request.data.outcome.status === "unknown"
+            ? "failed"
+            : request.data.outcome.status;
       completedStatus = status;
       transaction
         .update(runtimeToolExecutions)
@@ -419,6 +426,7 @@ export class RuntimeToolExecutions {
           dispatchedAt: runtimeToolExecutions.dispatchedAt,
           runId: runtimeToolExecutions.runId,
           toolCallId: runtimeToolExecutions.toolCallId,
+          toolId: runtimeToolExecutions.toolId,
         })
         .from(runtimeToolExecutions)
         .innerJoin(runAdmissions, eq(runAdmissions.runId, runtimeToolExecutions.runId))
@@ -431,7 +439,10 @@ export class RuntimeToolExecutions {
         .all();
 
       for (const execution of expired) {
-        const status = execution.dispatchedAt === null ? "failed" : "unknown";
+        const status =
+          execution.dispatchedAt === null || execution.toolId !== "sandbox.code"
+            ? "failed"
+            : "unknown";
         transaction
           .update(runtimeToolExecutions)
           .set({ completedAt: currentTime, outputBytes: 0, status })
@@ -458,7 +469,10 @@ export class RuntimeToolExecutions {
 
     for (const execution of reconciled) {
       recordExecutionEvent({
-        outcome: execution.dispatchedAt === null ? "failed" : "unknown",
+        outcome:
+          execution.dispatchedAt === null || execution.toolId !== "sandbox.code"
+            ? "failed"
+            : "unknown",
         outputBytes: 0,
         phase: "tool.completion",
         runId: execution.runId,
@@ -606,7 +620,9 @@ export class RuntimeToolExecutions {
       currentAgent.status !== "active" ||
       admittedTool === undefined ||
       JSON.stringify(admittedTool) !== JSON.stringify(request.action.tool) ||
-      !request.action.tool.languages.includes(request.action.language) ||
+      (request.action.tool.kind === "sandbox-code" &&
+        (!("language" in request.action) ||
+          !request.action.tool.languages.includes(request.action.language))) ||
       admission.toolCallsConsumed >= request.budgetReservation.maxToolCalls
     ) {
       return { ok: false };
@@ -620,7 +636,7 @@ export class RuntimeToolExecutions {
           and(
             eq(runtimeToolExecutions.runId, request.runId),
             eq(runtimeToolExecutions.toolId, request.action.tool.id),
-            eq(runtimeToolExecutions.inputDigest, request.action.codeDigest),
+            eq(runtimeToolExecutions.inputDigest, request.action.inputDigest),
           ),
         )
         .get()?.value ?? 0;

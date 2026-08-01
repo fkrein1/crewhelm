@@ -54,6 +54,13 @@ upgrades remember that choice. Use `--no-sandbox` to opt out again. Without Sand
 catalog returns the missing prerequisite, paid-plan requirement, and setup command while the rest
 of Crewhelm remains usable on the Free plan.
 
+Native Agent web search is independently opt-in. Supply `CREWHELM_BRAVE_SEARCH_API_KEY` when
+running `crewhelm up`, then enable `tools.web-search` on the Agent. `tools.web-fetch` needs no
+additional paid Worker feature and can read either a direct public HTTPS URL or an exact source
+handle returned by search in the same Run. Without the key, the MCP capability catalog keeps
+search visible and returns its missing prerequisite and setup command; fetch and all other
+capabilities remain available.
+
 ### Guided setup
 
 - **Connect.** Create a private GitHub App and securely enter the Worker URL and Composio project

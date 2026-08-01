@@ -11,6 +11,7 @@ declare global {
       AGENT_TASK_WORKFLOW?: Workflow<AgentTaskWorkflow>;
       AUTH_DB: D1Database;
       BETTER_AUTH_SECRET: string;
+      BRAVE_SEARCH_API_KEY?: string;
       COMPOSIO_API_KEY?: string;
       CREW_AGENT: DurableObjectNamespace<CrewAgent>;
       CREW_SESSION: DurableObjectNamespace<CrewSession>;

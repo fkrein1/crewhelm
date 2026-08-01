@@ -24,6 +24,12 @@ import {
 } from "./ai-gateway.js";
 import { skillsCapabilityConfiguration, skillsCapabilityModule } from "./skills.js";
 import { sandboxCodeCapabilityConfiguration, sandboxCodeCapabilityModule } from "./sandbox-code.js";
+import { webFetchCapabilityConfiguration, webFetchCapabilityModule } from "./web-fetch.js";
+import {
+  BRAVE_SEARCH_PREREQUISITE,
+  webSearchCapabilityConfiguration,
+  webSearchCapabilityModule,
+} from "./web-search.js";
 import {
   WORKERS_AI_BINDING_PREREQUISITE,
   workersAiCapabilityConfiguration,
@@ -246,6 +252,67 @@ describe("Agent capability registry", () => {
         { availablePrerequisites, checkPrerequisites: true, fleetConfiguration },
       ),
     ).toEqual({ code: "capability_unavailable", ok: false });
+  });
+
+  it("freezes separate search and controlled-fetch policies into the runtime plan", () => {
+    const registry = new AgentCapabilityRegistry([
+      webFetchCapabilityModule,
+      webSearchCapabilityModule,
+      workersAiCapabilityModule,
+    ]);
+    const capabilities = [
+      workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct"),
+      webFetchCapabilityConfiguration({ maxRedirects: 1 }),
+      webSearchCapabilityConfiguration({ maxResults: 4, safeSearch: "moderate" }),
+    ].toSorted((left, right) => left.id.localeCompare(right.id));
+
+    expect(
+      registry.compile(capabilities, {
+        availablePrerequisites: new Set([
+          WORKERS_AI_BINDING_PREREQUISITE,
+          BRAVE_SEARCH_PREREQUISITE,
+        ]),
+        checkPrerequisites: true,
+        fleetConfiguration,
+      }),
+    ).toMatchObject({
+      ok: true,
+      runtimePlan: {
+        tools: [
+          { id: "web.fetch", kind: "web-fetch", limits: { maxRedirects: 1 } },
+          {
+            id: "web.search",
+            kind: "web-search",
+            limits: { maxResults: 4 },
+            provider: "brave",
+            safeSearch: "moderate",
+          },
+        ],
+      },
+    });
+    expect(
+      registry.compile(capabilities, {
+        availablePrerequisites,
+        checkPrerequisites: true,
+        fleetConfiguration,
+      }),
+    ).toEqual({ code: "capability_unavailable", ok: false });
+    expect(registry.catalog(new Set(), "tools.web-search")).toMatchObject([
+      {
+        availability: {
+          missingPrerequisites: [BRAVE_SEARCH_PREREQUISITE],
+          state: "unavailable",
+        },
+        prerequisites: [
+          {
+            setup: {
+              command: "crewhelm up",
+              requirement: "Brave Search API plan and CREWHELM_BRAVE_SEARCH_API_KEY",
+            },
+          },
+        ],
+      },
+    ]);
   });
 
   it("accepts another contribution shape without changing the kernel", () => {

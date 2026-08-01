@@ -16,6 +16,13 @@ export type CapabilityCompilationContext = {
   fleetConfiguration: FleetConfigurationData;
 };
 
+type RuntimeTool = NonNullable<AgentRuntimePlan["tools"]>[number];
+type RuntimeToolContribution = RuntimeTool extends infer Tool
+  ? Tool extends RuntimeTool
+    ? Omit<Tool, "moduleId" | "schemaVersion">
+    : never
+  : never;
+
 export type CapabilityRuntimeContribution =
   | {
       kind: "inference";
@@ -34,10 +41,7 @@ export type CapabilityRuntimeContribution =
     }
   | {
       kind: "runtime-tool";
-      tool: Omit<
-        AgentRuntimePlan["tools"] extends (infer Tool)[] | undefined ? Tool : never,
-        "moduleId" | "schemaVersion"
-      >;
+      tool: RuntimeToolContribution;
     };
 
 export type CapabilityModuleResolution =

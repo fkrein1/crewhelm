@@ -770,6 +770,48 @@ describe("authenticated MCP handler", () => {
       "maxOutputBytes",
     ]);
     expect(sandboxResult.isError).toBe(false);
+
+    const searchResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 3,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { target: { id: "tools.web-search", kind: "agent-capability" } },
+            name: MCP_GET_CONFIGURATION_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const searchResult = jsonRpcToolResultSchema.parse(await searchResponse.json()).result;
+    const searchCatalog = getAgentCapabilityCatalogResultSchema.parse(
+      JSON.parse(searchResult.content[0]?.text ?? ""),
+    );
+    expect(searchCatalog).toMatchObject({
+      capabilities: [
+        {
+          availability: { missingPrerequisites: [], state: "available" },
+          id: "tools.web-search",
+          prerequisites: [
+            {
+              id: "brave.search",
+              setup: {
+                command: "crewhelm up",
+                mode: "installation-opt-in",
+                requirement: "Brave Search API plan and CREWHELM_BRAVE_SEARCH_API_KEY",
+              },
+            },
+          ],
+          schemaVersion: 1,
+          title: "Web search",
+        },
+      ],
+      ok: true,
+    });
+    expect(searchResult.isError).toBe(false);
   });
 
   it("publishes, discovers, reads, and retires an immutable Skill through MCP", async () => {

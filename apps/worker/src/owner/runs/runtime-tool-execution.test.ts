@@ -18,6 +18,7 @@ import { describe, expect, it, vi } from "vitest";
 import { digestRunPrompt } from "../../agent/admitted-runs/index.js";
 import { digestToolInput } from "../../agent/admitted-runs/protocol.js";
 import { sandboxCodeCapabilityConfiguration } from "../../agent-capabilities/sandbox-code.js";
+import { webSearchCapabilityConfiguration } from "../../agent-capabilities/web-search.js";
 import { workersAiCapabilityConfiguration } from "../../agent-capabilities/workers-ai.js";
 import { agentInput, authorityFor } from "../testkit.js";
 
@@ -93,7 +94,7 @@ async function fixture(subject: string, maximumDurationMs = 5_000) {
     action: {
       agentId: created.agent.id,
       agentRevision: created.agent.revision,
-      codeDigest: await digestToolInput({ code }),
+      inputDigest: await digestToolInput({ code }),
       language: "python" as const,
       ownerKey: authority.ownerKey,
       runId: admission.permit.runId,
@@ -144,6 +145,103 @@ describe("OwnerControlPlane runtime tool execution", () => {
         ...state.storage.sql.exec("SELECT status, output_bytes FROM runtime_tool_executions"),
       ];
       expect(rows).toEqual([{ output_bytes: 42, status: "completed" }]);
+    });
+  });
+
+  it("accounts for public search without creating a cleanup obligation", async () => {
+    const authority = await authorityFor("runtime-web-search", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(authority, {
+      ...agentInput("runtime-web-search-agent"),
+      capabilities: [
+        workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct"),
+        webSearchCapabilityConfiguration({ maxDurationMs: 2_000 }),
+      ].toSorted((left, right) => left.id.localeCompare(right.id)),
+      executionLimits: {
+        maxDurationSeconds: 45,
+        maxModelTokens: 2_000,
+        maxToolCalls: 2,
+        maxTurns: 4,
+      },
+    });
+    if (!created.ok) throw new Error("Expected a search-enabled Agent.");
+    const prompt = "Find a public source.";
+    const admission = await controlPlane.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "runtime-web-search-run",
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
+    });
+    if (!admission.ok || admission.state !== "issued") {
+      throw new Error("Expected a web search admission.");
+    }
+    await controlPlane.confirmRunAdmission(admission.permit);
+    const tool = admission.permit.budgetReservation.runtimePlan.tools.find(
+      (candidate) => candidate.kind === "web-search",
+    );
+    if (tool?.kind !== "web-search") throw new Error("Expected admitted web search.");
+    const action = {
+      agentId: admission.permit.agentId,
+      agentRevision: admission.permit.agentRevision,
+      inputDigest: await digestToolInput({ query: "Cloudflare Agents" }),
+      ownerKey: admission.permit.ownerKey,
+      runId: admission.permit.runId,
+      tool,
+      toolCallId: `tool_call_${crypto.randomUUID()}`,
+    };
+    const reference = {
+      agentId: admission.permit.agentId,
+      agentRevision: admission.permit.agentRevision,
+      budgetReservation: admission.permit.budgetReservation,
+      clientId: admission.permit.clientId,
+      idempotencyKey: admission.permit.idempotencyKey,
+      ownerKey: admission.permit.ownerKey,
+      promptDigest: admission.permit.promptDigest,
+      runId: admission.permit.runId,
+    };
+    const reserved = reserveRuntimeToolExecutionResultSchema.parse(
+      await controlPlane.reserveRuntimeToolExecution({ ...reference, action }),
+    );
+    expect(reserved).toMatchObject({
+      ok: true,
+      permit: { constraints: { maxDurationMs: 2_000 }, action },
+    });
+    if (!reserved.ok) throw new Error("Expected search reservation.");
+    await expect(
+      controlPlane.dispatchRuntimeToolExecution({ permit: reserved.permit }),
+    ).resolves.toMatchObject({ dispatched: true, ok: true });
+    await runInDurableObject(controlPlane, (instance, state) => {
+      expect(
+        state.storage.sql
+          .exec<{ cleanup_at: number | null }>(
+            "SELECT cleanup_at FROM runtime_tool_executions WHERE tool_call_id = ?",
+            action.toolCallId,
+          )
+          .one().cleanup_at,
+      ).not.toBeNull();
+      state.storage.sql.exec(
+        "UPDATE runtime_tool_executions SET expires_at = ? WHERE tool_call_id = ?",
+        Date.now() - 1,
+        action.toolCallId,
+      );
+      return instance.alarm();
+    });
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      expect(
+        state.storage.sql
+          .exec<{ status: string }>(
+            "SELECT status FROM runtime_tool_executions WHERE tool_call_id = ?",
+            action.toolCallId,
+          )
+          .one(),
+      ).toEqual({ status: "failed" });
     });
   });
 
@@ -400,7 +498,7 @@ describe("OwnerControlPlane runtime tool execution", () => {
 
     const dispatchedAction = {
       ...current.action,
-      codeDigest: await digestToolInput({ code: "print(7 * 8)" }),
+      inputDigest: await digestToolInput({ code: "print(7 * 8)" }),
       toolCallId: `tool_call_${crypto.randomUUID()}`,
     };
     const dispatched = reserveRuntimeToolExecutionResultSchema.parse(
@@ -503,7 +601,7 @@ describe("OwnerControlPlane runtime tool execution", () => {
     const activeAction = {
       agentId: activeAdmission.permit.agentId,
       agentRevision: activeAdmission.permit.agentRevision,
-      codeDigest: await digestToolInput({ code: "print('active')" }),
+      inputDigest: await digestToolInput({ code: "print('active')" }),
       language: "python" as const,
       ownerKey: activeAdmission.permit.ownerKey,
       runId: activeAdmission.permit.runId,

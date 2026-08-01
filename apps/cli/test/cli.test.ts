@@ -149,7 +149,7 @@ async function createDeploymentAssetsDirectory(): Promise<string> {
     JSON.stringify({
       ai: { binding: "AI" },
       compatibility_date: "2026-07-22",
-      compatibility_flags: ["nodejs_compat"],
+      compatibility_flags: ["global_fetch_strictly_public", "nodejs_compat"],
       d1_databases: [
         {
           binding: "AUTH_DB",
@@ -291,6 +291,7 @@ describe("Crewhelm CLI", () => {
     await expect(runCli(["up", "--help"], upHarness.dependencies)).resolves.toBe(0);
     expect(upHarness.output.join("")).toContain("Automation:");
     expect(upHarness.output.join("")).toContain("CREWHELM_COMPOSIO_API_KEY");
+    expect(upHarness.output.join("")).toContain("CREWHELM_BRAVE_SEARCH_API_KEY");
     expect(upHarness.output.join("")).toContain("CREWHELM_CLOUDFLARE_API_TOKEN");
     expect(upHarness.output.join("")).toContain("--no-sandbox");
     expect(upHarness.output.join("")).toContain("Safety:");

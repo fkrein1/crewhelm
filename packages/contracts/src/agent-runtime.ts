@@ -24,6 +24,12 @@ export const MAXIMUM_AGENT_RUNTIME_TOOLS = 16;
 export const MAXIMUM_SANDBOX_CODE_BYTES = 16 * 1_024;
 export const MAXIMUM_SANDBOX_DURATION_MS = 30_000;
 export const MAXIMUM_SANDBOX_OUTPUT_BYTES = 128 * 1_024;
+export const MAXIMUM_WEB_FETCH_OUTPUT_BYTES = 128 * 1_024;
+export const MAXIMUM_WEB_FETCH_RESPONSE_BYTES = 512 * 1_024;
+export const MAXIMUM_WEB_RUNTIME_DURATION_MS = 15_000;
+export const MAXIMUM_WEB_SEARCH_OUTPUT_BYTES = 64 * 1_024;
+export const MAXIMUM_WEB_SEARCH_QUERY_CHARACTERS = 512;
+export const MAXIMUM_WEB_SEARCH_RESULTS = 10;
 
 export const sandboxCodeLanguageSchema = z.enum(["javascript", "python"]);
 
@@ -52,7 +58,56 @@ export const sandboxCodeRuntimeToolSchema = z.strictObject({
   schemaVersion: agentCapabilitySchemaVersionSchema,
 });
 
-export const agentRuntimeToolSchema = z.discriminatedUnion("kind", [sandboxCodeRuntimeToolSchema]);
+export const webSearchFreshnessSchema = z.enum(["day", "month", "week", "year"]);
+export const webSearchRuntimeToolSchema = z.strictObject({
+  effect: z.literal("public-read"),
+  id: z.literal("web.search"),
+  kind: z.literal("web-search"),
+  limits: z.strictObject({
+    maxDurationMs: z.number().int().min(1).max(MAXIMUM_WEB_RUNTIME_DURATION_MS),
+    maxOutputBytes: z.number().int().min(1_024).max(MAXIMUM_WEB_SEARCH_OUTPUT_BYTES),
+    maxQueryCharacters: z.number().int().min(1).max(MAXIMUM_WEB_SEARCH_QUERY_CHARACTERS),
+    maxResults: z.number().int().min(1).max(MAXIMUM_WEB_SEARCH_RESULTS),
+  }),
+  moduleId: agentCapabilityModuleIdSchema,
+  network: z.literal("provider-only"),
+  provider: z.literal("brave"),
+  safeSearch: z.enum(["moderate", "strict"]),
+  schemaVersion: agentCapabilitySchemaVersionSchema,
+});
+
+export const webFetchContentTypeSchema = z.enum(["application/json", "text/html", "text/plain"]);
+export const webFetchRuntimeToolSchema = z.strictObject({
+  allowedContentTypes: z
+    .array(webFetchContentTypeSchema)
+    .min(1)
+    .max(3)
+    .refine(
+      (contentTypes) =>
+        contentTypes.every(
+          (contentType, index) => index === 0 || (contentTypes[index - 1] ?? "") < contentType,
+        ),
+      "Expected unique fetch content types in canonical order.",
+    ),
+  effect: z.literal("public-read"),
+  id: z.literal("web.fetch"),
+  kind: z.literal("web-fetch"),
+  limits: z.strictObject({
+    maxDurationMs: z.number().int().min(1).max(MAXIMUM_WEB_RUNTIME_DURATION_MS),
+    maxOutputBytes: z.number().int().min(1_024).max(MAXIMUM_WEB_FETCH_OUTPUT_BYTES),
+    maxRedirects: z.number().int().min(0).max(3),
+    maxResponseBytes: z.number().int().min(1_024).max(MAXIMUM_WEB_FETCH_RESPONSE_BYTES),
+  }),
+  moduleId: agentCapabilityModuleIdSchema,
+  network: z.literal("public-https"),
+  schemaVersion: agentCapabilitySchemaVersionSchema,
+});
+
+export const agentRuntimeToolSchema = z.discriminatedUnion("kind", [
+  sandboxCodeRuntimeToolSchema,
+  webFetchRuntimeToolSchema,
+  webSearchRuntimeToolSchema,
+]);
 
 export const agentSkillReferenceSchema = z.strictObject({
   id: skillIdSchema,
@@ -170,6 +225,10 @@ export type AgentRuntimePlan = z.infer<typeof agentRuntimePlanSchema>;
 export type AgentRuntimeTool = z.infer<typeof agentRuntimeToolSchema>;
 export type SandboxCodeLanguage = z.infer<typeof sandboxCodeLanguageSchema>;
 export type SandboxCodeRuntimeTool = z.infer<typeof sandboxCodeRuntimeToolSchema>;
+export type WebFetchContentType = z.infer<typeof webFetchContentTypeSchema>;
+export type WebFetchRuntimeTool = z.infer<typeof webFetchRuntimeToolSchema>;
+export type WebSearchFreshness = z.infer<typeof webSearchFreshnessSchema>;
+export type WebSearchRuntimeTool = z.infer<typeof webSearchRuntimeToolSchema>;
 export type CrewAgentRuntimeConfig = z.infer<typeof crewAgentRuntimeConfigSchema>;
 export type AdmittedSkillInstructions = z.infer<typeof admittedSkillInstructionsSchema>;
 export type AdmittedSkillProvenance = z.infer<typeof admittedSkillProvenanceSchema>;

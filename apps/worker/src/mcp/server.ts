@@ -177,6 +177,7 @@ function createMcpServer(
     availableAgentCapabilityPrerequisites: availableAgentCapabilityPrerequisites(
       env.AI_GATEWAY_ID,
       env.CODE_SANDBOX !== undefined,
+      env.BRAVE_SEARCH_API_KEY !== undefined && env.BRAVE_SEARCH_API_KEY.trim().length > 0,
     ),
     controlPlane,
   };

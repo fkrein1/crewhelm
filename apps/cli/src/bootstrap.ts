@@ -27,12 +27,14 @@ type RequiredSecretName = (typeof REQUIRED_SECRET_NAMES)[number];
 const CLOUDFLARE_API_TOKEN_ENVIRONMENT = "CREWHELM_CLOUDFLARE_API_TOKEN";
 const CLOUDFLARE_GATEWAY_DENIED_MESSAGE = `Cloudflare denied AI Gateway management. Set ${CLOUDFLARE_API_TOKEN_ENVIRONMENT} to an account API token with AI Gateway Edit.`;
 const COMPOSIO_API_KEY_ENVIRONMENT = "CREWHELM_COMPOSIO_API_KEY";
+const BRAVE_SEARCH_API_KEY_ENVIRONMENT = "CREWHELM_BRAVE_SEARCH_API_KEY";
 const GITHUB_SECRET_ENVIRONMENT = {
   clientId: "CREWHELM_GITHUB_CLIENT_ID",
   clientSecret: "CREWHELM_GITHUB_CLIENT_SECRET",
   ownerUserId: "CREWHELM_OWNER_GITHUB_USER_ID",
 } as const;
 const INSTALLATION_SECRET_ENVIRONMENTS = new Set([
+  BRAVE_SEARCH_API_KEY_ENVIRONMENT,
   COMPOSIO_API_KEY_ENVIRONMENT,
   ...Object.values(GITHUB_SECRET_ENVIRONMENT),
 ]);
@@ -62,7 +64,8 @@ const EXPECTED_MIGRATIONS = [
   "0011_autonomy_write_scope.sql",
   "0012_access_levels.sql",
 ] as const;
-const MAX_WORKER_SCRIPT_BYTES = 10 * 1_048_576;
+// This is an uncompressed package-integrity guard, not Cloudflare's compressed upload limit.
+const MAX_WORKER_SCRIPT_BYTES = 11 * 1_048_576;
 const MAX_SOURCE_MAP_BYTES = 25 * 1_048_576;
 const MAX_TEMPLATE_BYTES = 1_048_576;
 const MAX_MIGRATION_BYTES = 1_048_576;
@@ -131,6 +134,7 @@ const githubSecretsSchema = z.strictObject({
   ownerUserId: z.string().regex(/^[1-9][0-9]{0,19}$/),
 });
 const composioApiKeySchema = z.string().min(16).max(4_096).regex(/^\S+$/);
+const braveSearchApiKeySchema = z.string().min(16).max(4_096).regex(/^\S+$/);
 const cloudflareApiTokenSchema = z.string().min(16).max(4_096).regex(/^\S+$/);
 const whoamiSchema = z.looseObject({
   accounts: z
@@ -268,7 +272,10 @@ const deploymentTemplateSchema = z.strictObject({
     binding: z.literal("AI"),
   }),
   compatibility_date: z.literal("2026-07-22"),
-  compatibility_flags: z.tuple([z.literal("nodejs_compat")]),
+  compatibility_flags: z.tuple([
+    z.literal("global_fetch_strictly_public"),
+    z.literal("nodejs_compat"),
+  ]),
   d1_databases: z.tuple([
     z.strictObject({
       binding: z.literal("AUTH_DB"),
@@ -1565,6 +1572,19 @@ async function readComposioApiKey(
   return parsed.data;
 }
 
+function readBraveSearchApiKey(dependencies: BootstrapDependencies): string | undefined {
+  const candidate = dependencies.readEnvironment(BRAVE_SEARCH_API_KEY_ENVIRONMENT);
+  if (candidate === undefined) return undefined;
+  const parsed = braveSearchApiKeySchema.safeParse(candidate);
+  if (!parsed.success) {
+    throw commandFailed(
+      "configuration",
+      `Set ${BRAVE_SEARCH_API_KEY_ENVIRONMENT} to a valid Brave Search API key.`,
+    );
+  }
+  return parsed.data;
+}
+
 function requireCompleteSecretSet(
   existingSecretNames: readonly string[],
   githubSecrets: GitHubSecrets | undefined,
@@ -2273,9 +2293,10 @@ async function writeSecretsFile(
   cwd: string,
   github: GitHubSecrets | undefined,
   composioApiKey: string | undefined,
+  braveSearchApiKey: string | undefined,
   workerExists: boolean,
 ): Promise<string | undefined> {
-  if (!github && !composioApiKey) {
+  if (!github && !composioApiKey && !braveSearchApiKey) {
     return undefined;
   }
 
@@ -2289,6 +2310,10 @@ async function writeSecretsFile(
 
   if (composioApiKey) {
     secrets.COMPOSIO_API_KEY = composioApiKey;
+  }
+
+  if (braveSearchApiKey) {
+    secrets.BRAVE_SEARCH_API_KEY = braveSearchApiKey;
   }
 
   if (!workerExists) {
@@ -2711,6 +2736,7 @@ export async function bootstrapDeployment(
       dependencies.promptSecret === undefined
         ? await readComposioApiKey(workerInventory.exists, dependencies)
         : undefined;
+    const braveSearchApiKey = readBraveSearchApiKey(dependencies);
 
     if (existingSecretNames !== undefined && !deploymentOptions.setupGitHub) {
       requireCompleteSecretSet(existingSecretNames, githubSecrets, composioApiKey);
@@ -2885,6 +2911,7 @@ export async function bootstrapDeployment(
       cwd,
       githubSecrets,
       composioApiKey,
+      braveSearchApiKey,
       workerInventory.exists,
     );
     const deploymentDigest = createHash("sha256")

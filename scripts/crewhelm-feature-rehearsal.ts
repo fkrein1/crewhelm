@@ -40,6 +40,7 @@ import {
 import { CREWHELM_CLI_VERSION } from "../apps/cli/src/version.js";
 import { inspectSandboxRun, runSandboxSmoke } from "../apps/cli/src/sandbox-smoke.js";
 import { recoverWorkflowSmoke, runWorkflowSmoke } from "../apps/cli/src/workflow-smoke.js";
+import { runWebResearchSmoke } from "../apps/cli/src/web-research-smoke.js";
 
 const DEFAULT_INSTALLATION = "crewhelm.testing.installation.json";
 const DEFAULT_CREDENTIAL = ".crewhelm-rehearsal-credential.json";
@@ -179,6 +180,26 @@ async function sandbox(options: {
   const rehearsalTarget = await resolveRehearsalTarget(options.installationPath);
   const credential = await readRehearsalCredential(options.credentialPath);
   return runSandboxSmoke(
+    {
+      credential,
+      origin: rehearsalTarget.origin,
+      persistCredential: (rotated) => writeRehearsalCredential(options.credentialPath, rotated),
+      runTimeoutMs: options.runTimeoutMs,
+      timeoutMs: options.timeoutMs,
+    },
+    { expectedDeploymentFingerprint: rehearsalTarget.expectedDeploymentFingerprint, fetch },
+  );
+}
+
+async function webResearch(options: {
+  credentialPath: string;
+  installationPath: string;
+  runTimeoutMs: number;
+  timeoutMs: number;
+}): Promise<unknown> {
+  const rehearsalTarget = await resolveRehearsalTarget(options.installationPath);
+  const credential = await readRehearsalCredential(options.credentialPath);
+  return runWebResearchSmoke(
     {
       credential,
       origin: rehearsalTarget.origin,
@@ -641,10 +662,11 @@ export async function runFeatureRehearsal(arguments_: readonly string[]): Promis
     action !== "recover" &&
     action !== "sandbox" &&
     action !== "schedules" &&
+    action !== "web-research" &&
     action !== "workflow"
   ) {
     process.stderr.write(
-      "Usage: crewhelm-feature-rehearsal.ts <authorize|inspect-sandbox|recover|sandbox|schedules|workflow> [options]\n",
+      "Usage: crewhelm-feature-rehearsal.ts <authorize|inspect-sandbox|recover|sandbox|schedules|web-research|workflow> [options]\n",
     );
     return 2;
   }
@@ -716,10 +738,15 @@ export async function runFeatureRehearsal(arguments_: readonly string[]): Promis
               })
             : action === "schedules"
               ? await schedules(common)
-              : await workflow({
-                  ...common,
-                  runTimeoutMs,
-                });
+              : action === "web-research"
+                ? await webResearch({
+                    ...common,
+                    runTimeoutMs,
+                  })
+                : await workflow({
+                    ...common,
+                    runTimeoutMs,
+                  });
   process.stdout.write(`${JSON.stringify(report)}\n`);
   return typeof report === "object" && report !== null && Reflect.get(report, "ok") === true
     ? 0

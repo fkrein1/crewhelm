@@ -828,4 +828,5 @@ export type ResumeRunCapability = z.infer<typeof resumeRunCapabilitySchema>;
 export type StartRunResult = z.infer<typeof startRunResultSchema>;
 export type ToolAuthorizationTimelineEvent = z.infer<typeof toolAuthorizationTimelineEventSchema>;
 export type VerifyActiveRunAdmissionResult = z.infer<typeof verifyActiveRunAdmissionResultSchema>;
+export type VerifyActiveRunAdmissionInput = z.infer<typeof verifyActiveRunAdmissionInputSchema>;
 export type VerifyRunAdmissionResult = z.infer<typeof verifyRunAdmissionResultSchema>;
