@@ -28,4 +28,15 @@ Each stage rechecks the frozen fleet revision inside Run admission before a perm
 Workflow-owned Session is not an ordinary continuation target: direct Runs and Session deletion
 cannot mutate it, and it is removed only through the Workflow deletion path.
 
+Brief contents and Workflow deliverables are untrusted owner data, not authority. Owner-local
+SQLite stores only compact metadata, exact references, digests, and provenance; object content is
+read through a bounded Crewhelm adapter and verified before use. Run admission binds the ordered
+Brief revisions, aggregate digest, and size. `CrewSession` verifies the materialized payload against
+that binding, and `beforeTurn` cannot fetch or refresh Brief content. Revising a Brief never changes
+an existing admission. Referenced Brief deletion fails closed, and Workflow deletion removes its
+digest-bound deliverable before the Workflow projection disappears. Session turn metadata holds
+the full block only while its admitted Run is retained; Run cleanup rewrites durable history to
+remove the block, and the owner reference cannot expire until the Session acknowledges that
+redaction.
+
 No prompt-level instruction is an acceptable substitute for one of these controls.

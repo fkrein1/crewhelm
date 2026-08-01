@@ -45,6 +45,7 @@ import {
   type RunTimelineEvent,
   type StartRunResult,
   type DeleteAgentSessionResult,
+  type AdmittedBriefContext,
 } from "@crewhelm/contracts";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
@@ -66,6 +67,7 @@ import {
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
 import type { RunAdmissions, ToolExecutions } from "../runs/index.js";
+import type { Briefs } from "../briefs/index.js";
 import { RunReceiverCapabilities } from "./protocol.js";
 import { AgentInbox } from "./inbox.js";
 
@@ -188,6 +190,7 @@ export function deniedDecideRunToolApproval(
 export class AgentChannel {
   readonly #admissions: RunAdmissions;
   readonly #capabilities: RunReceiverCapabilities;
+  readonly #briefs: Briefs;
   readonly #crewAgents: DurableObjectNamespace<CrewAgent>;
   readonly #database: Database;
   readonly #inbox: AgentInbox;
@@ -197,11 +200,13 @@ export class AgentChannel {
     objectName: string | undefined,
     database: Database,
     crewAgents: DurableObjectNamespace<CrewAgent>,
+    briefs: Briefs,
     admissions: RunAdmissions,
     executionStore: ToolExecutions,
     currentFleetConfiguration: () => FleetConfigurationData,
   ) {
     this.#admissions = admissions;
+    this.#briefs = briefs;
     this.#capabilities = new RunReceiverCapabilities(objectName, admissions);
     this.#crewAgents = crewAgents;
     this.#database = database;
@@ -398,7 +403,7 @@ export class AgentChannel {
             if (page.data.runIds.length > 0) {
               transaction
                 .update(runAdmissions)
-                .set({ prompt: null })
+                .set({ briefContext: null, prompt: null })
                 .where(inArray(runAdmissions.runId, page.data.runIds))
                 .run();
               transaction
@@ -851,6 +856,7 @@ export class AgentChannel {
         ? {}
         : { continuation: continuationFromRunSession(run.session) }),
       diagnosis: this.#diagnosis(admission, run, timeline),
+      briefs: admission.briefContext?.references ?? [],
       ok: true,
       request: { prompt: admission.prompt },
       retention: {
@@ -943,8 +949,35 @@ export class AgentChannel {
       return deniedStartRun("invalid_request");
     }
 
+    const replay = this.#admissions.replayBriefContext(authority, {
+      agentId: request.data.agentId,
+      briefs: request.data.briefs,
+      idempotencyKey: request.data.idempotencyKey,
+    });
+    if (replay.outcome === "conflict") return deniedStartRun("idempotency_conflict");
+    const materialized =
+      replay.outcome === "replay" ? undefined : await this.#briefs.materialize(request.data.briefs);
+
+    if (materialized !== undefined && !materialized.ok) {
+      return deniedStartRun(materialized.code);
+    }
+
+    const materializedContext = materialized?.ok ? materialized.context : undefined;
+    const briefContext: AdmittedBriefContext | undefined =
+      replay.outcome === "replay"
+        ? replay.context
+        : materializedContext === undefined
+          ? undefined
+          : {
+              characters: materializedContext.characters,
+              digest: materializedContext.digest,
+              references: materializedContext.references,
+              sizeBytes: materializedContext.sizeBytes,
+            };
+
     const admission = await this.#admissions.create(authority, {
       agentId: request.data.agentId,
+      ...(briefContext === undefined ? {} : { briefContext }),
       ...(trigger !== "schedule" && request.data.continuation !== undefined
         ? { continuation: request.data.continuation }
         : {}),
@@ -1010,6 +1043,7 @@ export class AgentChannel {
     try {
       if (admission.state === "issued") {
         accepted = await agent.acceptRunAdmission({
+          ...(materializedContext === undefined ? {} : { briefContext: materializedContext }),
           ...(trigger !== "schedule" && request.data.continuation !== undefined
             ? { continuation: request.data.continuation }
             : {}),

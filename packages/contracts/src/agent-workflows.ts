@@ -1,7 +1,11 @@
 import * as z from "zod";
 
-import { runIdSchema } from "./capabilities.js";
-import { runPromptSchema, runStatusSchema } from "./run-admission.js";
+import { runIdSchema, sha256DigestSchema } from "./capabilities.js";
+import {
+  MAXIMUM_RUN_OUTPUT_CHARACTERS,
+  runPromptSchema,
+  runStatusSchema,
+} from "./run-admission.js";
 import {
   agentIdSchema,
   agentMutationIdempotencyKeySchema,
@@ -10,6 +14,7 @@ import {
 } from "./control-plane.js";
 import { MAXIMUM_FLEET_LIST_ITEMS } from "./fleet-capacity.js";
 import { runSessionSchema } from "./agent-sessions.js";
+import { admittedBriefReferenceSchema, artifactIdSchema, briefReferencesSchema } from "./briefs.js";
 
 export const MAXIMUM_AGENT_WORKFLOW_STAGES = 8;
 export const MAXIMUM_AGENT_WORKFLOW_OBJECTIVE_CHARACTERS = 4 * 1_024;
@@ -18,6 +23,7 @@ export const MAXIMUM_AGENT_WORKFLOW_STAGE_PROMPT_CHARACTERS = 11 * 1_024;
 export const MAXIMUM_AGENT_WORKFLOW_PLAN_CHARACTERS = 48 * 1_024;
 export const MAXIMUM_AGENT_WORKFLOWS_PER_OWNER = 1_000;
 export const MAXIMUM_ACTIVE_AGENT_WORKFLOWS_PER_OWNER = 32;
+export const MAXIMUM_WORKFLOW_DELIVERABLE_BYTES = MAXIMUM_RUN_OUTPUT_CHARACTERS * 3;
 
 export const agentWorkflowIdSchema = z
   .string()
@@ -65,6 +71,7 @@ export const agentWorkflowFailureSchema = z.strictObject({
   code: z.enum([
     "agent_unavailable",
     "budget_exhausted",
+    "brief_unavailable",
     "capability_unavailable",
     "coordinator_failed",
     "model_unavailable",
@@ -105,6 +112,7 @@ export const agentWorkflowStageSummarySchema = z.strictObject({
 export const agentWorkflowSummarySchema = z.strictObject({
   agentId: agentIdSchema,
   agentRevision: agentRevisionNumberSchema,
+  briefs: z.array(admittedBriefReferenceSchema).max(8).default([]),
   budget: agentWorkflowAggregateBudgetSchema,
   completedAt: z.iso.datetime().nullable(),
   completedStages: z.number().int().nonnegative().max(MAXIMUM_AGENT_WORKFLOW_STAGES),
@@ -119,7 +127,24 @@ export const agentWorkflowSummarySchema = z.strictObject({
   workflowId: agentWorkflowIdSchema,
 });
 
+export const workflowDeliverableSchema = z.strictObject({
+  artifactId: artifactIdSchema,
+  createdAt: z.iso.datetime(),
+  digest: sha256DigestSchema,
+  mediaType: z.literal("text/markdown"),
+  runId: runIdSchema,
+  truncated: z.boolean(),
+  sizeBytes: z.number().int().nonnegative().max(MAXIMUM_WORKFLOW_DELIVERABLE_BYTES),
+  stageIndex: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAXIMUM_AGENT_WORKFLOW_STAGES - 1),
+});
+
 export const agentWorkflowSchema = agentWorkflowSummarySchema.extend({
+  deliverable: workflowDeliverableSchema.nullable(),
+  deliverableContent: z.string().max(MAXIMUM_RUN_OUTPUT_CHARACTERS).optional(),
   objective: z.string().min(1).max(MAXIMUM_AGENT_WORKFLOW_OBJECTIVE_CHARACTERS),
   session: runSessionSchema.nullable(),
   stages: z.array(agentWorkflowStageSummarySchema).min(2).max(MAXIMUM_AGENT_WORKFLOW_STAGES),
@@ -128,6 +153,9 @@ export const agentWorkflowSchema = agentWorkflowSummarySchema.extend({
 export const startAgentWorkflowInputSchema = z
   .strictObject({
     agentId: agentIdSchema.describe("Exact Agent that will execute every stage."),
+    briefs: briefReferencesSchema
+      .describe("Exact immutable Brief revisions shared by every Workflow stage.")
+      .optional(),
     expectedRevision: agentRevisionNumberSchema.describe(
       "Current Agent revision. The whole workflow remains frozen to it.",
     ),
@@ -171,6 +199,10 @@ export const listAgentWorkflowsInputSchema = z.strictObject({
 });
 
 export const inspectAgentWorkflowInputSchema = z.strictObject({
+  includeDeliverable: z
+    .boolean()
+    .default(false)
+    .describe("Include the final report content. Omit for compact inspection."),
   includePrompts: z
     .boolean()
     .default(false)
@@ -235,6 +267,13 @@ export const manageAgentWorkflowsInputSchema = z
       .max(MAXIMUM_FLEET_LIST_ITEMS)
       .optional()
       .describe("For list, bounded page size; defaults to 10."),
+    briefs: briefReferencesSchema
+      .optional()
+      .describe("For start, exact immutable Brief revisions shared by every stage."),
+    includeDeliverable: z
+      .boolean()
+      .optional()
+      .describe("For inspect only. Defaults false to avoid fetching report content."),
     objective: z
       .string()
       .trim()
@@ -294,6 +333,8 @@ const agentWorkflowMutationErrorSchema = z.strictObject({
     "agent_unavailable",
     "admission_limit_exceeded",
     "budget_exhausted",
+    "brief_context_too_large",
+    "brief_unavailable",
     "capability_unavailable",
     "idempotency_conflict",
     "incompatible_schema",
@@ -430,3 +471,4 @@ export type InspectAgentWorkflowResult = z.infer<typeof inspectAgentWorkflowResu
 export type ListAgentWorkflowsResult = z.infer<typeof listAgentWorkflowsResultSchema>;
 export type StartAgentWorkflowInput = z.infer<typeof startAgentWorkflowInputSchema>;
 export type StartAgentWorkflowResult = z.infer<typeof startAgentWorkflowResultSchema>;
+export type WorkflowDeliverable = z.infer<typeof workflowDeliverableSchema>;

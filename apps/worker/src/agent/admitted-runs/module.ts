@@ -6,6 +6,7 @@ import {
   confirmRunAdmissionResultSchema,
   crewAgentObjectName,
   crewAgentSystemPrompt,
+  renderAdmittedBriefContext,
   crewSessionObjectName,
   inspectAdmittedRunInputSchema,
   inspectAdmittedRunResultSchema,
@@ -51,6 +52,8 @@ import {
   type PendingToolApproval,
   type RecordAgentInboxRunInput,
   type ToolAuthorizationTimelineEvent,
+  type AdmittedBriefContext,
+  type AdmittedBriefContextContent,
 } from "@crewhelm/contracts";
 import { createComposioRuntime } from "@crewhelm/composio";
 import {
@@ -126,6 +129,37 @@ const INVALID_RUN_ADMISSION = {
   },
   ok: false,
 } as const;
+
+function briefContextSummary(
+  context: AdmittedBriefContextContent | undefined,
+): AdmittedBriefContext | undefined {
+  return context === undefined
+    ? undefined
+    : {
+        characters: context.characters,
+        digest: context.digest,
+        references: context.references,
+        sizeBytes: context.sizeBytes,
+      };
+}
+
+async function briefContextMatches(
+  content: AdmittedBriefContextContent | undefined,
+  summary: AdmittedBriefContext | undefined,
+): Promise<boolean> {
+  if (content === undefined || summary === undefined) {
+    return content === undefined && summary === undefined;
+  }
+
+  const rendered = renderAdmittedBriefContext(content.blocks);
+
+  return (
+    content.characters === rendered.length &&
+    content.sizeBytes === new TextEncoder().encode(rendered).byteLength &&
+    content.digest === (await digestRunPrompt(rendered)) &&
+    JSON.stringify(briefContextSummary(content)) === JSON.stringify(summary)
+  );
+}
 
 export const BLOCKED_CREW_AGENT_AUTHORITY_METHODS = [
   "_cf_acquireFacetKeepAlive",
@@ -930,7 +964,7 @@ export class CrewSession extends Think {
       return INVALID_RUN_ADMISSION;
     }
 
-    const { permit, prompt, session } = request.data;
+    const { briefContext, permit, prompt, session } = request.data;
 
     if (
       !this.#objectMatches(permit.ownerKey, permit.agentId) ||
@@ -941,7 +975,8 @@ export class CrewSession extends Think {
             ownerKey: permit.ownerKey,
             sessionId: session.sessionId,
           })) ||
-      (await digestRunPrompt(prompt)) !== permit.promptDigest
+      (await digestRunPrompt(prompt)) !== permit.promptDigest ||
+      !(await briefContextMatches(briefContext, permit.briefContext))
     ) {
       return INVALID_RUN_ADMISSION;
     }
@@ -976,6 +1011,7 @@ export class CrewSession extends Think {
           permit.budgetReservation,
           verified.data.configuration,
           prompt.length,
+          briefContext?.characters ?? 0,
         )
       ) {
         return INVALID_RUN_ADMISSION;
@@ -985,6 +1021,7 @@ export class CrewSession extends Think {
 
       record = admittedRunRecordSchema.parse({
         budgetReservation: permit.budgetReservation,
+        ...(briefContext === undefined ? {} : { briefContext }),
         cleanupAt: acceptedAt + permit.budgetReservation.retentionSeconds * 1_000,
         clientId: permit.clientId,
         configuration: verified.data.configuration,
@@ -1003,6 +1040,7 @@ export class CrewSession extends Think {
                 verified.data.configuration,
                 permit.budgetReservation,
                 prompt.length,
+                briefContext?.characters ?? 0,
               ),
             }),
       });
@@ -1011,7 +1049,8 @@ export class CrewSession extends Think {
       await this.#scheduleRunLifecycle(permit.runId, record);
     } else if (
       !this.#recordMatchesPermit(record, permit) ||
-      JSON.stringify(record.session) !== JSON.stringify(session)
+      JSON.stringify(record.session) !== JSON.stringify(session) ||
+      JSON.stringify(record.briefContext) !== JSON.stringify(briefContext)
     ) {
       return INVALID_RUN_ADMISSION;
     }
@@ -1455,13 +1494,48 @@ export class CrewSession extends Think {
       await this.cancelAdmittedSubmission(request.data.runId, "Crewhelm run retention expired.");
     }
 
-    if (record.session === undefined) {
-      const branches = await Session.create(this).getBranches(runUserMessageId(request.data.runId));
+    const session = Session.create(this);
 
-      await Session.create(this).deleteMessages([
+    if (record.session === undefined) {
+      const branches = await session.getBranches(runUserMessageId(request.data.runId));
+
+      await session.deleteMessages([
         runUserMessageId(request.data.runId),
         ...branches.map((message) => message.id),
       ]);
+    } else if (record.briefContext !== undefined) {
+      const message = await session.getMessage(runUserMessageId(request.data.runId));
+      const metadata = z
+        .record(z.string(), z.unknown())
+        .safeParse(message === null ? undefined : Reflect.get(message, "metadata"));
+      const turnMetadata = admittedTurnMetadataSchema.safeParse(
+        metadata.success ? metadata.data.turnMetadata : undefined,
+      );
+      if (message === null || !metadata.success || !turnMetadata.success) {
+        throw new Error("Session Brief context could not be redacted.");
+      }
+      const { briefContext: _briefContext, ...crewhelmRun } = turnMetadata.data.crewhelmRun;
+      const redactedMessage = {
+        ...message,
+        metadata: {
+          ...metadata.data,
+          turnMetadata: { crewhelmRun },
+        },
+      };
+      await session.updateMessage(redactedMessage);
+    }
+
+    if (
+      record.briefContext !== undefined &&
+      !(await this.env.OWNER_CONTROL_PLANE.getByName(
+        record.configuration.ownerKey,
+      ).releaseRunBriefContext({
+        agentId: record.configuration.agentId,
+        ownerKey: record.configuration.ownerKey,
+        runId: request.data.runId,
+      }))
+    ) {
+      throw new Error("Session Brief context redaction could not be acknowledged.");
     }
 
     if (submission !== null) {
@@ -1693,11 +1767,19 @@ export class CrewSession extends Think {
       this.#permittedApprovalContinuationRunId = undefined;
     }
 
+    const instructions =
+      metadata.briefContext === undefined
+        ? crewAgentSystemPrompt(configuration)
+        : [
+            crewAgentSystemPrompt(configuration),
+            renderAdmittedBriefContext(metadata.briefContext.blocks),
+          ].join("\n\n");
+
     return {
       activeTools: approvalContinuation
         ? []
         : this.#activeToolAdapters().map((adapter) => adapter.name),
-      instructions: crewAgentSystemPrompt(configuration),
+      instructions,
       chatStreamStallTimeoutMs: Math.max(1, metadata.deadlineAt - Date.now()),
       maxOutputTokens: metadata.budgetReservation.maxOutputTokens,
       maxRetries: 0,
@@ -2282,6 +2364,7 @@ export class CrewSession extends Think {
       const turnMetadata = admittedTurnMetadataSchema.parse({
         crewhelmRun: {
           budgetReservation: record.budgetReservation,
+          ...(record.briefContext === undefined ? {} : { briefContext: record.briefContext }),
           configuration: record.configuration,
           deadlineAt: record.deadlineAt,
           promptCharacters: record.promptCharacters,
@@ -2758,6 +2841,7 @@ export class CrewSession extends Think {
       Date.now() >= record.deadlineAt ||
       record.promptCharacters !== metadata.promptCharacters ||
       record.promptDigest !== metadata.promptDigest ||
+      JSON.stringify(record.briefContext) !== JSON.stringify(metadata.briefContext) ||
       JSON.stringify(record.budgetReservation) !== JSON.stringify(metadata.budgetReservation) ||
       JSON.stringify(record.configuration) !== JSON.stringify(metadata.configuration) ||
       !this.#objectMatches(record.configuration.ownerKey, record.configuration.agentId)
@@ -2769,6 +2853,9 @@ export class CrewSession extends Think {
       agentId: record.configuration.agentId,
       agentRevision: record.configuration.revision,
       budgetReservation: record.budgetReservation,
+      ...(record.briefContext === undefined
+        ? {}
+        : { briefContext: briefContextSummary(record.briefContext) }),
       clientId: record.clientId,
       idempotencyKey: record.idempotencyKey,
       ownerKey: record.configuration.ownerKey,
@@ -3289,6 +3376,7 @@ export class CrewSession extends Think {
     configuration: CrewAgentRuntimeConfig,
     reservation: RunBudgetReservation,
     promptCharacters: number,
+    briefContextCharacters: number,
   ): Promise<NonNullable<AdmittedRunRecord["sessionContext"]>> {
     const characterLimit = Math.min(
       MAXIMUM_SESSION_CONTEXT_CHARACTERS,
@@ -3296,6 +3384,7 @@ export class CrewSession extends Think {
         0,
         reservation.maxInputCharacters -
           crewAgentSystemPrompt(configuration).length -
+          briefContextCharacters -
           promptCharacters,
       ),
     );
@@ -3356,11 +3445,14 @@ export class CrewSession extends Think {
       record.idempotencyKey === permit.idempotencyKey &&
       record.scheduleRevision === permit.scheduleRevision &&
       record.trigger === permit.trigger &&
+      JSON.stringify(briefContextSummary(record.briefContext)) ===
+        JSON.stringify(permit.briefContext) &&
       JSON.stringify(record.budgetReservation) === JSON.stringify(permit.budgetReservation) &&
       this.#reservationMatchesPrompt(
         record.budgetReservation,
         record.configuration,
         record.promptCharacters,
+        record.briefContext?.characters ?? 0,
       ) &&
       this.#configurationMatchesPermit(record.configuration, permit)
     );
@@ -3380,11 +3472,14 @@ export class CrewSession extends Think {
       record.promptCharacters === promptCharacters &&
       record.promptDigest === capability.promptDigest &&
       record.scheduleRevision === capability.scheduleRevision &&
+      JSON.stringify(briefContextSummary(record.briefContext)) ===
+        JSON.stringify(capability.briefContext) &&
       JSON.stringify(record.budgetReservation) === JSON.stringify(capability.budgetReservation) &&
       this.#reservationMatchesPrompt(
         record.budgetReservation,
         record.configuration,
         promptCharacters,
+        record.briefContext?.characters ?? 0,
       )
     );
   }
@@ -3406,10 +3501,11 @@ export class CrewSession extends Think {
     reservation: RunBudgetReservation,
     configuration: CrewAgentRuntimeConfig,
     promptCharacters: number,
+    briefContextCharacters: number,
   ): boolean {
     return (
       this.#skillInstructionsMatchReferences(configuration) &&
-      crewAgentSystemPrompt(configuration).length + promptCharacters <=
+      crewAgentSystemPrompt(configuration).length + briefContextCharacters + promptCharacters <=
         reservation.maxInputCharacters
     );
   }

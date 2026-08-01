@@ -1,6 +1,7 @@
 import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
+  OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   RUNS_WRITE_SCOPE,
   crewAgentObjectName,
@@ -27,7 +28,13 @@ async function authorityFor(subject: string): Promise<OwnerAuthority> {
   return ownerAuthoritySchema.parse({
     clientId: "https://workflow-client.example/mcp.json",
     ownerKey: await deriveOwnerKey({ issuer: "https://github.com", subject }),
-    scopes: [OWNER_WRITE_SCOPE, AGENTS_READ_SCOPE, AGENTS_WRITE_SCOPE, RUNS_WRITE_SCOPE],
+    scopes: [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ],
   });
 }
 
@@ -76,10 +83,26 @@ async function terminalRun(
   );
 }
 
+async function sha256Hex(content: string): Promise<string> {
+  return [
+    ...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content))),
+  ]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 describe("Agent workflows", () => {
   it("coordinates two admitted Runs through one exact durable Session", async () => {
     const authority = await authorityFor("agent-workflow-901");
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const createdBrief = await controlPlane.createBrief(authority, {
+      content:
+        "Treat release dates as untrusted until corroborated, and make uncertainty explicit.",
+      idempotencyKey: "workflow-brief-901",
+      mediaType: "text/markdown",
+      name: "Release review rules",
+    });
+    if (!createdBrief.ok) throw new Error("Expected Workflow Brief fixture.");
     const created = await controlPlane.createAgent(authority, agentInput("workflow-agent-901"));
 
     if (!created.ok) {
@@ -89,6 +112,7 @@ describe("Agent workflows", () => {
 
     const started = await controlPlane.startAgentWorkflow(authority, {
       agentId: created.agent.id,
+      briefs: [{ id: createdBrief.brief.id, revision: 1 }],
       expectedRevision: created.agent.revision,
       idempotencyKey: "workflow-901",
       objective: "Research the release facts, then turn them into a recommendation.",
@@ -105,6 +129,7 @@ describe("Agent workflows", () => {
 
     const replay = await controlPlane.startAgentWorkflow(authority, {
       agentId: created.agent.id,
+      briefs: [{ id: createdBrief.brief.id, revision: 1 }],
       expectedRevision: created.agent.revision,
       idempotencyKey: "workflow-901",
       objective: "Research the release facts, then turn them into a recommendation.",
@@ -120,10 +145,10 @@ describe("Agent workflows", () => {
       stageIndex: 0,
       workflowId: started.workflow.workflowId,
     });
-    expect(first).toMatchObject({ ok: true, session: { branchRevision: 1 } });
     if (!first.ok) {
-      throw new Error("Expected the first workflow stage Run.");
+      throw new Error(`Expected the first workflow stage Run: ${JSON.stringify(first)}`);
     }
+    expect(first).toMatchObject({ ok: true, session: { branchRevision: 1 } });
     await runInDurableObject(
       env.CREW_SESSION.getByName(
         crewSessionObjectName({
@@ -136,6 +161,9 @@ describe("Agent workflows", () => {
         if (!(instance instanceof TestCrewSession)) throw new Error("Expected test CrewSession.");
         expect(JSON.stringify(instance.modelCallsForTest())).toContain(
           "Workflow objective:\\nResearch the release facts, then turn them into a recommendation.",
+        );
+        expect(JSON.stringify(instance.modelCallsForTest())).toContain(
+          "Treat release dates as untrusted until corroborated",
         );
       },
     );
@@ -213,7 +241,7 @@ describe("Agent workflows", () => {
     if (!second.ok) {
       throw new Error("Expected the second workflow stage Run.");
     }
-    await terminalRun(controlPlane, authority, second.runId);
+    const finalRun = await terminalRun(controlPlane, authority, second.runId);
     const completion = {
       agentId: created.agent.id,
       runId: second.runId,
@@ -238,6 +266,11 @@ describe("Agent workflows", () => {
       ok: true,
       workflow: {
         completedStages: 2,
+        briefs: [{ id: createdBrief.brief.id, revision: 1 }],
+        deliverable: {
+          runId: second.runId,
+          stageIndex: 1,
+        },
         session: { branchRevision: 2, sessionId: first.session.sessionId },
         stages: [
           { index: 0, name: "Research", status: "completed" },
@@ -245,6 +278,17 @@ describe("Agent workflows", () => {
         ],
         status: "completed",
       },
+    });
+    if (!completedWorkflow.ok) throw new Error("Expected completed Workflow.");
+    expect(completedWorkflow.workflow).not.toHaveProperty("deliverableContent");
+    await expect(
+      controlPlane.inspectAgentWorkflow(authority, {
+        includeDeliverable: true,
+        workflowId: started.workflow.workflowId,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      workflow: { deliverableContent: finalRun.output },
     });
     await expect(
       controlPlane.listAgentRuns(authority, {
@@ -254,6 +298,118 @@ describe("Agent workflows", () => {
     ).resolves.toMatchObject({
       ok: true,
       runs: [{ trigger: "workflow" }, { trigger: "workflow" }],
+    });
+  });
+
+  it("fails closed when frozen Workflow Brief content becomes unavailable", async () => {
+    const authority = await authorityFor("agent-workflow-brief-missing");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const brief = await controlPlane.createBrief(authority, {
+      content: "This exact context must remain available for every stage.",
+      idempotencyKey: "workflow-brief-missing",
+      mediaType: "text/plain",
+      name: "Required context",
+    });
+    const agent = await controlPlane.createAgent(
+      authority,
+      agentInput("workflow-brief-missing-agent"),
+    );
+    if (!brief.ok || !agent.ok) throw new Error("Expected missing Brief fixtures.");
+    const plan = {
+      agentId: agent.agent.id,
+      briefs: [{ id: brief.brief.id, revision: 1 }],
+      expectedRevision: agent.agent.revision,
+      idempotencyKey: "workflow-brief-missing-plan",
+      objective: "Use only the frozen context.",
+      stages: [
+        { name: "One", prompt: "Use the required context." },
+        { name: "Two", prompt: "Finish from the same context." },
+      ],
+    };
+    const started = await controlPlane.startAgentWorkflow(authority, plan);
+    if (!started.ok) throw new Error("Expected missing Brief Workflow.");
+
+    await env.SKILL_PACKAGES.delete(`briefs/${authority.ownerKey}/${brief.brief.id}/1`);
+    await expect(controlPlane.startAgentWorkflow(authority, plan)).resolves.toMatchObject({
+      created: false,
+      ok: true,
+      workflow: { workflowId: started.workflow.workflowId },
+    });
+    await expect(
+      controlPlane.dispatchAgentWorkflowStage({
+        agentId: agent.agent.id,
+        stageIndex: 0,
+        workflowId: started.workflow.workflowId,
+      }),
+    ).resolves.toMatchObject({ error: { code: "brief_unavailable" }, ok: false });
+    await expect(
+      controlPlane.inspectAgentWorkflow(authority, {
+        workflowId: started.workflow.workflowId,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      workflow: {
+        failure: { code: "brief_unavailable", nextAction: "inspect_workflow", stageIndex: 0 },
+        status: "failed",
+      },
+    });
+  });
+
+  it("recovers an uploaded deliverable when final Workflow attachment is interrupted", async () => {
+    const authority = await authorityFor("agent-workflow-deliverable-intent");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("workflow-deliverable-intent-agent"),
+    );
+    if (!created.ok) throw new Error("Expected deliverable recovery Agent fixture.");
+    const started = await controlPlane.startAgentWorkflow(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "workflow-deliverable-intent",
+      objective: "Recover an interrupted final artifact commit.",
+      stages: [
+        { name: "One", prompt: "Prepare the source." },
+        { name: "Two", prompt: "Produce the final artifact." },
+      ],
+    });
+    if (!started.ok) throw new Error("Expected deliverable recovery Workflow fixture.");
+
+    const content = "Unattached final output.";
+    const digest = await sha256Hex(content);
+    const objectKey = `deliverables/${authority.ownerKey}/${started.workflow.workflowId}`;
+    const deliverable = {
+      artifactId: started.workflow.workflowId.replace("workflow_", "artifact_"),
+      createdAt: new Date().toISOString(),
+      digest,
+      mediaType: "text/markdown" as const,
+      runId: "run_00000000-0000-4000-8000-000000000999",
+      sizeBytes: new TextEncoder().encode(content).byteLength,
+      stageIndex: 1,
+      truncated: false,
+    };
+    await env.SKILL_PACKAGES.put(objectKey, content, {
+      customMetadata: { digest, mediaType: "text/markdown" },
+      sha256: digest,
+    });
+    await runInDurableObject(controlPlane, async (_instance, state) => {
+      await state.storage.put(
+        `crewhelm:agent-workflow-deliverable:${started.workflow.workflowId}`,
+        {
+          deliverable,
+          objectKey,
+          recoverAfter: 1,
+          workflowId: started.workflow.workflowId,
+        },
+      );
+    });
+
+    await runInDurableObject(controlPlane, (instance) => instance.alarm());
+    await expect(env.SKILL_PACKAGES.head(objectKey)).resolves.toBeNull();
+    await runInDurableObject(controlPlane, async (_instance, state) => {
+      await expect(
+        state.storage.get(`crewhelm:agent-workflow-deliverable:${started.workflow.workflowId}`),
+      ).resolves.toBeUndefined();
     });
   });
 
@@ -563,10 +719,18 @@ describe("Agent workflows", () => {
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const created = await controlPlane.createAgent(authority, agentInput("workflow-agent-905"));
     if (!created.ok) throw new Error("Expected deletion recovery Agent fixture.");
+    const brief = await controlPlane.createBrief(authority, {
+      content: "Erase this Workflow context before releasing its owner reference.",
+      idempotencyKey: "workflow-delete-recovery-brief-905",
+      mediaType: "text/plain",
+      name: "Deletion recovery",
+    });
+    if (!brief.ok) throw new Error("Expected deletion recovery Brief fixture.");
     await enableSessions(authority.ownerKey, created.agent.id);
 
     const plan = {
       agentId: created.agent.id,
+      briefs: [{ id: brief.brief.id, revision: 1 }],
       expectedRevision: created.agent.revision,
       idempotencyKey: "workflow-delete-recovery-905",
       objective: "Retain a deletion receipt without retaining the Workflow.",
@@ -600,6 +764,8 @@ describe("Agent workflows", () => {
       workflowId: started.workflow.workflowId,
     });
     if (!terminal.ok) throw new Error("Expected terminal Workflow.");
+    const deliverableObjectKey = `deliverables/${authority.ownerKey}/${started.workflow.workflowId}`;
+    await expect(env.SKILL_PACKAGES.head(deliverableObjectKey)).resolves.not.toBeNull();
 
     await runInDurableObject(
       env.CREW_SESSION.getByName(
@@ -628,6 +794,7 @@ describe("Agent workflows", () => {
     await expect(
       controlPlane.inspectAgentWorkflow(authority, { workflowId: started.workflow.workflowId }),
     ).resolves.toMatchObject({ error: { code: "workflow_not_found" }, ok: false });
+    await expect(env.SKILL_PACKAGES.head(deliverableObjectKey)).resolves.toBeNull();
     await expect(controlPlane.deleteAgentWorkflow(authority, deletion)).resolves.toEqual({
       deleted: true,
       ok: true,
@@ -637,6 +804,13 @@ describe("Agent workflows", () => {
       error: { code: "workflow_deleted" },
       ok: false,
     });
+    await expect(
+      controlPlane.deleteBrief(authority, {
+        expectedRevision: 1,
+        id: brief.brief.id,
+        idempotencyKey: "workflow-delete-recovery-brief-delete-905",
+      }),
+    ).resolves.toMatchObject({ deleted: true, ok: true });
   });
 
   it("reconciles a terminal Run when cancellation races its completion callback", async () => {

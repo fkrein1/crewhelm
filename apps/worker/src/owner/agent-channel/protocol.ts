@@ -75,6 +75,7 @@ export class RunReceiverCapabilities {
       agentRevision: admission.agentRevision,
       audience: "crew_agent",
       budgetReservation: admission.budgetReservation,
+      ...(admission.briefContext === null ? {} : { briefContext: admission.briefContext }),
       capability: capabilityName,
       clientId: authority.clientId,
       connection: "none",

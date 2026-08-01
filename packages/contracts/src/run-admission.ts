@@ -41,6 +41,11 @@ import {
   RUNNABLE_AGENT_MODELS,
   runnableAgentModelSchema,
 } from "./inference.js";
+import {
+  admittedBriefContextContentSchema,
+  admittedBriefContextSchema,
+  briefReferencesSchema,
+} from "./briefs.js";
 
 export const RUN_ADMISSION_LIFETIME_MS = 30_000;
 export const RUN_ADMISSION_RETENTION_MS = DEFAULT_FLEET_RUN_RETENTION_SECONDS * 1_000;
@@ -97,6 +102,7 @@ export const runTriggerSchema = z.enum(["manual", "schedule", "workflow"]);
 export const createRunAdmissionInputSchema = z
   .strictObject({
     agentId: agentIdSchema,
+    briefContext: admittedBriefContextSchema.optional(),
     continuation: sessionContinuationSchema.optional(),
     expectedFleetRevision: z.number().int().positive().safe().nullable().default(null),
     expectedRevision: agentRevisionNumberSchema,
@@ -171,6 +177,7 @@ export const runBudgetReservationSchema = z.strictObject({
 export const runAdmissionPermitSchema = z.strictObject({
   agentId: agentIdSchema,
   agentRevision: agentRevisionNumberSchema,
+  briefContext: admittedBriefContextSchema.optional(),
   budgetReservation: runBudgetReservationSchema,
   clientId: ownerClientIdSchema,
   expiresAt: z.iso.datetime(),
@@ -212,6 +219,7 @@ const runAdmissionRequestErrorSchema = z.strictObject({
     "agent_not_found",
     "agent_unavailable",
     "admission_limit_exceeded",
+    "brief_unavailable",
     "budget_exhausted",
     "capability_unavailable",
     "idempotency_conflict",
@@ -267,6 +275,7 @@ const runReceiverCapabilityBaseSchema = z.strictObject({
   agentRevision: agentRevisionNumberSchema,
   audience: z.literal("crew_agent"),
   budgetReservation: runBudgetReservationSchema,
+  briefContext: admittedBriefContextSchema.optional(),
   clientId: ownerClientIdSchema,
   connection: z.literal("none"),
   effect: z.literal("none"),
@@ -339,6 +348,7 @@ export const confirmRunAdmissionResultSchema = z.discriminatedUnion("ok", [
 ]);
 
 export const acceptRunAdmissionInputSchema = z.strictObject({
+  briefContext: admittedBriefContextContentSchema.optional(),
   continuation: sessionContinuationSchema.optional(),
   permit: runAdmissionPermitSchema,
   prompt: runPromptSchema,
@@ -377,6 +387,9 @@ export const acceptRunAdmissionResultSchema = z.discriminatedUnion("ok", [
 
 export const startRunInputSchema = z.strictObject({
   agentId: agentIdSchema,
+  briefs: briefReferencesSchema
+    .describe("Exact immutable Brief revisions to admit as bounded untrusted context.")
+    .optional(),
   continuation: sessionContinuationSchema
     .describe("Continue one exact durable Agent session. Omit to create a new session.")
     .optional(),
@@ -410,6 +423,7 @@ export const cancelAdmittedRunInputSchema = z.strictObject({
 export const verifyActiveRunAdmissionInputSchema = z.strictObject({
   agentId: agentIdSchema,
   agentRevision: agentRevisionNumberSchema,
+  briefContext: admittedBriefContextSchema.optional(),
   budgetReservation: runBudgetReservationSchema,
   clientId: ownerClientIdSchema,
   idempotencyKey: runAdmissionIdempotencyKeySchema,
@@ -417,6 +431,12 @@ export const verifyActiveRunAdmissionInputSchema = z.strictObject({
   promptDigest: sha256DigestSchema,
   runId: runIdSchema,
   scheduleRevision: agentScheduleRevisionNumberSchema.nullable().default(null),
+});
+
+export const releaseRunBriefContextInputSchema = z.strictObject({
+  agentId: agentIdSchema,
+  ownerKey: ownerKeySchema,
+  runId: runIdSchema,
 });
 
 export const verifyActiveRunAdmissionResultSchema = z.discriminatedUnion("ok", [
@@ -640,6 +660,8 @@ const runRequestErrorSchema = z.strictObject({
     "agent_unavailable",
     "admission_limit_exceeded",
     "budget_exhausted",
+    "brief_context_too_large",
+    "brief_unavailable",
     "capability_unavailable",
     "idempotency_conflict",
     "incompatible_schema",
@@ -687,6 +709,7 @@ export const startRunResultSchema = z.discriminatedUnion("ok", [
 
 export const inspectRunResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
+    briefs: z.array(admittedBriefContextSchema.shape.references.element).max(8).default([]),
     continuation: sessionContinuationSchema
       .describe("Pass this object unchanged to crewhelm_start_run.continuation for the next turn.")
       .optional(),

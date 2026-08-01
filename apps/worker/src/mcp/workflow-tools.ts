@@ -22,7 +22,7 @@ export function registerWorkflowTools(server: McpServer, context: McpToolContext
         readOnlyHint: false,
       },
       description:
-        "Coordinate a bounded multi-step objective as ordered durable Agent Runs. Start with an exact Agent revision, then use the returned workflowId for compact inspection or cancellation. List before inspecting when recovering context; request frozen prompts only when needed. Cancel stops future stages and safely cancels the active Run when possible. Delete is terminal-only and also removes the Workflow-owned Session transcript and retained prompts.",
+        "Coordinate a bounded multi-step objective as ordered durable Agent Runs. Skills and integrations come from the exact Agent revision; optional Brief references freeze owner context across every stage. Retain workflowId and revision. List compactly, inspect the selected Workflow, request prompts only for plan debugging, and request deliverable content only after completion when needed. Cancel stops future stages. Terminal deletion also removes the isolated Session, prompts, and deliverable.",
       inputSchema: manageAgentWorkflowsInputSchema,
       title: "Manage Crewhelm Agent workflows",
     },

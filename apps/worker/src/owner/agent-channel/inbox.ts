@@ -115,6 +115,8 @@ function deferredWorkPolicy(reason: AgentInboxDeferredReason): {
         summary: "Scheduled work was deferred because its dispatch state changed concurrently.",
       };
     case "dispatch_exception":
+    case "brief_context_too_large":
+    case "brief_unavailable":
       return {
         layer: "runtime",
         nextAction: "wait_until_retry",

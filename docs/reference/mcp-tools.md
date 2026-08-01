@@ -35,9 +35,18 @@ isolated durable Session; a later stage starts only after the prior Run succeeds
 
 Retain the returned `workflowId` and `revision`. List with small limits for compact progress,
 then inspect only the selected Workflow. Inspection omits frozen prompts by default; set
-`includePrompts: true` only when the exact plan is needed. Cancel active work with its current
-Workflow revision. Delete only a terminal Workflow after owner confirmation; deletion also removes
-its Workflow-owned Session and retained correlated execution data.
+`includePrompts: true` only when debugging the exact plan. A completed Workflow exposes compact
+deliverable metadata; set `includeDeliverable: true` only to read its final content. Cancel active
+work with its current revision. Delete only a terminal Workflow after owner confirmation; deletion
+also removes its Workflow-owned Session, retained execution data, and deliverable.
+
+### Add context and capabilities
+
+Skills and integration grants are Agent capabilities: configure them on an Agent revision when they
+change how work is performed. Briefs are explicit owner-provided inputs: use `crewhelm_briefs` to
+create or list compact metadata, retain exact `{id, revision}` references, and pass those references
+to a Run or Workflow. Do not read Brief content merely to attach it; Crewhelm admits the frozen
+revision deterministically. Updating a Brief creates a new revision and never changes existing work.
 
 ### Connect an integration
 
@@ -219,7 +228,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 **Manage Crewhelm Agent workflows**
 
-Coordinate a bounded multi-step objective as ordered durable Agent Runs. Start with an exact Agent revision, then use the returned workflowId for compact inspection or cancellation. List before inspecting when recovering context; request frozen prompts only when needed. Cancel stops future stages and safely cancels the active Run when possible. Delete is terminal-only and also removes the Workflow-owned Session transcript and retained prompts.
+Coordinate a bounded multi-step objective as ordered durable Agent Runs. Skills and integrations come from the exact Agent revision; optional Brief references freeze owner context across every stage. Retain workflowId and revision. List compactly, inspect the selected Workflow, request prompts only for plan debugging, and request deliverable content only after completion when needed. Cancel stops future stages. Terminal deletion also removes the isolated Session, prompts, and deliverable.
 
 Attributes: write, destructive, idempotent, closed-world.
 
@@ -274,6 +283,34 @@ Attributes: write, destructive, idempotent, closed-world.
       "type": "integer",
       "minimum": 1,
       "maximum": 25
+    },
+    "briefs": {
+      "description": "For start, exact immutable Brief revisions shared by every stage.",
+      "maxItems": 8,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "revision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "id",
+          "revision"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "includeDeliverable": {
+      "description": "For inspect only. Defaults false to avoid fetching report content.",
+      "type": "boolean"
     },
     "objective": {
       "description": "Required for start: the durable outcome shared by every stage.",
@@ -388,6 +425,92 @@ Attributes: write, destructive, idempotent, closed-world.
   },
   "required": [
     "agents"
+  ],
+  "additionalProperties": false
+}
+```
+
+</details>
+
+## `crewhelm_briefs`
+
+**Manage Crewhelm Briefs**
+
+Create or revise bounded owner-provided text Briefs, list compact metadata, inspect an exact revision, read content only when needed, or delete an unreferenced Brief. Retain the returned id and revision and pass them unchanged to a Run or Workflow. Revisions are immutable; lists and ordinary inspection never return content.
+
+Attributes: write, destructive, idempotent, closed-world.
+
+<details>
+<summary>Input schema</summary>
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "create",
+        "delete",
+        "inspect",
+        "list",
+        "read",
+        "revise"
+      ]
+    },
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32768,
+      "description": "UTF-8 text without control characters, unpaired surrogates, or a leading BOM; maximum 32768 encoded bytes."
+    },
+    "cursor": {
+      "type": "string",
+      "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "expectedRevision": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 100
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25
+    },
+    "mediaType": {
+      "type": "string",
+      "enum": [
+        "application/json",
+        "text/markdown",
+        "text/plain"
+      ]
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]*$"
+    },
+    "revision": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 100
+    }
+  },
+  "required": [
+    "action"
   ],
   "additionalProperties": false
 }
@@ -2974,7 +3097,7 @@ Attributes: read-only, non-destructive, idempotent, open-world.
 
 **Start Crewhelm run**
 
-Durably start one bounded turn for an exact Agent revision. Omit continuation for a new conversation; to continue, pass a continuation object returned by start, run inspection, or exact session inspection unchanged. The result also returns run.runId for exact inspection.
+Durably start one bounded turn for an exact Agent revision. Skills and integrations come from that Agent revision; attach owner context separately with exact {id, revision} Brief references. Omit continuation for a new conversation; to continue, pass a returned continuation unchanged. Retain run.runId for exact inspection.
 
 Attributes: write, non-destructive, idempotent, closed-world.
 
@@ -2989,6 +3112,30 @@ Attributes: write, non-destructive, idempotent, closed-world.
     "agentId": {
       "type": "string",
       "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "briefs": {
+      "maxItems": 8,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "revision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "id",
+          "revision"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Exact immutable Brief revisions to admit as bounded untrusted context."
     },
     "continuation": {
       "type": "object",

@@ -17,6 +17,8 @@ import {
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   RUNS_WRITE_SCOPE,
+  startAgentWorkflowInputSchema,
+  startRunInputSchema,
   ownerAuthoritySchema,
   type ControlPlaneStatusResult,
   type AgentInboxDeferredReason,
@@ -82,6 +84,12 @@ import {
   type InspectAgentWorkflowResult,
   type ListAgentWorkflowsResult,
   type StartAgentWorkflowResult,
+  type CreateBriefResult,
+  type ReviseBriefResult,
+  type ListBriefsResult,
+  type InspectBriefResult,
+  type ReadBriefResult,
+  type DeleteBriefResult,
 } from "@crewhelm/contracts";
 import { DurableObject } from "cloudflare:workers";
 import { and, count, desc, eq, gte, isNull, lt, lte } from "drizzle-orm";
@@ -135,6 +143,7 @@ import { AgentSchedules, deniedAgentSchedule, type DueAgentSchedule } from "./sc
 import { AiGatewayUsage } from "./usage/index.js";
 import { R2SkillPackageObjectStore, Skills, deniedSkill } from "./skills/index.js";
 import { AgentWorkflows } from "./workflows/index.js";
+import { Briefs, R2OwnerContentObjectStore, deniedBrief } from "./briefs/index.js";
 
 const INVALID_RUN_ADMISSION = {
   error: {
@@ -160,6 +169,8 @@ function scheduledRunFailureReason(code: StartRunFailureCode): AgentInboxDeferre
     case "agent_not_found":
     case "agent_unavailable":
     case "budget_exhausted":
+    case "brief_context_too_large":
+    case "brief_unavailable":
     case "capability_unavailable":
     case "idempotency_conflict":
     case "model_unavailable":
@@ -193,6 +204,7 @@ export class OwnerControlPlane extends DurableObject {
   readonly #fleetConfigurations: FleetConfigurations;
   readonly #aiGatewayUsage: AiGatewayUsage;
   readonly #skills: Skills;
+  readonly #briefs: Briefs;
   readonly #workflows: AgentWorkflows;
 
   constructor(state: DurableObjectState, environment: Cloudflare.Env) {
@@ -215,6 +227,11 @@ export class OwnerControlPlane extends DurableObject {
       new R2SkillPackageObjectStore(environment.SKILL_PACKAGES),
       this.#objectName,
     );
+    this.#briefs = new Briefs(
+      this.#database,
+      new R2OwnerContentObjectStore(environment.SKILL_PACKAGES),
+      this.#objectName,
+    );
     const availableCapabilityPrerequisites = availableAgentCapabilityPrerequisites(
       environment.AI_GATEWAY_ID,
     );
@@ -224,6 +241,7 @@ export class OwnerControlPlane extends DurableObject {
       this.#storage,
       () => this.#fleetConfigurations.current(),
       this.#skills,
+      this.#briefs,
       availableCapabilityPrerequisites,
     );
     this.#toolExecutions = new ToolExecutions(this.#objectName, this.#database, this.#storage, () =>
@@ -247,6 +265,7 @@ export class OwnerControlPlane extends DurableObject {
       this.#objectName,
       this.#database,
       environment.CREW_AGENT,
+      this.#briefs,
       this.#runAdmissions,
       this.#toolExecutions,
       () => this.#fleetConfigurations.currentData(),
@@ -257,6 +276,7 @@ export class OwnerControlPlane extends DurableObject {
       this.#storage,
       environment.CREW_AGENT,
       this.#agentChannel,
+      this.#briefs,
       () => this.#fleetConfigurations.current(),
     );
     this.#storage.sql.exec("PRAGMA foreign_keys = ON");
@@ -319,6 +339,7 @@ export class OwnerControlPlane extends DurableObject {
             unresolvedEffects: this.#toolExecutions.unresolvedCount(),
           },
           skills: this.#skills.usage(),
+          briefs: this.#briefs.usage(),
           workflows: this.#workflows.usage(),
           ...this.#agentChannel.usage(),
         },
@@ -375,6 +396,42 @@ export class OwnerControlPlane extends DurableObject {
     return authorization.ok
       ? this.#skills.retire(authorization.authority, input)
       : deniedSkill(authorization.code);
+  }
+
+  async createBrief(authorityInput: unknown, input: unknown): Promise<CreateBriefResult> {
+    const authorization = this.#authorize(authorityInput, OWNER_WRITE_SCOPE);
+    return authorization.ok
+      ? this.#briefs.create(authorization.authority, input)
+      : deniedBrief(authorization.code);
+  }
+
+  async reviseBrief(authorityInput: unknown, input: unknown): Promise<ReviseBriefResult> {
+    const authorization = this.#authorize(authorityInput, OWNER_WRITE_SCOPE);
+    return authorization.ok
+      ? this.#briefs.revise(authorization.authority, input)
+      : deniedBrief(authorization.code);
+  }
+
+  listBriefs(authorityInput: unknown, input: unknown): ListBriefsResult {
+    const authorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
+    return authorization.ok ? this.#briefs.list(input) : deniedBrief(authorization.code);
+  }
+
+  inspectBrief(authorityInput: unknown, input: unknown): InspectBriefResult {
+    const authorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
+    return authorization.ok ? this.#briefs.inspect(input) : deniedBrief(authorization.code);
+  }
+
+  async readBrief(authorityInput: unknown, input: unknown): Promise<ReadBriefResult> {
+    const authorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
+    return authorization.ok ? this.#briefs.read(input) : deniedBrief(authorization.code);
+  }
+
+  async deleteBrief(authorityInput: unknown, input: unknown): Promise<DeleteBriefResult> {
+    const authorization = this.#authorize(authorityInput, OWNER_WRITE_SCOPE);
+    return authorization.ok
+      ? this.#briefs.delete(authorization.authority, input)
+      : deniedBrief(authorization.code);
   }
 
   listAgentBlueprints(authorityInput: unknown, input: unknown): ListAgentBlueprintsResult {
@@ -459,6 +516,12 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     return this.#runAdmissions.verify(input);
+  }
+
+  releaseRunBriefContext(input: unknown): Promise<boolean> {
+    return this.#migrationReady
+      ? this.#runAdmissions.releaseBriefContext(input)
+      : Promise.resolve(false);
   }
 
   confirmRunAdmission(input: unknown): Promise<ConfirmRunAdmissionResult> {
@@ -635,6 +698,12 @@ export class OwnerControlPlane extends DurableObject {
 
   async startRun(authorityInput: unknown, input: unknown): Promise<StartRunResult> {
     const authorization = this.#authorize(authorityInput, RUNS_WRITE_SCOPE);
+    const request = startRunInputSchema.safeParse(input);
+
+    if (authorization.ok && request.success && (request.data.briefs?.length ?? 0) > 0) {
+      const briefAuthorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
+      if (!briefAuthorization.ok) return deniedStartRun(briefAuthorization.code);
+    }
 
     return authorization.ok
       ? this.#agentChannel.start(authorization.authority, input)
@@ -646,6 +715,17 @@ export class OwnerControlPlane extends DurableObject {
     input: unknown,
   ): Promise<StartAgentWorkflowResult> {
     const authorization = this.#authorize(authorityInput, RUNS_WRITE_SCOPE);
+    const request = startAgentWorkflowInputSchema.safeParse(input);
+
+    if (authorization.ok && request.success && (request.data.briefs?.length ?? 0) > 0) {
+      const briefAuthorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
+      if (!briefAuthorization.ok) {
+        return {
+          error: { code: briefAuthorization.code, message: "Agent workflow request denied." },
+          ok: false,
+        };
+      }
+    }
 
     return authorization.ok
       ? this.#workflows.start(authorization.authority, input)
@@ -666,15 +746,18 @@ export class OwnerControlPlane extends DurableObject {
         };
   }
 
-  inspectAgentWorkflow(authorityInput: unknown, input: unknown): InspectAgentWorkflowResult {
+  inspectAgentWorkflow(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<InspectAgentWorkflowResult> {
     const authorization = this.#authorize(authorityInput, AGENTS_READ_SCOPE);
 
     return authorization.ok
       ? this.#workflows.inspect(input)
-      : {
+      : Promise.resolve({
           error: { code: authorization.code, message: "Agent workflow request denied." },
           ok: false,
-        };
+        });
   }
 
   async cancelAgentWorkflow(

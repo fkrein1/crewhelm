@@ -158,6 +158,7 @@ function inspectedWorkflow(workflowState: "running" | "completed" | "cancelled",
   const summary = workflowSummary(workflowState, revision);
   return {
     ...summary,
+    deliverable: null,
     objective: "Produce one concise two-step rehearsal acknowledgment.",
     session: null,
     stages: [

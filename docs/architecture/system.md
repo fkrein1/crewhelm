@@ -13,7 +13,7 @@ flowchart LR
     MCP["Authorized MCP client"] --> Worker["OAuth MCP Worker"]
     Worker --> Auth["Auth D1"]
     Worker --> Owner["OwnerControlPlane"]
-    Owner --> Skills["Skill packages / R2"]
+    Owner --> Content["Immutable owner content / R2"]
     Owner --> Agent["CrewAgent directory"]
     Agent --> Workflow["AgentTaskWorkflow"]
     Workflow --> Owner
@@ -31,17 +31,17 @@ conversation. A Cloudflare `AgentTaskWorkflow` may coordinate one frozen ordered
 owner control plane to admit each stage as a normal Run. Retained pre-session runs remain readable
 through the Agent object during migration.
 
-| State owner         | Authoritative facts                                                                                                                                        |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Worker              | Authenticated request context only                                                                                                                         |
-| Auth D1             | OAuth state, signing keys, rotating refresh tokens, and token revocation                                                                                   |
-| `OwnerControlPlane` | Agent and connection lifecycle, grants, schedules, Workflow plans and projections, Run admission, owner inbox, approvals, effect reconciliation, and audit |
-| Skill package R2    | Immutable, content-addressed Skill files; owner-local SQLite holds metadata and lifecycle                                                                  |
-| `CrewAgent`         | Workflow and Session discovery, branch revisions, retention, deletion, and exact event and Run routing                                                     |
-| `AgentTaskWorkflow` | Durable ordering of identifiers and stage events; no prompts, bearer authority, provider access, or policy decisions                                       |
-| `CrewSession`       | One conversation's Think transcript, submissions, output, deadlines, and approval waits                                                                    |
-| AI Gateway          | Optional installation-wide hard spend ceiling and model-call cost metadata                                                                                 |
-| Composio            | Connected-account credentials and refresh                                                                                                                  |
+| State owner         | Authoritative facts                                                                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Worker              | Authenticated request context only                                                                                                                                 |
+| Auth D1             | OAuth state, signing keys, rotating refresh tokens, and token revocation                                                                                           |
+| `OwnerControlPlane` | Agent and connection lifecycle, grants, Briefs, schedules, Workflow plans and projections, Run admission, owner inbox, approvals, effect reconciliation, and audit |
+| Owner content R2    | Immutable Skill files, versioned Brief content, and final Workflow deliverables; owner-local SQLite holds metadata, digests, provenance, and lifecycle             |
+| `CrewAgent`         | Workflow and Session discovery, branch revisions, retention, deletion, and exact event and Run routing                                                             |
+| `AgentTaskWorkflow` | Durable ordering of identifiers and stage events; no prompts, bearer authority, provider access, or policy decisions                                               |
+| `CrewSession`       | One conversation's Think transcript, submissions, output, deadlines, and approval waits                                                                            |
+| AI Gateway          | Optional installation-wide hard spend ceiling and model-call cost metadata                                                                                         |
+| Composio            | Connected-account credentials and refresh                                                                                                                          |
 
 The control plane owns admission and administration; the Agent directory owns conversation
 lifecycle; each session owns execution. Cross-object calls
@@ -52,13 +52,26 @@ Session deletion is revision-bound and idempotent. An ambiguous deletion remains
 ordinary session retention until the exact request retries, preserving owner redaction and audit
 recovery without reopening an empty conversation.
 
-Workflow start freezes the owner, Agent and fleet revisions, objective, ordered stages, aggregate
-budget, and retention in the owner control plane before coordination begins. The Workflow runtime
+Workflow start freezes the owner, Agent and fleet revisions, exact Brief revisions and aggregate
+context digest, objective, ordered stages, aggregate budget, and retention in the owner control
+plane before coordination begins. The Workflow runtime
 receives only opaque owner, Agent, Workflow, and stage-count coordinates. It cannot mint Run
 permits, add stages, read prompts, call providers, or interpret model output as authority. Every
 stage returns through the existing admission path and executes in one exact Workflow-owned Session.
 That Session is hidden from ordinary discovery and rejects direct continuation or deletion, so only
 the owning Workflow can advance its branch until terminal cleanup.
+
+Briefs are bounded, explicit owner inputs rather than Agent capabilities. Each immutable revision
+is stored behind a Crewhelm-owned object-store adapter; the control plane keeps only compact
+metadata and verifies content and digest before admission. The exact rendered context is frozen
+before a Run permit is issued and passed to `CrewSession` with that permit. `beforeTurn` may use
+only this admitted payload and never discovers or refreshes Briefs. A successful final Workflow
+stage commits one digest-bound deliverable with exact Workflow, stage, and Run provenance. Default
+inspection returns metadata only; exact opt-in inspection reads content. Workflow deletion removes
+the deliverable before its owner projection. A durable upload intent repairs interruption between
+object storage and the final Workflow transition. Session Run cleanup removes raw Brief blocks from
+retained turn metadata; the owner keeps its Brief reference until the Session acknowledges that
+redaction has completed.
 
 Runs and tool calls are bound to the admitted Agent and fleet-configuration revisions.
 Configuration changes invalidate unconsumed authority. The optional AI Gateway provides the
@@ -80,6 +93,7 @@ cost-reconciliation controls.
 | Disablement, revocation, recovery     | `owner/recovery/`            |
 | Connection lifecycle                  | `owner/connections/`         |
 | Skill package lifecycle               | `owner/skills/`              |
+| Brief and deliverable lifecycle       | `owner/briefs/`              |
 | Owner inbox and Agent capabilities    | `owner/agent-channel/`       |
 | Session directory and lifecycle       | `agent/session-directory.ts` |
 | Admitted Think execution              | `agent/admitted-runs/`       |
@@ -102,7 +116,8 @@ branding, stylesheet assets, and terminal color roles.
 2. `OwnerControlPlane` revalidates authority, compiles validated Agent modules into an immutable
    runtime plan, and issues a bounded single-use permit against the exact Agent and fleet revisions.
 3. `CrewAgent` resolves or creates one exact session and branch revision. `CrewSession` redeems the
-   unchanged permit, freezes a bounded transcript snapshot, and only then submits inference.
+   unchanged permit, verifies any frozen Brief payload against its admitted digest, freezes a
+   bounded transcript snapshot, and only then submits inference.
    Discovery, session coordinates, and configuration grant no execution authority.
 4. `ToolGate` rechecks the grant, policy, connection, effect, approval, and budget before Composio
    dispatch. Ambiguous mutations remain blocked until reconciled.

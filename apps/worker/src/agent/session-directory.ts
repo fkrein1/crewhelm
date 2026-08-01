@@ -615,6 +615,9 @@ export class CrewAgent extends CrewSession {
     try {
       result = acceptRunAdmissionResultSchema.parse(
         await this.#session(prepared.mapping.session).acceptRunAdmission({
+          ...(request.data.briefContext === undefined
+            ? {}
+            : { briefContext: request.data.briefContext }),
           permit: request.data.permit,
           prompt: request.data.prompt,
           session: prepared.mapping.session,

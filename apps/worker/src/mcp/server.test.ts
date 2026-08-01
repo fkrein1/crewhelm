@@ -41,6 +41,7 @@ import {
   listSkillsResultSchema,
   listAgentBlueprintsResultSchema,
   listUnresolvedToolEffectsResultSchema,
+  manageBriefsResultSchema,
   ownerAuthoritySchema,
   publishSkillResultSchema,
   publishAgentBlueprintResultSchema,
@@ -58,6 +59,7 @@ import { MCP_SERVER_INSTRUCTIONS, mcpControlPlaneStatusResultSchema } from "./gu
 
 import {
   MCP_AGENT_INBOX_TOOL_NAME,
+  MCP_BRIEFS_TOOL_NAME,
   MCP_AGENT_WORKFLOWS_TOOL_NAME,
   MCP_AGENT_SESSIONS_TOOL_NAME,
   MCP_DELETE_AGENT_SESSION_TOOL_NAME,
@@ -272,6 +274,7 @@ describe("authenticated MCP handler", () => {
     const workflowsTool = payload.result.tools.find(
       (tool) => tool.name === MCP_AGENT_WORKFLOWS_TOOL_NAME,
     );
+    const briefsTool = payload.result.tools.find((tool) => tool.name === MCP_BRIEFS_TOOL_NAME);
     const configureScheduleTool = payload.result.tools.find(
       (tool) => tool.name === MCP_CONFIGURE_AGENT_SCHEDULE_TOOL_NAME,
     );
@@ -362,6 +365,16 @@ describe("authenticated MCP handler", () => {
       description: expect.stringContaining("ordered durable Agent Runs"),
     });
     expect(JSON.stringify(workflowsTool?.inputSchema)).toContain('"stages"');
+    expect(briefsTool).toMatchObject({
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+        readOnlyHint: false,
+      },
+      description: expect.stringContaining("immutable"),
+    });
+    expect(JSON.stringify(briefsTool?.inputSchema)).toContain('"read"');
     expect(scheduleReadTools).toHaveLength(2);
     expect(scheduleReadTools.every((tool) => tool.annotations.readOnlyHint)).toBe(true);
     expect(connectionLinkTool?.annotations).toMatchObject({
@@ -1158,6 +1171,12 @@ describe("authenticated MCP handler", () => {
           createAgent: async () => {
             throw new Error("do-not-reflect-this");
           },
+          createBrief: unavailableControlPlane,
+          deleteBrief: unavailableControlPlane,
+          inspectBrief: unavailableControlPlane,
+          listBriefs: unavailableControlPlane,
+          readBrief: unavailableControlPlane,
+          reviseBrief: unavailableControlPlane,
           completeConnectionLink: async () => {
             throw new Error("do-not-reflect-this");
           },
@@ -1880,6 +1899,60 @@ describe("authenticated MCP handler", () => {
       created: false,
       ok: true,
       run: inspected.ok ? inspected.run : undefined,
+    });
+  });
+
+  it("creates compact Brief metadata and reads content only by exact revision", async () => {
+    const authority = await ownerAuthority("mcp-brief-owner", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+    ]);
+    const callBriefs = async (id: number, args: Record<string, unknown>) => {
+      const response = await handleAuthenticatedMcpRequest(
+        toolRequest(
+          JSON.stringify({
+            id,
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: { arguments: args, name: MCP_BRIEFS_TOOL_NAME },
+          }),
+        ),
+        env,
+        { authority },
+      );
+      const result = jsonRpcToolResultSchema.parse(await response.json()).result;
+      return {
+        parsed: manageBriefsResultSchema.parse(JSON.parse(result.content[0]?.text ?? "")),
+        result,
+      };
+    };
+
+    const created = await callBriefs(36, {
+      action: "create",
+      content: "Prefer verified facts and label uncertainty.",
+      idempotencyKey: "mcp-brief-create",
+      mediaType: "text/markdown",
+      name: "Research rules",
+    });
+    expect(created.result.isError).toBe(false);
+    expect(created.parsed).toMatchObject({ ok: true, version: { revision: 1 } });
+    if (!("brief" in created.parsed)) throw new Error("Expected created Brief projection.");
+
+    const listed = await callBriefs(37, { action: "list", limit: 10 });
+    expect(listed.parsed).toMatchObject({
+      briefs: [{ id: created.parsed.brief.id }],
+      ok: true,
+    });
+    expect(JSON.stringify(listed.parsed)).not.toContain("Prefer verified facts");
+
+    const read = await callBriefs(38, {
+      action: "read",
+      id: created.parsed.brief.id,
+      revision: 1,
+    });
+    expect(read.parsed).toMatchObject({
+      content: { content: "Prefer verified facts and label uncertainty.", revision: 1 },
+      ok: true,
     });
   });
 
@@ -2687,6 +2760,12 @@ describe("authenticated MCP handler", () => {
           configureAgentSchedule: unavailableControlPlane,
           configureFleetConfiguration: unavailableControlPlane,
           createAgent: unavailableControlPlane,
+          createBrief: unavailableControlPlane,
+          deleteBrief: unavailableControlPlane,
+          inspectBrief: unavailableControlPlane,
+          listBriefs: unavailableControlPlane,
+          readBrief: unavailableControlPlane,
+          reviseBrief: unavailableControlPlane,
           getAgent: unavailableControlPlane,
           getAgentRevision: unavailableControlPlane,
           getAgentSchedule: unavailableControlPlane,
@@ -2815,6 +2894,12 @@ describe("authenticated MCP handler", () => {
           configureAgentSchedule: unavailableControlPlane,
           configureFleetConfiguration: unavailableControlPlane,
           createAgent: unavailableControlPlane,
+          createBrief: unavailableControlPlane,
+          deleteBrief: unavailableControlPlane,
+          inspectBrief: unavailableControlPlane,
+          listBriefs: unavailableControlPlane,
+          readBrief: unavailableControlPlane,
+          reviseBrief: unavailableControlPlane,
           getAgent: unavailableControlPlane,
           getAgentBlueprint: unavailableControlPlane,
           getAgentRevision: unavailableControlPlane,

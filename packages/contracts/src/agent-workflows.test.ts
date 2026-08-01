@@ -62,6 +62,7 @@ describe("Agent workflow contracts", () => {
 
     expect(agentWorkflowIdSchema.safeParse(workflowId).success).toBe(true);
     expect(inspectAgentWorkflowInputSchema.parse({ workflowId })).toEqual({
+      includeDeliverable: false,
       includePrompts: false,
       workflowId,
     });
