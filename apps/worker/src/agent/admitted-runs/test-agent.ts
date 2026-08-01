@@ -31,6 +31,7 @@ interface TestModelCall {
 }
 
 export class TestCrewAgent extends CrewAgent {
+  #cancellationCount = 0;
   readonly #completedBeforeCancellation = new Map<string, string>();
   #inspectionCount = 0;
   readonly #modelCalls: TestModelCall[] = [];
@@ -180,7 +181,12 @@ export class TestCrewAgent extends CrewAgent {
     this.#completeBeforeNextCancellation = true;
   }
 
+  cancellationCountForTest(): number {
+    return this.#cancellationCount;
+  }
+
   override async cancelAdmittedRun(input: unknown) {
+    this.#cancellationCount += 1;
     const request = cancelAdmittedRunInputSchema.safeParse(input);
 
     if (!this.#completeBeforeNextCancellation || !request.success) {
@@ -300,6 +306,8 @@ export class TestCrewAgent extends CrewAgent {
 }
 
 export class TestCrewSession extends CrewSession {
+  readonly #completedBeforeCancellation = new Map<string, string>();
+  #completeBeforeNextCancellation = false;
   #delayDeletion = false;
   #deletionWaiting = false;
   #failDeletionResponse = false;
@@ -352,6 +360,49 @@ export class TestCrewSession extends CrewSession {
 
   modelCallsForTest(): TestModelCall[] {
     return structuredClone(this.#modelCalls);
+  }
+
+  completeBeforeNextCancellationForTest(): void {
+    this.#completeBeforeNextCancellation = true;
+  }
+
+  override async cancelAdmittedRun(input: unknown) {
+    const request = cancelAdmittedRunInputSchema.safeParse(input);
+
+    if (!this.#completeBeforeNextCancellation || !request.success) {
+      return super.cancelAdmittedRun(input);
+    }
+
+    this.#completeBeforeNextCancellation = false;
+    const redeemed = await this.env.OWNER_CONTROL_PLANE.getByName(
+      request.data.capability.ownerKey,
+    ).redeemRunReceiverCapability(request.data.capability);
+
+    if (!redeemed.ok) {
+      return cancelAdmittedRunResultSchema.parse(redeemed);
+    }
+
+    this.#completedBeforeCancellation.set(request.data.capability.runId, new Date().toISOString());
+    return cancelAdmittedRunResultSchema.parse({ cancelled: false, ok: true });
+  }
+
+  override async inspectAdmittedRun(input: unknown) {
+    const result = await super.inspectAdmittedRun(input);
+    if (!result.ok) return result;
+    const completedAt = this.#completedBeforeCancellation.get(result.run.runId);
+    return completedAt === undefined
+      ? result
+      : inspectAdmittedRunResultSchema.parse({
+          ok: true,
+          run: {
+            ...result.run,
+            completedAt,
+            output: TEST_REPLY,
+            outputTruncated: false,
+            status: "completed",
+          },
+          trace: result.trace,
+        });
   }
 
   delayNextDeletionForTest(): void {

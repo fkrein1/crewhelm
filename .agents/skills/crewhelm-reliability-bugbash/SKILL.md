@@ -33,21 +33,26 @@ guided investigation, not a fixed test plan.
    tried, observations, identifiers, hypotheses, fixes, cleanup, and promising next paths. Include
    the hint, target, fingerprint, current authority and bounds, session status, and pending cleanup
    or revocation. Never commit it or place secrets in it.
-8. Run only one live session against the installation. Record it as active before authorization,
-   reserve request and token-lifetime headroom for cleanup, and do not start a parallel rescue
-   session while it polls.
+8. Run only one live session against the installation. Use the black-box skill's saved rotating
+   credential for routine journeys; do not repeat browser OAuth unless authentication is in scope
+   or credential recovery is required. Record the session before refreshing access, preserve
+   request and token-lifetime headroom for cleanup, and do not start a parallel rescue session.
 
 ## Investigate
 
-Work autonomously through public CLI, browser, OAuth, MCP, Agent, and integration workflows. Start
-with recent changes, risky transitions, or weakly understood behavior, then let observations guide
-the next test.
+Work autonomously through public CLI, MCP, Agent, and integration workflows. Include browser and
+OAuth only when the hint covers authentication or the saved credential must be recovered. Start
+with recent changes, risky transitions, or weakly understood behavior, then follow the evidence.
 
 - Within the approved envelope, create real test infrastructure, Agents, runs, connections, and
   provider effects without per-action approval. Prefer economical models and operations when they
   preserve the test's validity; platform budgets are ceilings, not targets.
-- Use installation-backed CLI commands with `--installation crewhelm.testing.installation.json`
-  and `--browser codex`. Never substitute a hand-typed endpoint or the system browser.
+- Use installation-backed commands with `--installation crewhelm.testing.installation.json` and
+  `scripts/crewhelm-feature-rehearsal.ts` for supported journeys. For combined auth, follow the
+  black-box skill's Codex-browser preference and narrow system-browser fallback. Never substitute
+  a hand-typed endpoint.
+- Reuse the rehearsal client's `recover` action for exact retained Workflow fixtures before
+  starting another journey. Keep public MCP polling within the documented rate-limit budget.
 - Treat the user's hint as the first priority, not the session boundary. After exercising it, use
   the remaining appetite on adjacent and then other high-value behavior.
 - Prefer realistic cross-capability journeys over isolated calls.
@@ -63,8 +68,9 @@ produces useful evidence. Before each new path, confirm it fits the working enve
 enough capacity for cleanup and revocation. Stop before the work becomes a separate investigation.
 
 For a light bug bash, target five minutes: complete preflight and public diagnosis, then exercise at
-most one bounded journey without provider effects unless the hint requires one. Light mode keeps all
-origin, authority, cleanup, and revocation requirements.
+most one bounded journey without provider effects unless the hint requires one. Reuse saved owner
+access and omit interactive OAuth unless auth is the hint. Light mode keeps all origin, authority,
+cleanup, and short-lived access revocation requirements.
 
 ## Repair
 

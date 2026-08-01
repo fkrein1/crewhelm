@@ -13,6 +13,7 @@ const AUTHORIZATION_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAXIMUM_OAUTH_RESPONSE_BYTES = 16 * 1_024;
 const MAXIMUM_MCP_RESPONSE_BYTES = 96 * 1_024;
 const MAXIMUM_REVOCATION_RESPONSE_BYTES = 4 * 1_024;
+const MAXIMUM_MCP_TOOLS = 33;
 
 export const temporaryOwnerSessionErrorCodeSchema = z.enum([
   "timeout",
@@ -83,7 +84,7 @@ export const toolListResponseSchema = z.looseObject({
           name: z.string().min(1).max(256),
         }),
       )
-      .max(32),
+      .max(MAXIMUM_MCP_TOOLS),
   }),
 });
 
@@ -158,6 +159,25 @@ export interface TemporaryOwnerSessionOptions extends DoctorOptions {
   authorizationTimeoutMs?: number;
   clientName: string;
   scope: "crewhelm:view" | "crewhelm:full";
+}
+
+export const refreshableOwnerCredentialSchema = z.strictObject({
+  clientId: z.string().min(1).max(2_048),
+  origin: z.url(),
+  refreshToken: revocableTokenValueSchema,
+  schemaVersion: z.literal(1),
+  scope: z.enum(["crewhelm:view", "crewhelm:full"]),
+});
+
+export type RefreshableOwnerCredential = z.infer<typeof refreshableOwnerCredentialSchema>;
+
+export interface RefreshableOwnerAuthorizationOptions extends TemporaryOwnerSessionOptions {
+  persistCredential: (credential: RefreshableOwnerCredential) => Promise<void>;
+}
+
+export interface RefreshableOwnerSessionOptions extends DoctorOptions {
+  credential: RefreshableOwnerCredential;
+  persistCredential: (credential: RefreshableOwnerCredential) => Promise<void>;
 }
 
 export interface TemporaryOwnerSessionDependencies extends DoctorDependencies {
@@ -565,10 +585,11 @@ export function parseMcpToolResult<T>(
   return parsed.data;
 }
 
-export async function runTemporaryOwnerSession<T>(
+async function runOwnerAuthorization<T>(
   options: TemporaryOwnerSessionOptions,
   dependencies: TemporaryOwnerSessionDependencies,
   operation: (session: TemporaryOwnerMcpSession) => Promise<T>,
+  persistCredential?: (credential: RefreshableOwnerCredential) => Promise<void>,
 ): Promise<TemporaryOwnerSessionResult<T>> {
   const clientName = z.string().min(1).max(128).parse(options.clientName);
   const endpoints = oauthEndpoints(options.origin);
@@ -586,6 +607,8 @@ export async function runTemporaryOwnerSession<T>(
   let revocation: TemporaryOwnerSessionResult<T>["revocation"] = { status: "not_issued" };
   const revocationTokens: Array<{ token: string; tokenType: "access_token" | "refresh_token" }> =
     [];
+  const requestedScope =
+    persistCredential === undefined ? options.scope : `${options.scope} offline_access`;
 
   try {
     listener = await startCallbackListener(state, endpoints.issuer);
@@ -596,12 +619,15 @@ export async function runTemporaryOwnerSession<T>(
         body: JSON.stringify({
           application_type: "native",
           client_name: clientName,
-          grant_types: ["authorization_code"],
+          grant_types:
+            persistCredential === undefined
+              ? ["authorization_code"]
+              : ["authorization_code", "refresh_token"],
           redirect_uris: [listener.redirectUrl.href],
           require_pkce: true,
           resources: [mcpEndpoint.href],
           response_types: ["code"],
-          scope: options.scope,
+          scope: requestedScope,
           token_endpoint_auth_method: "none",
         }),
         headers: { accept: "application/json", "content-type": "application/json" },
@@ -620,7 +646,7 @@ export async function runTemporaryOwnerSession<T>(
     authorizeUrl.searchParams.set("redirect_uri", listener.redirectUrl.href);
     authorizeUrl.searchParams.set("resource", mcpEndpoint.href);
     authorizeUrl.searchParams.set("response_type", "code");
-    authorizeUrl.searchParams.set("scope", options.scope);
+    authorizeUrl.searchParams.set("scope", requestedScope);
     authorizeUrl.searchParams.set("state", state);
 
     try {
@@ -658,10 +684,12 @@ export async function runTemporaryOwnerSession<T>(
     );
 
     if (typeof tokenPayload === "object" && tokenPayload !== null && !Array.isArray(tokenPayload)) {
-      for (const [property, tokenType] of [
+      const revocableProperties = [
         ["access_token", "access_token"],
         ["refresh_token", "refresh_token"],
-      ] as const) {
+      ] as const;
+
+      for (const [property, tokenType] of revocableProperties) {
         const candidate = revocableTokenValueSchema.safeParse(Reflect.get(tokenPayload, property));
 
         if (candidate.success) {
@@ -670,27 +698,55 @@ export async function runTemporaryOwnerSession<T>(
       }
     }
 
-    const token = z
-      .looseObject({
-        access_token: revocableTokenValueSchema,
-        expires_in: z.literal(900),
-        scope: z.literal(options.scope),
-        token_type: z.string().transform((value, context) => {
-          if (value.toLowerCase() !== "bearer") {
-            context.addIssue({ code: "custom", message: "Expected a Bearer token." });
-            return z.NEVER;
-          }
-          return "Bearer" as const;
-        }),
-      })
-      .refine((value) => !("refresh_token" in value))
-      .safeParse(tokenPayload);
+    const tokenBaseSchema = z.looseObject({
+      access_token: revocableTokenValueSchema,
+      expires_in: z.literal(900),
+      scope: z.literal(requestedScope),
+      token_type: z.string().transform((value, context) => {
+        if (value.toLowerCase() !== "bearer") {
+          context.addIssue({ code: "custom", message: "Expected a Bearer token." });
+          return z.NEVER;
+        }
+        return "Bearer" as const;
+      }),
+    });
+    const token = (
+      persistCredential === undefined
+        ? tokenBaseSchema.refine((value) => !("refresh_token" in value))
+        : tokenBaseSchema.extend({ refresh_token: revocableTokenValueSchema })
+    ).safeParse(tokenPayload);
 
     if (!token.success) {
       throw new TemporaryOwnerSessionError(
         "invalid_payload",
         "Endpoint returned an invalid payload.",
       );
+    }
+
+    if (persistCredential !== undefined) {
+      if (!("refresh_token" in token.data)) {
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          "Endpoint did not issue a refreshable owner credential.",
+        );
+      }
+
+      await persistCredential(
+        refreshableOwnerCredentialSchema.parse({
+          clientId,
+          origin: options.origin.origin,
+          refreshToken: token.data.refresh_token,
+          schemaVersion: 1,
+          scope: options.scope,
+        }),
+      );
+      const retainedRefreshToken = revocationTokens.findIndex(
+        (candidate) =>
+          candidate.tokenType === "refresh_token" && candidate.token === token.data.refresh_token,
+      );
+      if (retainedRefreshToken >= 0) {
+        revocationTokens.splice(retainedRefreshToken, 1);
+      }
     }
 
     authorization = { ok: true };
@@ -737,6 +793,185 @@ export async function runTemporaryOwnerSession<T>(
             {
               body: new URLSearchParams({
                 client_id: clientId,
+                token: token.token,
+                token_type_hint: token.tokenType,
+              }),
+              headers: {
+                accept: "application/json",
+                "content-type": "application/x-www-form-urlencoded",
+              },
+              method: "POST",
+            },
+            options.timeoutMs,
+            MAXIMUM_REVOCATION_RESPONSE_BYTES,
+          );
+        } catch (error) {
+          revocationError ??= error;
+        }
+      }
+
+      for (const token of revocationTokens) {
+        if (token.tokenType === "access_token") {
+          try {
+            await confirmAccessTokenRevoked(options, dependencies, token.token);
+          } catch (error) {
+            revocationError ??= error;
+          }
+        }
+      }
+
+      revocation =
+        revocationError === undefined
+          ? { ok: true, status: "revoked" }
+          : { error: normalizeFailure(revocationError), ok: false, status: "failed" };
+    }
+  }
+
+  return { authorization, operation: operationResult, revocation };
+}
+
+export function runTemporaryOwnerSession<T>(
+  options: TemporaryOwnerSessionOptions,
+  dependencies: TemporaryOwnerSessionDependencies,
+  operation: (session: TemporaryOwnerMcpSession) => Promise<T>,
+): Promise<TemporaryOwnerSessionResult<T>> {
+  return runOwnerAuthorization(options, dependencies, operation);
+}
+
+export function authorizeRefreshableOwnerCredential<T>(
+  options: RefreshableOwnerAuthorizationOptions,
+  dependencies: TemporaryOwnerSessionDependencies,
+  operation: (session: TemporaryOwnerMcpSession) => Promise<T>,
+): Promise<TemporaryOwnerSessionResult<T>> {
+  return runOwnerAuthorization(options, dependencies, operation, options.persistCredential);
+}
+
+export async function runRefreshableOwnerSession<T>(
+  options: RefreshableOwnerSessionOptions,
+  dependencies: DoctorDependencies,
+  operation: (session: TemporaryOwnerMcpSession) => Promise<T>,
+): Promise<TemporaryOwnerSessionResult<T>> {
+  const credential = refreshableOwnerCredentialSchema.parse(options.credential);
+  const endpoints = oauthEndpoints(options.origin);
+  const mcpEndpoint = new URL(MCP_PATH, options.origin);
+  let authorization: SessionStep = {
+    error: { code: "request_failed", message: "Saved owner access could not be refreshed." },
+    ok: false,
+  };
+  let operationResult: SessionOperation<T> = { status: "not_run" };
+  let revocation: TemporaryOwnerSessionResult<T>["revocation"] = { status: "not_issued" };
+  const revocationTokens: Array<{ token: string; tokenType: "access_token" | "refresh_token" }> =
+    [];
+
+  try {
+    if (new URL(credential.origin).origin !== options.origin.origin) {
+      throw new TemporaryOwnerSessionError(
+        "invalid_payload",
+        "Saved owner credential does not match the rehearsal installation.",
+      );
+    }
+
+    const requestedScope = `${credential.scope} offline_access`;
+    const tokenPayload = await fetchJsonValue(
+      dependencies,
+      endpoints.token,
+      {
+        body: new URLSearchParams({
+          client_id: credential.clientId,
+          grant_type: "refresh_token",
+          refresh_token: credential.refreshToken,
+          resource: mcpEndpoint.href,
+        }),
+        headers: {
+          accept: "application/json",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        method: "POST",
+      },
+      options.timeoutMs,
+      MAXIMUM_OAUTH_RESPONSE_BYTES,
+    );
+    if (typeof tokenPayload === "object" && tokenPayload !== null && !Array.isArray(tokenPayload)) {
+      for (const [property, tokenType] of [
+        ["access_token", "access_token"],
+        ["refresh_token", "refresh_token"],
+      ] as const) {
+        const candidate = revocableTokenValueSchema.safeParse(Reflect.get(tokenPayload, property));
+        if (candidate.success) {
+          revocationTokens.push({ token: candidate.data, tokenType });
+        }
+      }
+    }
+    const token = z
+      .looseObject({
+        access_token: revocableTokenValueSchema,
+        expires_in: z.literal(900),
+        refresh_token: revocableTokenValueSchema,
+        scope: z.literal(requestedScope),
+        token_type: z.string().transform((value, context) => {
+          if (value.toLowerCase() !== "bearer") {
+            context.addIssue({ code: "custom", message: "Expected a Bearer token." });
+            return z.NEVER;
+          }
+          return "Bearer" as const;
+        }),
+      })
+      .safeParse(tokenPayload);
+
+    if (!token.success) {
+      throw new TemporaryOwnerSessionError(
+        "invalid_payload",
+        "Endpoint returned an invalid payload.",
+      );
+    }
+
+    await options.persistCredential({
+      ...credential,
+      refreshToken: token.data.refresh_token,
+    });
+    const retainedRefreshToken = revocationTokens.findIndex(
+      (candidate) =>
+        candidate.tokenType === "refresh_token" && candidate.token === token.data.refresh_token,
+    );
+    if (retainedRefreshToken >= 0) {
+      revocationTokens.splice(retainedRefreshToken, 1);
+    }
+    authorization = { ok: true };
+    let nextRequestId = 1;
+    const session: TemporaryOwnerMcpSession = {
+      call: (method, params, schema, timeoutMs) =>
+        callMcp(
+          options,
+          dependencies,
+          token.data.access_token,
+          nextRequestId++,
+          method,
+          params,
+          schema,
+          timeoutMs,
+        ),
+      endpoint: mcpEndpoint,
+    };
+
+    try {
+      operationResult = { ok: true, status: "completed", value: await operation(session) };
+    } catch (error) {
+      operationResult = { error: normalizeFailure(error), ok: false, status: "failed" };
+    }
+  } catch (error) {
+    authorization = { error: normalizeFailure(error), ok: false };
+  } finally {
+    if (revocationTokens.length > 0) {
+      let revocationError: unknown;
+
+      for (const token of revocationTokens) {
+        try {
+          await fetchBounded(
+            dependencies,
+            endpoints.revoke,
+            {
+              body: new URLSearchParams({
+                client_id: credential.clientId,
                 token: token.token,
                 token_type_hint: token.tokenType,
               }),

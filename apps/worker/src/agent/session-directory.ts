@@ -48,6 +48,7 @@ const AGENT_WORKFLOW_RUN_PREFIX = "crewhelm:agent-workflow-run:";
 const AGENT_WORKFLOW_RUN_INDEX_PREFIX = "crewhelm:agent-workflow-run-index:";
 const AGENT_WORKFLOW_PENDING_PREFIX = "crewhelm:agent-workflow-pending:";
 const AGENT_WORKFLOW_CLIENT_PREFIX = "crewhelm:workflow:";
+const TERMINAL_PROVIDER_WORKFLOW_STATUSES = ["complete", "errored", "terminated"] as const;
 
 const agentWorkflowDirectoryRecordSchema = agentTaskWorkflowParamsSchema.extend({
   startedAt: z.number().int().positive(),
@@ -404,12 +405,11 @@ export class CrewAgent extends CrewSession {
 
     const tracked = Agent.prototype.getWorkflow.call(this, request.data.workflowId);
 
-    if (tracked !== undefined && !["complete", "errored", "terminated"].includes(tracked.status)) {
-      try {
-        await Agent.prototype.terminateWorkflow.call(this, request.data.workflowId);
-      } catch {
-        return false;
-      }
+    if (
+      tracked !== undefined &&
+      !(await this.#terminateAgentTaskWorkflow(request.data.workflowId))
+    ) {
+      return false;
     }
 
     await this.#sealAgentWorkflowRunDeliveries(request.data.workflowId);
@@ -435,17 +435,27 @@ export class CrewAgent extends CrewSession {
       return true;
     }
 
+    const runtimeActive = await this.env.OWNER_CONTROL_PLANE.getByName(
+      workflow.data.ownerKey,
+    ).verifyAgentWorkflowRuntime({
+      agentId: workflow.data.agentId,
+      stageCount: workflow.data.stageCount,
+      workflowId: workflow.data.workflowId,
+    });
+    if (runtimeActive) return false;
+
     const tracked = Agent.prototype.getWorkflow.call(this, request.data.workflowId);
 
-    if (tracked !== undefined && !["complete", "errored", "terminated"].includes(tracked.status)) {
-      try {
-        await Agent.prototype.terminateWorkflow.call(this, request.data.workflowId);
-      } catch {
-        return false;
-      }
+    if (
+      tracked !== undefined &&
+      !(await this.#terminateAgentTaskWorkflow(request.data.workflowId))
+    ) {
+      return false;
     }
 
-    Agent.prototype.deleteWorkflow.call(this, request.data.workflowId);
+    if (tracked !== undefined) {
+      Agent.prototype.deleteWorkflow.call(this, request.data.workflowId);
+    }
     const indexes = await this.ctx.storage.list({
       prefix: `${AGENT_WORKFLOW_RUN_INDEX_PREFIX}${request.data.workflowId}:`,
     });
@@ -458,6 +468,66 @@ export class CrewAgent extends CrewSession {
 
     await this.ctx.storage.delete(keys);
     return true;
+  }
+
+  async #terminateAgentTaskWorkflow(workflowId: string): Promise<boolean> {
+    const binding = this.env.AGENT_TASK_WORKFLOW;
+    if (binding === undefined) return false;
+
+    try {
+      const instance = await binding.get(workflowId);
+      let status = await instance.status();
+
+      if (!(TERMINAL_PROVIDER_WORKFLOW_STATUSES as readonly string[]).includes(status.status)) {
+        await instance.terminate();
+        status = await instance.status();
+      }
+
+      return (TERMINAL_PROVIDER_WORKFLOW_STATUSES as readonly string[]).includes(status.status);
+    } catch (error) {
+      console.warn({
+        error: error instanceof Error ? error.name : "UnknownError",
+        event: "crewhelm.workflow.recovery",
+        outcome: "deferred",
+        phase: "provider_terminate",
+        workflowId,
+      });
+      return false;
+    }
+  }
+
+  async deleteAgentTaskWorkflowSession(input: unknown): Promise<boolean> {
+    const request = z
+      .strictObject({
+        idempotencyKey: z.string().min(1).max(128),
+        ownerKey: z.string().min(1),
+        sessionId: sessionIdSchema,
+        workflowId: agentWorkflowIdSchema,
+      })
+      .safeParse(input);
+
+    if (!request.success || this.#agentIdentity().ownerKey !== request.data.ownerKey) {
+      return false;
+    }
+
+    let record = await this.#readAvailableSession(request.data.sessionId);
+    if (record === undefined) return true;
+    if (record.workflowId !== request.data.workflowId) return false;
+    if (await this.#reconcileActiveRun(record)) return false;
+
+    record = await this.#readAvailableSession(request.data.sessionId);
+    if (record === undefined) return true;
+    if (record.workflowId !== request.data.workflowId || record.activeRunId !== null) return false;
+
+    const deleted = await this.deleteAgentSession({
+      agentId: record.agentId,
+      expectedBranchRevision: record.branchRevision,
+      idempotencyKey: request.data.idempotencyKey,
+      ownerKey: record.ownerKey,
+      sessionId: record.sessionId,
+      workflowId: request.data.workflowId,
+    });
+    return deleted.ok || deleted.error.code === "session_not_found";
   }
 
   override async _workflow_handleCallback(...args: unknown[]): Promise<void> {

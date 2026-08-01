@@ -441,6 +441,7 @@ export class AgentWorkflows {
         ok: false,
       };
     }
+
     const stages = this.#stages(row.workflowId);
 
     return inspectAgentWorkflowResultSchema.parse({
@@ -588,6 +589,18 @@ export class AgentWorkflows {
     );
 
     if (!started.ok) {
+      const replayed = this.#workflow(row.workflowId);
+      const replayedStage = this.#stage(row.workflowId, stage.stageIndex);
+      if (
+        replayed?.currentRunId !== null &&
+        replayed?.currentRunId !== undefined &&
+        replayed.currentStageIndex === stage.stageIndex &&
+        replayed.session !== null &&
+        replayedStage?.runId === replayed.currentRunId
+      ) {
+        return this.dispatch(request.data);
+      }
+
       const code: FailureCode =
         started.error.code === "branch_revision_conflict"
           ? "revision_conflict"
@@ -612,6 +625,7 @@ export class AgentWorkflows {
       return dispatchAgentWorkflowStageResultSchema.parse(denied("workflow_unavailable"));
     }
 
+    let boundSession = started.run.session;
     const updatedAt = Date.now();
     const claimed = this.#database.transaction((transaction) => {
       const current = transaction
@@ -668,15 +682,28 @@ export class AgentWorkflows {
     });
 
     if (!claimed) {
-      await this.#agentChannel.cancel(authority, { runId: started.run.runId });
-      return dispatchAgentWorkflowStageResultSchema.parse(denied("workflow_unavailable"));
+      const current = this.#workflow(row.workflowId);
+      const currentStage = this.#stage(row.workflowId, stage.stageIndex);
+      const currentSession = current?.session;
+      const exactReplay =
+        current?.currentRunId === started.run.runId &&
+        current.currentStageIndex === stage.stageIndex &&
+        currentStage?.runId === started.run.runId &&
+        currentSession !== null &&
+        currentSession !== undefined;
+
+      if (!exactReplay) {
+        await this.#agentChannel.cancel(authority, { runId: started.run.runId });
+        return dispatchAgentWorkflowStageResultSchema.parse(denied("workflow_unavailable"));
+      }
+      boundSession = currentSession;
     }
 
     const attached = await this.#agent(row).attachAgentTaskWorkflowRun({
       agentId: row.agentId,
       ownerKey: this.#objectName,
       runId: started.run.runId,
-      session: started.run.session,
+      session: boundSession,
       stageIndex: stage.stageIndex,
       workflowId: row.workflowId,
     });
@@ -698,7 +725,7 @@ export class AgentWorkflows {
     return dispatchAgentWorkflowStageResultSchema.parse({
       ok: true,
       runId: started.run.runId,
-      session: started.run.session,
+      session: boundSession,
       status: started.run.status,
     });
   }
@@ -719,7 +746,7 @@ export class AgentWorkflows {
       return completeAgentWorkflowStageResultSchema.parse(denied("workflow_not_found"));
     }
 
-    if (isTerminalWorkflowStatus(row.status)) {
+    if (["cancelled", "completed", "failed"].includes(stage.status)) {
       const stageStatus =
         stage.status === "completed"
           ? "completed"
@@ -747,6 +774,13 @@ export class AgentWorkflows {
     }
     if (!isTerminalWorkflowStatus(inspected.run.status)) {
       return completeAgentWorkflowStageResultSchema.parse(denied("workflow_busy"));
+    }
+
+    if (inspected.run.session !== undefined) {
+      await this.#agent(row).completeSessionRun({
+        runId: request.data.runId,
+        session: inspected.run.session,
+      });
     }
 
     const runStatus = inspected.run.status;
@@ -835,6 +869,8 @@ export class AgentWorkflows {
     }
     if (isTerminalWorkflowStatus(finalized.workflowStatus)) {
       await this.#scheduleRecovery(Math.max(row.cleanupAt, Date.now()));
+    } else {
+      await this.#scheduleRecovery(Date.now() + RECOVERY_DELAY_MS);
     }
 
     return completeAgentWorkflowStageResultSchema.parse({
@@ -895,6 +931,27 @@ export class AgentWorkflows {
         runId: row.currentRunId,
       });
       cancelled = runCancellation.ok && runCancellation.cancelled;
+
+      if (!cancelled && row.currentStageIndex !== null) {
+        await this.complete({
+          agentId: row.agentId,
+          runId: row.currentRunId,
+          stageIndex: row.currentStageIndex,
+          workflowId: row.workflowId,
+        });
+        const reconciled = this.#workflow(row.workflowId);
+        if (reconciled !== undefined && isTerminalWorkflowStatus(reconciled.status)) {
+          await this.#agent(reconciled).cancelAgentTaskWorkflow({
+            ownerKey: authority.ownerKey,
+            workflowId: reconciled.workflowId,
+          });
+          return cancelAgentWorkflowResultSchema.parse({
+            cancelled: reconciled.status === "cancelled",
+            ok: true,
+            workflow: this.#summary(reconciled),
+          });
+        }
+      }
     }
 
     if (cancelled) {
@@ -945,6 +1002,8 @@ export class AgentWorkflows {
       }
       row = completed;
       await this.#scheduleRecovery(Math.max(row.cleanupAt, Date.now()));
+    } else {
+      await this.#scheduleRecovery(Date.now() + RECOVERY_DELAY_MS);
     }
 
     return cancelAgentWorkflowResultSchema.parse({
@@ -1161,6 +1220,46 @@ export class AgentWorkflows {
     for (const row of queued) await this.#ensureStarted(row);
   }
 
+  async recoverCancelling(): Promise<void> {
+    const cancelling = this.#database
+      .select()
+      .from(agentWorkflows)
+      .where(eq(agentWorkflows.status, "cancelling"))
+      .orderBy(asc(agentWorkflows.updatedAt))
+      .limit(10)
+      .all();
+
+    for (const row of cancelling) {
+      await this.cancel(this.#runtimeAuthority(row), {
+        expectedRevision: row.workflowRevision,
+        workflowId: row.workflowId,
+      });
+    }
+  }
+
+  async recoverActive(): Promise<void> {
+    const active = this.#database
+      .select()
+      .from(agentWorkflows)
+      .where(inArray(agentWorkflows.status, ["running", "waiting"]))
+      .orderBy(asc(agentWorkflows.updatedAt))
+      .limit(MAXIMUM_ACTIVE_AGENT_WORKFLOWS_PER_OWNER)
+      .all();
+
+    for (const row of active) {
+      try {
+        await this.#reconcileActive(row);
+      } catch {
+        console.warn({
+          event: "crewhelm.workflow.recovery",
+          outcome: "deferred",
+          phase: "active_reconciliation",
+          workflowId: row.workflowId,
+        });
+      }
+    }
+  }
+
   usage(): { active: number; total: number } {
     return {
       active:
@@ -1229,6 +1328,20 @@ export class AgentWorkflows {
       .orderBy(asc(agentWorkflows.updatedAt))
       .limit(1)
       .get()?.value;
+    const cancelling = this.#database
+      .select({ value: agentWorkflows.updatedAt })
+      .from(agentWorkflows)
+      .where(eq(agentWorkflows.status, "cancelling"))
+      .orderBy(asc(agentWorkflows.updatedAt))
+      .limit(1)
+      .get()?.value;
+    const active = this.#database
+      .select({ value: agentWorkflows.updatedAt })
+      .from(agentWorkflows)
+      .where(inArray(agentWorkflows.status, ["running", "waiting"]))
+      .orderBy(asc(agentWorkflows.updatedAt))
+      .limit(1)
+      .get()?.value;
     const cleanup = this.#database
       .select({ value: agentWorkflowDeletions.cleanupAt })
       .from(agentWorkflowDeletions)
@@ -1258,6 +1371,12 @@ export class AgentWorkflows {
       queued === undefined
         ? undefined
         : Math.max(queued + RECOVERY_DELAY_MS, Date.now() + RECOVERY_DELAY_MS),
+      cancelling === undefined
+        ? undefined
+        : Math.max(cancelling + RECOVERY_DELAY_MS, Date.now() + RECOVERY_DELAY_MS),
+      active === undefined
+        ? undefined
+        : Math.max(active + RECOVERY_DELAY_MS, Date.now() + RECOVERY_DELAY_MS),
       cleanup,
       deletionRecovery == null
         ? undefined
@@ -1308,30 +1427,43 @@ export class AgentWorkflows {
   }
 
   async #finishDeletion(intent: WorkflowDeletionIntent, row: StoredWorkflow): Promise<boolean> {
+    let phase = "session_delete";
     try {
       if (row.session !== null) {
-        const deletedSession = await this.#agentChannel.deleteSession(
-          this.#runtimeAuthority(row),
-          {
-            agentId: row.agentId,
-            expectedBranchRevision: row.session.branchRevision,
-            idempotencyKey: `workflow.${intent.idempotencyKey}`,
-            sessionId: row.session.sessionId,
-          },
-          row.workflowId,
-        );
-        if (!deletedSession.ok && deletedSession.error.code !== "session_not_found") return false;
+        const deletedSession = await this.#agent(row).deleteAgentTaskWorkflowSession({
+          idempotencyKey: `workflow.${intent.idempotencyKey}`,
+          ownerKey: this.#runtimeAuthority(row).ownerKey,
+          sessionId: row.session.sessionId,
+          workflowId: row.workflowId,
+        });
+        if (!deletedSession) {
+          console.warn({
+            event: "crewhelm.workflow.recovery",
+            outcome: "deferred",
+            phase,
+            workflowId: row.workflowId,
+          });
+          return false;
+        }
       }
 
+      phase = "runtime_delete";
       if (
         !(await this.#agent(row).deleteAgentTaskWorkflow({
           ownerKey: this.#objectName,
           workflowId: row.workflowId,
         }))
       ) {
+        console.warn({
+          event: "crewhelm.workflow.recovery",
+          outcome: "deferred",
+          phase,
+          workflowId: row.workflowId,
+        });
         return false;
       }
 
+      phase = "owner_projection_delete";
       const deletedAt = Date.now();
       const cleanupAt =
         deletedAt + this.#currentFleetConfiguration().data.retention.inboxSeconds * 1_000;
@@ -1379,6 +1511,12 @@ export class AgentWorkflows {
       await this.#storage.delete(workflowDeletionIntentKey(row.workflowId));
       return true;
     } catch {
+      console.warn({
+        event: "crewhelm.workflow.recovery",
+        outcome: "deferred",
+        phase,
+        workflowId: row.workflowId,
+      });
       await this.#scheduleRecovery(Date.now() + RECOVERY_DELAY_MS);
       return false;
     }
@@ -1409,9 +1547,36 @@ export class AgentWorkflows {
           and(eq(agentWorkflows.workflowId, row.workflowId), eq(agentWorkflows.status, "queued")),
         )
         .run();
+      await this.#scheduleRecovery(Date.now() + RECOVERY_DELAY_MS);
     } catch {
       await this.#scheduleRecovery(Date.now() + RECOVERY_DELAY_MS);
     }
+  }
+
+  async #reconcileActive(stored: StoredWorkflow): Promise<void> {
+    let row = this.#workflow(stored.workflowId);
+    if (row === undefined || !["running", "waiting"].includes(row.status)) return;
+
+    if (row.currentRunId !== null && row.currentStageIndex !== null) {
+      await this.complete({
+        agentId: row.agentId,
+        runId: row.currentRunId,
+        stageIndex: row.currentStageIndex,
+        workflowId: row.workflowId,
+      });
+      row = this.#workflow(row.workflowId);
+      if (row === undefined || !["running", "waiting"].includes(row.status)) return;
+    }
+
+    if (row.currentRunId === null && row.completedStages < row.stageCount) {
+      await this.dispatch({
+        agentId: row.agentId,
+        stageIndex: row.currentStageIndex ?? row.completedStages,
+        workflowId: row.workflowId,
+      });
+    }
+
+    await this.#scheduleRecovery(Date.now() + RECOVERY_DELAY_MS);
   }
 
   #failBeforeDispatch(row: StoredWorkflow, stage: StoredStage, code: string): void {

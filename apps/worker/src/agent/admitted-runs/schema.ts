@@ -231,6 +231,7 @@ export const admittedTurnMetadataSchema = z.strictObject({
   crewhelmRun: z.strictObject({
     budgetReservation: persistedRunBudgetReservationSchema,
     configuration: persistedCrewAgentRuntimeConfigSchema,
+    deadlineAt: z.number().int().positive().default(1),
     promptCharacters: z.number().int().positive(),
     promptDigest: z.string().regex(/^[0-9a-f]{64}$/),
     runId: runIdSchema,
