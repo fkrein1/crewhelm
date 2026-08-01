@@ -739,6 +739,16 @@ describe("authenticated MCP handler", () => {
         {
           availability: { missingPrerequisites: [], state: "available" },
           id: "tools.sandbox-code",
+          prerequisites: [
+            {
+              id: "cloudflare.sandbox",
+              setup: {
+                command: "crewhelm up --sandbox",
+                mode: "installation-opt-in",
+                requirement: "Cloudflare Workers Paid",
+              },
+            },
+          ],
           schemaVersion: 1,
           title: "Sandbox code",
         },

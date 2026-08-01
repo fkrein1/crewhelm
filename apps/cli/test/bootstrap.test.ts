@@ -154,6 +154,19 @@ function secretList(names: readonly string[]): WranglerResult {
   return success(JSON.stringify(names.map((name) => ({ name, type: "secret_text" }))));
 }
 
+function sandboxContainerList(state: "active" | "degraded" | "provisioning" | "ready" = "ready") {
+  return success(
+    JSON.stringify([
+      {
+        id: "a039044b-a162-4e3e-ab30-98f8655e4138",
+        image: "docker.io/cloudflare/sandbox:0.12.4-python",
+        name: "crewhelm-crewhelmsandbox",
+        state,
+      },
+    ]),
+  );
+}
+
 function gatewayPayload(limit: number): unknown {
   return {
     result: {
@@ -405,6 +418,9 @@ function successfulReuseWrangler(events: string[] = []): RunWrangler {
     if (arguments_[0] === "secret") {
       return secretList(WORKER_SECRET_NAMES);
     }
+    if (arguments_[0] === "containers") {
+      return sandboxContainerList();
+    }
     if (arguments_[0] === "d1" && arguments_[1] === "list") {
       return success(JSON.stringify([{ name: OPTIONS.databaseName, uuid: DATABASE_ID }]));
     }
@@ -491,6 +507,9 @@ function recoveryWrangler({
     }
     if (arguments_[0] === "secret") {
       return secretList(WORKER_SECRET_NAMES);
+    }
+    if (arguments_[0] === "containers") {
+      return sandboxContainerList();
     }
     if (arguments_[0] === "d1" && arguments_[1] === "list") {
       return success(JSON.stringify([{ name: databaseName, uuid: DATABASE_ID }]));
@@ -670,6 +689,113 @@ describe("Cloudflare bootstrap", () => {
     try {
       await expect(bootstrapDeployment(OPTIONS, dependencies)).resolves.toMatchObject({ ok: true });
       expect(persist).toHaveBeenCalledWith(expect.objectContaining({ sandboxEnabled: true }));
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("honors an explicit Sandbox opt-out while recovering an existing installation", async () => {
+    const fixture = await createDeploymentAssets();
+    const events: string[] = [];
+    const persist = vi.fn<(installation: unknown) => Promise<void>>(async () => {});
+    let stagedConfig: Record<string, unknown> | undefined;
+    const baseRunner = recoveryWrangler({
+      bindings: [
+        { database_id: DATABASE_ID, name: "AUTH_DB", type: "d1" },
+        {
+          name: "CREWHELM_DEPLOYMENT_FINGERPRINT",
+          text: "a".repeat(64),
+          type: "plain_text",
+        },
+        { name: "PUBLIC_ORIGIN", text: OPTIONS.origin.origin, type: "plain_text" },
+        { name: "CODE_SANDBOX", type: "durable_object_namespace" },
+      ],
+      events,
+    });
+    const runWrangler: RunWrangler = async (arguments_, options) => {
+      if (arguments_[0] === "deploy") {
+        const configPath = arguments_[arguments_.indexOf("--config") + 1];
+        if (configPath) stagedConfig = JSON.parse(await readFile(configPath, "utf8"));
+      }
+      return baseRunner(arguments_, options);
+    };
+    const dependencies = {
+      ...createDependencies(fixture.assets, runWrangler),
+      recoverExistingInstallation: { persist },
+    };
+
+    try {
+      await expect(
+        bootstrapDeployment({ ...OPTIONS, sandboxEnabled: false }, dependencies),
+      ).resolves.toMatchObject({ ok: true });
+      expect(persist).toHaveBeenCalled();
+      expect(
+        persist.mock.calls.every(([installation]) => !Reflect.has(installation!, "sandboxEnabled")),
+      ).toBe(true);
+      expect(events).not.toContain("containers:list");
+      expect(stagedConfig).not.toHaveProperty("containers");
+      expect(stagedConfig).toHaveProperty("exports.CrewhelmSandbox", {
+        storage: "sqlite",
+        type: "durable-object",
+      });
+      expect(stagedConfig).not.toHaveProperty(
+        "durable_objects.bindings",
+        expect.arrayContaining([expect.objectContaining({ name: "CODE_SANDBOX" })]),
+      );
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("does not persist requested Sandbox activation when recovered plan access is denied", async () => {
+    const fixture = await createDeploymentAssets();
+    const events: string[] = [];
+    const persist = vi.fn<(installation: unknown) => Promise<void>>(async () => {});
+    const baseRunner = recoveryWrangler({
+      bindings: [
+        { database_id: DATABASE_ID, name: "AUTH_DB", type: "d1" },
+        {
+          name: "CREWHELM_DEPLOYMENT_FINGERPRINT",
+          text: "a".repeat(64),
+          type: "plain_text",
+        },
+        { name: "PUBLIC_ORIGIN", text: OPTIONS.origin.origin, type: "plain_text" },
+        { bucket_name: "crewhelm-skills", name: "SKILL_PACKAGES", type: "r2_bucket" },
+      ],
+      events,
+    });
+    const runWrangler: RunWrangler = async (arguments_, options) => {
+      if (arguments_[0] === "containers") {
+        events.push("containers:list");
+        return {
+          exitCode: 1,
+          outcome: "completed",
+          stderr: "Unauthorized",
+          stdout: "",
+        };
+      }
+      return baseRunner(arguments_, options);
+    };
+    const dependencies = {
+      ...createDependencies(fixture.assets, runWrangler),
+      recoverExistingInstallation: { persist },
+    };
+
+    try {
+      await expect(
+        bootstrapDeployment({ ...OPTIONS, sandboxEnabled: true }, dependencies),
+      ).rejects.toMatchObject({
+        message:
+          "Sandbox code requires Cloudflare Workers Paid and Containers access. Upgrade the account or rerun with --no-sandbox; the core installation was not changed.",
+        stage: "configuration",
+      });
+      expect(persist).toHaveBeenCalled();
+      expect(
+        persist.mock.calls.every(([installation]) => !Reflect.has(installation!, "sandboxEnabled")),
+      ).toBe(true);
+      expect(events).toContain("containers:list");
+      expect(events.some((event) => event.startsWith("deploy:"))).toBe(false);
+      expect(events).not.toContain("d1:migrations");
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
     }
@@ -1408,7 +1534,10 @@ describe("Cloudflare bootstrap", () => {
       ).resolves.toMatchObject({ ok: true });
       expect(stagedConfig).toBeDefined();
       expect(stagedConfig).not.toHaveProperty("containers");
-      expect(stagedConfig).not.toHaveProperty("exports.CrewhelmSandbox");
+      expect(stagedConfig).toHaveProperty("exports.CrewhelmSandbox", {
+        storage: "sqlite",
+        type: "durable-object",
+      });
       expect(stagedConfig).not.toHaveProperty(
         "durable_objects.bindings",
         expect.arrayContaining([expect.objectContaining({ name: "CODE_SANDBOX" })]),
@@ -1743,6 +1872,10 @@ describe("Cloudflare bootstrap", () => {
         return secretList(WORKER_SECRET_NAMES);
       }
 
+      if (arguments_[0] === "containers") {
+        return sandboxContainerList();
+      }
+
       if (arguments_[0] === "d1" && arguments_[1] === "list") {
         return success(JSON.stringify([{ name: OPTIONS.databaseName, uuid: DATABASE_ID }]));
       }
@@ -1799,6 +1932,11 @@ describe("Cloudflare bootstrap", () => {
 
       expect(report.ok).toBe(true);
       expect(report.aiGateway).toEqual({ enabled: false });
+      expect(report.features.sandboxCode).toEqual({
+        enabled: true,
+        requirement: "Cloudflare Workers Paid",
+        setupCommand: "crewhelm up --sandbox",
+      });
       expect(JSON.stringify(report)).not.toContain(HOSTILE_ACCOUNT_NAME);
       expect(JSON.stringify(report)).not.toContain("test-token");
       expect(JSON.stringify(report)).not.toContain(cloudflareApiToken);
@@ -1819,6 +1957,7 @@ describe("Cloudflare bootstrap", () => {
           image: "docker.io/cloudflare/sandbox:0.12.4-python",
           instance_type: "lite",
           max_instances: 5,
+          name: "crewhelm-crewhelmsandbox",
         },
       ]);
       expect(stagedConfig?.workflows).toEqual([
@@ -1918,9 +2057,207 @@ describe("Cloudflare bootstrap", () => {
 
       expect(first.deployment.action).toBe("updated");
       expect(second.deployment.action).toBe("unchanged");
+      expect(second.features.sandboxCode.enabled).toBe(false);
       expect(events.filter((event) => event === "wrangler:deploy")).toHaveLength(1);
       expect(events.filter((event) => event === "wrangler:triggers")).toHaveLength(1);
+      expect(events).not.toContain("wrangler:containers");
       expect(deploymentMessage).toMatch(/^Crewhelm [a-f0-9]{40}$/);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("fails before mutation when optional Sandbox plan access is unavailable", async () => {
+    const fixture = await createDeploymentAssets();
+    const events: string[] = [];
+    const runWrangler: RunWrangler = async (arguments_) => {
+      events.push(arguments_.slice(0, 2).join(":"));
+
+      if (arguments_[0] === "whoami") return whoami();
+      if (arguments_[0] === "deployments") return success("[]");
+      if (arguments_[0] === "containers") {
+        return {
+          exitCode: 1,
+          outcome: "completed",
+          stderr: "Unauthorized",
+          stdout: "",
+        };
+      }
+
+      throw new Error(`Unexpected mutation: ${arguments_.join(" ")}`);
+    };
+
+    try {
+      await expect(
+        bootstrapDeployment(
+          { ...REUSE_OPTIONS, sandboxEnabled: true },
+          createDependencies(fixture.assets, runWrangler),
+        ),
+      ).rejects.toMatchObject({
+        message:
+          "Sandbox code requires Cloudflare Workers Paid and Containers access. Upgrade the account or rerun with --no-sandbox; the core installation was not changed.",
+        stage: "configuration",
+      });
+      expect(events).toEqual(["whoami:--json", "deployments:list", "containers:list"]);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("finds an existing Sandbox application beyond Wrangler's first JSON page", async () => {
+    const fixture = await createDeploymentAssets();
+    const events: string[] = [];
+    const baseRunner = successfulReuseWrangler(events);
+    const firstPage = Array.from({ length: 25 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`,
+      image: "example.invalid/other:1",
+      name: `other-application-${index}`,
+      state: "ready",
+    }));
+    const runWrangler: RunWrangler = async (arguments_, options) =>
+      arguments_[0] === "containers"
+        ? success(JSON.stringify(firstPage))
+        : baseRunner(arguments_, options);
+    const dependencies = createDependencies(fixture.assets, runWrangler, {
+      CREWHELM_CLOUDFLARE_API_TOKEN: "cloudflare-api-token-value-0123456789",
+    });
+    const deploymentFetch = dependencies.fetch;
+    dependencies.fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+
+      if (url.pathname.endsWith("/containers/dash/applications")) {
+        return Response.json({
+          result:
+            url.searchParams.get("page_token") === "next-page"
+              ? [
+                  {
+                    health: {
+                      instances: { active: 0, failed: 0, scheduling: 0, starting: 0 },
+                    },
+                    id: "a039044b-a162-4e3e-ab30-98f8655e4138",
+                    image: "docker.io/cloudflare/sandbox:0.12.4-python",
+                    name: "crewhelm-crewhelmsandbox",
+                  },
+                ]
+              : Array.from({ length: 100 }, (_, index) => ({
+                  health: {
+                    instances: { active: 0, failed: 0, scheduling: 0, starting: 0 },
+                  },
+                  id: `10000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`,
+                  image: "example.invalid/other:1",
+                  name: `paginated-other-application-${index}`,
+                })),
+          result_info:
+            url.searchParams.get("page_token") === "next-page"
+              ? {}
+              : { next_page_token: "next-page" },
+          success: true,
+        });
+      }
+
+      return deploymentFetch(input, init);
+    });
+
+    try {
+      await expect(
+        bootstrapDeployment({ ...REUSE_OPTIONS, sandboxEnabled: true }, dependencies),
+      ).resolves.toMatchObject({
+        features: { sandboxCode: { enabled: true } },
+        ok: true,
+      });
+      const containerRequests = vi.mocked(dependencies.fetch).mock.calls.filter(([input]) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        return url.pathname.endsWith("/containers/dash/applications");
+      });
+      expect(containerRequests).toHaveLength(4);
+      expect(
+        containerRequests.every(([input]) => {
+          const url = new URL(input instanceof Request ? input.url : input);
+          return url.searchParams.get("per_page") === "100";
+        }),
+      ).toBe(true);
+      expect(
+        containerRequests.filter(([input]) => {
+          const url = new URL(input instanceof Request ? input.url : input);
+          return url.searchParams.get("page_token") === "next-page";
+        }),
+      ).toHaveLength(2);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("reconciles a missing paid Sandbox application even when Worker bytes are unchanged", async () => {
+    const fixture = await createDeploymentAssets();
+    const events: string[] = [];
+    const progress: string[] = [];
+    const waits: number[] = [];
+    const baseRunner = successfulReuseWrangler(events);
+    let containerState: "absent" | "provisioning" | "ready" = "absent";
+    let deploymentMessage: string | undefined;
+    const runWrangler: RunWrangler = async (arguments_, options) => {
+      if (arguments_[0] === "deployments") {
+        events.push("wrangler:deployments");
+        return success(
+          deploymentMessage
+            ? JSON.stringify([
+                {
+                  annotations: { "workers/message": deploymentMessage },
+                  id: "31a2e99c-0bd4-46e0-9cbb-e9e9f0178024",
+                },
+              ])
+            : "[]",
+        );
+      }
+
+      if (arguments_[0] === "containers") {
+        events.push("wrangler:containers");
+        return containerState === "absent" ? success("[]") : sandboxContainerList(containerState);
+      }
+
+      if (arguments_[0] === "deploy") {
+        events.push("wrangler:deploy");
+        const messageIndex = arguments_.indexOf("--message");
+        deploymentMessage = arguments_[messageIndex + 1];
+        containerState = "provisioning";
+        return success();
+      }
+
+      return baseRunner(arguments_, options);
+    };
+    const dependencies = createDependencies(fixture.assets, runWrangler);
+    dependencies.reportProgress = ({ message }) => progress.push(message);
+    dependencies.wait = async (milliseconds) => {
+      waits.push(milliseconds);
+      containerState = "ready";
+    };
+
+    try {
+      const first = await bootstrapDeployment(
+        { ...REUSE_OPTIONS, sandboxEnabled: true },
+        dependencies,
+      );
+      containerState = "absent";
+      dependencies.expectedSkillBucketName = skillBucketNameForWorker(REUSE_OPTIONS.workerName);
+      const repaired = await bootstrapDeployment(
+        { ...REUSE_OPTIONS, sandboxEnabled: true },
+        dependencies,
+      );
+      const unchanged = await bootstrapDeployment(
+        { ...REUSE_OPTIONS, sandboxEnabled: true },
+        dependencies,
+      );
+
+      expect(first.deployment.action).toBe("updated");
+      expect(repaired.deployment.action).toBe("updated");
+      expect(unchanged.deployment.action).toBe("unchanged");
+      expect(events.filter((event) => event === "wrangler:deploy")).toHaveLength(2);
+      expect(
+        progress.filter((message) =>
+          message.startsWith("Checking optional Sandbox readiness (attempt 2"),
+        ),
+      ).toHaveLength(2);
+      expect(waits).toContain(1_000);
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
     }

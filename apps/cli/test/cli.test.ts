@@ -292,6 +292,7 @@ describe("Crewhelm CLI", () => {
     expect(upHarness.output.join("")).toContain("Automation:");
     expect(upHarness.output.join("")).toContain("CREWHELM_COMPOSIO_API_KEY");
     expect(upHarness.output.join("")).toContain("CREWHELM_CLOUDFLARE_API_TOKEN");
+    expect(upHarness.output.join("")).toContain("--no-sandbox");
     expect(upHarness.output.join("")).toContain("Safety:");
   });
 
@@ -373,6 +374,12 @@ describe("Crewhelm CLI", () => {
     expect(parseCli(["up", "--endpoint", "https://crewhelm.example", "--sandbox"])).toMatchObject({
       kind: "up",
       sandboxEnabled: true,
+    });
+    expect(
+      parseCli(["up", "--endpoint", "https://crewhelm.example", "--no-sandbox"]),
+    ).toMatchObject({
+      kind: "up",
+      sandboxEnabled: false,
     });
   });
 

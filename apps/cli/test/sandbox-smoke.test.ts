@@ -291,7 +291,19 @@ describe("Sandbox feature rehearsal", () => {
               configurationFields: [],
               description: "Bounded code.",
               id: "tools.sandbox-code",
-              prerequisites: [],
+              prerequisites: [
+                {
+                  description:
+                    "The optional Crewhelm-managed Cloudflare Sandbox container binding.",
+                  id: "cloudflare.sandbox",
+                  kind: "binding",
+                  setup: {
+                    command: "crewhelm up --sandbox",
+                    mode: "installation-opt-in",
+                    requirement: "Cloudflare Workers Paid",
+                  },
+                },
+              ],
               schemaVersion: 1,
               title: "Sandbox code",
               trust: {

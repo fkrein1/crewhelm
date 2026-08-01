@@ -96,6 +96,13 @@ function bootstrap(action: "updated" | "unchanged"): BootstrapReport {
       workerName: WORKER_NAME,
     },
     doctor: doctor(CURRENT_FINGERPRINT, "aligned"),
+    features: {
+      sandboxCode: {
+        enabled: false,
+        requirement: "Cloudflare Workers Paid",
+        setupCommand: "crewhelm up --sandbox",
+      },
+    },
   };
 }
 

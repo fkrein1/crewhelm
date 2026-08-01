@@ -49,9 +49,10 @@ non-secret coordinates in `crewhelm.installation.json`; see
 `crewhelm.installation.example.json` for the shape.
 
 Bounded Agent code execution is optional because Cloudflare Containers require Workers Paid. Add
-`--sandbox` to `crewhelm up` to provision it; repeat upgrades remember that choice. Without it,
-the capability catalog explains that Sandbox is unavailable and the rest of Crewhelm remains
-usable on the Free plan.
+`--sandbox` to `crewhelm up` to check plan access, provision it, and wait for readiness; repeat
+upgrades remember that choice. Use `--no-sandbox` to opt out again. Without Sandbox, the capability
+catalog returns the missing prerequisite, paid-plan requirement, and setup command while the rest
+of Crewhelm remains usable on the Free plan.
 
 ### Guided setup
 

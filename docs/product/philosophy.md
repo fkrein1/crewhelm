@@ -18,6 +18,9 @@ used across the public site, browser handoffs, CLI, and future product surfaces.
 - **Tools improve outcomes.** Code, search, fetch, and future runtime capabilities are bounded
   reasoning tools an Agent can choose when useful—not separate Agent personas or workflows the
   owner must orchestrate.
+- **Paid infrastructure is progressive enhancement.** Provider-plan features are disabled by
+  default, require explicit owner activation, never become enabled implicitly during an upgrade,
+  and never prevent the Free-compatible Crewhelm core from operating.
 - **Outcomes outlive the chat.** A durable Workflow carries one known multi-step objective across
   ordered bounded Runs, so an owner can leave the MCP conversation and return to exact progress,
   recovery, or one clear final deliverable.

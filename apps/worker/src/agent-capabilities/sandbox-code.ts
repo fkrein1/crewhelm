@@ -92,9 +92,14 @@ export const sandboxCodeCapabilityModule: AgentCapabilityModule<
     id: SANDBOX_CODE_CAPABILITY_ID,
     prerequisites: [
       {
-        description: "A Crewhelm-managed Cloudflare Sandbox container binding.",
+        description: "The optional Crewhelm-managed Cloudflare Sandbox container binding.",
         id: "cloudflare.sandbox",
         kind: "binding",
+        setup: {
+          command: "crewhelm up --sandbox",
+          mode: "installation-opt-in",
+          requirement: "Cloudflare Workers Paid",
+        },
       },
     ],
     schemaVersion: SANDBOX_CODE_CAPABILITY_SCHEMA_VERSION,

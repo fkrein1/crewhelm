@@ -113,6 +113,13 @@ export const agentCapabilityPrerequisiteSchema = z.strictObject({
   description: z.string().min(1).max(240),
   id: z.string().min(1).max(80),
   kind: z.enum(["binding", "grant", "resource"]),
+  setup: z
+    .strictObject({
+      command: z.string().min(1).max(160),
+      mode: z.literal("installation-opt-in"),
+      requirement: z.string().min(1).max(160).optional(),
+    })
+    .optional(),
 });
 
 export type AgentCapabilityPrerequisite = z.infer<typeof agentCapabilityPrerequisiteSchema>;

@@ -78,8 +78,13 @@ const RATE_LIMIT_NAMESPACE_PAIR_COUNT =
 const DEPLOYMENT_VERIFICATION_DELAYS_MS = [
   1_000, 1_000, 1_000, 1_000, 1_000, 2_000, 4_000, 8_000, 16_000,
 ] as const;
+const SANDBOX_PROVISIONING_DELAYS_MS = [
+  1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000, 30_000, 30_000,
+] as const;
 const MINIMUM_DEPLOYMENT_STABILITY_MS = 10_000;
 const REQUIRED_CONSECUTIVE_DEPLOYMENT_MATCHES = 3;
+const SANDBOX_CONTAINER_CLASS_NAME = "CrewhelmSandbox";
+const SANDBOX_CONTAINER_IMAGE = "docker.io/cloudflare/sandbox:0.12.4-python";
 const TABLE_INVENTORY_SQL = "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name";
 const MIGRATION_INVENTORY_SQL = "SELECT name FROM d1_migrations ORDER BY id";
 const ALLOWED_AUTH_TABLES = new Set([
@@ -152,6 +157,7 @@ const cloudflareCredentialsSchema = z.discriminatedUnion("type", [
 const cloudflareApiEnvelopeSchema = z.looseObject({
   success: z.boolean(),
   result: z.unknown().optional(),
+  result_info: z.unknown().optional(),
 });
 const aiGatewaySpendRuleSchema = z.looseObject({
   enabled: z.literal(true),
@@ -187,6 +193,30 @@ const activeDeploymentSchema = z.looseObject({
     .max(100),
 });
 const deploymentListSchema = z.array(deploymentSchema).max(100);
+const containerApplicationSchema = z.looseObject({
+  id: z.uuid(),
+  image: z.string().min(1).max(2_048),
+  name: z.string().min(1).max(255),
+  state: z.enum(["active", "degraded", "provisioning", "ready"]),
+});
+const containerApplicationListSchema = z.array(containerApplicationSchema).max(1_000);
+const containerDashApplicationSchema = z.looseObject({
+  health: z.looseObject({
+    instances: z.looseObject({
+      active: z.number().int().nonnegative(),
+      failed: z.number().int().nonnegative(),
+      scheduling: z.number().int().nonnegative(),
+      starting: z.number().int().nonnegative(),
+    }),
+  }),
+  id: z.uuid(),
+  image: z.string().min(1).max(2_048),
+  name: z.string().min(1).max(255),
+});
+const containerDashApplicationListSchema = z.array(containerDashApplicationSchema).max(100);
+const containerDashResultInfoSchema = z.looseObject({
+  next_page_token: z.string().min(1).max(4_096).optional(),
+});
 const establishedDurableObjectExportSchema = z.looseObject({
   renamed_to: z.never().optional(),
   state: z.literal("created").optional(),
@@ -412,6 +442,13 @@ export const bootstrapReportSchema = z.strictObject({
     workerName: z.string(),
   }),
   doctor: doctorReportSchema,
+  features: z.strictObject({
+    sandboxCode: z.strictObject({
+      enabled: z.boolean(),
+      requirement: z.literal("Cloudflare Workers Paid"),
+      setupCommand: z.literal("crewhelm up --sandbox"),
+    }),
+  }),
 });
 
 export type BootstrapFailure = z.infer<typeof bootstrapFailureSchema>;
@@ -548,6 +585,148 @@ function reportProgress(
   message: string,
 ): void {
   dependencies.reportProgress?.({ message, stage });
+}
+
+function sandboxContainerApplicationName(workerName: string): string {
+  return `${workerName}-${SANDBOX_CONTAINER_CLASS_NAME}`.toLowerCase();
+}
+
+async function readContainerApplications(
+  context: CloudflareContext,
+  failure: { message: string; stage: BootstrapFailureStage },
+): Promise<z.infer<typeof containerApplicationListSchema>> {
+  const result = await runCloudflare(
+    context,
+    ["containers", "list", "--json", "--config", context.accountConfigPath],
+    failure.stage,
+  );
+  requireCompleted(result, failure.stage, failure.message);
+
+  if (result.exitCode !== 0) {
+    throw commandFailed(failure.stage, failure.message);
+  }
+
+  try {
+    return containerApplicationListSchema.parse(JSON.parse(result.stdout));
+  } catch {
+    throw commandFailed(failure.stage, failure.message);
+  }
+}
+
+function containerApplicationFromDash(
+  application: z.infer<typeof containerDashApplicationSchema>,
+): z.infer<typeof containerApplicationSchema> {
+  const health = application.health.instances;
+  const state =
+    health.failed > 0
+      ? "degraded"
+      : health.starting > 0 || health.scheduling > 0
+        ? "provisioning"
+        : health.active > 0
+          ? "active"
+          : "ready";
+
+  return containerApplicationSchema.parse({ ...application, state });
+}
+
+async function readSandboxContainerApplication(
+  workerName: string,
+  context: CloudflareContext,
+  failure: { message: string; stage: BootstrapFailureStage },
+): Promise<z.infer<typeof containerApplicationSchema> | undefined> {
+  const applications = await readContainerApplications(context, failure);
+  const expectedName = sandboxContainerApplicationName(workerName);
+  const visible = applications.find((application) => application.name === expectedName);
+
+  if (visible !== undefined || applications.length < 25) {
+    return visible;
+  }
+
+  const credentials = await readCloudflareCredentials(context);
+  const seenPageTokens = new Set<string>();
+  let pageToken: string | undefined;
+
+  for (let page = 0; page < 100; page += 1) {
+    const url = new URL(
+      `https://api.cloudflare.com/client/v4/accounts/${context.accountId}/containers/dash/applications`,
+    );
+    url.searchParams.set("per_page", "100");
+    if (pageToken !== undefined) url.searchParams.set("page_token", pageToken);
+
+    const response = await cloudflareApiRequest(
+      context.dependencies,
+      credentials,
+      url.href,
+      { method: "GET" },
+      {
+        invalidResponseMessage: failure.message,
+        requestFailedMessage: failure.message,
+        stage: failure.stage,
+      },
+    );
+
+    if (!response.success) {
+      throw commandFailed(failure.stage, failure.message);
+    }
+
+    let pageApplications: z.infer<typeof containerDashApplicationListSchema>;
+    let resultInfo: z.infer<typeof containerDashResultInfoSchema>;
+
+    try {
+      pageApplications = containerDashApplicationListSchema.parse(response.result);
+      resultInfo = containerDashResultInfoSchema.parse(response.resultInfo ?? {});
+    } catch {
+      throw commandFailed(failure.stage, failure.message);
+    }
+
+    const exact = pageApplications.find((application) => application.name === expectedName);
+    if (exact !== undefined) return containerApplicationFromDash(exact);
+
+    const nextPageToken = resultInfo.next_page_token;
+    if (nextPageToken === undefined || seenPageTokens.has(nextPageToken)) return undefined;
+    seenPageTokens.add(nextPageToken);
+    pageToken = nextPageToken;
+  }
+
+  throw commandFailed(failure.stage, failure.message);
+}
+
+async function verifySandboxContainerReady(
+  workerName: string,
+  context: CloudflareContext,
+): Promise<void> {
+  const attempts = [...SANDBOX_PROVISIONING_DELAYS_MS, undefined];
+
+  for (const [index, delay] of attempts.entries()) {
+    reportProgress(
+      context.dependencies,
+      "deployment",
+      `Checking optional Sandbox readiness (attempt ${index + 1} of ${attempts.length})`,
+    );
+    const application = await readSandboxContainerApplication(workerName, context, {
+      message:
+        "Sandbox deployment completed, but Cloudflare Container readiness could not be verified. Retry crewhelm up --sandbox.",
+      stage: "deployment",
+    });
+
+    if (
+      application?.image === SANDBOX_CONTAINER_IMAGE &&
+      (application.state === "active" || application.state === "ready")
+    ) {
+      return;
+    }
+
+    if (application?.state === "degraded" || delay === undefined) {
+      break;
+    }
+
+    await waitFor(delay, context.dependencies);
+  }
+
+  throw commandFailed(
+    "deployment",
+    "Sandbox Container did not become ready. The core Worker is preserved; retry crewhelm up --sandbox.",
+  );
 }
 
 async function recordCreatedResource(
@@ -944,7 +1123,16 @@ async function cloudflareApiRequest(
   credentials: CloudflareCredentials,
   url: string,
   init: RequestInit,
-): Promise<{ result: unknown; status: number; success: boolean }> {
+  failure: {
+    invalidResponseMessage: string;
+    requestFailedMessage: string;
+    stage: BootstrapFailureStage;
+  } = {
+    invalidResponseMessage: "Cloudflare AI Gateway returned an invalid response.",
+    requestFailedMessage: "Cloudflare AI Gateway request failed.",
+    stage: "gateway",
+  },
+): Promise<{ result: unknown; resultInfo: unknown; status: number; success: boolean }> {
   let response: Response;
 
   try {
@@ -958,11 +1146,16 @@ async function cloudflareApiRequest(
       signal: AbortSignal.timeout(30_000),
     });
   } catch {
-    throw commandFailed("gateway", "Cloudflare AI Gateway request failed.");
+    throw commandFailed(failure.stage, failure.requestFailedMessage);
   }
 
   if (response.status === 404) {
-    return { result: undefined, status: response.status, success: false };
+    return {
+      result: undefined,
+      resultInfo: undefined,
+      status: response.status,
+      success: false,
+    };
   }
 
   let envelope: z.infer<typeof cloudflareApiEnvelopeSchema>;
@@ -976,11 +1169,12 @@ async function cloudflareApiRequest(
 
     envelope = cloudflareApiEnvelopeSchema.parse(JSON.parse(body));
   } catch {
-    throw commandFailed("gateway", "Cloudflare AI Gateway returned an invalid response.");
+    throw commandFailed(failure.stage, failure.invalidResponseMessage);
   }
 
   return {
     result: envelope.result,
+    resultInfo: envelope.result_info,
     status: response.status,
     success: response.ok && envelope.success,
   };
@@ -1765,13 +1959,15 @@ async function recoverExistingInstallation(
   }
 
   const aiGatewayId = gatewayBinding?.text;
+  const recoveredSandboxEnabled = sandboxBinding !== undefined && options.sandboxEnabled !== false;
+  const sandboxEnabled = options.sandboxEnabled === true || recoveredSandboxEnabled;
   const coordinates: ExistingInstallationCoordinates = {
     accountId: context.accountId,
     ...(aiGatewayId === undefined ? {} : { aiGatewayId }),
     databaseId: database.uuid,
     databaseName: database.name,
     origin: options.origin.origin,
-    ...(sandboxBinding === undefined ? {} : { sandboxEnabled: true }),
+    ...(recoveredSandboxEnabled ? { sandboxEnabled: true } : {}),
     ...(skillBucketBinding?.bucket_name === undefined
       ? {}
       : { skillBucketName: skillBucketBinding.bucket_name }),
@@ -1792,7 +1988,7 @@ async function recoverExistingInstallation(
     aiGatewayId,
     databaseId: database.uuid,
     databaseName: database.name,
-    sandboxEnabled: sandboxBinding !== undefined,
+    sandboxEnabled,
   });
 }
 
@@ -2018,7 +2214,14 @@ async function stageDeployment(
       ai: assets.template.ai,
       compatibility_date: assets.template.compatibility_date,
       compatibility_flags: assets.template.compatibility_flags,
-      ...(sandboxEnabled ? { containers: assets.template.containers } : {}),
+      ...(sandboxEnabled
+        ? {
+            containers: assets.template.containers.map((container) => ({
+              ...container,
+              name: sandboxContainerApplicationName(options.workerName),
+            })),
+          }
+        : {}),
       d1_databases: [
         {
           binding: "AUTH_DB",
@@ -2032,11 +2235,7 @@ async function stageDeployment(
           (binding) => sandboxEnabled || binding.name !== "CODE_SANDBOX",
         ),
       },
-      exports: Object.fromEntries(
-        Object.entries(assets.template.exports).filter(
-          ([name]) => sandboxEnabled || name !== "CrewhelmSandbox",
-        ),
-      ),
+      exports: assets.template.exports,
       main: "./index.js",
       name: options.workerName,
       observability: assets.template.observability,
@@ -2473,6 +2672,27 @@ export async function bootstrapDeployment(
       assets.migrations,
       context,
     );
+    let sandboxApplication: z.infer<typeof containerApplicationSchema> | undefined;
+
+    if (deploymentOptions.sandboxEnabled === true) {
+      reportProgress(
+        dependencies,
+        "configuration",
+        "Checking optional Sandbox plan and installation state",
+      );
+      sandboxApplication = await readSandboxContainerApplication(
+        deploymentOptions.workerName,
+        context,
+        {
+          message:
+            "Sandbox code requires Cloudflare Workers Paid and Containers access. Upgrade the account or rerun with --no-sandbox; the core installation was not changed.",
+          stage: "configuration",
+        },
+      );
+    }
+    const sandboxInstalledBeforeMutation =
+      sandboxApplication?.image === SANDBOX_CONTAINER_IMAGE &&
+      sandboxApplication.state !== "degraded";
     const existingSecretNames = workerInventory.exists
       ? await readWorkerSecretNames(deploymentOptions.workerName, context)
       : undefined;
@@ -2595,7 +2815,7 @@ export async function bootstrapDeployment(
           databaseId: database.uuid,
           databaseName: database.name,
           origin: deploymentOptions.origin.origin,
-          ...(deploymentOptions.sandboxEnabled === true ? { sandboxEnabled: true } : {}),
+          ...(sandboxInstalledBeforeMutation ? { sandboxEnabled: true } : {}),
           skillBucketName: skillBucket.name,
           workerName: deploymentOptions.workerName,
         });
@@ -2690,8 +2910,12 @@ export async function bootstrapDeployment(
       deployArguments.push("--secrets-file", secretsPath);
     }
 
+    const sandboxDeploymentAligned =
+      deploymentOptions.sandboxEnabled !== true || sandboxInstalledBeforeMutation;
     const deploymentUnchanged =
-      secretsPath === undefined && currentDeploymentHasMessage(workerInventory, deploymentMessage);
+      secretsPath === undefined &&
+      sandboxDeploymentAligned &&
+      currentDeploymentHasMessage(workerInventory, deploymentMessage);
 
     if (requiredWorkerVersionId !== undefined) {
       await requireUnchangedWorkerVersion(
@@ -2757,6 +2981,10 @@ export async function bootstrapDeployment(
       }
     }
 
+    if (deploymentOptions.sandboxEnabled === true) {
+      await verifySandboxContainerReady(deploymentOptions.workerName, context);
+    }
+
     const doctor = await verifyDeployedControlPlane(deploymentOptions, assets.digest, dependencies);
 
     return bootstrapReportSchema.parse({
@@ -2778,6 +3006,13 @@ export async function bootstrapDeployment(
         workerName: deploymentOptions.workerName,
       },
       doctor,
+      features: {
+        sandboxCode: {
+          enabled: deploymentOptions.sandboxEnabled === true,
+          requirement: "Cloudflare Workers Paid",
+          setupCommand: "crewhelm up --sandbox",
+        },
+      },
     });
   } finally {
     await removePrivateWorkspace(cwd);

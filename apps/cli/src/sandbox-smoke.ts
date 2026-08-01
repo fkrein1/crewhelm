@@ -491,21 +491,28 @@ export async function runSandboxSmoke(
       getAgentCapabilityCatalogResultSchema,
       "Sandbox capability catalog returned an invalid payload.",
     );
+    const sandboxDescriptor = capability.ok ? capability.capabilities[0] : undefined;
+    const sandboxPrerequisite = sandboxDescriptor?.prerequisites.find(
+      (prerequisite) => prerequisite.id === "cloudflare.sandbox",
+    );
     if (
       !capability.ok ||
       capability.capabilities.length !== 1 ||
-      capability.capabilities[0]?.id !== SANDBOX_CODE_CAPABILITY_ID ||
-      capability.capabilities[0].availability.state !== "available"
+      sandboxDescriptor?.id !== SANDBOX_CODE_CAPABILITY_ID ||
+      sandboxDescriptor.availability.state !== "available" ||
+      sandboxPrerequisite?.setup?.command !== "crewhelm up --sandbox" ||
+      sandboxPrerequisite.setup.mode !== "installation-opt-in" ||
+      sandboxPrerequisite.setup.requirement !== "Cloudflare Workers Paid"
     ) {
       throw new TemporaryOwnerSessionError(
         "invalid_payload",
-        "Sandbox capability was not available on the test installation.",
+        "Sandbox capability or its opt-in setup guidance was not available on the test installation.",
       );
     }
     checks[3] = check(
       "sandbox-capability",
       "valid",
-      "Sandbox code was discoverable as an available Agent capability.",
+      "Sandbox code was discoverable with paid-plan and explicit opt-in guidance.",
     );
 
     activeCheck = 4;
