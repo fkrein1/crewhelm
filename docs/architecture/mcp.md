@@ -15,6 +15,9 @@ retain authority.
 - Treat errors as first-class results: stable codes; bounded diagnosis and recovery fields; opaque
   log-correlation IDs for dependency failures.
 - Keep defaults compact. Put bounded recovery detail behind optional fields and exact reads.
+- Report unavailable optional capabilities with their missing prerequisites and concise setup or
+  plan requirements. One unavailable capability never blocks discovery or use of unrelated core
+  operations.
 
 Growing fleet lists return at most 25 compact summaries and stay within a 16 KiB serialized
 response budget. Exact get and inspect tools retain detailed configuration, grants, prompts,

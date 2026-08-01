@@ -267,6 +267,9 @@ function formatBootstrapReport(report: BootstrapReport, presentation: CliPresent
   const gateway = report.aiGateway.enabled
     ? report.aiGateway.id
     : presentation.warning("Not configured — no hard dollar limit");
+  const sandbox = report.features.sandboxCode.enabled
+    ? "Enabled"
+    : presentation.muted("Not enabled — optional, requires Workers Paid");
 
   const outcome = report.ok
     ? `${presentation.status("pass")} ${presentation.strong("Crewhelm is ready")}`
@@ -280,6 +283,7 @@ function formatBootstrapReport(report: BootstrapReport, presentation: CliPresent
     `  Endpoint  ${report.deployment.origin}`,
     `  Database  ${report.database.name} ${presentation.muted(`(${databaseState})`)}`,
     `  Gateway   ${gateway}`,
+    `  Sandbox   ${sandbox}`,
     `  Account   ${presentation.muted(report.account.id)}`,
     "",
     presentation.heading("Verification"),
@@ -418,7 +422,7 @@ async function resolveUpOptions(
     databaseId: command.databaseId ?? previous?.databaseId,
     databaseName: command.databaseName ?? previous?.databaseName ?? "crewhelm-auth",
     origin,
-    sandboxEnabled: command.sandboxEnabled === true || previous?.sandboxEnabled === true,
+    sandboxEnabled: command.sandboxEnabled ?? previous?.sandboxEnabled,
     setupGitHub: command.setupGitHub,
     timeoutMs: command.timeoutMs,
     workerName: command.workerName ?? previous?.workerName ?? "crewhelm",

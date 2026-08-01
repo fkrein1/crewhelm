@@ -50,6 +50,15 @@ lifecycle; each session owns execution. Cross-object calls
 carry explicit authority because Durable Objects do not share transactions. D1 is not an
 authoritative store for control-plane or Agent domain state.
 
+Optional installation features have three separate states: provider-plan eligibility,
+installation enablement, and Agent enablement. The CLI owns plan checks, explicit activation, and
+infrastructure readiness; MCP reports bounded prerequisite and setup metadata but does not infer
+account billing state or grant the capability. Default installation and upgrade paths omit paid
+Container runtime infrastructure. The inert Sandbox class export remains registered so an
+already-enabled installation can safely opt out without an invalid Durable Object deletion; no
+Sandbox binding or Container application is configured until explicit activation. An explicit
+opt-out returns the installation to the Free-compatible core.
+
 Session deletion is revision-bound and idempotent. An ambiguous deletion remains sealed beyond
 ordinary session retention until the exact request retries, preserving owner redaction and audit
 recovery without reopening an empty conversation.

@@ -32,6 +32,7 @@ ${style.accentStrong("Examples:")}
   ${style.accent("$ crewhelm up")}
   ${style.accent("$ crewhelm up --endpoint https://crewhelm.example --ai-budget-usd 5")}
   ${style.accent("$ crewhelm up --sandbox")} ${style.muted("# requires Cloudflare Workers Paid")}
+  ${style.accent("$ crewhelm up --no-sandbox")} ${style.muted("# keep or return to the Free-compatible core")}
   ${style.accent("$ crewhelm up --browser codex")}
 
 ${style.accentStrong("Automation:")}
@@ -410,6 +411,7 @@ function createCliProgram(
     .option("--database-id <uuid>", "existing D1 database identifier")
     .option("--ai-budget-usd <dollars>", "daily AI Gateway hard spend limit")
     .option("--sandbox", "enable bounded Agent code execution (requires Workers Paid)")
+    .option("--no-sandbox", "disable bounded Agent code execution")
     .option("--timeout-ms <milliseconds>", "timeout for each diagnostic request", "5000")
     .option("--json", "write one machine-readable JSON result")
     .addHelpText("after", formatUpHelp(style))
@@ -426,7 +428,7 @@ function createCliProgram(
           json: options.json === true,
           kind: "up",
           origin: parseOrigin(options.endpoint, "up"),
-          sandboxEnabled: options.sandbox === true,
+          sandboxEnabled: options.sandbox,
           setupGitHub: options.setupGithub === true,
           timeoutMs: Number(options.timeoutMs),
           workerName: options.workerName,
