@@ -99,7 +99,10 @@ import { DurableObject } from "cloudflare:workers";
 import { and, count, desc, eq, gte, isNull, lt, lte } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
-import { availableAgentCapabilityPrerequisites } from "../agent-capabilities/registry.js";
+import {
+  availableAgentCapabilityPrerequisites,
+  defaultAgentModelForPrerequisites,
+} from "../agent-capabilities/registry.js";
 import {
   AgentChannel,
   deniedAgentInbox,
@@ -221,7 +224,16 @@ export class OwnerControlPlane extends DurableObject {
       logger: false,
       schema: controlPlaneSchema,
     });
-    this.#fleetConfigurations = new FleetConfigurations(this.#database);
+    const availableCapabilityPrerequisites = availableAgentCapabilityPrerequisites(
+      environment.AI_GATEWAY_ID,
+      environment.CODE_SANDBOX !== undefined,
+      environment.BRAVE_SEARCH_API_KEY !== undefined &&
+        environment.BRAVE_SEARCH_API_KEY.trim().length > 0,
+    );
+    this.#fleetConfigurations = new FleetConfigurations(
+      this.#database,
+      defaultAgentModelForPrerequisites(availableCapabilityPrerequisites),
+    );
     this.#aiGatewayUsage = new AiGatewayUsage(
       this.#database,
       this.#storage,
@@ -237,12 +249,6 @@ export class OwnerControlPlane extends DurableObject {
       this.#database,
       new R2OwnerContentObjectStore(environment.SKILL_PACKAGES),
       this.#objectName,
-    );
-    const availableCapabilityPrerequisites = availableAgentCapabilityPrerequisites(
-      environment.AI_GATEWAY_ID,
-      environment.CODE_SANDBOX !== undefined,
-      environment.BRAVE_SEARCH_API_KEY !== undefined &&
-        environment.BRAVE_SEARCH_API_KEY.trim().length > 0,
     );
     this.#runAdmissions = new RunAdmissions(
       this.#objectName,
