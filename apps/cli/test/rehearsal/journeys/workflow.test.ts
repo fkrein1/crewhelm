@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as z from "zod";
 
-import { runWorkflowSmoke } from "../src/workflow-smoke.js";
+import { runWorkflowRehearsal } from "../../../src/rehearsal/journeys/workflow.js";
 
 const origin = "https://crewhelm-testing.example";
 const fingerprint = "a".repeat(64);
@@ -90,7 +90,10 @@ function status(activeAgents: number) {
   };
 }
 
-function agent(name = "Crewhelm Workflow smoke fixture", instructions = "fixture instructions") {
+function agent(
+  name = "Crewhelm Workflow rehearsal fixture",
+  instructions = "fixture instructions",
+) {
   return {
     capabilities: [
       {
@@ -344,7 +347,7 @@ describe("Workflow feature rehearsal", () => {
       throw new Error(`Unexpected Workflow action: ${String(toolArguments.action)}`);
     };
 
-    const report = await runWorkflowSmoke(
+    const report = await runWorkflowRehearsal(
       {
         credential,
         origin: new URL(origin),
@@ -509,7 +512,7 @@ describe("Workflow feature rehearsal", () => {
       throw new Error(`Unexpected request: ${name ?? String(toolArguments.action)}`);
     };
 
-    const report = await runWorkflowSmoke(
+    const report = await runWorkflowRehearsal(
       {
         credential,
         origin: new URL(origin),

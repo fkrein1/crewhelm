@@ -80,7 +80,7 @@ For sensitive changes, cover relevant abuse and failure paths:
 7. For changed public MCP or CLI behavior, explicitly account for live evidence before calling the
    slice complete. When test-installation deployment is authorized, read and use
    `../crewhelm-live-validation/SKILL.md`; otherwise state that live validation remains pending.
-   Never describe deterministic or local smoke coverage as live validation.
+   Never describe deterministic or local rehearsal coverage as live validation.
 
 Do not commit with a failing or flaky required check, unresolved high-impact finding, unreviewed
 dependency, unproven migration recovery, or undemonstrated objective.

@@ -4,7 +4,7 @@ import { basename, dirname, resolve } from "node:path";
 import {
   refreshableOwnerCredentialSchema,
   type RefreshableOwnerCredential,
-} from "./temporary-owner-session.js";
+} from "../temporary-owner-session.js";
 
 const MAXIMUM_CREDENTIAL_BYTES = 16 * 1_024;
 

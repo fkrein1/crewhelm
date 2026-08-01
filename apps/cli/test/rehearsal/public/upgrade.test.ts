@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
@@ -24,21 +24,21 @@ import type {
   BootstrapOptions,
   BootstrapReport,
   InstallationInfrastructureInventory,
-} from "../src/bootstrap.js";
-import type { DoctorReport } from "../src/doctor.js";
-import { writeInstallation } from "../src/installation.js";
+} from "../../../src/bootstrap.js";
+import type { DoctorReport } from "../../../src/doctor.js";
+import { writeInstallation } from "../../../src/installation.js";
 import {
-  createUpgradeSmokeFailure,
+  createUpgradeRehearsalFailure,
   readUpgradeOwnerState,
-  runUpgradeSmoke,
-  UPGRADE_SMOKE_SCOPE,
-  UpgradeSmokeError,
+  runUpgradeRehearsal,
+  UPGRADE_REHEARSAL_SCOPE,
+  UpgradeRehearsalError,
   upgradeOwnerStateEvidenceSchema,
   upgradeReceiptSchema,
   type UpgradeOwnerStateEvidence,
-  type UpgradeSmokeDependencies,
-} from "../src/upgrade-smoke.js";
-import type { TemporaryOwnerMcpSession } from "../src/temporary-owner-session.js";
+  type UpgradeRehearsalDependencies,
+} from "../../../src/rehearsal/public/upgrade.js";
+import type { TemporaryOwnerMcpSession } from "../../../src/temporary-owner-session.js";
 
 const ACCOUNT_ID = "a".repeat(32);
 const DATABASE_ID = "11111111-1111-4111-8111-111111111111";
@@ -138,7 +138,7 @@ function infrastructure(migrations: readonly string[]): InstallationInfrastructu
 }
 
 async function fixture() {
-  const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-upgrade-smoke-test-"));
+  const directory = await mkdtemp(resolve(tmpdir(), "crewhelm-upgrade-rehearsal-test-"));
   directories.push(directory);
   const installationPath = resolve(directory, "installation.json");
   const receiptPath = resolve(directory, "receipt.json");
@@ -166,7 +166,7 @@ async function fixture() {
   };
 }
 
-function dependencies(overrides: Partial<UpgradeSmokeDependencies> = {}) {
+function dependencies(overrides: Partial<UpgradeRehearsalDependencies> = {}) {
   const bootstrapMock = vi
     .fn<
       (options: BootstrapOptions, expectedDeploymentFingerprint: string) => Promise<BootstrapReport>
@@ -174,11 +174,11 @@ function dependencies(overrides: Partial<UpgradeSmokeDependencies> = {}) {
     .mockResolvedValueOnce(bootstrap("updated"))
     .mockResolvedValueOnce(bootstrap("unchanged"));
   const inspectInfrastructure = vi
-    .fn<UpgradeSmokeDependencies["inspectInfrastructure"]>()
+    .fn<UpgradeRehearsalDependencies["inspectInfrastructure"]>()
     .mockResolvedValueOnce(infrastructure(BASELINE_MIGRATIONS))
     .mockResolvedValueOnce(infrastructure(CURRENT_MIGRATIONS))
     .mockResolvedValueOnce(infrastructure(CURRENT_MIGRATIONS));
-  const captureOwnerState = vi.fn<NonNullable<UpgradeSmokeDependencies["captureOwnerState"]>>(
+  const captureOwnerState = vi.fn<NonNullable<UpgradeRehearsalDependencies["captureOwnerState"]>>(
     async () => ownerState(),
   );
 
@@ -192,15 +192,15 @@ function dependencies(overrides: Partial<UpgradeSmokeDependencies> = {}) {
       .mockResolvedValueOnce(doctor(CURRENT_FINGERPRINT, "aligned")),
     fetch: vi.fn<typeof globalThis.fetch>(),
     inspectInfrastructure,
-    openUrl: vi.fn<UpgradeSmokeDependencies["openUrl"]>(async () => undefined),
-    readCurrentFingerprint: vi.fn<UpgradeSmokeDependencies["readCurrentFingerprint"]>(
+    openUrl: vi.fn<UpgradeRehearsalDependencies["openUrl"]>(async () => undefined),
+    readCurrentFingerprint: vi.fn<UpgradeRehearsalDependencies["readCurrentFingerprint"]>(
       async () => CURRENT_FINGERPRINT,
     ),
-    readCurrentMigrations: vi.fn<UpgradeSmokeDependencies["readCurrentMigrations"]>(
+    readCurrentMigrations: vi.fn<UpgradeRehearsalDependencies["readCurrentMigrations"]>(
       async () => CURRENT_MIGRATIONS,
     ),
     ...overrides,
-  } satisfies UpgradeSmokeDependencies;
+  } satisfies UpgradeRehearsalDependencies;
 }
 
 function ownerFixtureSession(): TemporaryOwnerMcpSession {
@@ -409,14 +409,14 @@ afterEach(async () => {
 
 describe("supported upgrade rehearsal", () => {
   it("requests only read access for the owner snapshot", () => {
-    expect(UPGRADE_SMOKE_SCOPE).toBe("crewhelm:view");
+    expect(UPGRADE_REHEARSAL_SCOPE).toBe("crewhelm:view");
   });
 
   it("reports unconfirmed temporary-token revocation explicitly", () => {
     expect(
-      createUpgradeSmokeFailure(
+      createUpgradeRehearsalFailure(
         "receipt.json",
-        new UpgradeSmokeError(
+        new UpgradeRehearsalError(
           "token_revocation_unconfirmed",
           "revoke_temporary_access",
           "Temporary owner-token revocation was not confirmed. Revoke that access before retrying.",
@@ -447,16 +447,16 @@ describe("supported upgrade rehearsal", () => {
   it("preserves fixture evidence and proves the repeated upgrade is a no-op", async () => {
     const testFixture = await fixture();
     const reportUpgradeProgress =
-      vi.fn<NonNullable<UpgradeSmokeDependencies["reportUpgradeProgress"]>>();
+      vi.fn<NonNullable<UpgradeRehearsalDependencies["reportUpgradeProgress"]>>();
     const harness = dependencies({
       captureOwnerState: vi
-        .fn<NonNullable<UpgradeSmokeDependencies["captureOwnerState"]>>()
+        .fn<NonNullable<UpgradeRehearsalDependencies["captureOwnerState"]>>()
         .mockResolvedValueOnce(ownerState())
         .mockResolvedValueOnce(ownerState("1", 19)),
       reportUpgradeProgress,
     });
 
-    const report = await runUpgradeSmoke(testFixture.options, harness);
+    const report = await runUpgradeRehearsal(testFixture.options, harness);
 
     expect(report).toMatchObject({
       ok: true,
@@ -488,7 +488,7 @@ describe("supported upgrade rehearsal", () => {
       upgradeReceiptSchema.parse(JSON.parse(await readFile(testFixture.receiptPath, "utf8"))),
     ).toMatchObject({ phase: "completed" });
 
-    await expect(runUpgradeSmoke(testFixture.options, harness)).resolves.toMatchObject({
+    await expect(runUpgradeRehearsal(testFixture.options, harness)).resolves.toMatchObject({
       ok: true,
       recovery: "completed_receipt",
     });
@@ -498,9 +498,9 @@ describe("supported upgrade rehearsal", () => {
   it("accepts an exact target package with no new migration", async () => {
     const testFixture = await fixture();
     const inspectInfrastructure = vi
-      .fn<UpgradeSmokeDependencies["inspectInfrastructure"]>()
+      .fn<UpgradeRehearsalDependencies["inspectInfrastructure"]>()
       .mockResolvedValue(infrastructure(BASELINE_MIGRATIONS));
-    const report = await runUpgradeSmoke(
+    const report = await runUpgradeRehearsal(
       testFixture.options,
       dependencies({
         inspectInfrastructure,
@@ -516,11 +516,11 @@ describe("supported upgrade rehearsal", () => {
   it("fails when the current package migration inventory was not applied", async () => {
     const testFixture = await fixture();
     const inspectInfrastructure = vi
-      .fn<UpgradeSmokeDependencies["inspectInfrastructure"]>()
+      .fn<UpgradeRehearsalDependencies["inspectInfrastructure"]>()
       .mockResolvedValue(infrastructure(BASELINE_MIGRATIONS));
     const harness = dependencies({ inspectInfrastructure });
 
-    await expect(runUpgradeSmoke(testFixture.options, harness)).rejects.toThrow(
+    await expect(runUpgradeRehearsal(testFixture.options, harness)).rejects.toThrow(
       "Current package migrations were not applied exactly.",
     );
     expect(harness.bootstrap).toHaveBeenCalledTimes(1);
@@ -536,7 +536,7 @@ describe("supported upgrade rehearsal", () => {
         .mockResolvedValueOnce(doctor(changedFingerprint, "different")),
     });
 
-    await expect(runUpgradeSmoke(testFixture.options, harness)).rejects.toThrow(
+    await expect(runUpgradeRehearsal(testFixture.options, harness)).rejects.toThrow(
       "Worker does not match the pinned baseline package.",
     );
     expect(harness.bootstrap).not.toHaveBeenCalled();
@@ -552,12 +552,12 @@ describe("supported upgrade rehearsal", () => {
     let failure: unknown;
 
     try {
-      await runUpgradeSmoke(testFixture.options, harness);
+      await runUpgradeRehearsal(testFixture.options, harness);
     } catch (error) {
       failure = error;
     }
 
-    expect(createUpgradeSmokeFailure(testFixture.receiptPath, failure)).toMatchObject({
+    expect(createUpgradeRehearsalFailure(testFixture.receiptPath, failure)).toMatchObject({
       code: "invalid_input",
       recovery: "fix_input",
     });
@@ -569,18 +569,18 @@ describe("supported upgrade rehearsal", () => {
     const testFixture = await fixture();
     const harness = dependencies({
       inspectInfrastructure: vi
-        .fn<UpgradeSmokeDependencies["inspectInfrastructure"]>()
+        .fn<UpgradeRehearsalDependencies["inspectInfrastructure"]>()
         .mockResolvedValue(infrastructure(["0000_unknown.sql"])),
     });
     let failure: unknown;
 
     try {
-      await runUpgradeSmoke(testFixture.options, harness);
+      await runUpgradeRehearsal(testFixture.options, harness);
     } catch (error) {
       failure = error;
     }
 
-    expect(createUpgradeSmokeFailure(testFixture.receiptPath, failure)).toMatchObject({
+    expect(createUpgradeRehearsalFailure(testFixture.receiptPath, failure)).toMatchObject({
       code: "unsupported_upgrade",
       recovery: "use_supported_upgrade",
     });
@@ -591,18 +591,26 @@ describe("supported upgrade rehearsal", () => {
   it("resumes from a pending receipt without replacing the baseline snapshot", async () => {
     const testFixture = await fixture();
     const firstHarness = dependencies({
-      bootstrap: vi.fn<UpgradeSmokeDependencies["bootstrap"]>(async () => {
+      bootstrap: vi.fn<UpgradeRehearsalDependencies["bootstrap"]>(async () => {
         throw new Error("Ambiguous deploy response.");
       }),
     });
 
-    await expect(runUpgradeSmoke(testFixture.options, firstHarness)).rejects.toThrow(
+    await expect(runUpgradeRehearsal(testFixture.options, firstHarness)).rejects.toThrow(
       "Ambiguous deploy response.",
     );
     expect(firstHarness.captureOwnerState).toHaveBeenCalledTimes(1);
     expect(
       upgradeReceiptSchema.parse(JSON.parse(await readFile(testFixture.receiptPath, "utf8"))),
     ).toMatchObject({ phase: "upgrade_pending" });
+    const legacyReceipt = upgradeReceiptSchema.parse(
+      JSON.parse(await readFile(testFixture.receiptPath, "utf8")),
+    );
+    await writeFile(
+      testFixture.receiptPath,
+      `${JSON.stringify({ ...legacyReceipt, kind: "crewhelm-upgrade-smoke" })}\n`,
+      { mode: 0o600 },
+    );
 
     const resumedHarness = dependencies({
       bootstrap: vi
@@ -617,10 +625,10 @@ describe("supported upgrade rehearsal", () => {
         .fn<(expectedFingerprint: string) => Promise<DoctorReport>>()
         .mockResolvedValue(doctor(CURRENT_FINGERPRINT, "aligned")),
       inspectInfrastructure: vi
-        .fn<UpgradeSmokeDependencies["inspectInfrastructure"]>()
+        .fn<UpgradeRehearsalDependencies["inspectInfrastructure"]>()
         .mockResolvedValue(infrastructure(CURRENT_MIGRATIONS)),
     });
-    const report = await runUpgradeSmoke(testFixture.options, resumedHarness);
+    const report = await runUpgradeRehearsal(testFixture.options, resumedHarness);
 
     expect(report.recovery).toBe("resumed");
     expect(report.deployment).toEqual({ firstAction: "updated", retryAction: "unchanged" });
@@ -631,12 +639,12 @@ describe("supported upgrade rehearsal", () => {
   it("retains recovery state when owner evidence changes", async () => {
     const testFixture = await fixture();
     const captureOwnerState = vi
-      .fn<NonNullable<UpgradeSmokeDependencies["captureOwnerState"]>>()
+      .fn<NonNullable<UpgradeRehearsalDependencies["captureOwnerState"]>>()
       .mockResolvedValueOnce(ownerState())
       .mockResolvedValueOnce(ownerState("5"));
     const harness = dependencies({ captureOwnerState });
 
-    await expect(runUpgradeSmoke(testFixture.options, harness)).rejects.toThrow(
+    await expect(runUpgradeRehearsal(testFixture.options, harness)).rejects.toThrow(
       "Owner state or deployed secret inventory changed during upgrade.",
     );
     expect(harness.bootstrap).toHaveBeenCalledTimes(1);

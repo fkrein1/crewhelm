@@ -52,7 +52,7 @@ with recent changes, risky transitions, or weakly understood behavior, then foll
   provider effects without per-action approval. Prefer economical models and operations when they
   preserve the test's validity; platform budgets are ceilings, not targets.
 - Use installation-backed commands with `--installation crewhelm.testing.installation.json` and
-  `scripts/crewhelm-feature-rehearsal.ts` for supported journeys. For combined auth, follow the
+  `scripts/crewhelm-live-rehearsal.ts` for supported journeys. For combined auth, follow the
   live-validation skill's Codex-browser preference and narrow system-browser fallback. Never
   substitute a hand-typed endpoint.
 - Reuse the rehearsal client's `recover` action for exact retained Workflow fixtures before

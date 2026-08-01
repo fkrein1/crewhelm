@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 
 import * as z from "zod";
 
-import { agentSmokeReportSchema, runAgentSmoke } from "./agent-smoke.js";
+import { agentRehearsalReportSchema, runAgentRehearsal } from "./agent.js";
 import {
   bootstrapCleanupReportSchema,
   bootstrapDeployment,
@@ -17,17 +17,18 @@ import {
   readPackagedDeploymentFingerprint,
   skillBucketNameForWorker,
   type BootstrapDependencies,
-} from "./bootstrap.js";
+} from "../../bootstrap.js";
 
 const MAXIMUM_RECEIPT_BYTES = 16 * 1_024;
 const BROWSER_EDGE_SETTLE_MS = 15_000;
 const deploymentNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,62}$/);
-const rehearsalNameSchema = deploymentNameSchema.refine((name) =>
-  name.startsWith("crewhelm-smoke-"),
+const rehearsalNameSchema = deploymentNameSchema.refine(
+  (name) => name.startsWith("crewhelm-rehearsal-") || name.startsWith("crewhelm-smoke-"),
+  "Rehearsal resource names must start with crewhelm-rehearsal-.",
 );
 const accountIdSchema = z.string().regex(/^[a-f0-9]{32}$/);
 const databaseIdSchema = z.uuid();
-const smokeResourceSchema = z.discriminatedUnion("kind", [
+const rehearsalResourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     accountId: accountIdSchema,
     id: rehearsalNameSchema,
@@ -51,7 +52,7 @@ const smokeResourceSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-export const installationSmokeOptionsSchema = z.strictObject({
+export const installationRehearsalOptionsSchema = z.strictObject({
   accountId: accountIdSchema.optional(),
   aiDailySpendUsd: bootstrapOptionsSchema.shape.aiDailySpendUsd,
   cleanupOnly: z.boolean(),
@@ -67,14 +68,17 @@ export const installationSmokeOptionsSchema = z.strictObject({
   workerName: rehearsalNameSchema,
 });
 
-const installationSmokeReceiptSchema = z
+const installationRehearsalReceiptSchema = z
   .strictObject({
     schemaVersion: z.literal(1),
-    kind: z.literal("crewhelm-installation-smoke"),
+    kind: z.union([
+      z.literal("crewhelm-installation-rehearsal"),
+      z.literal("crewhelm-installation-smoke"),
+    ]),
     databaseName: rehearsalNameSchema,
     origin: z.url(),
     phase: z.enum(["provisioning", "cleanup_pending", "completed"]),
-    resources: z.array(smokeResourceSchema).max(4),
+    resources: z.array(rehearsalResourceSchema).max(4),
     updatedAt: z.iso.datetime(),
     workerName: rehearsalNameSchema,
   })
@@ -101,7 +105,7 @@ const installationSmokeReceiptSchema = z
     }
   });
 
-export const installationSmokeFailureSchema = z.strictObject({
+export const installationRehearsalFailureSchema = z.strictObject({
   schemaVersion: z.literal(1),
   ok: z.literal(false),
   stage: z.literal("rehearsal"),
@@ -110,30 +114,30 @@ export const installationSmokeFailureSchema = z.strictObject({
   receiptPath: z.string().min(1).max(8_192),
 });
 
-export const installationSmokeReportSchema = z.strictObject({
+export const installationRehearsalReportSchema = z.strictObject({
   schemaVersion: z.literal(1),
   ok: z.boolean(),
   recovered: z.boolean(),
   deployment: z.union([bootstrapReportSchema, bootstrapFailureSchema]).optional(),
-  agent: agentSmokeReportSchema.optional(),
+  agent: agentRehearsalReportSchema.optional(),
   cleanup: bootstrapCleanupReportSchema,
   receiptPath: z.string().min(1).max(8_192),
 });
 
-export type InstallationSmokeOptions = z.infer<typeof installationSmokeOptionsSchema>;
-export type InstallationSmokeReport = z.infer<typeof installationSmokeReportSchema>;
-export type InstallationSmokeFailure = z.infer<typeof installationSmokeFailureSchema>;
-type InstallationSmokeReceipt = z.infer<typeof installationSmokeReceiptSchema>;
+export type InstallationRehearsalOptions = z.infer<typeof installationRehearsalOptionsSchema>;
+export type InstallationRehearsalReport = z.infer<typeof installationRehearsalReportSchema>;
+export type InstallationRehearsalFailure = z.infer<typeof installationRehearsalFailureSchema>;
+type InstallationRehearsalReceipt = z.infer<typeof installationRehearsalReceiptSchema>;
 
-export interface InstallationSmokeDependencies extends BootstrapDependencies {
+export interface InstallationRehearsalDependencies extends BootstrapDependencies {
   openUrl: (url: URL) => Promise<void>;
 }
 
-export function createInstallationSmokeFailure(
+export function createInstallationRehearsalFailure(
   receiptPath: string,
   cleanupOnly: boolean,
-): InstallationSmokeFailure {
-  return installationSmokeFailureSchema.parse({
+): InstallationRehearsalFailure {
+  return installationRehearsalFailureSchema.parse({
     schemaVersion: 1,
     ok: false,
     stage: "rehearsal",
@@ -144,7 +148,7 @@ export function createInstallationSmokeFailure(
   });
 }
 
-async function readReceipt(path: string): Promise<InstallationSmokeReceipt | undefined> {
+async function readReceipt(path: string): Promise<InstallationRehearsalReceipt | undefined> {
   const absolutePath = resolve(path);
   let file;
 
@@ -163,13 +167,15 @@ async function readReceipt(path: string): Promise<InstallationSmokeReceipt | und
   }
 
   try {
-    return installationSmokeReceiptSchema.parse(JSON.parse(await readFile(absolutePath, "utf8")));
+    return installationRehearsalReceiptSchema.parse(
+      JSON.parse(await readFile(absolutePath, "utf8")),
+    );
   } catch {
     throw new Error("Installation rehearsal receipt is invalid.");
   }
 }
 
-async function writeReceipt(path: string, receipt: InstallationSmokeReceipt): Promise<void> {
+async function writeReceipt(path: string, receipt: InstallationRehearsalReceipt): Promise<void> {
   const absolutePath = resolve(path);
   const directory = dirname(absolutePath);
   const temporaryPath = `${absolutePath}.${randomUUID()}.tmp`;
@@ -195,7 +201,7 @@ function emptyCleanupReport() {
   });
 }
 
-function assertRehearsalWorkerOrigin(options: InstallationSmokeOptions): void {
+function assertRehearsalWorkerOrigin(options: InstallationRehearsalOptions): void {
   const workerLabel = options.origin.hostname.split(".")[0];
 
   if (!options.origin.hostname.endsWith(".workers.dev") || workerLabel !== options.workerName) {
@@ -206,8 +212,8 @@ function assertRehearsalWorkerOrigin(options: InstallationSmokeOptions): void {
 }
 
 async function cleanupReceipt(
-  receipt: InstallationSmokeReceipt,
-  dependencies: InstallationSmokeDependencies,
+  receipt: InstallationRehearsalReceipt,
+  dependencies: InstallationRehearsalDependencies,
 ) {
   if (receipt.resources.length === 0) {
     return emptyCleanupReport();
@@ -217,9 +223,9 @@ async function cleanupReceipt(
 }
 
 function retainUnresolvedResources(
-  receipt: InstallationSmokeReceipt,
-  cleanup: InstallationSmokeReport["cleanup"],
-): InstallationSmokeReceipt["resources"] {
+  receipt: InstallationRehearsalReceipt,
+  cleanup: InstallationRehearsalReport["cleanup"],
+): InstallationRehearsalReceipt["resources"] {
   const unresolved = new Set(
     cleanup.resources
       .filter((resource) => resource.status === "unresolved")
@@ -248,12 +254,12 @@ function retainUnresolvedResources(
 }
 
 function receiptAfterCleanup(
-  receipt: InstallationSmokeReceipt,
-  cleanup: InstallationSmokeReport["cleanup"],
-): InstallationSmokeReceipt {
+  receipt: InstallationRehearsalReceipt,
+  cleanup: InstallationRehearsalReport["cleanup"],
+): InstallationRehearsalReceipt {
   const resources = retainUnresolvedResources(receipt, cleanup);
 
-  return installationSmokeReceiptSchema.parse({
+  return installationRehearsalReceiptSchema.parse({
     ...receipt,
     phase: resources.length === 0 ? "completed" : "cleanup_pending",
     resources,
@@ -261,11 +267,11 @@ function receiptAfterCleanup(
   });
 }
 
-export async function runInstallationSmoke(
-  input: InstallationSmokeOptions,
-  dependencies: InstallationSmokeDependencies,
-): Promise<InstallationSmokeReport> {
-  const options = installationSmokeOptionsSchema.parse(input);
+export async function runInstallationRehearsal(
+  input: InstallationRehearsalOptions,
+  dependencies: InstallationRehearsalDependencies,
+): Promise<InstallationRehearsalReport> {
+  const options = installationRehearsalOptionsSchema.parse(input);
   if (!options.cleanupOnly) {
     assertRehearsalWorkerOrigin(options);
   }
@@ -292,7 +298,7 @@ export async function runInstallationSmoke(
 
     const cleanup = await cleanupReceipt(existing, dependencies);
     await writeReceipt(options.receiptPath, receiptAfterCleanup(existing, cleanup));
-    return installationSmokeReportSchema.parse({
+    return installationRehearsalReportSchema.parse({
       schemaVersion: 1,
       ok: cleanup.ok,
       recovered: true,
@@ -307,9 +313,9 @@ export async function runInstallationSmoke(
     );
   }
 
-  let receipt = installationSmokeReceiptSchema.parse({
+  let receipt = installationRehearsalReceiptSchema.parse({
     schemaVersion: 1,
-    kind: "crewhelm-installation-smoke",
+    kind: "crewhelm-installation-rehearsal",
     databaseName: options.databaseName,
     origin: options.origin.origin,
     phase: "provisioning",
@@ -319,7 +325,7 @@ export async function runInstallationSmoke(
   });
   await writeReceipt(options.receiptPath, receipt);
 
-  const bootstrapDependencies: InstallationSmokeDependencies = {
+  const bootstrapDependencies: InstallationRehearsalDependencies = {
     ...dependencies,
     recordCreatedResource: async (resource) => {
       if (
@@ -333,7 +339,7 @@ export async function runInstallationSmoke(
         return;
       }
 
-      receipt = installationSmokeReceiptSchema.parse({
+      receipt = installationRehearsalReceiptSchema.parse({
         ...receipt,
         resources: [...receipt.resources, resource],
         updatedAt: new Date().toISOString(),
@@ -345,8 +351,8 @@ export async function runInstallationSmoke(
   delete bootstrapDependencies.createGitHubApp;
   delete bootstrapDependencies.requestCloudflareGatewayAuthorization;
   delete bootstrapDependencies.promptSecret;
-  let deployment: InstallationSmokeReport["deployment"];
-  let agent: InstallationSmokeReport["agent"];
+  let deployment: InstallationRehearsalReport["deployment"];
+  let agent: InstallationRehearsalReport["agent"];
   let unexpectedError: unknown;
 
   try {
@@ -364,7 +370,7 @@ export async function runInstallationSmoke(
     );
 
     if (deployment.ok) {
-      agent = await runAgentSmoke(
+      agent = await runAgentRehearsal(
         {
           authorizationDelayMs: BROWSER_EDGE_SETTLE_MS,
           origin: options.origin,
@@ -387,7 +393,7 @@ export async function runInstallationSmoke(
     }
   }
 
-  receipt = installationSmokeReceiptSchema.parse({
+  receipt = installationRehearsalReceiptSchema.parse({
     ...receipt,
     phase: "cleanup_pending",
     updatedAt: new Date().toISOString(),
@@ -399,7 +405,7 @@ export async function runInstallationSmoke(
     throw unexpectedError;
   }
 
-  return installationSmokeReportSchema.parse({
+  return installationRehearsalReportSchema.parse({
     schemaVersion: 1,
     ok: deployment?.ok === true && agent?.ok === true && cleanup.ok,
     recovered: false,

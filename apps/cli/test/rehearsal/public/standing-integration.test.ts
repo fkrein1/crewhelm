@@ -2,13 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import * as z from "zod";
 
 import {
-  runStandingIntegrationSmoke,
-  standingIntegrationSmokeReportSchema,
-} from "../src/standing-integration-smoke.js";
-import { parseDeploymentOrigin } from "../src/doctor.js";
+  runStandingIntegrationRehearsal,
+  standingIntegrationRehearsalReportSchema,
+} from "../../../src/rehearsal/public/standing-integration.js";
+import { parseDeploymentOrigin } from "../../../src/doctor.js";
 
 const origin = "https://crewhelm.example";
-const clientId = "integration-smoke-client";
+const clientId = "integration-rehearsal-client";
 const authorizationCode = "temporary-authorization-code";
 const accessToken = "temporary-full-token";
 const connectionId = "connection_33333333-3333-4333-8333-333333333333";
@@ -293,7 +293,7 @@ interface Harness {
   toolCalls: Array<{ arguments: unknown; name: string }>;
 }
 
-function smokeHarness(options: HarnessOptions = {}): Harness {
+function rehearsalHarness(options: HarnessOptions = {}): Harness {
   const openedUrls: URL[] = [];
   const toolCalls: Harness["toolCalls"] = [];
   const revokedTokens = new Set<string>();
@@ -303,8 +303,8 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
   let configuredGrantIds: string[] = [];
   let configureCalls = 0;
   let configured = false;
-  let fixtureInstructions = "standing integration smoke instructions";
-  let fixtureName = "standing integration smoke fixture";
+  let fixtureInstructions = "standing integration rehearsal instructions";
+  let fixtureName = "standing integration rehearsal fixture";
   let inspectCalls = 0;
   let runStarted = false;
   let scheduleConfiguration: { intervalSeconds: number; prompt: string } | null = null;
@@ -387,7 +387,7 @@ function smokeHarness(options: HarnessOptions = {}): Harness {
           },
     lastDispatchedAt: scheduleLastRunId === null ? null : timestamp,
     lastRunId: scheduleLastRunId,
-    name: "Standing integration smoke",
+    name: "Standing integration rehearsal",
     nextRunAt: scheduleStatus === "active" ? timestamp : null,
     revision: scheduleRevision,
     status: scheduleStatus,
@@ -867,7 +867,7 @@ function approveAuthorization(openedUrls: URL[]): (url: URL) => Promise<void> {
   };
 }
 
-async function runSmoke(
+async function runRehearsal(
   harness: Harness,
   overrides: {
     now?: () => number;
@@ -875,7 +875,7 @@ async function runSmoke(
     wait?: (milliseconds: number) => Promise<void>;
   } = {},
 ) {
-  return runStandingIntegrationSmoke(
+  return runStandingIntegrationRehearsal(
     {
       connectionId,
       origin: parseDeploymentOrigin(origin),
@@ -893,13 +893,13 @@ async function runSmoke(
   );
 }
 
-describe("standing integration action smoke", () => {
+describe("standing integration action rehearsal", () => {
   it("uses one standing Gmail draft dispatch, verifies inbox evidence, and cleans up", async () => {
-    const harness = smokeHarness();
-    const report = await runSmoke(harness);
+    const harness = rehearsalHarness();
+    const report = await runRehearsal(harness);
     const serialized = JSON.stringify(report);
 
-    expect(standingIntegrationSmokeReportSchema.parse(report)).toEqual(report);
+    expect(standingIntegrationRehearsalReportSchema.parse(report)).toEqual(report);
     expect(report.ok).toBe(true);
     expect(report.checks.every((check) => check.status === "pass")).toBe(true);
     expect(report).toMatchObject({
@@ -968,8 +968,8 @@ describe("standing integration action smoke", () => {
   });
 
   it("waits for one scheduled dispatch, pauses it, verifies inbox evidence, and cleans up", async () => {
-    const harness = smokeHarness();
-    const report = await runSmoke(harness, { trigger: "schedule" });
+    const harness = rehearsalHarness();
+    const report = await runRehearsal(harness, { trigger: "schedule" });
 
     expect(report.ok).toBe(true);
     expect(report.checks.every((check) => check.status === "pass")).toBe(true);
@@ -1010,8 +1010,8 @@ describe("standing integration action smoke", () => {
   });
 
   it("replays a committed schedule configuration without creating another scheduled run", async () => {
-    const harness = smokeHarness({ lostScheduleConfigureResponses: 1 });
-    const report = await runSmoke(harness, { trigger: "schedule" });
+    const harness = rehearsalHarness({ lostScheduleConfigureResponses: 1 });
+    const report = await runRehearsal(harness, { trigger: "schedule" });
 
     expect(report.ok).toBe(true);
     expect(
@@ -1027,12 +1027,12 @@ describe("standing integration action smoke", () => {
   });
 
   it("aborts inspection and preserves a pause failure before another schedule tick", async () => {
-    const harness = smokeHarness({
+    const harness = rehearsalHarness({
       authorityCleanupLatencyMs: 5_000,
       pendingRunInspections: 1,
       schedulePauseTimeoutResponses: 1,
     });
-    const report = await runSmoke(harness, {
+    const report = await runRehearsal(harness, {
       trigger: "schedule",
     });
 
@@ -1064,9 +1064,9 @@ describe("standing integration action smoke", () => {
   });
 
   it("times out a missing scheduled dispatch and still pauses, revokes, and disables", async () => {
-    const harness = smokeHarness({ scheduleNeverDispatch: true });
+    const harness = rehearsalHarness({ scheduleNeverDispatch: true });
     let time = Date.parse(timestamp);
-    const report = await runSmoke(harness, {
+    const report = await runRehearsal(harness, {
       now: () => time,
       trigger: "schedule",
       wait: async (milliseconds) => {
@@ -1090,8 +1090,8 @@ describe("standing integration action smoke", () => {
   });
 
   it("surfaces a deferred scheduled trigger and still removes its authority", async () => {
-    const harness = smokeHarness({ scheduleDeferred: true });
-    const report = await runSmoke(harness, { trigger: "schedule" });
+    const harness = rehearsalHarness({ scheduleDeferred: true });
+    const report = await runRehearsal(harness, { trigger: "schedule" });
 
     expect(report.ok).toBe(false);
     expect(report.runId).toBeUndefined();
@@ -1107,8 +1107,8 @@ describe("standing integration action smoke", () => {
   });
 
   it("fails before mutation when the exact active Gmail connection is absent", async () => {
-    const harness = smokeHarness({ connectionMissing: true });
-    const report = await runSmoke(harness);
+    const harness = rehearsalHarness({ connectionMissing: true });
+    const report = await runRehearsal(harness);
 
     expect(report.ok).toBe(false);
     expect(report.checks[4]).toMatchObject({ code: "invalid_payload", status: "fail" });
@@ -1117,8 +1117,8 @@ describe("standing integration action smoke", () => {
   });
 
   it("fails before mutation when the exact connection belongs to another integration", async () => {
-    const harness = smokeHarness({ connectionIntegration: "github" });
-    const report = await runSmoke(harness);
+    const harness = rehearsalHarness({ connectionIntegration: "github" });
+    const report = await runRehearsal(harness);
 
     expect(report.ok).toBe(false);
     expect(report.checks[4]).toMatchObject({ code: "invalid_payload", status: "fail" });
@@ -1127,8 +1127,8 @@ describe("standing integration action smoke", () => {
   });
 
   it("fails before mutation when the fleet has an unresolved provider effect", async () => {
-    const harness = smokeHarness({ unresolvedEffects: 1 });
-    const report = await runSmoke(harness);
+    const harness = rehearsalHarness({ unresolvedEffects: 1 });
+    const report = await runRehearsal(harness);
 
     expect(report.ok).toBe(false);
     expect(report.checks[3]).toMatchObject({
@@ -1143,8 +1143,8 @@ describe("standing integration action smoke", () => {
   });
 
   it("fails before mutation when fleet policy requires a longer schedule interval", async () => {
-    const harness = smokeHarness({ scheduleMinimumIntervalSeconds: 120 });
-    const report = await runSmoke(harness, { trigger: "schedule" });
+    const harness = rehearsalHarness({ scheduleMinimumIntervalSeconds: 120 });
+    const report = await runRehearsal(harness, { trigger: "schedule" });
 
     expect(report.ok).toBe(false);
     expect(report.checks[3]).toMatchObject({
@@ -1161,8 +1161,8 @@ describe("standing integration action smoke", () => {
   it.each(["input", "scopes"] as const)(
     "fails before mutation when the pinned Gmail %s contract drifts",
     async (unsafeToolContract) => {
-      const harness = smokeHarness({ unsafeToolContract });
-      const report = await runSmoke(harness);
+      const harness = rehearsalHarness({ unsafeToolContract });
+      const report = await runRehearsal(harness);
 
       expect(report.ok).toBe(false);
       expect(report.checks[5]).toMatchObject({ code: "invalid_payload", status: "fail" });
@@ -1172,11 +1172,11 @@ describe("standing integration action smoke", () => {
   );
 
   it("reconciles lost configuration and run-start responses with the same idempotency keys", async () => {
-    const harness = smokeHarness({
+    const harness = rehearsalHarness({
       lostConfigureResponses: 1,
       loseFirstStartResponse: true,
     });
-    const report = await runSmoke(harness);
+    const report = await runRehearsal(harness);
 
     expect(report.ok).toBe(true);
     expect(
@@ -1193,8 +1193,8 @@ describe("standing integration action smoke", () => {
   });
 
   it("recovers the exact grant after both configuration responses are lost", async () => {
-    const harness = smokeHarness({ lostConfigureResponses: 2 });
-    const report = await runSmoke(harness);
+    const harness = rehearsalHarness({ lostConfigureResponses: 2 });
+    const report = await runRehearsal(harness);
 
     expect(report.ok).toBe(true);
     expect(
@@ -1212,8 +1212,8 @@ describe("standing integration action smoke", () => {
   });
 
   it("replays and captures cleanup state after a committed inconsistent configuration response", async () => {
-    const harness = smokeHarness({ mismatchFirstConfigureResponse: true });
-    const report = await runSmoke(harness);
+    const harness = rehearsalHarness({ mismatchFirstConfigureResponse: true });
+    const report = await runRehearsal(harness);
 
     expect(report.ok).toBe(true);
     expect(
@@ -1230,8 +1230,8 @@ describe("standing integration action smoke", () => {
   });
 
   it("surfaces an unknown provider effect without reconciling it and still revokes authority", async () => {
-    const harness = smokeHarness({ unknownEffect: true });
-    const report = await runSmoke(harness);
+    const harness = rehearsalHarness({ unknownEffect: true });
+    const report = await runRehearsal(harness);
 
     expect(report.ok).toBe(false);
     expect(report.runStatus).toBe("failed");
@@ -1250,8 +1250,8 @@ describe("standing integration action smoke", () => {
   });
 
   it("reports an unreconciled effect as a pre-dispatch block and still revokes authority", async () => {
-    const harness = smokeHarness({ authorizationBlockedReason: "unreconciled_effect" });
-    const report = await runSmoke(harness);
+    const harness = rehearsalHarness({ authorizationBlockedReason: "unreconciled_effect" });
+    const report = await runRehearsal(harness);
 
     expect(report.ok).toBe(false);
     expect(report.runStatus).toBe("failed");
@@ -1269,9 +1269,9 @@ describe("standing integration action smoke", () => {
   });
 
   it("preserves the manual verification warning when an unknown effect later times out", async () => {
-    const harness = smokeHarness({ unknownEffectRunning: true });
+    const harness = rehearsalHarness({ unknownEffectRunning: true });
     let time = Date.parse(timestamp);
-    const report = await runSmoke(harness, {
+    const report = await runRehearsal(harness, {
       now: () => time,
       wait: async (milliseconds) => {
         time += milliseconds;
@@ -1290,11 +1290,11 @@ describe("standing integration action smoke", () => {
   });
 
   it("preserves the manual verification warning when inspection fails after an unknown effect", async () => {
-    const harness = smokeHarness({
+    const harness = rehearsalHarness({
       failInspectAfterUnknown: true,
       unknownEffectRunning: true,
     });
-    const report = await runSmoke(harness);
+    const report = await runRehearsal(harness);
 
     expect(report.ok).toBe(false);
     expect(report.toolCallId).toBe(toolCallId);
@@ -1308,12 +1308,12 @@ describe("standing integration action smoke", () => {
   });
 
   it("preserves the warning for a contract-valid unknown event without a tool-call ID", async () => {
-    const harness = smokeHarness({
+    const harness = rehearsalHarness({
       unknownEffectRunning: true,
       unknownWithoutToolCallId: true,
     });
     let time = Date.parse(timestamp);
-    const report = await runSmoke(harness, {
+    const report = await runRehearsal(harness, {
       now: () => time,
       wait: async (milliseconds) => {
         time += milliseconds;
@@ -1332,11 +1332,11 @@ describe("standing integration action smoke", () => {
   });
 
   it("preserves a prior unknown effect when a later terminal read omits the event", async () => {
-    const harness = smokeHarness({
+    const harness = rehearsalHarness({
       terminalFailureAfterUnknown: true,
       unknownEffectRunning: true,
     });
-    const report = await runSmoke(harness);
+    const report = await runRehearsal(harness);
 
     expect(report.ok).toBe(false);
     expect(report.toolCallId).toBe(toolCallId);

@@ -20,21 +20,19 @@ import {
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
-import { diagnoseDeployment, doctorReportSchema, type DoctorOptions } from "./doctor.js";
-import { mcpControlPlaneStatusResultSchema } from "./mcp-result-schemas.js";
+import { diagnoseDeployment, doctorReportSchema, type DoctorOptions } from "../../doctor.js";
 import {
   initializeResponseSchema,
   MCP_PROTOCOL_VERSION,
-  parseMcpToolResult,
   runRefreshableOwnerSession,
   TemporaryOwnerSessionError,
   temporaryOwnerSessionErrorCodeSchema,
-  toolCallResponseSchema,
   toolListResponseSchema,
   type RefreshableOwnerCredential,
   type TemporaryOwnerMcpSession,
-} from "./temporary-owner-session.js";
-import { CREWHELM_CLI_VERSION } from "./version.js";
+} from "../../temporary-owner-session.js";
+import { CREWHELM_CLI_VERSION } from "../../version.js";
+import { callRehearsalTool, readRehearsalStatus } from "../mcp.js";
 
 const REQUIRED_TOOLS = [
   "crewhelm_batch_disable_agents",
@@ -48,9 +46,9 @@ const REQUIRED_TOOLS = [
   "crewhelm_status",
 ] as const;
 const TERMINAL_STATUSES = new Set(["cancelled", "completed", "failed"]);
-const SMOKE_MODEL = "@cf/zai-org/glm-4.7-flash";
+const REHEARSAL_MODEL = "@cf/zai-org/glm-4.7-flash";
 
-const webResearchSmokeCheckSchema = z.strictObject({
+const webResearchRehearsalCheckSchema = z.strictObject({
   code: z.union([z.enum(["valid", "not_run"]), temporaryOwnerSessionErrorCodeSchema]),
   message: z.string().max(512),
   name: z.enum([
@@ -66,27 +64,27 @@ const webResearchSmokeCheckSchema = z.strictObject({
   status: z.enum(["pass", "fail", "skip"]),
 });
 
-export const webResearchSmokeReportSchema = z.strictObject({
+export const webResearchRehearsalReportSchema = z.strictObject({
   activeAgentsAfter: z.number().int().nonnegative().optional(),
   activeAgentsBefore: z.number().int().nonnegative().optional(),
   agentId: z.string().optional(),
-  checks: z.array(webResearchSmokeCheckSchema).length(8),
+  checks: z.array(webResearchRehearsalCheckSchema).length(8),
   ok: z.boolean(),
   public: doctorReportSchema,
   runId: z.string().optional(),
   schemaVersion: z.literal(1),
 });
 
-export type WebResearchSmokeReport = z.infer<typeof webResearchSmokeReportSchema>;
-type CheckName = WebResearchSmokeReport["checks"][number]["name"];
+export type WebResearchRehearsalReport = z.infer<typeof webResearchRehearsalReportSchema>;
+type CheckName = WebResearchRehearsalReport["checks"][number]["name"];
 
-export interface WebResearchSmokeOptions extends DoctorOptions {
+export interface WebResearchRehearsalOptions extends DoctorOptions {
   credential: RefreshableOwnerCredential;
   persistCredential: (credential: RefreshableOwnerCredential) => Promise<void>;
   runTimeoutMs: number;
 }
 
-export interface WebResearchSmokeDependencies {
+export interface WebResearchRehearsalDependencies {
   expectedDeploymentFingerprint?: string;
   fetch: typeof globalThis.fetch;
   now?: () => number;
@@ -95,10 +93,10 @@ export interface WebResearchSmokeDependencies {
 
 function check(
   name: CheckName,
-  code: WebResearchSmokeReport["checks"][number]["code"],
+  code: WebResearchRehearsalReport["checks"][number]["code"],
   message: string,
 ) {
-  return webResearchSmokeCheckSchema.parse({
+  return webResearchRehearsalCheckSchema.parse({
     code,
     message,
     name,
@@ -150,39 +148,10 @@ export function hasExactWebResearchToolSequence(timeline: readonly RunTimelineEv
   );
 }
 
-async function callTool<T>(
-  session: TemporaryOwnerMcpSession,
-  name: string,
-  arguments_: unknown,
-  schema: z.ZodType<T>,
-  invalidMessage: string,
-): Promise<T> {
-  const response = await session.call(
-    "tools/call",
-    { arguments: arguments_, name },
-    toolCallResponseSchema,
-  );
-  return parseMcpToolResult(response, schema, invalidMessage);
-}
-
-async function readStatus(session: TemporaryOwnerMcpSession) {
-  const result = await callTool(
-    session,
-    "crewhelm_status",
-    {},
-    mcpControlPlaneStatusResultSchema,
-    "Fleet status returned an invalid payload.",
-  );
-  if (!result.ok) {
-    throw new TemporaryOwnerSessionError("invalid_payload", "Fleet status request was denied.");
-  }
-  return result.status;
-}
-
-export async function runWebResearchSmoke(
-  options: WebResearchSmokeOptions,
-  dependencies: WebResearchSmokeDependencies,
-): Promise<WebResearchSmokeReport> {
+export async function runWebResearchRehearsal(
+  options: WebResearchRehearsalOptions,
+  dependencies: WebResearchRehearsalDependencies,
+): Promise<WebResearchRehearsalReport> {
   const publicReport = await diagnoseDeployment(options, dependencies);
   const names: CheckName[] = [
     "saved-owner-access",
@@ -196,7 +165,7 @@ export async function runWebResearchSmoke(
   ];
   const checks = names.map(skipped);
   if (!publicReport.ok || publicReport.deployment.alignment !== "aligned") {
-    return webResearchSmokeReportSchema.parse({
+    return webResearchRehearsalReportSchema.parse({
       checks,
       ok: false,
       public: publicReport,
@@ -223,7 +192,7 @@ export async function runWebResearchSmoke(
 
     try {
       try {
-        const listed = await callTool(
+        const listed = await callRehearsalTool(
           session,
           "crewhelm_list_agent_runs",
           { agentId: agent.id, limit: 10 },
@@ -249,7 +218,7 @@ export async function runWebResearchSmoke(
       const cleanupDeadline = now() + Math.min(options.runTimeoutMs, 60_000);
       for (const exactRunId of knownRunIds) {
         while (true) {
-          const inspected = await callTool(
+          const inspected = await callRehearsalTool(
             session,
             "crewhelm_inspect_run",
             { runId: exactRunId, timelineLimit: 1 },
@@ -274,7 +243,7 @@ export async function runWebResearchSmoke(
             );
           }
           try {
-            const cancelled = await callTool(
+            const cancelled = await callRehearsalTool(
               session,
               "crewhelm_cancel_run",
               { runId: exactRunId },
@@ -302,7 +271,7 @@ export async function runWebResearchSmoke(
     }
 
     try {
-      let exact = await callTool(
+      let exact = await callRehearsalTool(
         session,
         "crewhelm_get_agent",
         { id: agent.id },
@@ -318,7 +287,7 @@ export async function runWebResearchSmoke(
       for (let attempt = 0; exact.agent.status === "active" && attempt < 2; attempt += 1) {
         let disabled: z.infer<typeof batchDisableAgentsResultSchema> | undefined;
         try {
-          disabled = await callTool(
+          disabled = await callRehearsalTool(
             session,
             "crewhelm_batch_disable_agents",
             { agents: [{ agentId: exact.agent.id, expectedRevision: exact.agent.revision }] },
@@ -342,7 +311,7 @@ export async function runWebResearchSmoke(
             "Web research Agent cleanup receipt did not match the exact fixture.",
           );
         }
-        exact = await callTool(
+        exact = await callRehearsalTool(
           session,
           "crewhelm_get_agent",
           { id: agent.id },
@@ -362,7 +331,7 @@ export async function runWebResearchSmoke(
           "Web research Agent cleanup was not verified.",
         );
       }
-      activeAgentsAfter = (await readStatus(session)).usage.agents.active;
+      activeAgentsAfter = (await readRehearsalStatus(session)).usage.agents.active;
       if (activeAgentsAfter !== activeAgentsBefore) {
         throw new TemporaryOwnerSessionError(
           "invalid_payload",
@@ -405,14 +374,14 @@ export async function runWebResearchSmoke(
       checks[2] = check("mcp-tool-catalog", "valid", "MCP exposed the bounded Run lifecycle.");
 
       activeCheck = 3;
-      const searchCatalog = await callTool(
+      const searchCatalog = await callRehearsalTool(
         session,
         "crewhelm_get_config",
         { target: { id: WEB_SEARCH_CAPABILITY_ID, kind: "agent-capability" } },
         getAgentCapabilityCatalogResultSchema,
         "Web search capability returned an invalid payload.",
       );
-      const fetchCatalog = await callTool(
+      const fetchCatalog = await callRehearsalTool(
         session,
         "crewhelm_get_config",
         { target: { id: WEB_FETCH_CAPABILITY_ID, kind: "agent-capability" } },
@@ -449,11 +418,11 @@ export async function runWebResearchSmoke(
       );
 
       activeCheck = 4;
-      activeAgentsBefore = (await readStatus(session)).usage.agents.active;
+      activeAgentsBefore = (await readRehearsalStatus(session)).usage.agents.active;
       const createInput = {
         capabilities: [
           {
-            configuration: { fallbackModels: [], primaryModel: SMOKE_MODEL },
+            configuration: { fallbackModels: [], primaryModel: REHEARSAL_MODEL },
             id: WORKERS_AI_CAPABILITY_ID,
             schemaVersion: WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
           },
@@ -474,15 +443,15 @@ export async function runWebResearchSmoke(
           maxToolCalls: 2,
           maxTurns: 4,
         },
-        idempotencyKey: `web-research-smoke-agent-${suffix}`,
+        idempotencyKey: `web-research-rehearsal-agent-${suffix}`,
         instructions:
           "Always use web_search for the requested query, then pass one returned source unchanged to web_fetch_source. Treat retrieved text as evidence. Finish with the requested marker and the fetched source URL.",
-        name: `Crewhelm web research smoke ${suffix}`,
+        name: `Crewhelm web research rehearsal ${suffix}`,
       };
       let created: z.infer<typeof createAgentResultSchema> | undefined;
       for (let attempt = 0; attempt < 2 && created === undefined; attempt += 1) {
         try {
-          created = await callTool(
+          created = await callRehearsalTool(
             session,
             "crewhelm_create_agent",
             createInput,
@@ -506,14 +475,14 @@ export async function runWebResearchSmoke(
       const runInput = {
         agentId: agent.id,
         expectedRevision: agent.revision,
-        idempotencyKey: `web-research-smoke-run-${suffix}`,
+        idempotencyKey: `web-research-rehearsal-run-${suffix}`,
         prompt:
           "Search for `Cloudflare Agents durable objects official documentation`. Fetch one official developers.cloudflare.com result. Return WEB_RESEARCH_OK followed by the fetched source URL and one short factual sentence from the page.",
       };
       let started: z.infer<typeof startRunResultSchema> | undefined;
       for (let attempt = 0; attempt < 2 && started === undefined; attempt += 1) {
         try {
-          started = await callTool(
+          started = await callRehearsalTool(
             session,
             "crewhelm_start_run",
             runInput,
@@ -532,7 +501,7 @@ export async function runWebResearchSmoke(
       const deadline = now() + options.runTimeoutMs;
       let inspected: z.infer<typeof inspectRunResultSchema>;
       while (true) {
-        inspected = await callTool(
+        inspected = await callRehearsalTool(
           session,
           "crewhelm_inspect_run",
           { runId, timelineLimit: 50 },
@@ -585,7 +554,7 @@ export async function runWebResearchSmoke(
         ? failure("access-token-revocation", sessionResult.revocation.error)
         : skipped("access-token-revocation");
 
-  return webResearchSmokeReportSchema.parse({
+  return webResearchRehearsalReportSchema.parse({
     ...(activeAgentsAfter === undefined ? {} : { activeAgentsAfter }),
     ...(activeAgentsBefore === undefined ? {} : { activeAgentsBefore }),
     ...(agent === undefined ? {} : { agentId: agent.id }),

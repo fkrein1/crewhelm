@@ -1,12 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import * as z from "zod";
 
-import { agentSmokeReportSchema, runAgentSmoke } from "../src/agent-smoke.js";
-import { parseDeploymentOrigin } from "../src/doctor.js";
-import { toolListResponseSchema } from "../src/temporary-owner-session.js";
+import { parseDeploymentOrigin } from "../../../src/doctor.js";
+import {
+  agentRehearsalReportSchema,
+  runAgentRehearsal,
+} from "../../../src/rehearsal/public/agent.js";
+import { toolListResponseSchema } from "../../../src/temporary-owner-session.js";
 
 const origin = "https://crewhelm.example";
-const clientId = "smoke-client";
+const clientId = "rehearsal-client";
 const authorizationCode = "temporary-authorization-code";
 const accessToken = "temporary-full-token";
 const agentId = "agent_11111111-1111-4111-8111-111111111111";
@@ -150,7 +153,7 @@ function fleetStatus(active: number) {
   };
 }
 
-interface SmokeHarnessOptions {
+interface RehearsalHarnessOptions {
   created?: boolean;
   disableFails?: boolean;
   failFirstCreateBeforeCommit?: boolean;
@@ -166,16 +169,16 @@ interface SmokeHarnessOptions {
   started?: boolean;
 }
 
-interface SmokeHarness {
+interface RehearsalHarness {
   fetch: typeof globalThis.fetch;
   openedUrls: URL[];
   requests: Array<{ body: string; headers: Headers; method: string; url: URL }>;
   toolCalls: Array<{ arguments: unknown; name: string }>;
 }
 
-function smokeHarness(options: SmokeHarnessOptions = {}): SmokeHarness {
-  const requests: SmokeHarness["requests"] = [];
-  const toolCalls: SmokeHarness["toolCalls"] = [];
+function rehearsalHarness(options: RehearsalHarnessOptions = {}): RehearsalHarness {
+  const requests: RehearsalHarness["requests"] = [];
+  const toolCalls: RehearsalHarness["toolCalls"] = [];
   const openedUrls: URL[] = [];
   const revokedTokens = new Set<string>();
   const inspectStatuses = [...(options.inspectStatuses ?? ["running", "completed"])];
@@ -187,7 +190,7 @@ function smokeHarness(options: SmokeHarnessOptions = {}): SmokeHarness {
   let runCreated = false;
   let fixtureInstructions =
     "Return one short plain-text acknowledgment. Do not request or call any tools.";
-  let fixtureName = "Crewhelm lifecycle smoke fixture";
+  let fixtureName = "Crewhelm lifecycle rehearsal fixture";
 
   const agent = (overrides: { id?: string; name?: string } = {}) => ({
     capabilities: [
@@ -439,11 +442,11 @@ function approveAuthorization(openedUrls: URL[]): (url: URL) => Promise<void> {
   };
 }
 
-async function runSmoke(
-  harness: SmokeHarness,
+async function runRehearsal(
+  harness: RehearsalHarness,
   overrides: { now?: () => number; wait?: (milliseconds: number) => Promise<void> } = {},
 ) {
-  return runAgentSmoke(
+  return runAgentRehearsal(
     {
       origin: parseDeploymentOrigin(origin),
       runTimeoutMs: 3_000,
@@ -458,7 +461,7 @@ async function runSmoke(
   );
 }
 
-describe("disposable Agent lifecycle smoke", () => {
+describe("disposable Agent lifecycle rehearsal", () => {
   it("accepts the complete bounded Worker tool catalog", () => {
     const tool = {
       annotations: {
@@ -486,11 +489,11 @@ describe("disposable Agent lifecycle smoke", () => {
   });
 
   it("waits for browser-edge propagation before opening authorization", async () => {
-    const harness = smokeHarness();
+    const harness = rehearsalHarness();
     const events: string[] = [];
     const approve = approveAuthorization(harness.openedUrls);
 
-    const report = await runAgentSmoke(
+    const report = await runAgentRehearsal(
       {
         authorizationDelayMs: 15_000,
         origin: parseDeploymentOrigin(origin),
@@ -515,10 +518,10 @@ describe("disposable Agent lifecycle smoke", () => {
   });
 
   it("uses Full control for one zero-grant bounded run, cleans up, and revokes access", async () => {
-    const harness = smokeHarness();
-    const report = await runSmoke(harness, { wait: async () => {} });
+    const harness = rehearsalHarness();
+    const report = await runRehearsal(harness, { wait: async () => {} });
 
-    expect(agentSmokeReportSchema.parse(report)).toEqual(report);
+    expect(agentRehearsalReportSchema.parse(report)).toEqual(report);
     expect(report.ok).toBe(true);
     expect(report.checks.map((check) => check.status)).toEqual([
       "pass",
@@ -541,7 +544,7 @@ describe("disposable Agent lifecycle smoke", () => {
       (request) => request.url.pathname === "/api/auth/oauth2/register",
     );
     expect(JSON.parse(registration?.body ?? "")).toMatchObject({
-      client_name: "Crewhelm Agent lifecycle smoke",
+      client_name: "Crewhelm Agent lifecycle rehearsal",
       scope: "crewhelm:full",
     });
     expect(harness.openedUrls[0]?.searchParams.get("scope")).toBe("crewhelm:full");
@@ -581,8 +584,8 @@ describe("disposable Agent lifecycle smoke", () => {
   });
 
   it("refuses to mutate when the lifecycle catalog is incomplete and still revokes access", async () => {
-    const harness = smokeHarness({ omitTool: "crewhelm_batch_disable_agents" });
-    const report = await runSmoke(harness);
+    const harness = rehearsalHarness({ omitTool: "crewhelm_batch_disable_agents" });
+    const report = await runRehearsal(harness);
 
     expect(report.ok).toBe(false);
     expect(report.checks[2]).toMatchObject({ code: "invalid_payload", status: "fail" });
@@ -592,8 +595,8 @@ describe("disposable Agent lifecycle smoke", () => {
   });
 
   it("treats a replayed create as unsafe and does not run or disable an existing Agent", async () => {
-    const harness = smokeHarness({ created: false });
-    const report = await runSmoke(harness);
+    const harness = rehearsalHarness({ created: false });
+    const report = await runRehearsal(harness);
 
     expect(report.ok).toBe(false);
     expect(report.checks[3]).toMatchObject({ code: "invalid_payload", status: "fail" });
@@ -605,8 +608,8 @@ describe("disposable Agent lifecycle smoke", () => {
   });
 
   it("reconciles a post-commit create response loss and disables the recovered fixture", async () => {
-    const harness = smokeHarness({ loseFirstCreateResponse: true });
-    const report = await runSmoke(harness, { wait: async () => {} });
+    const harness = rehearsalHarness({ loseFirstCreateResponse: true });
+    const report = await runRehearsal(harness, { wait: async () => {} });
 
     expect(report.ok).toBe(true);
     expect(harness.toolCalls.filter((call) => call.name === "crewhelm_create_agent")).toHaveLength(
@@ -624,8 +627,8 @@ describe("disposable Agent lifecycle smoke", () => {
   });
 
   it("adopts and disables the exact fixture when the retry performs the first commit", async () => {
-    const harness = smokeHarness({ failFirstCreateBeforeCommit: true });
-    const report = await runSmoke(harness, { wait: async () => {} });
+    const harness = rehearsalHarness({ failFirstCreateBeforeCommit: true });
+    const report = await runRehearsal(harness, { wait: async () => {} });
 
     expect(report.ok).toBe(true);
     expect(harness.toolCalls.filter((call) => call.name === "crewhelm_create_agent")).toHaveLength(
@@ -643,8 +646,8 @@ describe("disposable Agent lifecycle smoke", () => {
   });
 
   it("reconciles a post-commit run-start response loss and inspects the recovered run", async () => {
-    const harness = smokeHarness({ loseFirstStartResponse: true });
-    const report = await runSmoke(harness, { wait: async () => {} });
+    const harness = rehearsalHarness({ loseFirstStartResponse: true });
+    const report = await runRehearsal(harness, { wait: async () => {} });
 
     expect(report.ok).toBe(true);
     expect(harness.toolCalls.filter((call) => call.name === "crewhelm_start_run")).toHaveLength(2);
@@ -653,8 +656,8 @@ describe("disposable Agent lifecycle smoke", () => {
   });
 
   it("captures the exact run when the retry performs the first start commit", async () => {
-    const harness = smokeHarness({ failFirstStartBeforeCommit: true });
-    const report = await runSmoke(harness, { wait: async () => {} });
+    const harness = rehearsalHarness({ failFirstStartBeforeCommit: true });
+    const report = await runRehearsal(harness, { wait: async () => {} });
 
     expect(report.ok).toBe(true);
     expect(harness.toolCalls.filter((call) => call.name === "crewhelm_start_run")).toHaveLength(2);
@@ -663,8 +666,8 @@ describe("disposable Agent lifecycle smoke", () => {
   });
 
   it("does not adopt an unexplained replayed run on the ordinary start path", async () => {
-    const harness = smokeHarness({ started: false });
-    const report = await runSmoke(harness);
+    const harness = rehearsalHarness({ started: false });
+    const report = await runRehearsal(harness);
 
     expect(report.ok).toBe(false);
     expect(report.checks[4]).toMatchObject({ code: "invalid_payload", status: "fail" });
@@ -674,8 +677,8 @@ describe("disposable Agent lifecycle smoke", () => {
   });
 
   it("refuses to run or disable a create response that does not match the exact fixture", async () => {
-    const harness = smokeHarness({ mismatchCreatedName: true });
-    const report = await runSmoke(harness);
+    const harness = rehearsalHarness({ mismatchCreatedName: true });
+    const report = await runRehearsal(harness);
 
     expect(report.ok).toBe(false);
     expect(report.checks[3]).toMatchObject({ code: "invalid_payload", status: "fail" });
@@ -686,8 +689,8 @@ describe("disposable Agent lifecycle smoke", () => {
   });
 
   it("rejects a mismatched exact-Agent cleanup read", async () => {
-    const harness = smokeHarness({ mismatchGetId: true });
-    const report = await runSmoke(harness, { wait: async () => {} });
+    const harness = rehearsalHarness({ mismatchGetId: true });
+    const report = await runRehearsal(harness, { wait: async () => {} });
 
     expect(report.ok).toBe(false);
     expect(report.checks[4]).toMatchObject({ code: "valid", status: "pass" });
@@ -697,12 +700,12 @@ describe("disposable Agent lifecycle smoke", () => {
 
   it("cleans up after a run timeout and does not expose prompt or model output", async () => {
     const outputSecret = "provider-model-output-secret";
-    const harness = smokeHarness({
+    const harness = rehearsalHarness({
       inspectStatuses: ["running", "running"],
       secretOutput: outputSecret,
     });
     let time = 0;
-    const report = await runSmoke(harness, {
+    const report = await runRehearsal(harness, {
       now: () => time,
       wait: async (milliseconds) => {
         time += milliseconds;
@@ -721,8 +724,8 @@ describe("disposable Agent lifecycle smoke", () => {
   });
 
   it("cleans up a terminally failed run while preserving only its bounded status", async () => {
-    const harness = smokeHarness({ inspectStatuses: ["failed"] });
-    const report = await runSmoke(harness);
+    const harness = rehearsalHarness({ inspectStatuses: ["failed"] });
+    const report = await runRehearsal(harness);
 
     expect(report.ok).toBe(false);
     expect(report.runStatus).toBe("failed");
@@ -732,8 +735,8 @@ describe("disposable Agent lifecycle smoke", () => {
   });
 
   it("does not issue a token or mutate when the owner declines Full control", async () => {
-    const harness = smokeHarness();
-    const report = await runAgentSmoke(
+    const harness = rehearsalHarness();
+    const report = await runAgentRehearsal(
       {
         origin: parseDeploymentOrigin(origin),
         runTimeoutMs: 3_000,
@@ -766,8 +769,8 @@ describe("disposable Agent lifecycle smoke", () => {
   });
 
   it("reports cleanup and revocation failures independently", async () => {
-    const harness = smokeHarness({ disableFails: true, revokeWithoutEffect: true });
-    const report = await runSmoke(harness, { wait: async () => {} });
+    const harness = rehearsalHarness({ disableFails: true, revokeWithoutEffect: true });
+    const report = await runRehearsal(harness, { wait: async () => {} });
 
     expect(report.ok).toBe(false);
     expect(report.checks[4]).toMatchObject({ code: "valid", status: "pass" });
