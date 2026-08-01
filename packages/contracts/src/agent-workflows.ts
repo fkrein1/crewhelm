@@ -240,7 +240,7 @@ export const manageAgentWorkflowsInputSchema = z
     action: z
       .enum(["cancel", "delete", "inspect", "list", "start"])
       .describe(
-        "Start an ordered durable objective, list compact projections, inspect one exact Workflow, cancel active work, or delete a terminal Workflow.",
+        "Choose one action and send only its fields: cancel(workflowId, expectedRevision); delete(workflowId, expectedRevision, idempotencyKey); inspect(workflowId, includePrompts?, includeDeliverable?); list(agentId?, cursor?, limit?, status?); start(agentId, expectedRevision, idempotencyKey, objective, stages, briefs?).",
       ),
     agentId: agentIdSchema
       .optional()

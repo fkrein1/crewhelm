@@ -91,6 +91,7 @@ export {
 } from "./recovery-tools.js";
 
 const MAX_MCP_BODY_BYTES = 512 * 1024;
+export const MCP_MODEL_VISIBLE_CATALOG_SIZE_BUDGET_BYTES = 72 * 1_024;
 export const MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES = 64 * 1_024;
 export const MCP_TOOL_COUNT_BUDGET = 35;
 const MCP_SERVER_INFO = {

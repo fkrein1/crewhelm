@@ -85,6 +85,7 @@ import {
   MCP_LIST_CONNECTIONS_TOOL_NAME,
   MCP_LIST_UNRESOLVED_TOOL_EFFECTS_TOOL_NAME,
   MCP_LIST_RUN_TOOL_APPROVALS_TOOL_NAME,
+  MCP_MODEL_VISIBLE_CATALOG_SIZE_BUDGET_BYTES,
   MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES,
   MCP_DECIDE_RUN_TOOL_APPROVAL_TOOL_NAME,
   MCP_RECONCILE_TOOL_EXECUTION_TOOL_NAME,
@@ -208,7 +209,7 @@ describe("authenticated MCP handler", () => {
     });
   });
 
-  it("keeps the advertised MCP surface within explicit tool-count and schema budgets", async () => {
+  it("keeps the model-visible MCP surface within explicit catalog budgets", async () => {
     const authority = await ownerAuthority();
     const response = await handleAuthenticatedMcpRequest(
       toolRequest(
@@ -226,8 +227,12 @@ describe("authenticated MCP handler", () => {
     const serializedSchemas = new TextEncoder().encode(
       JSON.stringify(tools.map((tool) => tool.inputSchema)),
     ).byteLength;
+    const serializedCatalog = new TextEncoder().encode(
+      JSON.stringify({ instructions: MCP_SERVER_INSTRUCTIONS, tools }),
+    ).byteLength;
 
     expect(tools.length).toBeLessThanOrEqual(MCP_TOOL_COUNT_BUDGET);
+    expect(serializedCatalog).toBeLessThanOrEqual(MCP_MODEL_VISIBLE_CATALOG_SIZE_BUDGET_BYTES);
     expect(serializedSchemas).toBeLessThanOrEqual(MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES);
   });
 
@@ -342,6 +347,8 @@ describe("authenticated MCP handler", () => {
       openWorldHint: false,
       readOnlyHint: false,
     });
+    expect(inboxTool?.inputSchema).not.toHaveProperty("oneOf");
+    expect(JSON.stringify(inboxTool?.inputSchema)).toContain("acknowledge(itemId, version)");
     expect(sessionsTool).toMatchObject({
       annotations: {
         destructiveHint: false,
@@ -351,7 +358,8 @@ describe("authenticated MCP handler", () => {
       },
       description: expect.stringContaining("copy-ready continuation"),
     });
-    expect(JSON.stringify(sessionsTool?.inputSchema)).toContain('"action"');
+    expect(sessionsTool?.inputSchema).not.toHaveProperty("oneOf");
+    expect(JSON.stringify(sessionsTool?.inputSchema)).toContain("inspect(agentId, sessionId)");
     expect(deleteSessionTool).toMatchObject({
       annotations: {
         destructiveHint: true,
@@ -369,7 +377,10 @@ describe("authenticated MCP handler", () => {
       },
       description: expect.stringContaining("ordered durable Agent Runs"),
     });
-    expect(JSON.stringify(workflowsTool?.inputSchema)).toContain('"stages"');
+    expect(workflowsTool?.inputSchema).not.toHaveProperty("oneOf");
+    expect(JSON.stringify(workflowsTool?.inputSchema)).toContain(
+      "start(agentId, expectedRevision, idempotencyKey, objective, stages, briefs?)",
+    );
     expect(briefsTool).toMatchObject({
       annotations: {
         destructiveHint: true,
@@ -379,7 +390,8 @@ describe("authenticated MCP handler", () => {
       },
       description: expect.stringContaining("immutable"),
     });
-    expect(JSON.stringify(briefsTool?.inputSchema)).toContain('"read"');
+    expect(briefsTool?.inputSchema).not.toHaveProperty("oneOf");
+    expect(JSON.stringify(briefsTool?.inputSchema)).toContain("read(id, revision)");
     expect(scheduleReadTools).toHaveLength(3);
     expect(scheduleReadTools.every((tool) => tool.annotations.readOnlyHint)).toBe(true);
     expect(connectionLinkTool?.annotations).toMatchObject({
@@ -486,6 +498,9 @@ describe("authenticated MCP handler", () => {
     });
     expect(JSON.stringify(configureTool?.inputSchema)).toContain(
       "Current revision returned by crewhelm_get_config",
+    );
+    expect(JSON.stringify(configureTool?.inputSchema)).toContain(
+      "Fleet accepts preview(target, expectedRevision, patch) only",
     );
     expect(JSON.stringify(configureTool?.inputSchema)).toContain("bounds accidental loops");
   });

@@ -55,8 +55,12 @@ describe("MCP first-use guidance", () => {
   it("keeps initialization guidance compact and centered on bounded discovery", () => {
     expect(new TextEncoder().encode(MCP_SERVER_INSTRUCTIONS).byteLength).toBeLessThanOrEqual(1_536);
     expect(MCP_SERVER_INSTRUCTIONS).toContain("Start with crewhelm_status");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("choose the action first");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("schedules, Briefs, integrations, and recovery");
     expect(MCP_SERVER_INSTRUCTIONS).toContain("Preserve a Run continuation");
     expect(MCP_SERVER_INSTRUCTIONS).toContain("crewhelm_agent_workflows");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("tools.web-search");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("authenticated providers");
     expect(MCP_SERVER_INSTRUCTIONS).toContain("Never guess or blindly retry");
   });
 

@@ -185,7 +185,11 @@ export const deleteBriefInputSchema = z.strictObject({
 
 export const manageBriefsInputSchema = z
   .strictObject({
-    action: z.enum(["create", "delete", "inspect", "list", "read", "revise"]),
+    action: z
+      .enum(["create", "delete", "inspect", "list", "read", "revise"])
+      .describe(
+        "Choose one action and send only its fields: create(content, idempotencyKey, mediaType, name); delete(id, expectedRevision, idempotencyKey); inspect(id, revision?); list(cursor?, limit?, name?); read(id, revision); revise(id, expectedRevision, idempotencyKey, content, mediaType).",
+      ),
     content: briefContentSchema.optional(),
     cursor: briefIdSchema.optional(),
     expectedRevision: briefRevisionSchema.optional(),
