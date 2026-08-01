@@ -1,9 +1,9 @@
 ---
-name: crewhelm-development
-description: Deliver Crewhelm repository changes as small, secure, validated commits. Use for any Crewhelm implementation, bug fix, refactor, dependency update, configuration change, migration, security change, or documentation change intended for commit.
+name: crewhelm-delivery
+description: Deliver Crewhelm repository changes as small, secure, reviewed pull-request slices. Use for any Crewhelm implementation, bug fix, refactor, dependency update, configuration change, migration, security change, or documentation change intended for commit or pull request.
 ---
 
-# Crewhelm Development
+# Crewhelm delivery
 
 Ship one observable pull-request objective as a complete, green slice.
 
@@ -77,6 +77,10 @@ For sensitive changes, cover relevant abuse and failure paths:
    compatibility breaks. The reviewer must not delegate or repeat successful checks unless
    investigating a specific finding or missing evidence. Address blocking findings and repeat only
    checks invalidated by later changes.
+7. For changed public MCP or CLI behavior, explicitly account for live evidence before calling the
+   slice complete. When test-installation deployment is authorized, read and use
+   `../crewhelm-live-validation/SKILL.md`; otherwise state that live validation remains pending.
+   Never describe deterministic or local smoke coverage as live validation.
 
 Do not commit with a failing or flaky required check, unresolved high-impact finding, unreviewed
 dependency, unproven migration recovery, or undemonstrated objective.

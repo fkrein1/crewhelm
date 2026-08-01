@@ -1,0 +1,4 @@
+interface:
+  display_name: "Crewhelm delivery"
+  short_description: "Deliver secure, reviewed Crewhelm slices"
+  default_prompt: "Use $crewhelm-delivery to implement and deliver the next approved Crewhelm work item with explicit verification evidence."

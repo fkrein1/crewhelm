@@ -1,6 +1,6 @@
 # Crewhelm agent instructions
 
-For changes intended for commit, follow `.agents/skills/crewhelm-development/SKILL.md`.
+For changes intended for commit, follow `.agents/skills/crewhelm-delivery/SKILL.md`.
 
 Preserve unrelated changes, use the domain language in `CONTEXT.md`, and never weaken
 `docs/security/invariants.md`.

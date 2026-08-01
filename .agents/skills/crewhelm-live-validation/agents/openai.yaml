@@ -1,0 +1,4 @@
+interface:
+  display_name: "Crewhelm live validation"
+  short_description: "Validate Crewhelm through its public surfaces"
+  default_prompt: "Use $crewhelm-live-validation to run a bounded public-MCP rehearsal against the dedicated test installation and report cleanup-safe evidence."
