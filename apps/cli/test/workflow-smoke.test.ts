@@ -256,6 +256,7 @@ describe("Workflow feature rehearsal", () => {
             tools: [
               "crewhelm_agent_workflows",
               "crewhelm_batch_disable_agents",
+              "crewhelm_briefs",
               "crewhelm_create_agent",
               "crewhelm_get_agent",
               "crewhelm_list_agents",

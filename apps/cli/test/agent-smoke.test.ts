@@ -481,8 +481,8 @@ describe("disposable Agent lifecycle smoke", () => {
       },
     });
 
-    expect(toolListResponseSchema.safeParse(response(33)).success).toBe(true);
-    expect(toolListResponseSchema.safeParse(response(34)).success).toBe(false);
+    expect(toolListResponseSchema.safeParse(response(48)).success).toBe(true);
+    expect(toolListResponseSchema.safeParse(response(49)).success).toBe(false);
   });
 
   it("waits for browser-edge propagation before opening authorization", async () => {

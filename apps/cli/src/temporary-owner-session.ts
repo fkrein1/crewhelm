@@ -13,7 +13,7 @@ const AUTHORIZATION_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAXIMUM_OAUTH_RESPONSE_BYTES = 16 * 1_024;
 const MAXIMUM_MCP_RESPONSE_BYTES = 96 * 1_024;
 const MAXIMUM_REVOCATION_RESPONSE_BYTES = 4 * 1_024;
-const MAXIMUM_MCP_TOOLS = 33;
+const MAXIMUM_MCP_TOOLS = 48;
 
 export const temporaryOwnerSessionErrorCodeSchema = z.enum([
   "timeout",
