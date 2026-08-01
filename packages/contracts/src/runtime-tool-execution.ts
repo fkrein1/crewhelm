@@ -1,6 +1,11 @@
 import * as z from "zod";
 
-import { sandboxCodeRuntimeToolSchema, sandboxCodeLanguageSchema } from "./agent-runtime.js";
+import {
+  sandboxCodeLanguageSchema,
+  sandboxCodeRuntimeToolSchema,
+  webFetchRuntimeToolSchema,
+  webSearchRuntimeToolSchema,
+} from "./agent-runtime.js";
 import { sha256DigestSchema, toolCallIdSchema } from "./capabilities.js";
 import { agentIdSchema, agentRevisionNumberSchema, ownerKeySchema } from "./control-plane.js";
 import { runAdmissionNonceSchema, verifyActiveRunAdmissionInputSchema } from "./run-admission.js";
@@ -14,7 +19,7 @@ export const RUNTIME_TOOL_LATE_OPEN_CLEANUP_HORIZON_MS = 180_000;
 export const classifiedSandboxCodeActionSchema = z.strictObject({
   agentId: agentIdSchema,
   agentRevision: agentRevisionNumberSchema,
-  codeDigest: sha256DigestSchema,
+  inputDigest: sha256DigestSchema,
   language: sandboxCodeLanguageSchema,
   ownerKey: ownerKeySchema,
   runId: verifyActiveRunAdmissionInputSchema.shape.runId,
@@ -22,8 +27,34 @@ export const classifiedSandboxCodeActionSchema = z.strictObject({
   toolCallId: toolCallIdSchema,
 });
 
+export const classifiedWebFetchActionSchema = z.strictObject({
+  agentId: agentIdSchema,
+  agentRevision: agentRevisionNumberSchema,
+  inputDigest: sha256DigestSchema,
+  ownerKey: ownerKeySchema,
+  runId: verifyActiveRunAdmissionInputSchema.shape.runId,
+  tool: webFetchRuntimeToolSchema,
+  toolCallId: toolCallIdSchema,
+});
+
+export const classifiedWebSearchActionSchema = z.strictObject({
+  agentId: agentIdSchema,
+  agentRevision: agentRevisionNumberSchema,
+  inputDigest: sha256DigestSchema,
+  ownerKey: ownerKeySchema,
+  runId: verifyActiveRunAdmissionInputSchema.shape.runId,
+  tool: webSearchRuntimeToolSchema,
+  toolCallId: toolCallIdSchema,
+});
+
+export const classifiedRuntimeToolActionSchema = z.union([
+  classifiedSandboxCodeActionSchema,
+  classifiedWebFetchActionSchema,
+  classifiedWebSearchActionSchema,
+]);
+
 export const reserveRuntimeToolExecutionInputSchema = verifyActiveRunAdmissionInputSchema.extend({
-  action: classifiedSandboxCodeActionSchema,
+  action: classifiedRuntimeToolActionSchema,
 });
 
 const invalidRuntimeToolExecutionSchema = z.strictObject({
@@ -35,13 +66,13 @@ const invalidRuntimeToolExecutionSchema = z.strictObject({
 });
 
 export const runtimeToolExecutionPermitSchema = z.strictObject({
-  action: classifiedSandboxCodeActionSchema,
+  action: classifiedRuntimeToolActionSchema,
   actionDigest: sha256DigestSchema,
   audience: z.literal("crew_session_runtime_tool"),
   constraints: z.strictObject({
     decisionExpiresAt: z.iso.datetime(),
-    maxDurationMs: sandboxCodeRuntimeToolSchema.shape.limits.shape.maxDurationMs,
-    maxOutputBytes: sandboxCodeRuntimeToolSchema.shape.limits.shape.maxOutputBytes,
+    maxDurationMs: z.number().int().min(1),
+    maxOutputBytes: z.number().int().min(1_024),
   }),
   nonce: runAdmissionNonceSchema,
 });
@@ -83,6 +114,9 @@ export const completeRuntimeToolExecutionResultSchema = z.discriminatedUnion("ok
 ]);
 
 export type ClassifiedSandboxCodeAction = z.infer<typeof classifiedSandboxCodeActionSchema>;
+export type ClassifiedRuntimeToolAction = z.infer<typeof classifiedRuntimeToolActionSchema>;
+export type ClassifiedWebFetchAction = z.infer<typeof classifiedWebFetchActionSchema>;
+export type ClassifiedWebSearchAction = z.infer<typeof classifiedWebSearchActionSchema>;
 export type CompleteRuntimeToolExecutionResult = z.infer<
   typeof completeRuntimeToolExecutionResultSchema
 >;

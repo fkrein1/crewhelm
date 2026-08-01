@@ -269,7 +269,7 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
     JSON.stringify({
       ai: { binding: "AI" },
       compatibility_date: "2026-07-22",
-      compatibility_flags: ["nodejs_compat"],
+      compatibility_flags: ["global_fetch_strictly_public", "nodejs_compat"],
       d1_databases: [
         {
           binding: "AUTH_DB",
@@ -2542,6 +2542,7 @@ describe("Cloudflare bootstrap", () => {
 
     try {
       const dependencies = createDependencies(fixture.assets, runWrangler, {
+        CREWHELM_BRAVE_SEARCH_API_KEY: "brave-search-api-key-value",
         CREWHELM_COMPOSIO_API_KEY: "composio-project-key",
         CREWHELM_GITHUB_CLIENT_ID: "github-client-id",
         CREWHELM_GITHUB_CLIENT_SECRET: suppliedSecret,
@@ -2557,6 +2558,7 @@ describe("Cloudflare bootstrap", () => {
       expect(deployCount).toBe(2);
       expect(uploadedSecrets?.GITHUB_CLIENT_SECRET).toBe(suppliedSecret);
       expect(uploadedSecrets?.COMPOSIO_API_KEY).toBe("composio-project-key");
+      expect(uploadedSecrets?.BRAVE_SEARCH_API_KEY).toBe("brave-search-api-key-value");
       expect(uploadedSecrets?.BETTER_AUTH_SECRET).toMatch(/^[A-Za-z0-9_-]{64}$/);
       expect(deployArguments?.join(" ")).not.toContain(suppliedSecret);
       expect(createdResources).toEqual([
@@ -2981,6 +2983,40 @@ describe("Cloudflare bootstrap", () => {
       }
     },
   );
+
+  it("stops before D1 mutation when an optional Brave Search key is invalid", async () => {
+    const fixture = await createDeploymentAssets();
+    const runWrangler = vi.fn<RunWrangler>(async (arguments_) => {
+      if (arguments_[0] === "whoami") return whoami();
+      return {
+        exitCode: 1,
+        outcome: "completed",
+        stderr: "This Worker does not exist. [code: 10007]",
+        stdout: "",
+      };
+    });
+    try {
+      await expect(
+        bootstrapDeployment(
+          OPTIONS,
+          createDependencies(fixture.assets, runWrangler, {
+            CREWHELM_BRAVE_SEARCH_API_KEY: "short",
+            CREWHELM_COMPOSIO_API_KEY: "composio-project-key",
+            CREWHELM_GITHUB_CLIENT_ID: "github-client-id",
+            CREWHELM_GITHUB_CLIENT_SECRET: "github-client-secret",
+            CREWHELM_OWNER_GITHUB_USER_ID: "123456",
+          }),
+        ),
+      ).rejects.toMatchObject({
+        message: "Set CREWHELM_BRAVE_SEARCH_API_KEY to a valid Brave Search API key.",
+        stage: "configuration",
+      });
+      expect(runWrangler).toHaveBeenCalledTimes(2);
+      expect(runWrangler).not.toHaveBeenCalledWith(expect.arrayContaining(["d1", "migrations"]));
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
 
   it("requires explicit reuse after an ambiguous concurrent database creation", async () => {
     const fixture = await createDeploymentAssets();

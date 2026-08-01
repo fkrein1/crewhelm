@@ -12,10 +12,11 @@ export default defineConfig({
       main: fileURLToPath(new URL("./src/worker-test-entry.ts", import.meta.url)),
       miniflare: {
         compatibilityDate: "2026-07-22",
-        compatibilityFlags: ["nodejs_compat"],
+        compatibilityFlags: ["global_fetch_strictly_public", "nodejs_compat"],
         bindings: {
           AI: {},
           BETTER_AUTH_SECRET: "test-better-auth-secret-that-is-at-least-32-bytes",
+          BRAVE_SEARCH_API_KEY: "test-brave-search-api-key",
           COMPOSIO_API_KEY: "test-composio-api-key",
           CREWHELM_DEPLOYMENT_FINGERPRINT:
             "0000000000000000000000000000000000000000000000000000000000000000",

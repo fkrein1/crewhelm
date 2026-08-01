@@ -241,6 +241,8 @@ export class OwnerControlPlane extends DurableObject {
     const availableCapabilityPrerequisites = availableAgentCapabilityPrerequisites(
       environment.AI_GATEWAY_ID,
       environment.CODE_SANDBOX !== undefined,
+      environment.BRAVE_SEARCH_API_KEY !== undefined &&
+        environment.BRAVE_SEARCH_API_KEY.trim().length > 0,
     );
     this.#runAdmissions = new RunAdmissions(
       this.#objectName,

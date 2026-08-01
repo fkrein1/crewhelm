@@ -3,7 +3,7 @@
   "name": "crewhelm",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-22",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["global_fetch_strictly_public", "nodejs_compat"],
   "observability": {
     "enabled": true,
     "logs": {

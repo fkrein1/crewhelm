@@ -42,6 +42,9 @@ ${style.accentStrong("Automation:")}
     ${style.warning("CREWHELM_OWNER_GITHUB_USER_ID")}
     ${style.warning("CREWHELM_COMPOSIO_API_KEY")}
 
+  Optional capabilities:
+    ${style.warning("CREWHELM_BRAVE_SEARCH_API_KEY")} ${style.muted("# enables Agent web search; controlled fetch needs no paid Worker feature")}
+
   When Wrangler OAuth cannot manage AI Gateway, also set:
     ${style.warning("CREWHELM_CLOUDFLARE_API_TOKEN")}
 

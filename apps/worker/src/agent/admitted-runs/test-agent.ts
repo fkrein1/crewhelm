@@ -5,6 +5,8 @@ import {
   inspectAdmittedRunResultSchema,
   resolveToolExecutionConnectionResultSchema,
   type ComposioToolCapabilityGrant,
+  type WebFetchRuntimeTool,
+  type WebSearchRuntimeTool,
 } from "@crewhelm/contracts";
 import type { ThinkModel } from "@cloudflare/think";
 import type { ExecutionResult } from "@cloudflare/sandbox";
@@ -14,6 +16,7 @@ import * as z from "zod";
 import { CrewAgent } from "../session-directory.js";
 import { CrewSession, type CrewAgentToolAdapter } from "./module.js";
 import { digestToolInput } from "./protocol.js";
+import type { ControlledWebFetchResult, WebSearchEvidence } from "./web-research-execution.js";
 
 const TEST_REPLY = "Crewhelm completed the admitted test run.";
 const LARGE_TEST_PROMPT = "Return an output larger than the retained character boundary.";
@@ -26,6 +29,36 @@ const TOOL_RESULT_FALLBACK_TEST_PROMPT =
 const TEST_TOOL_NAME = "projectToolkitReadItem";
 const SANDBOX_TEST_PROMPT = "Use the bounded Sandbox to calculate six times seven.";
 const SANDBOX_LIMIT_TEST_PROMPT = "Use the bounded Sandbox and exercise its execution limit.";
+const WEB_RESEARCH_TEST_PROMPT = "Search for and read the exact public Crewhelm test source.";
+
+function findWebSource(value: unknown): { token: string; url: string } | undefined {
+  if (typeof value === "string") {
+    try {
+      return findWebSource(JSON.parse(value));
+    } catch {
+      return undefined;
+    }
+  }
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      const source = findWebSource(child);
+      if (source !== undefined) return source;
+    }
+    return undefined;
+  }
+  if (value === null || typeof value !== "object") return undefined;
+  const token = Reflect.get(value, "token");
+  const url = Reflect.get(value, "url");
+  if (typeof token === "string" && typeof url === "string" && token.length === 43) {
+    return { token, url };
+  }
+  for (const key of Reflect.ownKeys(value)) {
+    const child = Reflect.get(value, key);
+    const source = findWebSource(child);
+    if (source !== undefined) return source;
+  }
+  return undefined;
+}
 
 interface TestModelCall {
   maxOutputTokens: number | undefined;
@@ -317,6 +350,8 @@ export class TestCrewSession extends CrewSession {
   #releaseDeletion: (() => void) | undefined;
   readonly #modelCalls: TestModelCall[] = [];
   readonly #sandboxExecutions: Array<{ code: string; language: string }> = [];
+  readonly #webFetchExecutions: string[] = [];
+  readonly #webSearchExecutions: string[] = [];
   readonly #model = new MockLanguageModelV4({
     doGenerate: async () => ({
       content: [{ text: TEST_REPLY, type: "text" }],
@@ -334,6 +369,64 @@ export class TestCrewSession extends CrewSession {
         toolCount: options.tools?.length ?? 0,
       });
       const serializedPrompt = JSON.stringify(options.prompt);
+
+      if (
+        serializedPrompt.includes(WEB_RESEARCH_TEST_PROMPT) &&
+        (JSON.stringify(options.tools) ?? "").includes("web_search") &&
+        this.#webSearchExecutions.length === 0
+      ) {
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: "stream-start", warnings: [] },
+              {
+                input: JSON.stringify({ query: "Crewhelm public test source" }),
+                toolCallId: "framework-web-search-call",
+                toolName: "web_search",
+                type: "tool-call",
+              },
+              {
+                finishReason: { raw: "tool-calls", unified: "tool-calls" },
+                type: "finish",
+                usage: {
+                  inputTokens: { cacheRead: 0, cacheWrite: 0, noCache: 8, total: 8 },
+                  outputTokens: { reasoning: 0, text: 1, total: 1 },
+                },
+              },
+            ],
+          }),
+        };
+      }
+
+      const webSource = findWebSource(options.prompt);
+      if (
+        serializedPrompt.includes(WEB_RESEARCH_TEST_PROMPT) &&
+        (JSON.stringify(options.tools) ?? "").includes("web_fetch_source") &&
+        this.#webFetchExecutions.length === 0 &&
+        webSource !== undefined
+      ) {
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: "stream-start", warnings: [] },
+              {
+                input: JSON.stringify({ source: webSource }),
+                toolCallId: "framework-web-fetch-call",
+                toolName: "web_fetch_source",
+                type: "tool-call",
+              },
+              {
+                finishReason: { raw: "tool-calls", unified: "tool-calls" },
+                type: "finish",
+                usage: {
+                  inputTokens: { cacheRead: 0, cacheWrite: 0, noCache: 8, total: 8 },
+                  outputTokens: { reasoning: 0, text: 1, total: 1 },
+                },
+              },
+            ],
+          }),
+        };
+      }
 
       if (
         (serializedPrompt.includes(SANDBOX_TEST_PROMPT) ||
@@ -401,6 +494,49 @@ export class TestCrewSession extends CrewSession {
 
   sandboxExecutionsForTest(): Array<{ code: string; language: string }> {
     return structuredClone(this.#sandboxExecutions);
+  }
+
+  webExecutionsForTest(): { fetches: string[]; searches: string[] } {
+    return {
+      fetches: structuredClone(this.#webFetchExecutions),
+      searches: structuredClone(this.#webSearchExecutions),
+    };
+  }
+
+  protected override runWebSearch(input: {
+    query: string;
+    signal: AbortSignal;
+    tool: WebSearchRuntimeTool;
+  }): Promise<{ query: string; results: WebSearchEvidence[] }> {
+    if (input.signal.aborted) return Promise.reject(new Error("Test search was cancelled."));
+    this.#webSearchExecutions.push(input.query);
+    return Promise.resolve({
+      query: input.query,
+      results: [
+        {
+          snippet: "A bounded public test source.",
+          title: "Crewhelm source",
+          url: "https://example.com/crewhelm-source",
+        },
+      ],
+    });
+  }
+
+  protected override runWebFetch(input: {
+    signal: AbortSignal;
+    tool: WebFetchRuntimeTool;
+    url: string;
+  }): Promise<ControlledWebFetchResult> {
+    if (input.signal.aborted) return Promise.reject(new Error("Test fetch was cancelled."));
+    this.#webFetchExecutions.push(input.url);
+    return Promise.resolve({
+      contentType: "text/plain",
+      digest: "a".repeat(64),
+      finalUrl: input.url,
+      redirects: 0,
+      text: "Crewhelm public source evidence.",
+      truncated: false,
+    });
   }
 
   protected override runSandboxCode(input: {
@@ -523,6 +659,7 @@ export {
   REJECTED_SESSION_PROMPT,
   SANDBOX_LIMIT_TEST_PROMPT,
   SANDBOX_TEST_PROMPT,
+  WEB_RESEARCH_TEST_PROMPT,
   SLOW_TEST_PROMPT,
   TEST_REPLY,
   TOOL_RESULT_FALLBACK_TEST_PROMPT,

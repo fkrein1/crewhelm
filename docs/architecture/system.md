@@ -20,6 +20,8 @@ flowchart LR
     Agent --> Session["CrewSession / Think"]
     Session -. optional .-> Gateway["Dedicated AI Gateway"]
     Session -. admitted native tool .-> Sandbox["Ephemeral no-egress Sandbox"]
+    Session -. admitted search .-> Search["Brave Search adapter"]
+    Session -. Run-bound source .-> Web["Controlled public HTTPS fetch"]
     Worker --> Catalog["Composio catalog and Connect Links"]
     Session --> Gate["ToolGate and execution reservation"]
     Gate --> Composio["Trusted adapter / Composio"]
@@ -32,18 +34,19 @@ conversation. A Cloudflare `AgentTaskWorkflow` may coordinate one frozen ordered
 owner control plane to admit each stage as a normal Run. Retained pre-session runs remain readable
 through the Agent object during migration.
 
-| State owner         | Authoritative facts                                                                                                                                                |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Worker              | Authenticated request context only                                                                                                                                 |
-| Auth D1             | OAuth state, signing keys, rotating refresh tokens, and token revocation                                                                                           |
-| `OwnerControlPlane` | Agent and connection lifecycle, grants, Briefs, schedules, Workflow plans and projections, Run admission, owner inbox, approvals, effect reconciliation, and audit |
-| Owner content R2    | Immutable Skill files, versioned Brief content, and final Workflow deliverables; owner-local SQLite holds metadata, digests, provenance, and lifecycle             |
-| `CrewAgent`         | Workflow and Session discovery, branch revisions, retention, deletion, and exact event and Run routing                                                             |
-| `AgentTaskWorkflow` | Durable ordering of identifiers and stage events; no prompts, bearer authority, provider access, or policy decisions                                               |
-| `CrewSession`       | One conversation's Think transcript, submissions, output, deadlines, and approval waits                                                                            |
-| Sandbox container   | One runtime-tool call's ephemeral process and filesystem; never owner authority or credentials; its backing Durable Object is purged after teardown                |
-| AI Gateway          | Optional installation-wide hard spend ceiling and model-call cost metadata                                                                                         |
-| Composio            | Connected-account credentials and refresh                                                                                                                          |
+| State owner          | Authoritative facts                                                                                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Worker               | Authenticated request context only                                                                                                                                 |
+| Auth D1              | OAuth state, signing keys, rotating refresh tokens, and token revocation                                                                                           |
+| `OwnerControlPlane`  | Agent and connection lifecycle, grants, Briefs, schedules, Workflow plans and projections, Run admission, owner inbox, approvals, effect reconciliation, and audit |
+| Owner content R2     | Immutable Skill files, versioned Brief content, and final Workflow deliverables; owner-local SQLite holds metadata, digests, provenance, and lifecycle             |
+| `CrewAgent`          | Workflow and Session discovery, branch revisions, retention, deletion, and exact event and Run routing                                                             |
+| `AgentTaskWorkflow`  | Durable ordering of identifiers and stage events; no prompts, bearer authority, provider access, or policy decisions                                               |
+| `CrewSession`        | One conversation's Think transcript, submissions, output, deadlines, and approval waits                                                                            |
+| Sandbox container    | One runtime-tool call's ephemeral process and filesystem; never owner authority or credentials; its backing Durable Object is purged after teardown                |
+| Search/fetch adapter | Bounded public evidence reads; provider credentials stay in the Worker and exact source handles expire with their Run                                              |
+| AI Gateway           | Optional installation-wide hard spend ceiling and model-call cost metadata                                                                                         |
+| Composio             | Connected-account credentials and refresh                                                                                                                          |
 
 The control plane owns admission and administration; the Agent directory owns conversation
 lifecycle; each session owns execution. Cross-object calls
@@ -103,6 +106,14 @@ container per call, blocks network egress, exposes no Crewhelm credentials, retu
 textual output, and destroys the container after execution. The owner ledger retains the exact
 container identity and repeats cleanup across the bounded late-open window before releasing the
 Run's storage target.
+
+`web.search` sends one bounded query through a Crewhelm-owned Brave Search adapter and returns only
+normalized public HTTPS evidence. Each result receives an HMAC source handle bound to the active
+Run and exact normalized URL. `web.fetch` accepts that handle unchanged or one direct public HTTPS
+URL, follows a small number of revalidated public HTTPS redirects, accepts configured textual media
+types, and bounds response bytes, normalized output, and wall time. Search and fetch are public
+reads, so interrupted calls fail instead of entering external-effect reconciliation and are never
+silently replayed. Retrieved titles, snippets, URLs, and page text remain untrusted data.
 Configuration changes invalidate unconsumed authority. The optional AI Gateway provides the
 fleet-wide dollar ceiling. The
 [threat model](../security/threat-model.md#observability-and-deployment) defines telemetry and

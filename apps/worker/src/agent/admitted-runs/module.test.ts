@@ -32,6 +32,8 @@ import {
 import { deriveOwnerKey } from "../../owner/identity.js";
 import { skillsCapabilityConfiguration } from "../../agent-capabilities/skills.js";
 import { sandboxCodeCapabilityConfiguration } from "../../agent-capabilities/sandbox-code.js";
+import { webFetchCapabilityConfiguration } from "../../agent-capabilities/web-fetch.js";
+import { webSearchCapabilityConfiguration } from "../../agent-capabilities/web-search.js";
 import { workersAiCapabilityConfiguration } from "../../agent-capabilities/workers-ai.js";
 import { OwnerControlPlane } from "../../owner/durable-object.js";
 import { digestRunPrompt } from "./protocol.js";
@@ -45,6 +47,7 @@ import {
   TEST_REPLY,
   TOOL_RESULT_FALLBACK_TEST_PROMPT,
   TOOL_TEST_PROMPT,
+  WEB_RESEARCH_TEST_PROMPT,
   TestCrewAgent,
   TestCrewSession,
 } from "./test-agent.js";
@@ -846,6 +849,88 @@ describe("CrewAgent admitted execution", () => {
         ),
       ];
       expect(rows).toEqual([expect.objectContaining({ status: "completed" })]);
+    });
+  });
+
+  it("searches and fetches only the exact Run-bound source through an isolated CrewSession", async () => {
+    const authority = await authorityFor("crew-session-web-research");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(authority, {
+      ...agentInput("crew-session-web-research-agent"),
+      capabilities: [
+        workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct"),
+        webFetchCapabilityConfiguration(),
+        webSearchCapabilityConfiguration({ maxResults: 3 }),
+      ].toSorted((left, right) => left.id.localeCompare(right.id)),
+      executionLimits: {
+        maxDurationSeconds: 45,
+        maxModelTokens: 2_000,
+        maxToolCalls: 2,
+        maxTurns: 4,
+      },
+    });
+    if (!created.ok) throw new Error("Expected web-research-enabled Agent.");
+    await runInDurableObject(
+      env.CREW_AGENT.getByName(
+        crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
+      ),
+      (agent) => asTestCrewAgent(agent).enableDurableSessionsForTest(),
+    );
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-session-web-research-run",
+      prompt: WEB_RESEARCH_TEST_PROMPT,
+    });
+    if (!started.ok || started.run.session === undefined) {
+      throw new Error("Expected an isolated web research session run.");
+    }
+    const finished = await vi.waitFor(
+      async () => {
+        const result = await controlPlane.inspectRun(authority, { runId: started.run.runId });
+        expect(result).toMatchObject({
+          ok: true,
+          run: { runId: started.run.runId, status: "completed" },
+        });
+        if (!result.ok) throw new Error("Expected completed web research run.");
+        return result;
+      },
+      { interval: 25, timeout: 5_000 },
+    );
+    expect(finished.usage?.toolCalls).toEqual({ limit: 2, used: 2 });
+    expect(finished.timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event: "tool.execution_reserved" }),
+        expect.objectContaining({ event: "tool.execution_dispatched" }),
+        expect.objectContaining({ event: "tool.execution_completed" }),
+      ]),
+    );
+    const session = env.CREW_SESSION.getByName(
+      crewSessionObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+        sessionId: started.run.session.sessionId,
+      }),
+    );
+    await runInDurableObject(session, (instance) => {
+      expect(asTestCrewSession(instance).webExecutionsForTest()).toEqual({
+        fetches: ["https://example.com/crewhelm-source"],
+        searches: ["Crewhelm public test source"],
+      });
+    });
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      const rows = [
+        ...state.storage.sql.exec<{ cleanup_at: number | null; status: string }>(
+          "SELECT cleanup_at, status FROM runtime_tool_executions WHERE run_id = ? ORDER BY tool_id",
+          started.run.runId,
+        ),
+      ];
+      expect(rows).toHaveLength(2);
+      expect(rows).toEqual([
+        expect.objectContaining({ status: "completed" }),
+        expect.objectContaining({ status: "completed" }),
+      ]);
+      expect(rows.every((row) => row.cleanup_at !== null)).toBe(true);
     });
   });
 
