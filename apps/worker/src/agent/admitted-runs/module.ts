@@ -2991,6 +2991,7 @@ export class CrewSession extends Think {
       runTimelineEventSchema.parse({
         event: "tool.execution_reserved",
         occurredAt: new Date().toISOString(),
+        runtimeToolId: runtimeTool.id,
         toolCallId: action.toolCallId,
       }),
     );
@@ -3012,6 +3013,7 @@ export class CrewSession extends Think {
       runTimelineEventSchema.parse({
         event: "tool.execution_dispatched",
         occurredAt: new Date().toISOString(),
+        runtimeToolId: runtimeTool.id,
         toolCallId: action.toolCallId,
       }),
     );
@@ -3054,6 +3056,7 @@ export class CrewSession extends Think {
       runTimelineEventSchema.parse({
         event: `tool.execution_${recordedStatus}`,
         occurredAt: new Date().toISOString(),
+        runtimeToolId: runtimeTool.id,
         toolCallId: action.toolCallId,
       }),
     );
@@ -3266,6 +3269,7 @@ export class CrewSession extends Think {
         event: "tool.provider_failed",
         occurredAt: new Date().toISOString(),
         provider: toolProviderFailureSchema.parse({ outcome, status, toolSlug }),
+        runtimeToolId: permit.action.tool.id,
         toolCallId: permit.action.toolCallId,
       }),
     );
@@ -3302,6 +3306,7 @@ export class CrewSession extends Think {
       runTimelineEventSchema.parse({
         event: "tool.execution_reserved",
         occurredAt: new Date().toISOString(),
+        runtimeToolId: action.tool.id,
         toolCallId: action.toolCallId,
       }),
     );
@@ -3321,6 +3326,7 @@ export class CrewSession extends Think {
       runTimelineEventSchema.parse({
         event: "tool.execution_dispatched",
         occurredAt: new Date().toISOString(),
+        runtimeToolId: action.tool.id,
         toolCallId: action.toolCallId,
       }),
     );
@@ -3347,6 +3353,7 @@ export class CrewSession extends Think {
       runTimelineEventSchema.parse({
         event: `tool.execution_${completed ? status : "unknown"}`,
         occurredAt: new Date().toISOString(),
+        runtimeToolId: action.tool.id,
         toolCallId: action.toolCallId,
       }),
     );

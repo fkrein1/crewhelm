@@ -32,6 +32,7 @@ export const MAXIMUM_WEB_SEARCH_QUERY_CHARACTERS = 512;
 export const MAXIMUM_WEB_SEARCH_RESULTS = 10;
 
 export const sandboxCodeLanguageSchema = z.enum(["javascript", "python"]);
+export const agentRuntimeToolIdSchema = z.enum(["sandbox.code", "web.fetch", "web.search"]);
 
 export const sandboxCodeRuntimeToolSchema = z.strictObject({
   effect: z.literal("local-compute"),
