@@ -12,3 +12,6 @@ Use explicit variants when the surface controls its color scheme. `crewhelm-mark
 `crewhelm-favicon.svg` are adaptive aliases for consumers that support `prefers-color-scheme`.
 Raster exports are always named for their color-scheme variant because PNGs cannot adapt by
 themselves.
+
+The `crewhelm-readme-header-{light,dark}.svg` lockups reuse the unchanged mark geometry with the
+wordmark and product promise for the repository landing page.

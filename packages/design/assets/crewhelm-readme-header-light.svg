@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="620"
+  height="150"
+  viewBox="0 0 620 150"
+  role="img"
+  aria-labelledby="title description"
+>
+  <title id="title">Crewhelm</title>
+  <desc id="description">Crewhelm boundary mark and the tagline Give Agents a mandate. Not a master key.</desc>
+  <g transform="translate(28 13) scale(.10546875)">
+    <g fill="#0B121B">
+      <path d="M107 78h371v148H247v272H107V78Z" />
+      <path d="M544 78h372v387H775V226H544V78Z" />
+      <path d="M107 553h140v237h231v155H107V553Z" />
+      <path d="M775 551h141v394H544V790h231V551Z" />
+    </g>
+    <rect x="442" y="429" width="140" height="143" fill="#0067DB" />
+  </g>
+  <text
+    x="150"
+    y="69"
+    fill="#0B121B"
+    font-family="Inter, Arial, sans-serif"
+    font-size="50"
+    font-weight="800"
+    letter-spacing="3"
+  >CREWHELM</text>
+  <text
+    x="153"
+    y="108"
+    fill="#57606A"
+    font-family="Georgia, 'Times New Roman', serif"
+    font-size="20"
+    font-style="italic"
+  >
+    <tspan>Give Agents a mandate. </tspan>
+    <tspan fill="#0067DB">Not a master key.</tspan>
+  </text>
+</svg>

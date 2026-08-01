@@ -1,41 +1,42 @@
-# Crewhelm
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="packages/design/assets/crewhelm-readme-header-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="packages/design/assets/crewhelm-readme-header-light.svg">
+    <img alt="CREWHELM — Give Agents a mandate. Not a master key." src="packages/design/assets/crewhelm-readme-header-light.svg" width="620">
+  </picture>
+</p>
 
-Crewhelm is an open-source personal control plane for creating and operating AI agents on
-Cloudflare. MCP is the administration surface, a local CLI bootstraps and diagnoses the
-deployment, and Composio supplies the external integration plane.
+<p align="center">
+  <strong><a href="https://crewhelm.app">Website</a></strong> ·
+  <strong><a href="#bring-up-your-helm">Quick start</a></strong> ·
+  <strong><a href="docs/reference/mcp-tools.md">MCP reference</a></strong> ·
+  <strong><a href="docs/architecture/system.md">Architecture</a></strong>
+</p>
 
-Website: [crewhelm.app](https://crewhelm.app)
+**Own the control plane. Grant the minimum. Let routine work run.** Crewhelm creates and operates
+long-lived Agents on your Cloudflare account—with exact capability grants, immutable revisions,
+budgets, approvals, and a complete audit trail.
 
-The current implementation provides an authenticated, owner-scoped Agent registry; immutable
-Agent revisions; bounded manual and scheduled runs on Cloudflare Think; deterministic capability,
-approval, budget, and recovery controls; durable ordered Agent workflows that survive MCP
-disconnects; and version-pinned Composio tool discovery and execution.
-Declarative, shareable Agent recipes are part of the longer-term product vision, not the current
-surface.
+MCP is the administration surface. A local CLI bootstraps and diagnoses the deployment. Composio
+holds provider credentials while Agents receive only bounded use.
 
-## Principles
+## Why Crewhelm
 
-- Personal ownership and simple self-hosting
-- Cloudflare-native durable agents
-- MCP-first administration
-- Deterministic, deny-by-default authority
-- Composio integrations without provider credentials entering Crewhelm
-- Bounded execution, explicit side effects, and recoverable state
+| Principle                  | What it means                                                                     |
+| -------------------------- | --------------------------------------------------------------------------------- |
+| **Own the control plane**  | Durable state, policy, and operational control stay in infrastructure you own.    |
+| **Grant the minimum**      | Capability grants are explicit; provider credentials remain in Composio.          |
+| **Let routine work run**   | Runs proceed within standing authority and fixed budgets.                         |
+| **Keep stops recoverable** | Approve, deny, disable, revoke, retry, and inspect without improvising authority. |
 
-## Development
+> [!NOTE]
+> **Available today:** an authenticated, owner-scoped Agent registry; immutable revisions;
+> bounded manual and scheduled runs; durable ordered workflows; deterministic authority,
+> approval, budget, and recovery controls; and version-pinned Composio tool execution.
+>
+> Declarative, shareable Agent recipes remain part of the longer-term product vision.
 
-Use Node.js 24.18.0 and the pinned pnpm version:
-
-```sh
-corepack enable
-pnpm install --frozen-lockfile
-pnpm verify
-```
-
-Read [AGENTS.md](AGENTS.md) before using an AI coding agent. Human contribution guidance is in
-[CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Install and upgrade
+## Bring up your helm
 
 Run the guided installer from a terminal authenticated with Cloudflare:
 
@@ -43,33 +44,49 @@ Run the guided installer from a terminal authenticated with Cloudflare:
 npx @crewhelm/cli@beta up
 ```
 
-On a fresh installation, `crewhelm up` creates a private GitHub App in your browser and securely
-prompts for the Worker URL and Composio project key. Interactive setup recommends Cloudflare AI
-Gateway spend protection, asks for the daily USD limit when enabled, and also lets you skip it. The
-CLI applies packaged migrations, provisions isolated Skill package storage, deploys, and diagnoses
-the public origin. It saves only non-secret
-coordinates in `crewhelm.installation.json`; `crewhelm.installation.example.json` shows the shape.
-Repeat upgrades preserve deployed secrets and an existing Gateway route, and skip an identical
-Worker upload while still reconciling triggers.
-If that local file is missing but the named Worker already exists, `up` verifies its single active
-version, origin, D1 binding and provenance, and optional Gateway route before recreating the file
-and starting any deployment mutation. Conflicting or ambiguous remote state stops the upgrade.
-The public health contract includes a non-secret packaged-build fingerprint and deployment-protocol
-version. `doctor` reports whether the installed Worker matches the CLI, production smoke commands
-stop before authorization when it does not, and an interactive smoke offers to run the explicit
-matching `up`. A newer Worker protocol is never replaced by an older CLI.
+`crewhelm up` provisions the control plane, deploys it, and verifies what came up. It stores only
+non-secret coordinates in `crewhelm.installation.json`; see
+`crewhelm.installation.example.json` for the shape.
 
-One Cloudflare account may host multiple installations when each uses explicit, distinct Worker,
-D1, R2, metadata, and callback coordinates. Rate-limit counters and Durable Objects remain
-Worker-specific; shared Gateways and GitHub Apps must be explicit, with every callback allowlisted.
+### Guided setup
 
-Pass `--ai-budget-usd <dollars>` to enable or change the optional Gateway hard limit. Without a
-Gateway, Crewhelm keeps run and tool-loop safeguards but has no hard dollar ceiling. Use
-`--account-id` when Wrangler can access multiple Cloudflare accounts. If Wrangler's OAuth
-credential cannot manage AI Gateways, interactive setup prints the exact account-scoped AI Gateway
-Edit recipe, opens Cloudflare's token page, or lets the operator skip or stop. The token is hidden
-and process-only. Environment variables remain available for unattended setup; see
-`crewhelm --help`.
+- **Connect.** Create a private GitHub App and securely enter the Worker URL and Composio project
+  key.
+- **Protect spend.** Enable an optional Cloudflare AI Gateway hard limit or continue without one.
+- **Provision.** Apply packaged migrations, create isolated Skill package storage, and deploy the
+  Worker.
+- **Verify.** Diagnose the public origin against the CLI's packaged build and deployment protocol.
+
+### Upgrade and recovery guarantees
+
+- Repeat upgrades preserve deployed secrets and an existing Gateway route, reconcile triggers,
+  and skip an identical Worker upload.
+- If local installation metadata is missing, `up` verifies the Worker's active version, origin, D1
+  binding, provenance, and optional Gateway route before recreating it. Conflicting or ambiguous
+  remote state stops the upgrade.
+- Production smoke commands stop before authorization when the installed Worker does not match
+  the CLI. An older CLI never replaces a newer Worker protocol.
+
+### Operator controls
+
+| Need                         | Use                                                        |
+| ---------------------------- | ---------------------------------------------------------- |
+| Set a hard AI spend limit    | `--ai-budget-usd <dollars>`                                |
+| Select a Cloudflare account  | `--account-id <id>`                                        |
+| Choose browser handling      | `--browser system`, `--browser codex`, or `--browser none` |
+| Target installation metadata | `--installation <path>`                                    |
+| Produce machine output       | `--json`                                                   |
+
+Without an AI Gateway, Crewhelm still enforces run and tool-loop safeguards but has no hard dollar
+ceiling. If Wrangler cannot manage AI Gateways, guided setup provides the exact account-scoped
+token recipe; the token remains hidden and process-only. Environment variables are available for
+unattended setup—see `crewhelm --help`.
+
+### Target multiple installations
+
+One Cloudflare account may host multiple installations when each has distinct Worker, D1, R2,
+metadata, and callback coordinates. Rate-limit counters and Durable Objects remain Worker-specific;
+shared Gateways and GitHub Apps must be explicit, with every callback allowlisted.
 
 Use explicit installation metadata to keep a dedicated target authoritative:
 
@@ -85,12 +102,7 @@ Installation-backed diagnosis and smoke commands derive their endpoint from the 
 both `--installation` and `--endpoint` are supplied, Crewhelm rejects a mismatch before making a
 network request.
 
-Interactive commands accept `--browser system`, `--browser codex`, or `--browser none`. Codex mode
-prints a capability-bearing `CODEX_BROWSER_HANDOFF` loopback URL to stderr. Open it in the Codex
-in-app browser, then choose **Continue to Crewhelm**. The continuation is single-use; the CLI never
-prints the signed authorization target or falls back to the system browser.
-
-Diagnose without deploying:
+### Diagnose without deploying
 
 ```sh
 node apps/cli/dist/crewhelm.js doctor --endpoint https://YOUR_WORKER_HOST
@@ -105,38 +117,61 @@ non-interactive.
 Both commands support `--json`. Public endpoints require HTTPS; exact loopback HTTP is accepted
 for local development.
 
-## MCP
+### Use the Codex browser handoff
 
-The Worker exposes Streamable HTTP MCP at `/mcp`. Clients dynamically register at
-`/api/auth/oauth2/register` and authenticate the configured owner through the private GitHub App:
+Codex browser mode prints a capability-bearing `CODEX_BROWSER_HANDOFF` loopback URL to stderr.
+Open it in the Codex in-app browser, then choose **Continue to Crewhelm**. The continuation is
+single-use; the CLI never prints the signed authorization target or falls back to the system
+browser.
+
+## Administer through MCP
+
+The Worker exposes Streamable HTTP MCP at `/mcp`. Clients register dynamically and authenticate the
+configured owner through the private GitHub App:
 
 ```text
 https://YOUR_WORKER_HOST/api/auth/callback/github
 ```
 
-Clients request one stable access level: **View only** inspects fleet state, **Use agents** also
-operates runs and decides run-time approvals, and **Full control** reconfigures Agents,
-integrations, automation, and policy. The installation owner defaults to Full control. The Worker
-maps each level to precise internal capabilities before a module handles the request.
+### Choose an access level
+
+| Access           | Authority                                                   |
+| ---------------- | ----------------------------------------------------------- |
+| **View only**    | Inspect fleet state.                                        |
+| **Use agents**   | Inspect state, operate runs, and decide run-time approvals. |
+| **Full control** | Reconfigure Agents, integrations, automation, and policy.   |
+
+The installation owner defaults to **Full control**. Crewhelm maps each stable access level to
+precise internal capabilities before a module handles the request.
+
+### Authority stays explicit
 
 Internally, capabilities separate control-plane, Agent, autonomy, connection,
 authentication-configuration, and integration access. Tool visibility does not grant execution
 authority: Crewhelm revalidates the owner, access level, immutable Agent revision, capability,
-approval, connection, budget, and
-single-use permit at the relevant boundaries.
+approval, connection, budget, and single-use permit at the relevant boundaries.
 
-The complete [MCP tool reference](docs/reference/mcp-tools.md) is generated from the authenticated
-`tools/list` response:
+### Explore the surface
 
-Stable failure fields and bounded follow-up reads are documented in
-[MCP errors and recovery](docs/reference/errors.md).
+- [MCP tool reference](docs/reference/mcp-tools.md) — generated from the authenticated
+  `tools/list` response.
+- [MCP errors and recovery](docs/reference/errors.md) — stable failure fields and bounded
+  follow-up reads.
+- [Official MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector) — interactive
+  protocol exploration.
+
+## Development
+
+Use Node.js 24.18.0 and the pinned pnpm version:
 
 ```sh
-pnpm docs:mcp
+corepack enable
+pnpm install --frozen-lockfile
+pnpm verify
 ```
 
-For interactive exploration, use the
-[official MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector).
+Run `pnpm docs:mcp` after changing the MCP surface. Read [AGENTS.md](AGENTS.md) before using an AI
+coding agent; human contribution guidance is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Design and operations
 
