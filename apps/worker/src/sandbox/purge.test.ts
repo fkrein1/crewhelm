@@ -7,7 +7,12 @@ function sandboxStorage() {
     ["labels", { runId: "run-1" }],
     ["transport", "rpc"],
   ]);
-  const tables = new Set(["container_schedules", "sandbox_runtime"]);
+  const tables = new Set([
+    "_cf_internal",
+    "acfXlookalike",
+    "container_schedules",
+    "sandbox_runtime",
+  ]);
   let alarm: number | undefined;
   let interruptNextTransaction = false;
   const storage: SandboxPurgeStorage = {
@@ -15,7 +20,13 @@ function sandboxStorage() {
     sql: {
       exec: (query: string) => {
         if (query.startsWith("SELECT name")) {
-          return [...tables].map((name) => ({ name }));
+          if (!query.includes("NOT GLOB '_cf_*'")) {
+            throw new Error("Framework tables must be selected with a literal prefix filter.");
+          }
+
+          return [...tables]
+            .filter((name) => !name.startsWith("sqlite_") && !name.startsWith("_cf_"))
+            .map((name) => ({ name }));
         }
 
         const match = /^DROP TABLE IF EXISTS "([^"]+)"$/u.exec(query);
@@ -84,7 +95,7 @@ describe("Sandbox durable cleanup", () => {
     expect(fixture.alarm()).toBeUndefined();
   });
 
-  it("stops the container and atomically clears its per-call durable state", async () => {
+  it("stops the container and clears per-call tables including host-prefix lookalikes", async () => {
     const fixture = sandboxStorage();
     const destroy = vi.fn<() => Promise<void>>(async () => undefined);
 
@@ -96,7 +107,7 @@ describe("Sandbox durable cleanup", () => {
 
     expect(destroy).toHaveBeenCalledOnce();
     expect(fixture.keys.size).toBe(0);
-    expect(fixture.tables.size).toBe(0);
+    expect([...fixture.tables]).toEqual(["_cf_internal"]);
     expect(fixture.alarm()).toBeUndefined();
   });
 
@@ -124,7 +135,7 @@ describe("Sandbox durable cleanup", () => {
     });
 
     expect(fixture.keys.size).toBe(0);
-    expect(fixture.tables.size).toBe(0);
+    expect([...fixture.tables]).toEqual(["_cf_internal"]);
     expect(fixture.alarm()).toBeUndefined();
   });
 });

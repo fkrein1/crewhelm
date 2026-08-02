@@ -25,7 +25,7 @@ function quotedIdentifier(identifier: string): string {
 async function purgeSandboxStorage(storage: SandboxPurgeStorage): Promise<void> {
   const tables = [
     ...storage.sql.exec(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'",
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'sqlite_*' AND name NOT GLOB '_cf_*'",
     ),
   ];
 

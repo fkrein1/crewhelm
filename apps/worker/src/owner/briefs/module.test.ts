@@ -14,6 +14,20 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
 import { agentInput, authorityFor } from "../testkit.js";
+import { workflowDeliverableStorageFailure } from "./module.js";
+
+describe("Brief storage control flow", () => {
+  it("translates every Brief storage failure at the Workflow boundary", () => {
+    expect(workflowDeliverableStorageFailure("brief_storage_corrupt")).toEqual({
+      code: "storage_corrupt",
+      ok: false,
+    });
+    expect(workflowDeliverableStorageFailure("brief_storage_unavailable")).toEqual({
+      code: "storage_unavailable",
+      ok: false,
+    });
+  });
+});
 
 describe("OwnerControlPlane Briefs", () => {
   it("creates, revisions, lists, reads exactly, freezes into Runs, and deletes only when unreferenced", async () => {
@@ -255,6 +269,16 @@ describe("OwnerControlPlane Briefs", () => {
           .one().objectKey,
     );
     await env.SKILL_PACKAGES.delete(objectKey);
+    await expect(stub.readBrief(authority, { id: created.brief.id, revision: 1 })).resolves.toEqual(
+      {
+        error: {
+          code: "brief_storage_corrupt",
+          message: "Brief request denied.",
+          operation: { nextAction: "contact_operator" },
+        },
+        ok: false,
+      },
+    );
     const agent = await stub.createAgent(authority, agentInput("missing-brief-agent"));
     if (!agent.ok) throw new Error("Expected Agent creation.");
     await expect(

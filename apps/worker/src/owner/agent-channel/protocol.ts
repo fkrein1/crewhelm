@@ -32,6 +32,32 @@ function createNonce(): string {
   return runAdmissionNonceSchema.parse(encodeBase64Url(crypto.getRandomValues(new Uint8Array(32))));
 }
 
+function unreachableReceiverAction(action: never): never {
+  throw new Error(`Unreachable Run receiver action: ${String(action)}`);
+}
+
+function receiverActionDescriptor(action: RunReceiverCapability["action"]): {
+  capability: RunReceiverCapability["capability"];
+  executionBound: boolean;
+} {
+  switch (action) {
+    case "approve_tool":
+      return { capability: "run:approvals:approve", executionBound: true };
+    case "cancel":
+      return { capability: "run:cancel", executionBound: false };
+    case "inspect":
+      return { capability: "run:inspect", executionBound: false };
+    case "list_approvals":
+      return { capability: "run:approvals:read", executionBound: false };
+    case "reject_tool":
+      return { capability: "run:approvals:reject", executionBound: true };
+    case "resume":
+      return { capability: "run:resume", executionBound: false };
+  }
+
+  return unreachableReceiverAction(action);
+}
+
 export class RunReceiverCapabilities {
   readonly #admissions: RunAdmissions;
   readonly #objectName: string | undefined;
@@ -61,14 +87,7 @@ export class RunReceiverCapabilities {
     }
 
     const expiresAt = currentTime + RUN_RECEIVER_CAPABILITY_LIFETIME_MS;
-    const capabilityName = {
-      approve_tool: "run:approvals:approve",
-      cancel: "run:cancel",
-      inspect: "run:inspect",
-      list_approvals: "run:approvals:read",
-      reject_tool: "run:approvals:reject",
-      resume: "run:resume",
-    }[action];
+    const descriptor = receiverActionDescriptor(action);
     const capability = runReceiverCapabilitySchema.parse({
       action,
       agentId: admission.agentId,
@@ -76,7 +95,7 @@ export class RunReceiverCapabilities {
       audience: "crew_agent",
       budgetReservation: admission.budgetReservation,
       ...(admission.briefContext === null ? {} : { briefContext: admission.briefContext }),
-      capability: capabilityName,
+      capability: descriptor.capability,
       clientId: authority.clientId,
       connection: "none",
       effect: "none",
@@ -102,7 +121,7 @@ export class RunReceiverCapabilities {
               sourceKind: admission.watchSourceKind,
             },
           }),
-      ...(["approve_tool", "reject_tool"].includes(action) ? { executionId } : {}),
+      ...(descriptor.executionBound ? { executionId } : {}),
     });
 
     this.#pending.set(capability.nonce, {

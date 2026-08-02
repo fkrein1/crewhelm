@@ -58,6 +58,10 @@ import {
 
 type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type BriefFailureCode = Extract<CreateBriefResult, { ok: false }>["error"]["code"];
+type BriefStorageFailureCode = Extract<
+  BriefFailureCode,
+  "brief_storage_corrupt" | "brief_storage_unavailable"
+>;
 type StoredBriefVersion = typeof briefVersions.$inferSelect;
 
 export interface StoredOwnerContent {
@@ -140,15 +144,50 @@ async function deterministicUuid(seed: string): Promise<string> {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-function denied(code: BriefFailureCode, nextAction?: "contact_operator" | "retry_same_request") {
+function denied(code: BriefFailureCode) {
   return {
     error: {
       code,
       message: "Brief request denied." as const,
-      ...(nextAction === undefined ? {} : { operation: { nextAction } }),
     },
     ok: false as const,
   };
+}
+
+function storageDenied(code: BriefStorageFailureCode) {
+  switch (code) {
+    case "brief_storage_corrupt":
+      return {
+        error: {
+          code,
+          message: "Brief request denied." as const,
+          operation: { nextAction: "contact_operator" as const },
+        },
+        ok: false as const,
+      };
+    case "brief_storage_unavailable":
+      return {
+        error: {
+          code,
+          message: "Brief request denied." as const,
+          operation: { nextAction: "retry_same_request" as const },
+        },
+        ok: false as const,
+      };
+    default:
+      throw new Error("Brief storage received an unhandled failure.");
+  }
+}
+
+export function workflowDeliverableStorageFailure(code: BriefStorageFailureCode) {
+  switch (code) {
+    case "brief_storage_corrupt":
+      return { code: "storage_corrupt" as const, ok: false as const };
+    case "brief_storage_unavailable":
+      return { code: "storage_unavailable" as const, ok: false as const };
+    default:
+      throw new Error("Workflow deliverable received an unhandled storage failure.");
+  }
 }
 
 export function deniedBrief(code: BriefFailureCode) {
@@ -332,14 +371,10 @@ export class Briefs implements WorkflowDeliverableStorage {
       if (!result.ok && stored.disposition === "created") {
         try {
           if ((await this.#objectStore.delete(objectKey, prepared.digest)) === "conflict") {
-            return createBriefResultSchema.parse(
-              denied("brief_storage_corrupt", "contact_operator"),
-            );
+            return createBriefResultSchema.parse(storageDenied("brief_storage_corrupt"));
           }
         } catch {
-          return createBriefResultSchema.parse(
-            denied("brief_storage_unavailable", "retry_same_request"),
-          );
+          return createBriefResultSchema.parse(storageDenied("brief_storage_unavailable"));
         }
       }
       return createBriefResultSchema.parse(result);
@@ -353,13 +388,9 @@ export class Briefs implements WorkflowDeliverableStorage {
           stored.disposition,
         ))
       ) {
-        return createBriefResultSchema.parse(
-          denied("brief_storage_unavailable", "retry_same_request"),
-        );
+        return createBriefResultSchema.parse(storageDenied("brief_storage_unavailable"));
       }
-      return createBriefResultSchema.parse(
-        denied("brief_storage_unavailable", "retry_same_request"),
-      );
+      return createBriefResultSchema.parse(storageDenied("brief_storage_unavailable"));
     }
   }
 
@@ -460,9 +491,7 @@ export class Briefs implements WorkflowDeliverableStorage {
           stored.disposition,
         ))
       ) {
-        return reviseBriefResultSchema.parse(
-          denied("brief_storage_unavailable", "retry_same_request"),
-        );
+        return reviseBriefResultSchema.parse(storageDenied("brief_storage_unavailable"));
       }
       return reviseBriefResultSchema.parse(result);
     } catch {
@@ -475,13 +504,9 @@ export class Briefs implements WorkflowDeliverableStorage {
           stored.disposition,
         ))
       ) {
-        return reviseBriefResultSchema.parse(
-          denied("brief_storage_unavailable", "retry_same_request"),
-        );
+        return reviseBriefResultSchema.parse(storageDenied("brief_storage_unavailable"));
       }
-      return reviseBriefResultSchema.parse(
-        denied("brief_storage_unavailable", "retry_same_request"),
-      );
+      return reviseBriefResultSchema.parse(storageDenied("brief_storage_unavailable"));
     }
   }
 
@@ -697,7 +722,7 @@ export class Briefs implements WorkflowDeliverableStorage {
       });
       if (!sealed.ok) return deleteBriefResultSchema.parse(sealed);
     } catch {
-      return denied("brief_storage_unavailable", "retry_same_request");
+      return storageDenied("brief_storage_unavailable");
     }
     return this.#finishDelete(authority.clientId, request.data.id);
   }
@@ -777,13 +802,7 @@ export class Briefs implements WorkflowDeliverableStorage {
       input.deliverable.mediaType,
     );
     if (stored.ok) return { ok: true };
-    return {
-      code:
-        stored.result.error.code === "brief_storage_corrupt"
-          ? "storage_corrupt"
-          : "storage_unavailable",
-      ok: false,
-    };
+    return workflowDeliverableStorageFailure(stored.result.error.code);
   }
 
   async readWorkflowDeliverable(
@@ -846,12 +865,12 @@ export class Briefs implements WorkflowDeliverableStorage {
     try {
       const stored = await this.#objectStore.put(key, bytes, digest, mediaType);
       return stored === "conflict"
-        ? { ok: false as const, result: denied("brief_storage_corrupt", "contact_operator") }
+        ? { ok: false as const, result: storageDenied("brief_storage_corrupt") }
         : { disposition: stored, ok: true as const };
     } catch {
       return {
         ok: false as const,
-        result: denied("brief_storage_unavailable", "retry_same_request"),
+        result: storageDenied("brief_storage_unavailable"),
       };
     }
   }
@@ -863,7 +882,7 @@ export class Briefs implements WorkflowDeliverableStorage {
     } catch {
       return {
         ok: false as const,
-        result: denied("brief_storage_unavailable", "retry_same_request"),
+        result: storageDenied("brief_storage_unavailable"),
       };
     }
     if (
@@ -872,20 +891,20 @@ export class Briefs implements WorkflowDeliverableStorage {
       stored.mediaType !== row.mediaType ||
       stored.bytes.byteLength !== row.sizeBytes
     ) {
-      return { ok: false as const, result: denied("brief_storage_corrupt", "contact_operator") };
+      return { ok: false as const, result: storageDenied("brief_storage_corrupt") };
     }
     let content: string;
     try {
       content = decoder.decode(stored.bytes);
     } catch {
-      return { ok: false as const, result: denied("brief_storage_corrupt", "contact_operator") };
+      return { ok: false as const, result: storageDenied("brief_storage_corrupt") };
     }
     if (
       !briefContentSchema.safeParse(content).success ||
       !briefMediaTypeSchema.safeParse(row.mediaType).success ||
       !validatesMediaType(content, row.mediaType)
     ) {
-      return { ok: false as const, result: denied("brief_storage_corrupt", "contact_operator") };
+      return { ok: false as const, result: storageDenied("brief_storage_corrupt") };
     }
     return { content, ok: true as const };
   }
@@ -1090,10 +1109,10 @@ export class Briefs implements WorkflowDeliverableStorage {
     for (const version of versions) {
       try {
         if ((await this.#objectStore.delete(version.objectKey, version.digest)) === "conflict") {
-          return denied("brief_storage_corrupt", "contact_operator");
+          return storageDenied("brief_storage_corrupt");
         }
       } catch {
-        return denied("brief_storage_unavailable", "retry_same_request");
+        return storageDenied("brief_storage_unavailable");
       }
     }
     try {
@@ -1105,7 +1124,7 @@ export class Briefs implements WorkflowDeliverableStorage {
           .run();
       });
     } catch {
-      return denied("brief_storage_unavailable", "retry_same_request");
+      return storageDenied("brief_storage_unavailable");
     }
     return deleteBriefResultSchema.parse({ deleted: true, id, ok: true });
   }
