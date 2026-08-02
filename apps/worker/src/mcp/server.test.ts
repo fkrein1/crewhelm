@@ -356,7 +356,7 @@ describe("authenticated MCP handler", () => {
         openWorldHint: false,
         readOnlyHint: true,
       },
-      description: expect.stringContaining("copy-ready continuation"),
+      description: expect.stringContaining("copy-ready conversation"),
     });
     expect(sessionsTool?.inputSchema).not.toHaveProperty("oneOf");
     expect(JSON.stringify(sessionsTool?.inputSchema)).toContain("inspect(agentId, sessionId)");
@@ -1702,6 +1702,9 @@ describe("authenticated MCP handler", () => {
 
     expect(startPayload.isError).toBe(false);
     expect(started).toMatchObject({
+      conversation: {
+        expectedRevision: 1,
+      },
       continuation: {
         expectedBranchRevision: 1,
       },
@@ -1740,6 +1743,7 @@ describe("authenticated MCP handler", () => {
 
         expect(payload.isError).toBe(false);
         expect(result).toMatchObject({
+          conversation: started.ok ? started.conversation : undefined,
           continuation: started.ok ? started.continuation : undefined,
           diagnosis: null,
           ok: true,
@@ -1801,9 +1805,10 @@ describe("authenticated MCP handler", () => {
       !sessions.ok ||
       !("sessions" in sessions) ||
       sessions.sessions[0] === undefined ||
-      started.continuation === undefined
+      started.continuation === undefined ||
+      started.conversation === undefined
     ) {
-      throw new Error("Expected one discoverable session and continuation.");
+      throw new Error("Expected one discoverable conversation and continuation.");
     }
 
     const sessionInspectionResponse = await handleAuthenticatedMcpRequest(
@@ -1833,7 +1838,11 @@ describe("authenticated MCP handler", () => {
       manageAgentSessionsResultSchema.parse(
         JSON.parse(sessionInspectionPayload.content[0]?.text ?? ""),
       ),
-    ).toMatchObject({ continuation: started.continuation, ok: true });
+    ).toMatchObject({
+      continuation: started.continuation,
+      conversation: started.conversation,
+      ok: true,
+    });
 
     const inboxResponse = await handleAuthenticatedMcpRequest(
       toolRequest(
@@ -2017,10 +2026,168 @@ describe("authenticated MCP handler", () => {
 
     expect(replayPayload.isError).toBe(false);
     expect(replay).toEqual({
+      conversation: inspected.ok ? inspected.conversation : undefined,
       continuation: inspected.ok ? inspected.continuation : undefined,
       created: false,
       ok: true,
       run: inspected.ok ? inspected.run : undefined,
+    });
+
+    if (!replay.ok || replay.conversation === undefined) {
+      throw new Error("Expected a copy-ready MCP conversation.");
+    }
+
+    const followUpInput = {
+      agentId: created.agent.id,
+      conversation: replay.conversation,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "mcp-run-2",
+      prompt: "Continue this owner-private conversation.",
+    };
+    const writeOnlyAuthority = ownerAuthoritySchema.parse({
+      ...authority,
+      scopes: [RUNS_WRITE_SCOPE],
+    });
+    const deniedFollowUpResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 351,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: followUpInput,
+            name: MCP_START_RUN_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority: writeOnlyAuthority },
+    );
+    const deniedFollowUpPayload = jsonRpcToolResultSchema.parse(
+      await deniedFollowUpResponse.json(),
+    ).result;
+
+    expect(deniedFollowUpPayload.isError).toBe(true);
+    expect(
+      startRunResultSchema.parse(JSON.parse(deniedFollowUpPayload.content[0]?.text ?? "")),
+    ).toEqual({
+      error: { code: "insufficient_scope", message: "Run request denied." },
+      ok: false,
+    });
+
+    const followUpResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 36,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: followUpInput,
+            name: MCP_START_RUN_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const followUpPayload = jsonRpcToolResultSchema.parse(await followUpResponse.json()).result;
+    const followUp = startRunResultSchema.parse(JSON.parse(followUpPayload.content[0]?.text ?? ""));
+
+    expect(followUpPayload.isError).toBe(false);
+    expect(followUp).toMatchObject({
+      conversation: {
+        expectedRevision: 2,
+        id: replay.conversation.id,
+      },
+      created: true,
+      ok: true,
+      run: {
+        session: {
+          branchRevision: 2,
+          sessionId: replay.conversation.id,
+        },
+      },
+    });
+
+    if (!followUp.ok) throw new Error("Expected MCP conversation follow-up.");
+
+    await vi.waitFor(
+      async () => {
+        const response = await handleAuthenticatedMcpRequest(
+          toolRequest(
+            JSON.stringify({
+              id: 37,
+              jsonrpc: "2.0",
+              method: "tools/call",
+              params: {
+                arguments: { runId: followUp.run.runId },
+                name: MCP_INSPECT_RUN_TOOL_NAME,
+              },
+            }),
+          ),
+          env,
+          { authority },
+        );
+        const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+        const result = inspectRunResultSchema.parse(JSON.parse(payload.content[0]?.text ?? ""));
+        expect(result).toMatchObject({ ok: true, run: { status: "completed" } });
+      },
+      { interval: 25, timeout: 5_000 },
+    );
+
+    const followUpReplayResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 38,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: { arguments: followUpInput, name: MCP_START_RUN_TOOL_NAME },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const followUpReplayPayload = jsonRpcToolResultSchema.parse(
+      await followUpReplayResponse.json(),
+    ).result;
+    const followUpReplay = startRunResultSchema.parse(
+      JSON.parse(followUpReplayPayload.content[0]?.text ?? ""),
+    );
+    expect(followUpReplay).toMatchObject({
+      conversation: followUp.conversation,
+      created: false,
+      ok: true,
+      run: { runId: followUp.run.runId },
+    });
+
+    const staleConversationResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 39,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              ...followUpInput,
+              idempotencyKey: "mcp-run-stale-conversation",
+            },
+            name: MCP_START_RUN_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const staleConversationPayload = jsonRpcToolResultSchema.parse(
+      await staleConversationResponse.json(),
+    ).result;
+
+    expect(staleConversationPayload.isError).toBe(true);
+    expect(
+      startRunResultSchema.parse(JSON.parse(staleConversationPayload.content[0]?.text ?? "")),
+    ).toEqual({
+      error: { code: "branch_revision_conflict", message: "Run request denied." },
+      ok: false,
     });
   });
 

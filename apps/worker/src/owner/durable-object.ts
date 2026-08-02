@@ -749,6 +749,11 @@ export class OwnerControlPlane extends DurableObject {
     const authorization = this.#authorize(authorityInput, RUNS_WRITE_SCOPE);
     const request = startRunInputSchema.safeParse(input);
 
+    if (authorization.ok && request.success && request.data.conversation !== undefined) {
+      const conversationAuthorization = this.#authorize(authorityInput, AGENTS_READ_SCOPE);
+      if (!conversationAuthorization.ok) return deniedStartRun(conversationAuthorization.code);
+    }
+
     if (authorization.ok && request.success && (request.data.briefs?.length ?? 0) > 0) {
       const briefAuthorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
       if (!briefAuthorization.ok) return deniedStartRun(briefAuthorization.code);

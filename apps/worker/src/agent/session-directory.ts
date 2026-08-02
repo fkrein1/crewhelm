@@ -6,6 +6,7 @@ import {
   agentWorkflowRunEventSchema,
   branchIdSchema,
   continuationFromRunSession,
+  conversationFromRunSession,
   crewAgentObjectName,
   crewSessionObjectName,
   DEFAULT_AGENT_SESSION_RETENTION_SECONDS,
@@ -839,6 +840,7 @@ export class CrewAgent extends CrewSession {
 
       return inspectAgentSessionResultSchema.parse({
         ...inspection,
+        conversation: conversationFromRunSession(sessionProjection(record)),
         continuation: continuationFromRunSession(sessionProjection(record)),
         ok: true,
         session: sessionProjection(record),

@@ -4,6 +4,7 @@ import {
   cancelRunInputSchema,
   cancelRunResultSchema,
   continuationFromRunSession,
+  conversationFromRunSession,
   crewAgentObjectName,
   decideRunToolApprovalInputSchema,
   decideRunToolApprovalResultSchema,
@@ -882,7 +883,10 @@ export class AgentChannel {
     return inspectRunResultSchema.options[0].parse({
       ...(run.session === undefined
         ? {}
-        : { continuation: continuationFromRunSession(run.session) }),
+        : {
+            continuation: continuationFromRunSession(run.session),
+            conversation: conversationFromRunSession(run.session),
+          }),
       diagnosis: this.#diagnosis(admission, presentedRun, timeline),
       briefs: admission.briefContext?.references ?? [],
       ...(input.includeDeliverable && deliverableContent !== undefined
@@ -1004,6 +1008,31 @@ export class AgentChannel {
       return deniedStartRun("invalid_request");
     }
 
+    let continuation = request.data.continuation;
+
+    if (request.data.conversation !== undefined) {
+      const inspected = await this.inspectSession(authority, {
+        agentId: request.data.agentId,
+        sessionId: request.data.conversation.id,
+      });
+
+      if (!inspected.ok) {
+        return deniedStartRun(
+          inspected.error.code === "session_not_found"
+            ? "session_not_found"
+            : inspected.error.code === "agent_not_found"
+              ? "agent_not_found"
+              : "run_unavailable",
+        );
+      }
+
+      continuation = {
+        branchId: inspected.session.branchId,
+        expectedBranchRevision: request.data.conversation.expectedRevision,
+        sessionId: inspected.session.sessionId,
+      };
+    }
+
     const replay = await this.#admissions.replayBriefContext(authority, {
       agentId: request.data.agentId,
       briefs: request.data.briefs,
@@ -1034,9 +1063,7 @@ export class AgentChannel {
     const admission = await this.#admissions.create(authority, {
       agentId: request.data.agentId,
       ...(briefContext === undefined ? {} : { briefContext }),
-      ...(trigger !== "schedule" && request.data.continuation !== undefined
-        ? { continuation: request.data.continuation }
-        : {}),
+      ...(trigger !== "schedule" && continuation !== undefined ? { continuation } : {}),
       expectedFleetRevision,
       expectedRevision: request.data.expectedRevision,
       idempotencyKey: request.data.idempotencyKey,
@@ -1106,9 +1133,7 @@ export class AgentChannel {
       if (admission.state === "issued") {
         accepted = await agent.acceptRunAdmission({
           ...(materializedContext === undefined ? {} : { briefContext: materializedContext }),
-          ...(trigger !== "schedule" && request.data.continuation !== undefined
-            ? { continuation: request.data.continuation }
-            : {}),
+          ...(trigger !== "schedule" && continuation !== undefined ? { continuation } : {}),
           permit: admission.permit,
           prompt: request.data.prompt,
         });
@@ -1121,9 +1146,7 @@ export class AgentChannel {
 
         accepted = await agent.resumeRunAdmission({
           capability,
-          ...(trigger !== "schedule" && request.data.continuation !== undefined
-            ? { continuation: request.data.continuation }
-            : {}),
+          ...(trigger !== "schedule" && continuation !== undefined ? { continuation } : {}),
           prompt: request.data.prompt,
         });
       }
@@ -1176,7 +1199,10 @@ export class AgentChannel {
     return startRunResultSchema.parse({
       ...(alignedRun.session === undefined
         ? {}
-        : { continuation: continuationFromRunSession(alignedRun.session) }),
+        : {
+            continuation: continuationFromRunSession(alignedRun.session),
+            conversation: conversationFromRunSession(alignedRun.session),
+          }),
       created: admission.state === "issued" && admission.created,
       ok: true,
       run: alignedRun,

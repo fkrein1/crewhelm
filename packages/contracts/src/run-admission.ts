@@ -36,7 +36,11 @@ import {
   diagnosticNextActionSchema,
   retryDispositionSchema,
 } from "./diagnostics.js";
-import { runSessionSchema, sessionContinuationSchema } from "./agent-sessions.js";
+import {
+  agentConversationSchema,
+  runSessionSchema,
+  sessionContinuationSchema,
+} from "./agent-sessions.js";
 import {
   DEFAULT_RUNNABLE_AGENT_MODEL,
   RUNNABLE_AGENT_MODELS,
@@ -395,21 +399,38 @@ export const acceptRunAdmissionResultSchema = z.discriminatedUnion("ok", [
   }),
 ]);
 
-export const startRunInputSchema = z.strictObject({
-  agentId: agentIdSchema,
-  briefs: briefReferencesSchema
-    .describe("Exact immutable Brief revisions to admit as bounded untrusted context.")
-    .optional(),
-  continuation: sessionContinuationSchema
-    .describe("Continue one exact durable Agent session. Omit to create a new session.")
-    .optional(),
-  expectedRevision: agentRevisionNumberSchema,
-  idempotencyKey: runAdmissionIdempotencyKeySchema,
-  outputContract: outputContractSchema
-    .describe("Optional final deliverable contract. Omit to preserve Markdown output.")
-    .optional(),
-  prompt: runPromptSchema,
-});
+export const startRunInputSchema = z
+  .strictObject({
+    agentId: agentIdSchema,
+    briefs: briefReferencesSchema
+      .describe("Exact immutable Brief revisions to admit as bounded untrusted context.")
+      .optional(),
+    continuation: sessionContinuationSchema
+      .describe(
+        "Legacy exact Session continuation. Prefer conversation for owner-private MCP conversation turns.",
+      )
+      .optional(),
+    conversation: agentConversationSchema
+      .describe(
+        "Continue one owner-private Agent conversation. Omit both conversation and legacy continuation to start a new conversation.",
+      )
+      .optional(),
+    expectedRevision: agentRevisionNumberSchema,
+    idempotencyKey: runAdmissionIdempotencyKeySchema,
+    outputContract: outputContractSchema
+      .describe("Optional final deliverable contract. Omit to preserve Markdown output.")
+      .optional(),
+    prompt: runPromptSchema,
+  })
+  .superRefine((input, context) => {
+    if (input.conversation !== undefined && input.continuation !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Choose conversation or legacy continuation, not both.",
+        path: ["conversation"],
+      });
+    }
+  });
 
 export const inspectRunInputSchema = z.strictObject({
   includeDeliverable: z
@@ -730,6 +751,9 @@ const runReadErrorSchema = z.strictObject({
 
 export const startRunResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
+    conversation: agentConversationSchema
+      .describe("Pass this object unchanged to continue the owner-private Agent conversation.")
+      .optional(),
     continuation: sessionContinuationSchema
       .describe("Pass this object unchanged to crewhelm_start_run.continuation for the next turn.")
       .optional(),
@@ -748,6 +772,9 @@ export const inspectRunResultSchema = z.discriminatedUnion("ok", [
     briefs: z.array(admittedBriefContextSchema.shape.references.element).max(8).default([]),
     continuation: sessionContinuationSchema
       .describe("Pass this object unchanged to crewhelm_start_run.continuation for the next turn.")
+      .optional(),
+    conversation: agentConversationSchema
+      .describe("Pass this object unchanged to continue the owner-private Agent conversation.")
       .optional(),
     deliverableContent: publicJsonObjectSchema.optional(),
     diagnosis: runDiagnosticSchema.nullable(),
