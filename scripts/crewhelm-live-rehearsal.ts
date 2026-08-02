@@ -1287,13 +1287,13 @@ async function typedOutput(options: {
           ],
           executionLimits: {
             maxDurationSeconds: 90,
-            maxModelTokens: 1_024,
+            maxModelTokens: 2_048,
             maxToolCalls: 0,
-            maxTurns: 2,
+            maxTurns: 4,
           },
           idempotencyKey: `typed-output-agent-${suffix}`,
           instructions:
-            "Follow the requested output contract exactly. Return concise factual content without tools.",
+            "Follow the requested JSON output contract exactly. Return only one object with exactly the requested fields, no prose or code fence, and use the values the prompt supplies.",
           name: `Typed output rehearsal ${suffix}`,
         },
         createAgentResultSchema,
@@ -1312,7 +1312,7 @@ async function typedOutput(options: {
           idempotencyKey: `typed-output-run-${suffix}`,
           outputContract: TYPED_OUTPUT_CONTRACT,
           prompt:
-            "Assess whether a durable typed output is useful. Set confidence between zero and one.",
+            'Return exactly this assessment under the requested contract: {"summary":"Durable typed output is useful.","confidence":0.9}',
         };
         const started = await callTool<StartRunResult>(
           session,
@@ -1352,9 +1352,9 @@ async function typedOutput(options: {
           );
         }
 
-        const deadline = Date.now() + options.runTimeoutMs;
+        const runDeadline = Date.now() + options.runTimeoutMs;
         let compactRun: InspectRunResult | undefined;
-        while (Date.now() < deadline) {
+        while (Date.now() < runDeadline) {
           compactRun = await callTool<InspectRunResult>(
             session,
             "crewhelm_inspect_run",
@@ -1384,6 +1384,31 @@ async function typedOutput(options: {
           exactRun.retention.output.retainedCharacters !==
             compactRun.retention.output.retainedCharacters
         ) {
+          console.warn({
+            compactDeliverableState: compactRun?.ok ? compactRun.run.deliverable?.state : undefined,
+            compactHasDeliverableContent:
+              compactRun === undefined ? undefined : "deliverableContent" in compactRun,
+            compactOk: compactRun?.ok,
+            compactRetainedCharacters: compactRun?.ok
+              ? compactRun.retention.output.retainedCharacters
+              : undefined,
+            compactStatus: compactRun?.ok ? compactRun.run.status : undefined,
+            event: "crewhelm.rehearsal.typed_run_mismatch",
+            exactConfidenceType:
+              exactRun.ok && exactRun.deliverableContent !== undefined
+                ? typeof exactRun.deliverableContent.confidence
+                : undefined,
+            exactDeliverableState: exactRun.ok ? exactRun.run.deliverable?.state : undefined,
+            exactOk: exactRun.ok,
+            exactRetainedCharacters: exactRun.ok
+              ? exactRun.retention.output.retainedCharacters
+              : undefined,
+            exactStatus: exactRun.ok ? exactRun.run.status : undefined,
+            exactSummaryType:
+              exactRun.ok && exactRun.deliverableContent !== undefined
+                ? typeof exactRun.deliverableContent.summary
+                : undefined,
+          });
           throw new TemporaryOwnerSessionError(
             "invalid_payload",
             "Typed Run did not preserve compact discovery and exact validated content.",
@@ -1407,7 +1432,8 @@ async function typedOutput(options: {
               { name: "Prepare", prompt: "Prepare the assessment facts in ordinary prose." },
               {
                 name: "Deliver",
-                prompt: "Return the final assessment under the exact requested contract.",
+                prompt:
+                  'Return exactly this final assessment under the requested contract: {"summary":"Durable typed workflows are useful.","confidence":0.9}',
               },
             ],
           },
@@ -1417,8 +1443,9 @@ async function typedOutput(options: {
           throw new TemporaryOwnerSessionError("invalid_payload", "Typed Workflow was denied.");
         }
         workflowId = workflowStarted.workflow.workflowId;
+        const workflowDeadline = Date.now() + options.runTimeoutMs;
         let compactWorkflow: ReturnType<typeof manageAgentWorkflowsResultSchema.parse> | undefined;
-        while (Date.now() < deadline) {
+        while (Date.now() < workflowDeadline) {
           compactWorkflow = await callTool(
             session,
             "crewhelm_agent_workflows",
@@ -1461,6 +1488,23 @@ async function typedOutput(options: {
           exactWorkflowAggregate.deliverable?.kind !== "json" ||
           exactWorkflowAggregate.deliverableContent === undefined
         ) {
+          console.warn({
+            compactHasDeliverableContent:
+              compactWorkflow !== undefined && "workflow" in compactWorkflow
+                ? "deliverableContent" in compactWorkflow.workflow
+                : undefined,
+            compactStatus:
+              compactWorkflow !== undefined && "workflow" in compactWorkflow && compactWorkflow.ok
+                ? compactWorkflow.workflow.status
+                : undefined,
+            event: "crewhelm.rehearsal.typed_workflow_mismatch",
+            exactDeliverableKind: exactWorkflowAggregate?.deliverable?.kind,
+            exactHasDeliverableContent:
+              exactWorkflowAggregate === undefined
+                ? undefined
+                : exactWorkflowAggregate.deliverableContent !== undefined,
+            exactStatus: exactWorkflowAggregate?.status,
+          });
           throw new TemporaryOwnerSessionError(
             "invalid_payload",
             "Typed Workflow did not return one exact final JSON deliverable.",
@@ -1493,21 +1537,25 @@ async function typedOutput(options: {
         operationFailure = error;
       }
 
-      const disabled = await callTool<BatchDisableAgentsResult>(
-        session,
-        "crewhelm_batch_disable_agents",
-        { agents: [{ agentId, expectedRevision: created.agent.revision }] },
-        batchDisableAgentsResultSchema,
-      );
-      if (
-        !disabled.ok ||
-        disabled.receipts.length !== 1 ||
-        !["already_disabled", "disabled"].includes(disabled.receipts[0]?.outcome ?? "")
-      ) {
-        throw new TemporaryOwnerSessionError(
-          "invalid_payload",
-          "Disposable typed-output Agent was not disabled.",
+      try {
+        const disabled = await callTool<BatchDisableAgentsResult>(
+          session,
+          "crewhelm_batch_disable_agents",
+          { agents: [{ agentId, expectedRevision: created.agent.revision }] },
+          batchDisableAgentsResultSchema,
         );
+        if (
+          !disabled.ok ||
+          disabled.receipts.length !== 1 ||
+          !["already_disabled", "disabled"].includes(disabled.receipts[0]?.outcome ?? "")
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Disposable typed-output Agent was not disabled.",
+          );
+        }
+      } catch (cleanupError) {
+        if (operationFailure === undefined) throw cleanupError;
       }
       if (operationFailure !== undefined) throw operationFailure;
       return evidence;

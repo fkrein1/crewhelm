@@ -150,6 +150,8 @@ type CommittedValidatedRunOutput = Exclude<StoredValidatedRunOutput, { state: "r
 const RUNTIME_ADMISSION_UNAVAILABLE = "CrewAgent runtime admission is not available.";
 const INBOX_PROJECTION_PREFIX = "crewhelm:inbox-projection:";
 const RUN_RECORD_PREFIX = "crewhelm:run:";
+const SESSION_RUN_DRAINED_PREFIX = "crewhelm:session-run-drained:";
+const SESSION_RUN_RESTART_PREFIX = "crewhelm:session-run-restart:";
 const SESSION_RUN_TERMINAL_PREFIX = "crewhelm:session-run-terminal:";
 const RUN_TRACE_PREFIX = "crewhelm:run-trace:";
 const RUN_OUTPUT_PREFIX = "crewhelm:run-output:";
@@ -313,6 +315,14 @@ function sessionRunTerminalKey(runId: string): string {
   return `${SESSION_RUN_TERMINAL_PREFIX}${runId}`;
 }
 
+function sessionRunDrainedKey(runId: string): string {
+  return `${SESSION_RUN_DRAINED_PREFIX}${runId}`;
+}
+
+function sessionRunRestartKey(runId: string): string {
+  return `${SESSION_RUN_RESTART_PREFIX}${runId}`;
+}
+
 function inboxProjectionKey(runId: string): string {
   return `${INBOX_PROJECTION_PREFIX}${runId}`;
 }
@@ -420,6 +430,7 @@ export class CrewSession extends Think {
   #approvalTurnMetadata: AdmittedTurnMetadata | undefined;
   #outputRepairTurnMetadata: AdmittedTurnMetadata | undefined;
   #gatewayAiBinding: Ai | undefined;
+  #isolateId = crypto.randomUUID();
   #permittedApprovalContinuationRunId: string | undefined;
   #permittedAbortRequestId: string | undefined;
   override chatRecovery = false;
@@ -447,6 +458,16 @@ export class CrewSession extends Think {
 
         await this.#scheduleRunLifecycle(runId, record.data);
         await this.#recoverStructuredRunOutput(runId, record.data);
+        const submission = await super.inspectSubmission(runId);
+        if (
+          record.data.session !== undefined &&
+          submission !== null &&
+          ["aborted", "completed", "error", "skipped"].includes(submission.status)
+        ) {
+          // A terminal submission found during startup has no surviving turn in
+          // this isolate, so it is safe to backfill the quiescence acknowledgement.
+          await this.ctx.storage.put(sessionRunDrainedKey(runId), true);
+        }
       }
     }
 
@@ -1305,7 +1326,7 @@ export class CrewSession extends Think {
     const output =
       submission.status === "completed" ? this.#readRunOutput(capability.runId) : undefined;
     const structuredOutput =
-      record.outputContract?.kind === "json"
+      record.outputContract?.kind === "json" && committedSessionStatus !== "cancelled"
         ? await this.#finalizeStructuredRunOutput(
             record,
             capability.runId,
@@ -1334,7 +1355,9 @@ export class CrewSession extends Think {
         : frameworkStatus);
 
     return inspectAdmittedRunResultSchema.parse({
-      ...(request.data.includeDeliverable && structuredOutput?.state === "valid"
+      ...(request.data.includeDeliverable &&
+      committedSessionStatus !== "cancelled" &&
+      structuredOutput?.state === "valid"
         ? { deliverableContent: JSON.parse(structuredOutput.canonical) }
         : {}),
       ok: true,
@@ -1343,7 +1366,9 @@ export class CrewSession extends Think {
         agentRevision: record.configuration.revision,
         completedAt: outputPending ? undefined : isoTimestamp(submission.completedAt),
         createdAt: new Date(submission.createdAt).toISOString(),
-        ...(record.outputContract?.kind === "json" || output?.state !== "available"
+        ...(committedSessionStatus === "cancelled" ||
+        record.outputContract?.kind === "json" ||
+        output?.state !== "available"
           ? {}
           : {
               output: output.text,
@@ -1378,10 +1403,28 @@ export class CrewSession extends Think {
     });
     const waitingForToolApproval = submission?.status === "completed" && approvalRecords.size > 0;
 
+    if (submission === null) {
+      if (record?.session !== undefined) {
+        const committedSessionStatus = await this.#commitSessionTerminalStatus(runId, "cancelled");
+        if (committedSessionStatus === "cancelled") {
+          await Promise.all([...approvalRecords.keys()].map((key) => this.ctx.storage.delete(key)));
+          if (Date.now() >= record.deadlineAt) {
+            await this.#discardCancelledSessionBranch(runId);
+            await this.#completeSessionRun(record, runId);
+          }
+          return cancelAdmittedRunResultSchema.parse({ cancelled: true, ok: true });
+        }
+      }
+
+      return cancelAdmittedRunResultSchema.parse({
+        cancelled: false,
+        ok: true,
+      });
+    }
+
     if (
-      submission === null ||
-      (["aborted", "completed", "error", "skipped"].includes(submission.status) &&
-        !waitingForToolApproval)
+      ["aborted", "completed", "error", "skipped"].includes(submission.status) &&
+      !waitingForToolApproval
     ) {
       return cancelAdmittedRunResultSchema.parse({
         cancelled: false,
@@ -1389,14 +1432,37 @@ export class CrewSession extends Think {
       });
     }
 
+    const committedSessionStatus =
+      record?.session === undefined
+        ? undefined
+        : await this.#commitSessionTerminalStatus(runId, "cancelled");
+    if (committedSessionStatus !== undefined && committedSessionStatus !== "cancelled") {
+      return cancelAdmittedRunResultSchema.parse({
+        cancelled: false,
+        ok: true,
+      });
+    }
+
+    let physicalCancellationFailed = false;
     if (!waitingForToolApproval) {
-      await this.cancelAdmittedSubmission(runId, "Cancelled by the Crewhelm owner.");
+      try {
+        await this.cancelAdmittedSubmission(runId, "Cancelled by the Crewhelm owner.");
+      } catch (error) {
+        if (committedSessionStatus === undefined) throw error;
+        physicalCancellationFailed = true;
+        // The durable Session fence rejects late output even when a stale framework
+        // submission cannot be physically aborted after runtime recovery.
+      }
     }
 
     await Promise.all([...approvalRecords.keys()].map((key) => this.ctx.storage.delete(key)));
 
-    if (record?.session !== undefined) {
-      await this.ctx.storage.put(sessionRunTerminalKey(runId), "cancelled");
+    if (
+      committedSessionStatus === "cancelled" &&
+      record?.session !== undefined &&
+      !physicalCancellationFailed
+    ) {
+      await this.#discardCancelledSessionBranch(runId);
       await this.#completeSessionRun(record, runId);
     }
 
@@ -1524,6 +1590,9 @@ export class CrewSession extends Think {
         .safeParse(await this.ctx.storage.get(sessionRunTerminalKey(request.data.runId)));
 
       if (committed.success) {
+        if (committed.data === "cancelled") {
+          await this.#discardCancelledSessionBranch(request.data.runId);
+        }
         await this.#completeSessionRun(record, request.data.runId);
         return;
       }
@@ -1533,7 +1602,7 @@ export class CrewSession extends Think {
 
     if (submission === null) {
       if (record.session !== undefined) {
-        await this.ctx.storage.put(sessionRunTerminalKey(request.data.runId), "failed");
+        await this.#commitSessionTerminalStatus(request.data.runId, "failed");
         await this.#completeSessionRun(record, request.data.runId);
       }
       return;
@@ -1581,16 +1650,29 @@ export class CrewSession extends Think {
                 : "failed";
 
         await Promise.all([...approvalRecords.keys()].map((key) => this.ctx.storage.delete(key)));
-        await this.ctx.storage.put(sessionRunTerminalKey(request.data.runId), terminalStatus);
+        await this.#commitSessionTerminalStatus(request.data.runId, terminalStatus);
+        if (terminalStatus === "cancelled") {
+          await this.#discardCancelledSessionBranch(request.data.runId);
+        }
         await this.#completeSessionRun(record, request.data.runId);
       }
       return;
     }
 
-    await this.cancelAdmittedSubmission(request.data.runId, "Crewhelm run deadline exceeded.");
+    const committedSessionStatus =
+      record.session === undefined
+        ? undefined
+        : await this.#commitSessionTerminalStatus(request.data.runId, "cancelled");
+    try {
+      await this.cancelAdmittedSubmission(request.data.runId, "Crewhelm run deadline exceeded.");
+    } catch (error) {
+      if (committedSessionStatus === undefined) throw error;
+      // The durable Session fence is authoritative even if Think retained only a
+      // stale submission record and can no longer abort the original request.
+    }
 
-    if (record.session !== undefined) {
-      await this.ctx.storage.put(sessionRunTerminalKey(request.data.runId), "cancelled");
+    if (record.session !== undefined && committedSessionStatus === "cancelled") {
+      await this.#discardCancelledSessionBranch(request.data.runId);
       await this.#completeSessionRun(record, request.data.runId);
     }
   }
@@ -1705,6 +1787,8 @@ export class CrewSession extends Think {
     if (record.session === undefined && validatedOutput !== undefined) {
       await this.ctx.storage.delete(runOutputMessageKey(validatedOutput.messageId));
     }
+    await this.ctx.storage.delete(sessionRunDrainedKey(request.data.runId));
+    await this.ctx.storage.delete(sessionRunRestartKey(request.data.runId));
     await this.ctx.storage.delete(sessionRunTerminalKey(request.data.runId));
     await this.ctx.storage.delete(runRecordKey(request.data.runId));
   }
@@ -2103,31 +2187,46 @@ export class CrewSession extends Think {
       return;
     }
 
-    const approvalRecords = await this.ctx.storage.list({
-      prefix: toolApprovalPrefix(runId),
-    });
-    const approvalCount = approvalRecords.size;
-    const structuredOutput =
-      result.status === "completed" && approvalCount === 0 && record.outputContract?.kind === "json"
-        ? await this.#finalizeStructuredRunOutput(record, runId)
-        : undefined;
-    if (
-      result.status === "completed" &&
-      approvalCount === 0 &&
-      record.outputContract?.kind === "json" &&
-      structuredOutput === undefined
-    ) {
-      await this.#scheduleStructuredOutputRetry(record, runId, 0);
-      return;
+    try {
+      const approvalRecords = await this.ctx.storage.list({
+        prefix: toolApprovalPrefix(runId),
+      });
+      const approvalCount = approvalRecords.size;
+      const committedSessionStatus = z
+        .enum(["cancelled", "completed", "failed"])
+        .safeParse(await this.ctx.storage.get(sessionRunTerminalKey(runId)));
+      const structuredOutput =
+        result.status === "completed" &&
+        approvalCount === 0 &&
+        record.outputContract?.kind === "json" &&
+        (!committedSessionStatus.success || committedSessionStatus.data !== "cancelled")
+          ? await this.#finalizeStructuredRunOutput(record, runId)
+          : undefined;
+      if (
+        result.status === "completed" &&
+        approvalCount === 0 &&
+        record.outputContract?.kind === "json" &&
+        structuredOutput === undefined &&
+        (!committedSessionStatus.success || committedSessionStatus.data !== "cancelled")
+      ) {
+        await this.#scheduleStructuredOutputRetry(record, runId, 0);
+        return;
+      }
+      await this.#publishRunResponse({
+        approvalCount,
+        frameworkStatus: result.status === "aborted" ? "cancelled" : result.status,
+        record,
+        resultMessage: result.message,
+        runId,
+        ...(structuredOutput === undefined ? {} : { structuredOutput }),
+      });
+    } finally {
+      if (record.session !== undefined) {
+        // Think terminal status can precede callback completion. This marker is
+        // written last so deletion can prove all Crewhelm turn work has drained.
+        await this.ctx.storage.put(sessionRunDrainedKey(runId), true);
+      }
     }
-    await this.#publishRunResponse({
-      approvalCount,
-      frameworkStatus: result.status === "aborted" ? "cancelled" : result.status,
-      record,
-      resultMessage: result.message,
-      runId,
-      ...(structuredOutput === undefined ? {} : { structuredOutput }),
-    });
   }
 
   async #publishRunResponse(input: {
@@ -2141,28 +2240,32 @@ export class CrewSession extends Think {
     const { approvalCount, frameworkStatus, record, resultMessage, runId, structuredOutput } =
       input;
     const trace = await this.#readRunTrace(runId);
-    const status =
+    const derivedStatus =
       structuredOutput?.state === "invalid" ||
       (frameworkStatus === "completed" &&
         trace.some((event) => event.event === "tool.authorization_blocked"))
         ? "failed"
         : frameworkStatus;
-    const kind =
-      approvalCount > 0
-        ? "action_required"
-        : status === "completed" || status === "cancelled"
-          ? "outcome"
-          : "exception";
-
-    await this.#publishInboxProjection(
-      record,
-      recordAgentInboxRunInputSchema.parse({
+    const proposedSessionStatus: Extract<Run["status"], "cancelled" | "completed" | "failed"> =
+      derivedStatus === "completed"
+        ? "completed"
+        : derivedStatus === "cancelled"
+          ? "cancelled"
+          : "failed";
+    const projectionForStatus = (status: Run["status"] | "error"): RecordAgentInboxRunInput => {
+      const kind =
+        approvalCount > 0
+          ? "action_required"
+          : status === "completed" || status === "cancelled"
+            ? "outcome"
+            : "exception";
+      return recordAgentInboxRunInputSchema.parse({
         event: {
           approvalCount: kind === "action_required" ? approvalCount : 0,
           kind,
           occurredAt: new Date().toISOString(),
           resultPreview:
-            kind !== "outcome"
+            kind !== "outcome" || status === "cancelled"
               ? null
               : structuredOutput?.state === "valid"
                 ? structuredOutput.canonical.slice(0, MAXIMUM_AGENT_INBOX_PREVIEW_CHARACTERS)
@@ -2187,8 +2290,21 @@ export class CrewSession extends Think {
           runId,
           scheduleRevision: record.scheduleRevision,
         },
-      }),
-    );
+      });
+    };
+    const committedSessionStatus =
+      record.session !== undefined && approvalCount === 0
+        ? await this.#publishSessionTerminalProjection(
+            record,
+            runId,
+            proposedSessionStatus,
+            projectionForStatus,
+          )
+        : undefined;
+    const status = committedSessionStatus ?? derivedStatus;
+    if (committedSessionStatus === undefined) {
+      await this.#publishInboxProjection(record, projectionForStatus(status));
+    }
 
     if (record.session !== undefined && approvalCount > 0) {
       try {
@@ -2204,11 +2320,27 @@ export class CrewSession extends Think {
     }
 
     if (record.session !== undefined && approvalCount === 0) {
-      const terminalStatus: Extract<Run["status"], "cancelled" | "completed" | "failed"> =
-        status === "completed" ? "completed" : status === "cancelled" ? "cancelled" : "failed";
-      await this.ctx.storage.put(sessionRunTerminalKey(runId), terminalStatus);
+      if (status === "cancelled") {
+        await this.#discardCancelledSessionBranch(runId, resultMessage?.id);
+      }
       await this.#completeSessionRun(record, runId);
     }
+  }
+
+  async #commitSessionTerminalStatus(
+    runId: string,
+    proposed: Extract<Run["status"], "cancelled" | "completed" | "failed">,
+  ): Promise<Extract<Run["status"], "cancelled" | "completed" | "failed">> {
+    let committed: Extract<Run["status"], "cancelled" | "completed" | "failed"> | undefined;
+    await this.ctx.storage.transaction(async (transaction) => {
+      const current = z
+        .enum(["cancelled", "completed", "failed"])
+        .safeParse(await transaction.get(sessionRunTerminalKey(runId)));
+      committed = current.success ? current.data : proposed;
+      if (!current.success) await transaction.put(sessionRunTerminalKey(runId), proposed);
+    });
+    if (committed === undefined) throw new Error("Session terminal status could not be committed.");
+    return committed;
   }
 
   async retryStructuredRunOutput(input: unknown): Promise<void> {
@@ -2589,11 +2721,20 @@ export class CrewSession extends Think {
       .enum(["cancelled", "completed", "failed"])
       .safeParse(await this.ctx.storage.get(sessionRunTerminalKey(runId.data)));
 
+    const submission = await super.inspectSubmission(runId.data);
+
     if (terminalStatus.success) {
+      const quarantined =
+        terminalStatus.data === "cancelled" &&
+        (submission === null ||
+          !["aborted", "completed", "error", "skipped"].includes(submission.status)) &&
+        Date.now() < record.deadlineAt;
+      if (quarantined) return "running";
+      if (terminalStatus.data === "cancelled") {
+        await this.#discardCancelledSessionBranch(runId.data);
+      }
       return terminalStatus.data;
     }
-
-    const submission = await super.inspectSubmission(runId.data);
 
     if (submission === null) {
       return Date.now() >= record.deadlineAt ? "failed" : "queued";
@@ -2622,6 +2763,100 @@ export class CrewSession extends Think {
               : output?.state === "pending")
           ? "running"
           : publicRunStatus(submission.status);
+  }
+
+  async settleExpiredSessionRunForDeletion(input: unknown): Promise<boolean> {
+    const request = z
+      .strictObject({
+        objectName: z.string().min(1),
+        runId: runIdSchema,
+        session: runSessionSchema,
+      })
+      .safeParse(input);
+    if (!request.success) {
+      console.warn({
+        event: "crewhelm.session.deletion_deferred",
+        reason: "invalid_request",
+      });
+      return false;
+    }
+
+    const record = await this.#readRunRecord(request.data.runId);
+    const reason =
+      request.data.objectName !== this.ctx.id.name
+        ? "object_mismatch"
+        : record?.session === undefined
+          ? "run_missing"
+          : JSON.stringify(record.session) !== JSON.stringify(request.data.session)
+            ? "session_mismatch"
+            : Date.now() < record.deadlineAt
+              ? "deadline_active"
+              : undefined;
+    if (reason !== undefined) {
+      console.warn({
+        event: "crewhelm.session.deletion_deferred",
+        reason,
+        runId: request.data.runId,
+      });
+      return false;
+    }
+
+    const terminalStatus = await this.#commitSessionTerminalStatus(request.data.runId, "cancelled");
+    let submission = await super.inspectSubmission(request.data.runId);
+    const isDrained = () =>
+      submission !== null &&
+      ["aborted", "completed", "error", "skipped"].includes(submission.status);
+
+    if (!isDrained()) {
+      try {
+        await this.cancelAdmittedSubmission(
+          request.data.runId,
+          "Expired Session Run was cancelled for Session deletion.",
+        );
+      } catch {
+        // The durable terminal fence remains, but storage cannot be deleted
+        // until the framework submission is demonstrably drained.
+      }
+      submission = await super.inspectSubmission(request.data.runId);
+    }
+
+    if (!isDrained()) {
+      console.warn({
+        event: "crewhelm.session.deletion_deferred",
+        reason: submission === null ? "submission_missing" : `submission_${submission.status}`,
+        runId: request.data.runId,
+      });
+      return false;
+    }
+    if ((await this.ctx.storage.get(sessionRunDrainedKey(request.data.runId))) !== true) {
+      // Think can expose a terminal row before an in-memory turn unwinds, and
+      // pre-marker deployments may have no callback left to acknowledge it.
+      // Restarting the exact Session isolate forcibly drains either case. RPC
+      // wakes bypass Think's onStart hook, so the durable proof names the
+      // isolate that requested the restart and the next isolate acknowledges
+      // quiescence here. The intent must commit in an earlier wake because
+      // ctx.abort can discard writes from the wake it terminates.
+      const restartKey = sessionRunRestartKey(request.data.runId);
+      const restartingIsolateId = await this.ctx.storage.get(restartKey);
+      if (typeof restartingIsolateId !== "string") {
+        await this.ctx.storage.put(restartKey, this.#isolateId);
+        return false;
+      }
+      if (restartingIsolateId === this.#isolateId) {
+        this.ctx.abort("Expired Session Run is restarting to prove deletion quiescence.");
+        return false;
+      }
+      await this.ctx.storage.put(sessionRunDrainedKey(request.data.runId), true);
+    }
+
+    if (terminalStatus === "cancelled") {
+      const approvals = await this.ctx.storage.list({
+        prefix: toolApprovalPrefix(request.data.runId),
+      });
+      await Promise.all([...approvals.keys()].map((key) => this.ctx.storage.delete(key)));
+      await this.#discardCancelledSessionBranch(request.data.runId);
+    }
+    return true;
   }
 
   override authorizeAction(
@@ -4212,12 +4447,49 @@ export class CrewSession extends Think {
       retryAt: currentTime,
     });
 
+    await this.ctx.storage.put(inboxProjectionKey(projection.reference.runId), outbox);
+    await this.#activateInboxProjection(outbox);
+  }
+
+  async #publishSessionTerminalProjection(
+    record: AdmittedRunRecord,
+    runId: string,
+    proposed: Extract<Run["status"], "cancelled" | "completed" | "failed">,
+    projectionForStatus: (status: Run["status"] | "error") => RecordAgentInboxRunInput,
+  ): Promise<Extract<Run["status"], "cancelled" | "completed" | "failed">> {
+    const currentTime = Date.now();
+    let committed: Extract<Run["status"], "cancelled" | "completed" | "failed"> | undefined;
+    let outbox: AgentInboxProjectionOutbox | undefined;
+    await this.ctx.storage.transaction(async (transaction) => {
+      const current = z
+        .enum(["cancelled", "completed", "failed"])
+        .safeParse(await transaction.get(sessionRunTerminalKey(runId)));
+      committed = current.success ? current.data : proposed;
+      const projection = projectionForStatus(committed);
+      outbox = agentInboxProjectionOutboxSchema.parse({
+        attempts: 0,
+        cleanupAt: record.cleanupAt,
+        projection,
+        retryAt: currentTime,
+      });
+      if (!current.success) await transaction.put(sessionRunTerminalKey(runId), proposed);
+      await transaction.put(inboxProjectionKey(runId), outbox);
+    });
+    if (committed === undefined || outbox === undefined) {
+      throw new Error("Session terminal projection could not be committed.");
+    }
+    await this.#activateInboxProjection(outbox);
+    return committed;
+  }
+
+  async #activateInboxProjection(outbox: AgentInboxProjectionOutbox): Promise<void> {
+    const currentTime = Date.now();
+
     const recovery = await this.#scheduleInboxProjection(
       outbox,
       currentTime + INBOX_PROJECTION_SAFETY_WAKEUP_MS,
     );
-    await this.ctx.storage.put(inboxProjectionKey(projection.reference.runId), outbox);
-    const delivered = await this.#deliverInboxProjection(projection.reference.runId, 0);
+    const delivered = await this.#deliverInboxProjection(outbox.projection.reference.runId, 0);
 
     if (delivered) {
       await super.cancelSchedule(recovery.id);
@@ -4821,6 +5093,30 @@ export class CrewSession extends Think {
       messages,
       truncated: history.truncated || messages.length < candidates.length,
     };
+  }
+
+  async #discardCancelledSessionBranch(runId: string, exactMessageId?: string): Promise<void> {
+    const rootId = runUserMessageId(runId);
+    const resultId = exactMessageId ?? rootId;
+    const branch = super.sql<{ id: string }>`
+      WITH RECURSIVE cancelled_branch(id) AS (
+        SELECT ${rootId} AS id
+        UNION
+        SELECT ${resultId} AS id
+        UNION ALL
+        SELECT child.id
+        FROM assistant_messages AS child
+        INNER JOIN cancelled_branch AS parent ON child.parent_id = parent.id
+        WHERE child.session_id = ''
+      )
+      SELECT branch.id
+      FROM cancelled_branch AS branch
+      INNER JOIN assistant_messages AS message ON message.id = branch.id
+      WHERE message.session_id = ''
+    `;
+    if (branch.length > 0) {
+      await Session.create(this).deleteMessages(branch.map((message) => message.id));
+    }
   }
 
   #recordMatchesPermit(record: AdmittedRunRecord, permit: RunAdmissionPermit): boolean {

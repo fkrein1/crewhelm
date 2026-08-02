@@ -96,6 +96,262 @@ async function completedRun(
 }
 
 describe("CrewAgent durable session directory", () => {
+  it("logically cancels a Session Run whose Think submission record is missing", async () => {
+    const authority = await authorityFor("crew-session-cancellation-missing-submission");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("crew-session-cancellation-missing-submission"),
+    );
+    if (!created.ok) throw new Error("Expected missing-submission Session Agent.");
+    await enableSessions(authority.ownerKey, created.agent.id);
+
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-session-cancellation-missing-submission-run",
+      prompt: SLOW_TEST_PROMPT,
+    });
+    if (!started.ok || started.run.session === undefined || started.continuation === undefined) {
+      throw new Error("Expected missing-submission Session Run.");
+    }
+
+    const child = env.CREW_SESSION.getByName(
+      crewSessionObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+        sessionId: started.run.session.sessionId,
+      }),
+    );
+    await runInDurableObject(child, async (_instance, state) => {
+      state.storage.sql.exec(
+        "DELETE FROM cf_think_submissions WHERE submission_id = ?",
+        started.run.runId,
+      );
+      const key = `crewhelm:run:${started.run.runId}`;
+      const record = await state.storage.get<Record<string, unknown>>(key);
+      if (record === undefined) throw new Error("Expected retained missing-submission Run.");
+      await state.storage.put(key, { ...record, deadlineAt: Date.now() + 3_000 });
+    });
+
+    await expect(controlPlane.cancelRun(authority, { runId: started.run.runId })).resolves.toEqual({
+      cancelled: true,
+      ok: true,
+      runId: started.run.runId,
+    });
+    await expect(
+      controlPlane.inspectRun(authority, { includeDeliverable: true, runId: started.run.runId }),
+    ).resolves.toMatchObject({ ok: true, run: { status: "cancelled" } });
+
+    await expect(
+      controlPlane.startRun(authority, {
+        agentId: created.agent.id,
+        continuation: started.continuation,
+        expectedRevision: created.agent.revision,
+        idempotencyKey: "crew-session-cancellation-missing-submission-overlap",
+        prompt: "Must not overlap the missing submission.",
+      }),
+    ).resolves.toEqual({
+      error: { code: "session_busy", message: "Run request denied." },
+      ok: false,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 3_250));
+
+    const continued = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      continuation: started.continuation,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-session-cancellation-missing-submission-continuation",
+      prompt: "Continue after the missing cancelled submission.",
+    });
+    if (!continued.ok) throw new Error("Expected continuation after logical cancellation.");
+    await completedRun(controlPlane, authority, continued.run.runId);
+    const inspectedSession = await controlPlane.inspectAgentSession(authority, {
+      agentId: created.agent.id,
+      sessionId: started.run.session.sessionId,
+    });
+    if (!inspectedSession.ok) throw new Error("Expected clean Session inspection.");
+    expect(inspectedSession.messages.map((message) => message.text)).not.toContain(
+      SLOW_TEST_PROMPT,
+    );
+  });
+
+  it("durably fences a cancelled Session Run when physical submission abort fails", async () => {
+    const authority = await authorityFor("crew-session-cancellation-fence");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("crew-session-cancellation-fence"),
+    );
+    if (!created.ok) throw new Error("Expected Session cancellation fixture Agent.");
+    await enableSessions(authority.ownerKey, created.agent.id);
+
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-session-cancellation-fence-run",
+      prompt: SLOW_TEST_PROMPT,
+    });
+    if (!started.ok || started.run.session === undefined) {
+      throw new Error("Expected cancellable Session Run.");
+    }
+
+    const child = env.CREW_SESSION.getByName(
+      crewSessionObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+        sessionId: started.run.session.sessionId,
+      }),
+    );
+    await runInDurableObject(child, (instance) => {
+      if (!(instance instanceof TestCrewSession)) {
+        throw new Error("Expected the test CrewSession implementation.");
+      }
+      instance.failNextCancellationForTest();
+    });
+
+    await expect(controlPlane.cancelRun(authority, { runId: started.run.runId })).resolves.toEqual({
+      cancelled: true,
+      ok: true,
+      runId: started.run.runId,
+    });
+    const cancelledImmediately = await controlPlane.inspectRun(authority, {
+      includeDeliverable: true,
+      runId: started.run.runId,
+    });
+    expect(cancelledImmediately).toMatchObject({ ok: true, run: { status: "cancelled" } });
+
+    if (started.continuation === undefined) {
+      throw new Error("Expected a Session continuation token.");
+    }
+    await expect(
+      controlPlane.startRun(authority, {
+        agentId: created.agent.id,
+        continuation: started.continuation,
+        expectedRevision: created.agent.revision,
+        idempotencyKey: "crew-session-cancellation-fence-overlap",
+        prompt: "Must not overlap the stale submission.",
+      }),
+    ).resolves.toEqual({
+      error: { code: "session_busy", message: "Run request denied." },
+      ok: false,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 3_250));
+    const cancelledAfterDrain = await controlPlane.inspectRun(authority, {
+      includeDeliverable: true,
+      runId: started.run.runId,
+    });
+    expect(cancelledAfterDrain).toMatchObject({ ok: true, run: { status: "cancelled" } });
+    if (!cancelledAfterDrain.ok) throw new Error("Expected cancelled Session Run inspection.");
+    expect(cancelledAfterDrain.run).not.toHaveProperty("output");
+
+    const continued = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      continuation: started.continuation,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-session-cancellation-fence-continuation",
+      prompt: "Continue without the cancelled turn.",
+    });
+    if (!continued.ok) throw new Error("Expected Session continuation after stale drain.");
+    await completedRun(controlPlane, authority, continued.run.runId);
+    const inspectedSession = await controlPlane.inspectAgentSession(authority, {
+      agentId: created.agent.id,
+      sessionId: started.run.session.sessionId,
+    });
+    if (!inspectedSession.ok) throw new Error("Expected filtered Session inspection.");
+    const inspectedTexts = inspectedSession.messages.map((message) => message.text);
+    expect(inspectedTexts).toContain("Continue without the cancelled turn.");
+    expect(inspectedTexts).not.toContain(SLOW_TEST_PROMPT);
+    await runInDurableObject(child, (instance) => {
+      if (!(instance instanceof TestCrewSession)) throw new Error("Expected test CrewSession.");
+      const prompt = JSON.stringify(instance.modelCallsForTest().at(-1)?.prompt);
+      expect(prompt).not.toContain(SLOW_TEST_PROMPT);
+      expect(prompt).not.toContain("Crewhelm completed the admitted test run.");
+    });
+
+    if (continued.continuation === undefined) {
+      throw new Error("Expected clean continuation token.");
+    }
+    const secondContinuation = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      continuation: continued.continuation,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-session-cancellation-fence-second-continuation",
+      prompt: "Confirm the retained clean turn.",
+    });
+    if (!secondContinuation.ok) throw new Error("Expected second clean continuation.");
+    await runInDurableObject(child, (instance) => {
+      if (!(instance instanceof TestCrewSession)) throw new Error("Expected test CrewSession.");
+      const prompt = JSON.stringify(instance.modelCallsForTest().at(-1)?.prompt);
+      expect(prompt).toContain("Continue without the cancelled turn.");
+      expect(prompt).toContain("Crewhelm completed the admitted test run.");
+      expect(prompt).not.toContain(SLOW_TEST_PROMPT);
+    });
+    await completedRun(controlPlane, authority, secondContinuation.run.runId);
+  });
+
+  it("deletes a quarantined cancelled branch when its hard deadline releases the Session", async () => {
+    const authority = await authorityFor("crew-session-cancellation-deadline");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("crew-session-cancellation-deadline"),
+    );
+    if (!created.ok) throw new Error("Expected Session deadline fixture Agent.");
+    await enableSessions(authority.ownerKey, created.agent.id);
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-session-cancellation-deadline-run",
+      prompt: SLOW_TEST_PROMPT,
+    });
+    if (!started.ok || started.run.session === undefined) {
+      throw new Error("Expected deadline Session Run.");
+    }
+    const child = env.CREW_SESSION.getByName(
+      crewSessionObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+        sessionId: started.run.session.sessionId,
+      }),
+    );
+    await runInDurableObject(child, (instance) => {
+      if (!(instance instanceof TestCrewSession)) throw new Error("Expected test CrewSession.");
+      instance.failNextCancellationForTest();
+      return instance.appendCancellationDescendantsForTest(started.run.runId);
+    });
+    await expect(controlPlane.cancelRun(authority, { runId: started.run.runId })).resolves.toEqual({
+      cancelled: true,
+      ok: true,
+      runId: started.run.runId,
+    });
+
+    await runInDurableObject(child, async (instance, state) => {
+      if (!(instance instanceof TestCrewSession)) throw new Error("Expected test CrewSession.");
+      const key = `crewhelm:run:${started.run.runId}`;
+      const record = await state.storage.get<Record<string, unknown>>(key);
+      if (record === undefined) throw new Error("Expected retained Session Run record.");
+      await state.storage.put(key, { ...record, deadlineAt: 1 });
+      await instance.expireAdmittedRun({ runId: started.run.runId });
+    });
+    const inspected = await controlPlane.inspectAgentSession(authority, {
+      agentId: created.agent.id,
+      sessionId: started.run.session.sessionId,
+    });
+    if (!inspected.ok) throw new Error("Expected deadline Session inspection.");
+    expect(inspected.messages.map((message) => message.text)).toEqual([]);
+
+    await new Promise((resolve) => setTimeout(resolve, 3_250));
+    const reinspected = await controlPlane.inspectAgentSession(authority, {
+      agentId: created.agent.id,
+      sessionId: started.run.session.sessionId,
+    });
+    if (!reinspected.ok) throw new Error("Expected stable deadline Session inspection.");
+    expect(reinspected.messages.map((message) => message.text)).toEqual([]);
+  });
+
   it("continues from canonical repaired JSON even when retained Think text is malformed", async () => {
     const authority = await authorityFor("crew-session-json-repair");
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);

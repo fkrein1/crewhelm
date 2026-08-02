@@ -1070,6 +1070,18 @@ export class RunAdmissions {
     return this.#database.select().from(runAdmissions).where(eq(runAdmissions.runId, runId)).get();
   }
 
+  cancellationDeadlineElapsed(runId: string, currentTime = Date.now()): boolean {
+    const admission = this.read(runId);
+
+    return (
+      admission?.status === "redeemed" &&
+      admission.redeemedAt !== null &&
+      admission.cancellationRequestedAt !== null &&
+      admission.cancelledAt === null &&
+      admission.redeemedAt + admission.budgetReservation.maxDurationSeconds * 1_000 <= currentTime
+    );
+  }
+
   skillProvenance(admission: StoredRunAdmission) {
     return (
       this.#skills.runtimeProvenance(admission.budgetReservation.runtimePlan.skillReferences) ?? []

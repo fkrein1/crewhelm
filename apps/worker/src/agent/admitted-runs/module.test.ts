@@ -3136,6 +3136,110 @@ describe("CrewAgent admitted execution", () => {
     });
   });
 
+  it("settles a requested cancellation after its deadline when receiver state is unavailable", async () => {
+    const authority = await authorityFor("crew-agent-cancellation-expired-receiver");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("crew-agent-cancellation-expired-receiver"),
+    );
+    if (!created.ok) throw new Error("Expected expired cancellation Agent.");
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-cancellation-expired-receiver-run",
+      prompt: SLOW_TEST_PROMPT,
+    });
+    if (!started.ok) throw new Error("Expected expired cancellation Run.");
+
+    const stub = crewAgentNamespace().getByName(
+      crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
+    );
+    await runInDurableObject(stub, (agent) => {
+      asTestCrewAgent(agent).failNextCancellationForTest();
+    });
+    await expect(controlPlane.cancelRun(authority, { runId: started.run.runId })).resolves.toEqual({
+      error: { code: "run_unavailable", message: "Run cancellation denied." },
+      ok: false,
+    });
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        "DELETE FROM cf_think_submissions WHERE submission_id = ?",
+        started.run.runId,
+      );
+      return state.storage.delete(`crewhelm:run:${started.run.runId}`);
+    });
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE run_admissions SET redeemed_at = 1 WHERE run_id = ?",
+        started.run.runId,
+      );
+    });
+
+    await expect(controlPlane.cancelRun(authority, { runId: started.run.runId })).resolves.toEqual({
+      cancelled: true,
+      ok: true,
+      runId: started.run.runId,
+    });
+    await expect(
+      controlPlane.inspectRun(authority, { runId: started.run.runId }),
+    ).resolves.toMatchObject({
+      ok: true,
+      run: { status: "cancelled" },
+      timeline: expect.arrayContaining([expect.objectContaining({ event: "run.cancelled" })]),
+    });
+  });
+
+  it("settles an expired cancellation when the receiver remains nonterminal", async () => {
+    const authority = await authorityFor("crew-agent-cancellation-expired-running");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("crew-agent-cancellation-expired-running"),
+    );
+    if (!created.ok) throw new Error("Expected running cancellation Agent.");
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-cancellation-expired-running-run",
+      prompt: SLOW_TEST_PROMPT,
+    });
+    if (!started.ok) throw new Error("Expected running cancellation Run.");
+
+    const stub = crewAgentNamespace().getByName(
+      crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
+    );
+    await runInDurableObject(stub, (agent) => {
+      asTestCrewAgent(agent).ignoreNextCancellationForTest();
+    });
+    await expect(controlPlane.cancelRun(authority, { runId: started.run.runId })).resolves.toEqual({
+      error: { code: "run_unavailable", message: "Run cancellation denied." },
+      ok: false,
+    });
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE run_admissions SET redeemed_at = 1 WHERE run_id = ?",
+        started.run.runId,
+      );
+    });
+    await runInDurableObject(stub, (agent) => {
+      asTestCrewAgent(agent).ignoreNextCancellationForTest();
+    });
+
+    await expect(controlPlane.cancelRun(authority, { runId: started.run.runId })).resolves.toEqual({
+      cancelled: true,
+      ok: true,
+      runId: started.run.runId,
+    });
+    await expect(
+      controlPlane.inspectRun(authority, { runId: started.run.runId }),
+    ).resolves.toMatchObject({
+      ok: true,
+      run: { status: "cancelled" },
+    });
+  });
+
   it("requires the exact run prompt, owner object, revision, and scopes", async () => {
     const authority = await authorityFor("crew-agent-602");
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
