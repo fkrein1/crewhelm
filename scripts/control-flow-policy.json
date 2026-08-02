@@ -24,8 +24,8 @@
     "apps/worker/src/worker-test-entry.ts"
   ],
   "recordedProgress": {
-    "migratedFiles": 45,
-    "migratedUnits": 15,
+    "migratedFiles": 48,
+    "migratedUnits": 18,
     "totalFiles": 159,
     "totalUnits": 30
   },
@@ -91,18 +91,30 @@
     },
     {
       "files": ["apps/worker/src/agent/admitted-runs/inference-fallback.ts"],
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/agent/admitted-runs/inference-fallback.test.ts"]
+      },
       "id": "admitted-runs-inference",
-      "status": "legacy"
+      "status": "migrated"
     },
     {
       "files": ["apps/worker/src/agent/admitted-runs/sandbox-code-execution.ts"],
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/agent/admitted-runs/sandbox-code-execution.test.ts"]
+      },
       "id": "admitted-runs-sandbox",
-      "status": "legacy"
+      "status": "migrated"
     },
     {
       "files": ["apps/worker/src/agent/admitted-runs/web-research-execution.ts"],
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/agent/admitted-runs/web-research-execution.test.ts"]
+      },
       "id": "admitted-runs-web-research",
-      "status": "legacy"
+      "status": "migrated"
     },
     {
       "files": [
