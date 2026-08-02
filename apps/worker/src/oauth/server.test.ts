@@ -1,12 +1,17 @@
 import { env } from "cloudflare:test";
 import { OWNER_READ_SCOPE } from "@crewhelm/contracts";
+import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import * as z from "zod";
 
 import type { WorkerEnv } from "../env.js";
 import { createWorker } from "../http/server.js";
 import { VIEW_ACCESS_SCOPE } from "./access-levels.js";
-import { hasActiveClientRegistration, purgeExpiredAuthRecords } from "./server.js";
+import {
+  hasActiveClientRegistration,
+  purgeExpiredAuthRecords,
+  registerAuthServerRoutes,
+} from "./server.js";
 import { OAUTH_ACCEPTED_SCOPES, OAUTH_SCOPES } from "./scopes.js";
 import { readAuthTestMigrations, registerAuthTestDatabase } from "./testkit.js";
 
@@ -71,6 +76,39 @@ function decodeStoredJson(value: unknown): unknown {
 }
 
 describe("OAuth server boundary", () => {
+  it("contains an unexpected revocation response normalization failure", async () => {
+    const worker = new Hono<{ Bindings: WorkerEnv }>();
+    const upstream = new Proxy(new Response(null, { status: 400 }), {
+      get(target, property, receiver) {
+        if (property === "status") {
+          throw new Error("Injected upstream response failure.");
+        }
+
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const auth = { handler: async () => upstream };
+
+    registerAuthServerRoutes(worker, () => auth);
+    const response = await worker.request(
+      new Request(`${origin}/api/auth/oauth2/revoke`, {
+        body: new URLSearchParams({
+          client_id: "client_123",
+          token: "refresh-token",
+          token_type_hint: "refresh_token",
+        }),
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "temporarily_unavailable",
+      error_description: "OAuth request denied.",
+    });
+  });
+
   it.each([
     "https://client.example/oauth/callback",
     "http://localhost:43123/oauth/callback",

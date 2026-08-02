@@ -70,7 +70,9 @@ type PublishCandidate = {
   version: number;
 };
 
-class SkillStorageInvariantError extends Error {}
+class SkillStorageInvariantError extends Error {
+  override readonly name = "SkillStorageInvariantError";
+}
 
 export interface StoredSkillPackage {
   bytes: Uint8Array;

@@ -107,7 +107,7 @@ const revocationRequestSchema = z.strictObject({
 
 type AuthApp = Hono<{ Bindings: WorkerEnv }>;
 type WorkerContext = Context<{ Bindings: WorkerEnv }>;
-type AuthFactory = (context: WorkerContext) => CrewhelmAuth;
+type AuthFactory = (context: WorkerContext) => Pick<CrewhelmAuth, "handler">;
 type RegistrationApplicationType = z.infer<typeof registrationApplicationTypeSchema>;
 type NormalizedRegistration = {
   applicationType: RegistrationApplicationType | undefined;
@@ -748,7 +748,7 @@ export async function handleAuthServerRequest(
         return successfulRevocationResponse();
       }
 
-      return normalizeProtocolErrorResponse(await auth.handler(request));
+      return await normalizeProtocolErrorResponse(await auth.handler(request));
     } catch {
       return authorizationUnavailable("provider");
     }
