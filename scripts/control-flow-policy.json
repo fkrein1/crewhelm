@@ -24,8 +24,8 @@
     "apps/worker/src/worker-test-entry.ts"
   ],
   "recordedProgress": {
-    "migratedFiles": 74,
-    "migratedUnits": 24,
+    "migratedFiles": 97,
+    "migratedUnits": 27,
     "totalFiles": 159,
     "totalUnits": 30
   },
@@ -54,8 +54,18 @@
       "status": "legacy"
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": [
+          "apps/cli/test/rehearsal/journeys/sandbox.test.ts",
+          "apps/cli/test/rehearsal/journeys/web-research.test.ts",
+          "apps/cli/test/rehearsal/journeys/workflow.test.ts",
+          "apps/cli/test/rehearsal/public/agent.test.ts",
+          "apps/cli/test/rehearsal/public/standing-integration.test.ts"
+        ]
+      },
       "id": "cli-rehearsal",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/cli/src/rehearsal/"]
     },
     {
@@ -80,8 +90,12 @@
       "pathPrefixes": ["packages/contracts/src/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/agent-capabilities/kernel.test.ts"]
+      },
       "id": "worker-agent-capabilities",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/agent-capabilities/"]
     },
     {
@@ -94,6 +108,13 @@
       "pathPrefixes": ["apps/worker/src/agent-workflows/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": [
+          "apps/worker/src/agent/admitted-runs/module.test.ts",
+          "apps/worker/src/agent/admitted-runs/protocol.test.ts"
+        ]
+      },
       "files": [
         "apps/worker/src/agent/admitted-runs/index.ts",
         "apps/worker/src/agent/admitted-runs/module.ts",
@@ -102,7 +123,7 @@
         "apps/worker/src/agent/admitted-runs/schema.ts"
       ],
       "id": "admitted-runs-core",
-      "status": "legacy"
+      "status": "migrated"
     },
     {
       "files": ["apps/worker/src/agent/admitted-runs/inference-fallback.ts"],

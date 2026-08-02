@@ -39,7 +39,7 @@ import {
   type TemporaryOwnerSessionDependencies,
 } from "../../temporary-owner-session.js";
 import { CREWHELM_CLI_VERSION } from "../../version.js";
-import { callRehearsalTool, readRehearsalStatus } from "../mcp.js";
+import { callRehearsalTool, normalizeRehearsalFailure, readRehearsalStatus } from "../mcp.js";
 
 const FULL_SCOPE = "crewhelm:full";
 const GMAIL_INTEGRATION_SLUG = "gmail";
@@ -378,20 +378,11 @@ function skippedCheck(name: RehearsalCheckName, endpoint: URL): RehearsalCheck {
 }
 
 function failedCheck(name: RehearsalCheckName, endpoint: URL, error: unknown): RehearsalCheck {
-  return typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    "message" in error &&
-    typeof error.code === "string" &&
-    typeof error.message === "string" &&
-    temporaryOwnerSessionErrorCodeSchema.safeParse(error.code).success
-    ? createCheck(
-        name,
-        endpoint,
-        temporaryOwnerSessionErrorCodeSchema.parse(error.code),
-        error.message,
-      )
-    : createCheck(name, endpoint, "request_failed", "Standing integration rehearsal check failed.");
+  const normalized = normalizeRehearsalFailure(
+    error,
+    "Standing integration rehearsal check failed.",
+  );
+  return createCheck(name, endpoint, normalized.code, normalized.message);
 }
 
 async function validateSchedulePolicy(session: TemporaryOwnerMcpSession): Promise<void> {

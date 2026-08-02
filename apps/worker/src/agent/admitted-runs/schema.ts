@@ -254,6 +254,9 @@ export const scheduledRunInputSchema = z.strictObject({
   runId: runIdSchema,
 });
 
+export const sessionTerminalStatusSchema = z.enum(["cancelled", "completed", "failed"]);
+export type SessionTerminalStatus = z.infer<typeof sessionTerminalStatusSchema>;
+
 export const validatedRunOutputRecordSchema = z.discriminatedUnion("state", [
   z.strictObject({
     canonical: z.string().max(MAXIMUM_RUN_OUTPUT_CHARACTERS),

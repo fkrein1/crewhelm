@@ -133,10 +133,12 @@ import {
   pendingToolApprovalRecordSchema,
   scheduledInboxProjectionInputSchema,
   scheduledRunInputSchema,
+  sessionTerminalStatusSchema,
   validatedRunOutputRecordSchema,
   type AdmittedRunRecord,
   type AdmittedTurnMetadata,
   type AgentInboxProjectionOutbox,
+  type SessionTerminalStatus,
 } from "./schema.js";
 import {
   finalizeJsonCandidate,
@@ -331,7 +333,6 @@ const structuredOutputRetrySchema = z.strictObject({
   attempt: z.number().int().min(0).max(STRUCTURED_OUTPUT_RETRY_LIMIT),
   runId: runIdSchema,
 });
-
 function toolApprovalPrefix(runId: string): string {
   return `${TOOL_APPROVAL_PREFIX}${runId}:`;
 }
@@ -420,9 +421,15 @@ function publicRunStatus(status: ThinkSubmissionInspection["status"]): Run["stat
     case "error":
     case "skipped":
       return "failed";
-    default:
-      return "failed";
   }
+
+  status satisfies never;
+  throw new Error("Invariant violated: unsupported Think submission status.");
+}
+
+function isTerminalSubmissionStatus(status: ThinkSubmissionInspection["status"]): boolean {
+  const runStatus = publicRunStatus(status);
+  return runStatus !== "queued" && runStatus !== "running";
 }
 
 export class CrewSession extends Think {
@@ -462,7 +469,7 @@ export class CrewSession extends Think {
         if (
           record.data.session !== undefined &&
           submission !== null &&
-          ["aborted", "completed", "error", "skipped"].includes(submission.status)
+          isTerminalSubmissionStatus(submission.status)
         ) {
           // A terminal submission found during startup has no surviving turn in
           // this isolate, so it is safe to backfill the quiescence acknowledgement.
@@ -1301,9 +1308,9 @@ export class CrewSession extends Think {
     const committedSessionStatusResult =
       record.session === undefined
         ? undefined
-        : z
-            .enum(["cancelled", "completed", "failed"])
-            .safeParse(await this.ctx.storage.get(sessionRunTerminalKey(capability.runId)));
+        : sessionTerminalStatusSchema.safeParse(
+            await this.ctx.storage.get(sessionRunTerminalKey(capability.runId)),
+          );
     const committedSessionStatus = committedSessionStatusResult?.success
       ? committedSessionStatusResult.data
       : undefined;
@@ -1423,10 +1430,7 @@ export class CrewSession extends Think {
       });
     }
 
-    if (
-      ["aborted", "completed", "error", "skipped"].includes(submission.status) &&
-      !waitingForToolApproval
-    ) {
+    if (isTerminalSubmissionStatus(submission.status) && !waitingForToolApproval) {
       return cancelAdmittedRunResultSchema.parse({
         cancelled: false,
         ok: true,
@@ -1586,9 +1590,9 @@ export class CrewSession extends Think {
     }
 
     if (record.session !== undefined) {
-      const committed = z
-        .enum(["cancelled", "completed", "failed"])
-        .safeParse(await this.ctx.storage.get(sessionRunTerminalKey(request.data.runId)));
+      const committed = sessionTerminalStatusSchema.safeParse(
+        await this.ctx.storage.get(sessionRunTerminalKey(request.data.runId)),
+      );
 
       if (committed.success) {
         if (committed.data === "cancelled") {
@@ -1609,7 +1613,7 @@ export class CrewSession extends Think {
       return;
     }
 
-    if (["aborted", "completed", "error", "skipped"].includes(submission.status)) {
+    if (isTerminalSubmissionStatus(submission.status)) {
       if (record.outputContract?.kind === "json") {
         const approvalRecords = await this.ctx.storage.list({
           prefix: toolApprovalPrefix(request.data.runId),
@@ -1640,7 +1644,7 @@ export class CrewSession extends Think {
         const output =
           submission.status === "completed" ? this.#readRunOutput(request.data.runId) : undefined;
         const trace = await this.#readRunTrace(request.data.runId);
-        const terminalStatus: Extract<Run["status"], "cancelled" | "completed" | "failed"> =
+        const terminalStatus: SessionTerminalStatus =
           approvalRecords.size > 0 || output?.state === "pending"
             ? "cancelled"
             : submission.status === "completed" &&
@@ -1723,10 +1727,7 @@ export class CrewSession extends Think {
 
     const submission = await super.inspectSubmission(request.data.runId);
 
-    if (
-      submission !== null &&
-      !["aborted", "completed", "error", "skipped"].includes(submission.status)
-    ) {
+    if (submission !== null && !isTerminalSubmissionStatus(submission.status)) {
       await this.cancelAdmittedSubmission(request.data.runId, "Crewhelm run retention expired.");
     }
 
@@ -2193,9 +2194,9 @@ export class CrewSession extends Think {
         prefix: toolApprovalPrefix(runId),
       });
       const approvalCount = approvalRecords.size;
-      const committedSessionStatus = z
-        .enum(["cancelled", "completed", "failed"])
-        .safeParse(await this.ctx.storage.get(sessionRunTerminalKey(runId)));
+      const committedSessionStatus = sessionTerminalStatusSchema.safeParse(
+        await this.ctx.storage.get(sessionRunTerminalKey(runId)),
+      );
       const structuredOutput =
         result.status === "completed" &&
         approvalCount === 0 &&
@@ -2247,7 +2248,7 @@ export class CrewSession extends Think {
         trace.some((event) => event.event === "tool.authorization_blocked"))
         ? "failed"
         : frameworkStatus;
-    const proposedSessionStatus: Extract<Run["status"], "cancelled" | "completed" | "failed"> =
+    const proposedSessionStatus: SessionTerminalStatus =
       derivedStatus === "completed"
         ? "completed"
         : derivedStatus === "cancelled"
@@ -2331,13 +2332,13 @@ export class CrewSession extends Think {
 
   async #commitSessionTerminalStatus(
     runId: string,
-    proposed: Extract<Run["status"], "cancelled" | "completed" | "failed">,
-  ): Promise<Extract<Run["status"], "cancelled" | "completed" | "failed">> {
-    let committed: Extract<Run["status"], "cancelled" | "completed" | "failed"> | undefined;
+    proposed: SessionTerminalStatus,
+  ): Promise<SessionTerminalStatus> {
+    let committed: SessionTerminalStatus | undefined;
     await this.ctx.storage.transaction(async (transaction) => {
-      const current = z
-        .enum(["cancelled", "completed", "failed"])
-        .safeParse(await transaction.get(sessionRunTerminalKey(runId)));
+      const current = sessionTerminalStatusSchema.safeParse(
+        await transaction.get(sessionRunTerminalKey(runId)),
+      );
       committed = current.success ? current.data : proposed;
       if (!current.success) await transaction.put(sessionRunTerminalKey(runId), proposed);
     });
@@ -2426,9 +2427,9 @@ export class CrewSession extends Think {
       return committed;
     }
 
-    const committedSessionStatus = z
-      .enum(["cancelled", "completed", "failed"])
-      .safeParse(await this.ctx.storage.get(sessionRunTerminalKey(runId)));
+    const committedSessionStatus = sessionTerminalStatusSchema.safeParse(
+      await this.ctx.storage.get(sessionRunTerminalKey(runId)),
+    );
     if (Date.now() >= record.deadlineAt || committedSessionStatus.success) {
       const invalid = validatedRunOutputRecordSchema.options[1].parse({
         deliverable: initial.deliverable,
@@ -2588,9 +2589,9 @@ export class CrewSession extends Think {
       const current = validatedRunOutputRecordSchema.safeParse(
         await transaction.get(runOutputKey(runId)),
       );
-      const terminal = z
-        .enum(["cancelled", "completed", "failed"])
-        .safeParse(await transaction.get(sessionRunTerminalKey(runId)));
+      const terminal = sessionTerminalStatusSchema.safeParse(
+        await transaction.get(sessionRunTerminalKey(runId)),
+      );
       const expectedState =
         expected === "absent"
           ? !current.success
@@ -2719,17 +2720,16 @@ export class CrewSession extends Think {
       return null;
     }
 
-    const terminalStatus = z
-      .enum(["cancelled", "completed", "failed"])
-      .safeParse(await this.ctx.storage.get(sessionRunTerminalKey(runId.data)));
+    const terminalStatus = sessionTerminalStatusSchema.safeParse(
+      await this.ctx.storage.get(sessionRunTerminalKey(runId.data)),
+    );
 
     const submission = await super.inspectSubmission(runId.data);
 
     if (terminalStatus.success) {
       const quarantined =
         terminalStatus.data === "cancelled" &&
-        (submission === null ||
-          !["aborted", "completed", "error", "skipped"].includes(submission.status)) &&
+        (submission === null || !isTerminalSubmissionStatus(submission.status)) &&
         Date.now() < record.deadlineAt;
       if (quarantined) return "running";
       if (terminalStatus.data === "cancelled") {
@@ -2805,9 +2805,7 @@ export class CrewSession extends Think {
 
     const terminalStatus = await this.#commitSessionTerminalStatus(request.data.runId, "cancelled");
     let submission = await super.inspectSubmission(request.data.runId);
-    const isDrained = () =>
-      submission !== null &&
-      ["aborted", "completed", "error", "skipped"].includes(submission.status);
+    const isDrained = () => submission !== null && isTerminalSubmissionStatus(submission.status);
 
     if (!isDrained()) {
       try {
@@ -4458,16 +4456,16 @@ export class CrewSession extends Think {
   async #publishSessionTerminalProjection(
     record: AdmittedRunRecord,
     runId: string,
-    proposed: Extract<Run["status"], "cancelled" | "completed" | "failed">,
+    proposed: SessionTerminalStatus,
     projectionForStatus: (status: Run["status"] | "error") => RecordAgentInboxRunInput,
-  ): Promise<Extract<Run["status"], "cancelled" | "completed" | "failed">> {
+  ): Promise<SessionTerminalStatus> {
     const currentTime = Date.now();
-    let committed: Extract<Run["status"], "cancelled" | "completed" | "failed"> | undefined;
+    let committed: SessionTerminalStatus | undefined;
     let outbox: AgentInboxProjectionOutbox | undefined;
     await this.ctx.storage.transaction(async (transaction) => {
-      const current = z
-        .enum(["cancelled", "completed", "failed"])
-        .safeParse(await transaction.get(sessionRunTerminalKey(runId)));
+      const current = sessionTerminalStatusSchema.safeParse(
+        await transaction.get(sessionRunTerminalKey(runId)),
+      );
       committed = current.success ? current.data : proposed;
       const projection = projectionForStatus(committed);
       outbox = agentInboxProjectionOutboxSchema.parse({
