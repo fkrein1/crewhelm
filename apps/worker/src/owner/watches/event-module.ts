@@ -324,76 +324,73 @@ export class AgentEventWatches {
     const watchId = `watch_${crypto.randomUUID()}`;
     const createdAt = Date.now();
 
-    try {
-      this.#database.transaction((transaction) => {
-        const currentSlots =
-          (transaction
-            .select({ value: count() })
-            .from(agentSchedules)
-            .where(
-              and(eq(agentSchedules.agentId, input.agentId), ne(agentSchedules.status, "deleted")),
-            )
-            .get()?.value ?? 0) +
-          (transaction
-            .select({ value: count() })
-            .from(agentEventWatches)
-            .where(
-              and(
-                eq(agentEventWatches.agentId, input.agentId),
-                ne(agentEventWatches.status, "deleted"),
-              ),
-            )
-            .get()?.value ?? 0);
+    const reserved = this.#database.transaction((transaction) => {
+      const currentSlots =
+        (transaction
+          .select({ value: count() })
+          .from(agentSchedules)
+          .where(
+            and(eq(agentSchedules.agentId, input.agentId), ne(agentSchedules.status, "deleted")),
+          )
+          .get()?.value ?? 0) +
+        (transaction
+          .select({ value: count() })
+          .from(agentEventWatches)
+          .where(
+            and(
+              eq(agentEventWatches.agentId, input.agentId),
+              ne(agentEventWatches.status, "deleted"),
+            ),
+          )
+          .get()?.value ?? 0);
 
-        if (currentSlots >= MAXIMUM_AGENT_SCHEDULES_PER_AGENT) {
-          throw new Error("watch_limit_exceeded");
-        }
+      if (currentSlots >= MAXIMUM_AGENT_SCHEDULES_PER_AGENT) {
+        return false;
+      }
 
-        transaction
-          .insert(agentEventWatchRevisions)
-          .values({
-            agentId: input.agentId,
-            agentRevision: input.expectedAgentRevision,
-            createdAt,
-            definition,
-            revision: 1,
-            watchId,
-          })
-          .run();
-        transaction
-          .insert(agentEventWatches)
-          .values({
-            agentId: input.agentId,
-            connectionId: definition.source.connectionId,
-            createdAt,
-            currentRevision: 1,
-            providerOperation: "creating",
-            providerAttempts: 0,
-            providerRetryAt: createdAt,
-            providerTriggerId: null,
-            sourceSlug: definition.source.sourceSlug,
-            status: "active",
-            watchId,
-          })
-          .run();
-        transaction
-          .insert(agentEventWatchUpdates)
-          .values({
-            action: "create",
-            clientId: authority.clientId,
-            idempotencyKey: input.idempotencyKey,
-            requestDigest,
-            revision: 1,
-            watchId,
-          })
-          .run();
-      });
-    } catch (error) {
-      return deniedAgentWatch(
-        error instanceof Error && error.message === "watch_limit_exceeded"
-          ? "watch_limit_exceeded"
-          : "invalid_request",
-      );
+      transaction
+        .insert(agentEventWatchRevisions)
+        .values({
+          agentId: input.agentId,
+          agentRevision: input.expectedAgentRevision,
+          createdAt,
+          definition,
+          revision: 1,
+          watchId,
+        })
+        .run();
+      transaction
+        .insert(agentEventWatches)
+        .values({
+          agentId: input.agentId,
+          connectionId: definition.source.connectionId,
+          createdAt,
+          currentRevision: 1,
+          providerOperation: "creating",
+          providerAttempts: 0,
+          providerRetryAt: createdAt,
+          providerTriggerId: null,
+          sourceSlug: definition.source.sourceSlug,
+          status: "active",
+          watchId,
+        })
+        .run();
+      transaction
+        .insert(agentEventWatchUpdates)
+        .values({
+          action: "create",
+          clientId: authority.clientId,
+          idempotencyKey: input.idempotencyKey,
+          requestDigest,
+          revision: 1,
+          watchId,
+        })
+        .run();
+      return true;
+    });
+
+    if (!reserved) {
+      return deniedAgentWatch("watch_limit_exceeded");
     }
 
     await this.#scheduleAlarm(createdAt + EVENT_WATCH_RECOVERY_DELAY_MS);
