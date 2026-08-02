@@ -62,6 +62,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isStringArray(value: unknown): value is string[] {
+  if (!Array.isArray(value)) return false;
+  const values: unknown[] = value;
+  return values.every((item) => typeof item === "string");
+}
+
 function schemaIssue(context: z.RefinementCtx, path: PropertyKey[], message: string): void {
   context.addIssue({ code: "custom", message, path });
 }
@@ -112,7 +118,7 @@ function readJsonContainer(container: object, maximumChildren: number): JsonCont
       return { kind: "array", ok: true, values };
     }
 
-    const prototype = Object.getPrototypeOf(container);
+    const prototype: unknown = Object.getPrototypeOf(container);
 
     if (prototype !== Object.prototype && prototype !== null) {
       return { failure: "invalid", ok: false };
@@ -419,7 +425,7 @@ function inspectSchemaNode(
         "Objects must deny additional properties.",
       );
     }
-    if (!Array.isArray(required) || required.some((value) => typeof value !== "string")) {
+    if (!isStringArray(required)) {
       schemaIssue(
         context,
         [...path, "required"],

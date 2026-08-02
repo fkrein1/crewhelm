@@ -14,9 +14,6 @@ export const MCP_DELETE_AGENT_SESSION_TOOL_NAME = "crewhelm_delete_agent_session
 
 export function registerSessionTools(server: McpServer, context: McpToolContext): void {
   const { authority, controlPlane } = context;
-  const deleteAgentSession = controlPlane.deleteAgentSession?.bind(controlPlane);
-  const inspectAgentSession = controlPlane.inspectAgentSession?.bind(controlPlane);
-  const listAgentSessions = controlPlane.listAgentSessions?.bind(controlPlane);
 
   server.registerTool(
     MCP_AGENT_SESSIONS_TOOL_NAME,
@@ -38,17 +35,17 @@ export function registerSessionTools(server: McpServer, context: McpToolContext)
       switch (input.action) {
         case "list": {
           return optionalControlPlaneToolResult(
-            listAgentSessions === undefined
+            controlPlane.listAgentSessions === undefined
               ? undefined
-              : () => listAgentSessions(authority, request),
+              : async () => controlPlane.listAgentSessions?.(authority, request),
             browseAgentSessionsResultSchema,
           );
         }
         case "inspect": {
           return optionalControlPlaneToolResult(
-            inspectAgentSession === undefined
+            controlPlane.inspectAgentSession === undefined
               ? undefined
-              : () => inspectAgentSession(authority, request),
+              : async () => controlPlane.inspectAgentSession?.(authority, request),
             browseAgentSessionsResultSchema,
           );
         }
@@ -75,7 +72,9 @@ export function registerSessionTools(server: McpServer, context: McpToolContext)
     },
     async (input) => {
       return optionalControlPlaneToolResult(
-        deleteAgentSession === undefined ? undefined : () => deleteAgentSession(authority, input),
+        controlPlane.deleteAgentSession === undefined
+          ? undefined
+          : async () => controlPlane.deleteAgentSession?.(authority, input),
         deleteAgentSessionResultSchema,
       );
     },

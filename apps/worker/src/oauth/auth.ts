@@ -19,6 +19,7 @@ import {
   ownerScopeClaimFromOAuthClaim,
 } from "./scopes.js";
 import type { WorkerEnv } from "../env.js";
+import { readByteStreamChunk } from "../http/byte-stream.js";
 import { deriveOwnerKey } from "../owner/identity.js";
 
 const GITHUB_ISSUER = "https://github.com";
@@ -147,7 +148,7 @@ async function readBoundedResponseBody(
   let bytesRead = 0;
 
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readByteStreamChunk(reader);
 
     if (done) {
       body += decoder.decode();

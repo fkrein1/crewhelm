@@ -1,3 +1,5 @@
+import { readByteStreamChunk } from "./byte-stream.js";
+
 export async function readBoundedPostRequest(
   request: Request,
   maximumBytes: number,
@@ -30,7 +32,7 @@ export async function readBoundedPostRequest(
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readByteStreamChunk(reader);
 
       if (done) {
         break;

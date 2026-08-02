@@ -1404,9 +1404,13 @@ export class CrewAgent extends CrewSession {
   }
 
   async #sessionForRunInput(input: unknown) {
-    const runId =
+    const capability: unknown =
       typeof input === "object" && input !== null && !Array.isArray(input)
-        ? Reflect.get(Reflect.get(input, "capability") ?? {}, "runId")
+        ? Reflect.get(input, "capability")
+        : undefined;
+    const runId: unknown =
+      typeof capability === "object" && capability !== null && !Array.isArray(capability)
+        ? Reflect.get(capability, "runId")
         : undefined;
     const parsedRunId = runIdSchema.safeParse(runId);
 

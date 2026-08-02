@@ -9,6 +9,7 @@ import {
 import * as z from "zod";
 
 import { readBoundedJson } from "./bounded-json.js";
+import { isUnknownRecord } from "./safe-values.js";
 
 const COMPOSIO_TRIGGER_INSTANCES_URL = "https://backend.composio.dev/api/v3.1/trigger_instances";
 const COMPOSIO_TRIGGER_INSTANCE_TIMEOUT_MS = 5_000;
@@ -130,8 +131,10 @@ function containsSecret(value: unknown, secret: string): boolean {
     }
 
     if (Array.isArray(current)) {
-      pending.push(...current);
-    } else if (typeof current === "object" && current !== null) {
+      for (const item of current as unknown[]) {
+        pending.push(item);
+      }
+    } else if (isUnknownRecord(current)) {
       pending.push(...Object.keys(current), ...Object.values(current));
     }
   }

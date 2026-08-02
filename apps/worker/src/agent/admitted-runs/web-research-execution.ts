@@ -6,6 +6,8 @@ import type {
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
+import { readByteStreamChunk } from "../../http/byte-stream.js";
+
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const SOURCE_TOKEN_AUDIENCE = "crewhelm:web-fetch-source:v1";
 const encoder = new TextEncoder();
@@ -224,7 +226,7 @@ async function readBoundedBody(response: Response, maximumBytes: number): Promis
   let length = 0;
   try {
     while (true) {
-      const next = await reader.read();
+      const next = await readByteStreamChunk(reader);
       if (next.done) break;
       length += next.value.byteLength;
       if (length > maximumBytes) {

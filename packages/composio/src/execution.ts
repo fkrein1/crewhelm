@@ -9,6 +9,7 @@ import {
 import * as z from "zod";
 
 import { readBoundedJson } from "./bounded-json.js";
+import { isUnknownRecord } from "./safe-values.js";
 
 const COMPOSIO_CONNECTED_ACCOUNTS_URL = "https://backend.composio.dev/api/v3.1/connected_accounts";
 const COMPOSIO_TOOL_EXECUTION_URL = "https://backend.composio.dev/api/v3/tools/execute";
@@ -146,8 +147,10 @@ function containsSecret(value: unknown, secret: string): boolean {
     }
 
     if (Array.isArray(current)) {
-      pending.push(...current);
-    } else if (typeof current === "object" && current !== null) {
+      for (const item of current as unknown[]) {
+        pending.push(item);
+      }
+    } else if (isUnknownRecord(current)) {
       pending.push(...Object.values(current));
     }
   }
@@ -234,9 +237,12 @@ function containsSensitiveProviderOutput(
     }
 
     if (Array.isArray(current)) {
-      pending.push(...current);
-    } else if (typeof current === "object" && current !== null) {
-      const descriptor = Object.entries(current).find(
+      for (const item of current as unknown[]) {
+        pending.push(item);
+      }
+    } else if (isUnknownRecord(current)) {
+      const entries = Object.entries(current);
+      const descriptor = entries.find(
         ([key, item]) =>
           ["key", "label", "name", "type"].includes(key.toLowerCase().replaceAll(/[^a-z]/g, "")) &&
           typeof item === "string",
@@ -246,7 +252,7 @@ function containsSensitiveProviderOutput(
         return true;
       }
 
-      for (const [key, item] of Object.entries(current)) {
+      for (const [key, item] of entries) {
         if (isSensitiveKey(key)) {
           return true;
         }

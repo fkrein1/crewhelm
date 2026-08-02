@@ -98,7 +98,7 @@ function isBoundedToolParameterValue(value: unknown): value is IntegrationToolPa
         return false;
       }
 
-      const prototype = Object.getPrototypeOf(current.value);
+      const prototype: unknown = Object.getPrototypeOf(current.value);
 
       if (prototype !== Object.prototype && prototype !== null) {
         return false;
