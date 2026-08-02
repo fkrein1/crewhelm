@@ -430,6 +430,7 @@ export class CrewSession extends Think {
   #approvalTurnMetadata: AdmittedTurnMetadata | undefined;
   #outputRepairTurnMetadata: AdmittedTurnMetadata | undefined;
   #gatewayAiBinding: Ai | undefined;
+  #isolateId = crypto.randomUUID();
   #permittedApprovalContinuationRunId: string | undefined;
   #permittedAbortRequestId: string | undefined;
   override chatRecovery = false;
@@ -2830,16 +2831,22 @@ export class CrewSession extends Think {
     if ((await this.ctx.storage.get(sessionRunDrainedKey(request.data.runId))) !== true) {
       // Think can expose a terminal row before an in-memory turn unwinds, and
       // pre-marker deployments may have no callback left to acknowledge it.
-      // Restarting the exact Session isolate forcibly drains either case. The
-      // intent must commit in an earlier wake because ctx.abort can discard
-      // writes from the wake it terminates.
+      // Restarting the exact Session isolate forcibly drains either case. RPC
+      // wakes bypass Think's onStart hook, so the durable proof names the
+      // isolate that requested the restart and the next isolate acknowledges
+      // quiescence here. The intent must commit in an earlier wake because
+      // ctx.abort can discard writes from the wake it terminates.
       const restartKey = sessionRunRestartKey(request.data.runId);
-      if ((await this.ctx.storage.get(restartKey)) !== true) {
-        await this.ctx.storage.put(restartKey, true);
+      const restartingIsolateId = await this.ctx.storage.get(restartKey);
+      if (typeof restartingIsolateId !== "string") {
+        await this.ctx.storage.put(restartKey, this.#isolateId);
         return false;
       }
-      this.ctx.abort("Expired Session Run is restarting to prove deletion quiescence.");
-      return false;
+      if (restartingIsolateId === this.#isolateId) {
+        this.ctx.abort("Expired Session Run is restarting to prove deletion quiescence.");
+        return false;
+      }
+      await this.ctx.storage.put(sessionRunDrainedKey(request.data.runId), true);
     }
 
     if (terminalStatus === "cancelled") {
