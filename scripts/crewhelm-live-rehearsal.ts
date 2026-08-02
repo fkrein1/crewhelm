@@ -7,11 +7,13 @@ import {
   WORKERS_AI_CAPABILITY_ID,
   WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
   batchDisableAgentsResultSchema,
+  cancelRunResultSchema,
   configureAgentScheduleResultSchema,
   createAgentResultSchema,
   getAgentScheduleResultSchema,
   inspectRunResultSchema,
   listAgentSchedulesResultSchema,
+  manageAgentSessionsResultSchema,
   manageAgentWorkflowsResultSchema,
   startRunResultSchema,
   type BatchDisableAgentsResult,
@@ -52,6 +54,7 @@ import {
   recoverWorkflowRehearsal,
   runWorkflowRehearsal,
 } from "../apps/cli/src/rehearsal/journeys/workflow.js";
+import { readRehearsalStatus } from "../apps/cli/src/rehearsal/mcp.js";
 
 const DEFAULT_INSTALLATION = "crewhelm.testing.installation.json";
 const DEFAULT_CREDENTIAL = ".crewhelm-rehearsal-credential.json";
@@ -70,6 +73,16 @@ const SCHEDULE_REHEARSAL_TOOLS = [
   "crewhelm_create_agent",
   "crewhelm_get_agent_schedule",
   "crewhelm_list_agent_schedules",
+] as const;
+const CONVERSATION_REHEARSAL_TOOLS = [
+  "crewhelm_agent_sessions",
+  "crewhelm_batch_disable_agents",
+  "crewhelm_cancel_run",
+  "crewhelm_create_agent",
+  "crewhelm_delete_agent_session",
+  "crewhelm_inspect_run",
+  "crewhelm_start_run",
+  "crewhelm_status",
 ] as const;
 const TYPED_OUTPUT_REHEARSAL_TOOLS = [
   "crewhelm_agent_workflows",
@@ -688,6 +701,404 @@ async function schedules(options: {
   };
 }
 
+async function conversation(options: {
+  credentialPath: string;
+  installationPath: string;
+  runTimeoutMs: number;
+  timeoutMs: number;
+}): Promise<unknown> {
+  const target = await resolveRehearsalTarget(options.installationPath);
+  const publicReport = await diagnoseDeployment(
+    { origin: target.origin, timeoutMs: options.timeoutMs },
+    { expectedDeploymentFingerprint: target.expectedDeploymentFingerprint, fetch },
+  );
+  if (!publicReport.ok || publicReport.deployment.alignment !== "aligned") {
+    return { ok: false, public: publicReport, schemaVersion: 1 };
+  }
+
+  const credential = await readRehearsalCredential(options.credentialPath);
+  const suffix = crypto.randomUUID().slice(0, 8);
+  const marker = `conversation-${suffix}`;
+  let agentId: string | undefined;
+  let conversationId: string | undefined;
+  let firstRunId: string | undefined;
+  let secondRunId: string | undefined;
+  const result = await runRefreshableOwnerSession(
+    {
+      credential,
+      origin: target.origin,
+      persistCredential: (rotated) => writeRehearsalCredential(options.credentialPath, rotated),
+      timeoutMs: options.timeoutMs,
+    },
+    { expectedDeploymentFingerprint: target.expectedDeploymentFingerprint, fetch },
+    async (session) => {
+      await session.call(
+        "initialize",
+        {
+          capabilities: {},
+          clientInfo: { name: "crewhelm-live-rehearsal", version: CREWHELM_CLI_VERSION },
+          protocolVersion: MCP_PROTOCOL_VERSION,
+        },
+        initializeResponseSchema,
+      );
+      const catalog = await session.call("tools/list", {}, toolListResponseSchema);
+      const names = new Set(catalog.result.tools.map((tool) => tool.name));
+      if (!CONVERSATION_REHEARSAL_TOOLS.every((name) => names.has(name))) {
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          "MCP catalog omitted a conversation rehearsal tool.",
+        );
+      }
+
+      const activeAgentsBefore = (await readRehearsalStatus(session)).usage.agents.active;
+      const created = await callTool<CreateAgentResult>(
+        session,
+        "crewhelm_create_agent",
+        {
+          capabilities: [
+            {
+              configuration: {
+                fallbackModels: [],
+                primaryModel: "@cf/zai-org/glm-4.7-flash",
+              },
+              id: WORKERS_AI_CAPABILITY_ID,
+              schemaVersion: WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
+            },
+          ],
+          executionLimits: {
+            maxDurationSeconds: 90,
+            maxModelTokens: 768,
+            maxToolCalls: 0,
+            maxTurns: 2,
+          },
+          idempotencyKey: `conversation-agent-${suffix}`,
+          instructions:
+            "Keep a short conversation. Remember owner-provided context and reply concisely without tools.",
+          name: `Conversation rehearsal ${suffix}`,
+        },
+        createAgentResultSchema,
+      );
+      if (!created.ok) {
+        throw new TemporaryOwnerSessionError("invalid_payload", "Disposable Agent was denied.");
+      }
+      agentId = created.agent.id;
+      let evidence: unknown;
+      let operationFailure: unknown;
+      let sessionDeleted = false;
+
+      const waitForRun = async (runId: string) => {
+        const deadline = Date.now() + options.runTimeoutMs;
+        let inspected: InspectRunResult | undefined;
+        while (Date.now() < deadline) {
+          inspected = await callTool<InspectRunResult>(
+            session,
+            "crewhelm_inspect_run",
+            { runId },
+            inspectRunResultSchema,
+          );
+          if (inspected.ok && ["completed", "failed"].includes(inspected.run.status)) break;
+          await new Promise((resolve) => setTimeout(resolve, 5_000));
+        }
+        if (!inspected?.ok || inspected.run.status !== "completed") {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Conversation Run did not complete successfully.",
+          );
+        }
+        return inspected;
+      };
+
+      try {
+        const firstInput = {
+          agentId,
+          expectedRevision: created.agent.revision,
+          idempotencyKey: `conversation-first-${suffix}`,
+          prompt: `Remember the phrase ${marker} and acknowledge it briefly.`,
+        };
+        const first = await callTool<StartRunResult>(
+          session,
+          "crewhelm_start_run",
+          firstInput,
+          startRunResultSchema,
+        );
+        if (!first.ok || first.conversation === undefined) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Conversation start did not return a copy-ready handle.",
+          );
+        }
+        conversationId = first.conversation.id;
+        firstRunId = first.run.runId;
+        const firstReplay = await callTool<StartRunResult>(
+          session,
+          "crewhelm_start_run",
+          firstInput,
+          startRunResultSchema,
+        );
+        if (
+          !firstReplay.ok ||
+          firstReplay.created ||
+          firstReplay.run.runId !== first.run.runId ||
+          JSON.stringify(firstReplay.conversation) !== JSON.stringify(first.conversation)
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Conversation start did not return one replay-safe handle.",
+          );
+        }
+        const firstInspection = await waitForRun(firstRunId);
+        if (
+          firstInspection.conversation?.id !== conversationId ||
+          firstInspection.conversation.expectedRevision !== first.conversation.expectedRevision
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Run inspection did not preserve the conversation handle.",
+          );
+        }
+
+        const listedBeforeFollowUp = await callTool(
+          session,
+          "crewhelm_agent_sessions",
+          { action: "list", agentId, limit: 10 },
+          manageAgentSessionsResultSchema,
+        );
+        if (
+          !listedBeforeFollowUp.ok ||
+          !("sessions" in listedBeforeFollowUp) ||
+          listedBeforeFollowUp.sessions.length !== 1 ||
+          listedBeforeFollowUp.sessions[0]?.sessionId !== conversationId ||
+          JSON.stringify(listedBeforeFollowUp).includes(marker)
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Compact conversation discovery was not bounded to metadata.",
+          );
+        }
+
+        const firstConversation = first.conversation;
+        const secondInput = {
+          agentId,
+          conversation: firstConversation,
+          expectedRevision: created.agent.revision,
+          idempotencyKey: `conversation-second-${suffix}`,
+          prompt: "Reply with the exact phrase I asked you to remember and nothing else.",
+        };
+        const second = await callTool<StartRunResult>(
+          session,
+          "crewhelm_start_run",
+          secondInput,
+          startRunResultSchema,
+        );
+        if (
+          !second.ok ||
+          second.conversation?.id !== conversationId ||
+          second.conversation.expectedRevision !== firstConversation.expectedRevision + 1
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Conversation follow-up did not advance one exact revision.",
+          );
+        }
+        secondRunId = second.run.runId;
+        const secondInspection = await waitForRun(secondRunId);
+        if (!secondInspection.run.output?.includes(marker)) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "The Agent follow-up did not preserve conversation context.",
+          );
+        }
+        const secondReplay = await callTool<StartRunResult>(
+          session,
+          "crewhelm_start_run",
+          secondInput,
+          startRunResultSchema,
+        );
+        if (
+          !secondReplay.ok ||
+          secondReplay.created ||
+          secondReplay.run.runId !== secondRunId ||
+          JSON.stringify(secondReplay.conversation) !== JSON.stringify(second.conversation)
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Conversation follow-up replay did not return the original Run.",
+          );
+        }
+
+        const stale = await callDeniedTool<StartRunResult>(
+          session,
+          "crewhelm_start_run",
+          {
+            ...secondInput,
+            idempotencyKey: `conversation-stale-${suffix}`,
+          },
+          startRunResultSchema,
+        );
+        if (stale.ok || stale.error.code !== "branch_revision_conflict") {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "A stale conversation handle did not fail closed.",
+          );
+        }
+
+        const recovered = await callTool(
+          session,
+          "crewhelm_agent_sessions",
+          { action: "inspect", agentId, sessionId: conversationId },
+          manageAgentSessionsResultSchema,
+        );
+        if (
+          !recovered.ok ||
+          !("conversation" in recovered) ||
+          JSON.stringify(recovered.conversation) !== JSON.stringify(second.conversation) ||
+          !recovered.messages.some((message) => message.text.includes(marker)) ||
+          secondInspection.run.session?.sessionId !== conversationId
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Exact conversation recovery did not return the latest copy-ready handle.",
+          );
+        }
+
+        const deleted = await callTool(
+          session,
+          "crewhelm_delete_agent_session",
+          { agentId, sessionId: conversationId },
+          manageAgentSessionsResultSchema,
+        );
+        if (!deleted.ok || !("deleted" in deleted) || !deleted.deleted) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Conversation cleanup was not verified.",
+          );
+        }
+        sessionDeleted = true;
+
+        evidence = {
+          activeAgentsBefore,
+          conversationId,
+          conversationRevisions: [
+            firstConversation.expectedRevision,
+            second.conversation.expectedRevision,
+          ],
+          firstRunId,
+          secondRunId,
+        };
+      } catch (error) {
+        operationFailure = error;
+      }
+
+      let cleanupFailure: unknown;
+      if (conversationId !== undefined && !sessionDeleted) {
+        try {
+          const cleanupDeadline = Date.now() + Math.min(options.runTimeoutMs, 60_000);
+          const knownRunIds = [firstRunId, secondRunId].filter(
+            (runId): runId is string => runId !== undefined,
+          );
+          for (const runId of knownRunIds) {
+            while (true) {
+              const inspected = await callTool<InspectRunResult>(
+                session,
+                "crewhelm_inspect_run",
+                { runId },
+                inspectRunResultSchema,
+              );
+              if (!inspected.ok || inspected.run.runId !== runId) {
+                throw new TemporaryOwnerSessionError(
+                  "invalid_payload",
+                  "Conversation cleanup did not match the exact Run.",
+                );
+              }
+              if (["cancelled", "completed", "failed"].includes(inspected.run.status)) break;
+              if (Date.now() >= cleanupDeadline) {
+                throw new TemporaryOwnerSessionError(
+                  "timeout",
+                  "Conversation cleanup did not reach a terminal Run state.",
+                );
+              }
+              try {
+                await callTool(session, "crewhelm_cancel_run", { runId }, cancelRunResultSchema);
+              } catch {
+                // Exact inspection reconciles an in-flight cancellation or a lost response.
+              }
+              await new Promise((resolve) => setTimeout(resolve, 5_000));
+            }
+          }
+
+          const deleted = await callTool(
+            session,
+            "crewhelm_delete_agent_session",
+            { agentId, sessionId: conversationId },
+            manageAgentSessionsResultSchema,
+          );
+          if (!deleted.ok && deleted.error.code !== "session_not_found") {
+            throw new TemporaryOwnerSessionError(
+              "invalid_payload",
+              "Conversation cleanup was not verified.",
+            );
+          }
+        } catch (error) {
+          cleanupFailure = error;
+        }
+      }
+
+      try {
+        const disabled = await callTool<BatchDisableAgentsResult>(
+          session,
+          "crewhelm_batch_disable_agents",
+          { agents: [{ agentId, expectedRevision: created.agent.revision }] },
+          batchDisableAgentsResultSchema,
+        );
+        if (
+          !disabled.ok ||
+          disabled.receipts.length !== 1 ||
+          !["already_disabled", "disabled"].includes(disabled.receipts[0]?.outcome ?? "")
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Disposable conversation Agent was not disabled.",
+          );
+        }
+        const activeAgentsAfter = (await readRehearsalStatus(session)).usage.agents.active;
+        if (activeAgentsAfter !== activeAgentsBefore) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Conversation rehearsal did not restore Agent capacity.",
+          );
+        }
+        evidence = {
+          ...(typeof evidence === "object" && evidence !== null ? evidence : {}),
+          activeAgentsAfter,
+        };
+      } catch (error) {
+        cleanupFailure ??= error;
+      }
+
+      if (cleanupFailure !== undefined) throw cleanupFailure;
+      if (operationFailure !== undefined) throw operationFailure;
+      return evidence;
+    },
+  );
+
+  return {
+    agentId,
+    authorization: result.authorization,
+    conversationId,
+    evidence: result.operation.status === "completed" ? result.operation.value : undefined,
+    firstRunId,
+    ok:
+      result.authorization.ok &&
+      result.operation.status === "completed" &&
+      result.revocation.status === "revoked",
+    operation: result.operation,
+    public: publicReport,
+    revocation: result.revocation,
+    schemaVersion: 1,
+    secondRunId,
+  };
+}
+
 async function typedOutput(options: {
   credentialPath: string;
   installationPath: string;
@@ -997,6 +1408,7 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
   const [action, ...rest] = arguments_;
   if (
     action !== "authorize" &&
+    action !== "conversation" &&
     action !== "inspect-sandbox" &&
     action !== "recover" &&
     action !== "sandbox" &&
@@ -1006,7 +1418,7 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
     action !== "workflow"
   ) {
     process.stderr.write(
-      "Usage: crewhelm-live-rehearsal.ts <authorize|inspect-sandbox|recover|sandbox|schedules|typed-output|web-research|workflow> [options]\n",
+      "Usage: crewhelm-live-rehearsal.ts <authorize|conversation|inspect-sandbox|recover|sandbox|schedules|typed-output|web-research|workflow> [options]\n",
     );
     return 2;
   }
@@ -1047,48 +1459,50 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
                   throw new Error("browser must be codex or system.");
                 })(),
         })
-      : action === "inspect-sandbox"
-        ? await inspectSandbox({
-            ...common,
-            runId:
-              parsed.values["run-id"] ??
-              (() => {
-                throw new Error("inspect-sandbox requires run-id.");
-              })(),
-          })
-        : action === "recover"
-          ? await recover({
+      : action === "conversation"
+        ? await conversation({ ...common, runTimeoutMs })
+        : action === "inspect-sandbox"
+          ? await inspectSandbox({
               ...common,
-              agentId:
-                parsed.values["agent-id"] ??
+              runId:
+                parsed.values["run-id"] ??
                 (() => {
-                  throw new Error("recover requires agent-id.");
-                })(),
-              runTimeoutMs,
-              workflowId:
-                parsed.values["workflow-id"] ??
-                (() => {
-                  throw new Error("recover requires workflow-id.");
+                  throw new Error("inspect-sandbox requires run-id.");
                 })(),
             })
-          : action === "sandbox"
-            ? await sandbox({
+          : action === "recover"
+            ? await recover({
                 ...common,
+                agentId:
+                  parsed.values["agent-id"] ??
+                  (() => {
+                    throw new Error("recover requires agent-id.");
+                  })(),
                 runTimeoutMs,
+                workflowId:
+                  parsed.values["workflow-id"] ??
+                  (() => {
+                    throw new Error("recover requires workflow-id.");
+                  })(),
               })
-            : action === "schedules"
-              ? await schedules(common)
-              : action === "typed-output"
-                ? await typedOutput({ ...common, runTimeoutMs })
-                : action === "web-research"
-                  ? await webResearch({
-                      ...common,
-                      runTimeoutMs,
-                    })
-                  : await workflow({
-                      ...common,
-                      runTimeoutMs,
-                    });
+            : action === "sandbox"
+              ? await sandbox({
+                  ...common,
+                  runTimeoutMs,
+                })
+              : action === "schedules"
+                ? await schedules(common)
+                : action === "typed-output"
+                  ? await typedOutput({ ...common, runTimeoutMs })
+                  : action === "web-research"
+                    ? await webResearch({
+                        ...common,
+                        runTimeoutMs,
+                      })
+                    : await workflow({
+                        ...common,
+                        runTimeoutMs,
+                      });
   process.stdout.write(`${JSON.stringify(report)}\n`);
   return typeof report === "object" && report !== null && Reflect.get(report, "ok") === true
     ? 0
