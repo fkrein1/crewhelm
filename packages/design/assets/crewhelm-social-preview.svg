@@ -7,15 +7,12 @@
   role="img"
   aria-labelledby="title description"
 >
-  <title id="title">Crewhelm social preview — light editorial hero</title>
-  <desc id="description">
-    Crewhelm's homepage headline on a light editorial layout with the boundary mark and issue labels.
-  </desc>
+  <title id="title">CREWHELM</title>
+  <desc id="description">Give Agents a mandate. Not a master key.</desc>
 
   <rect width="1280" height="640" fill="#F3F2EB" />
 
-  <!-- Masthead: the same boundary mark and compact mono wordmark used on crewhelm.app. -->
-  <g transform="translate(60.5 29.5) scale(.032)">
+  <g transform="translate(56.5 31.5) scale(.075)">
     <g fill="#0B121B">
       <path d="M107 78h371v148H247v272H107V78Z" />
       <path d="M544 78h372v387H775V226H544V78Z" />
@@ -24,82 +21,46 @@
     </g>
     <rect x="442" y="429" width="140" height="143" fill="#0067DB" />
   </g>
+
   <text
-    x="105"
-    y="54"
+    x="154"
+    y="91"
     fill="#0B121B"
-    font-family="SFMono-Regular, 'Cascadia Code', 'Roboto Mono', Consolas, monospace"
-    font-size="18"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="35"
     font-weight="800"
-    letter-spacing="2.5"
+    letter-spacing="7"
   >CREWHELM</text>
-  <line x1="64" y1="84" x2="1216" y2="84" stroke="#A9B1BA" stroke-width="1" />
 
-  <!-- Editorial labels from the homepage hero. -->
-  <text
-    x="64"
-    y="120"
-    fill="#57606A"
-    font-family="SFMono-Regular, 'Cascadia Code', 'Roboto Mono', Consolas, monospace"
-    font-size="13"
-    letter-spacing="1.5"
-  >OPEN-SOURCE CONTROL PLANE / FOR AI AGENTS</text>
-  <text
-    x="1216"
-    y="120"
-    fill="#57606A"
-    font-family="SFMono-Regular, 'Cascadia Code', 'Roboto Mono', Consolas, monospace"
-    font-size="13"
-    letter-spacing="1.5"
-    text-anchor="end"
-  >ISSUE 01 / OWNER EDITION</text>
+  <rect x="64" y="132" width="1152" height="4" fill="#0B121B" />
 
-  <!-- Homepage promise, enlarged for recognition at social-card size. -->
   <text
-    x="60"
-    y="269"
+    x="58"
+    y="287"
     fill="#0B121B"
-    font-family="Arial Black, Inter, Arial, sans-serif"
-    font-size="104"
+    font-family="Arial Black, Arial, Helvetica, sans-serif"
+    font-size="118"
     font-weight="900"
-    letter-spacing="-7"
+    letter-spacing="-6"
   >Give Agents</text>
   <text
-    x="60"
-    y="366"
+    x="58"
+    y="414"
     fill="#0B121B"
-    font-family="Arial Black, Inter, Arial, sans-serif"
-    font-size="104"
+    font-family="Arial Black, Arial, Helvetica, sans-serif"
+    font-size="118"
     font-weight="900"
-    letter-spacing="-7"
+    letter-spacing="-6"
   >a mandate.</text>
+
+  <rect x="0" y="470" width="1280" height="170" fill="#0067DB" />
   <text
-    x="60"
-    y="478"
-    fill="#0067DB"
-    font-family="Georgia, 'Times New Roman', serif"
-    font-size="106"
-    font-style="italic"
+    x="58"
+    y="584"
+    fill="#F3F2EB"
+    font-family="Arial Black, Arial, Helvetica, sans-serif"
+    font-size="98"
+    font-weight="900"
     letter-spacing="-5"
   >Not a master key.</text>
-
-  <line x1="64" y1="550" x2="1216" y2="550" stroke="#A9B1BA" stroke-width="1" />
-  <text
-    x="64"
-    y="590"
-    fill="#57606A"
-    font-family="SFMono-Regular, 'Cascadia Code', 'Roboto Mono', Consolas, monospace"
-    font-size="13"
-    letter-spacing="1.4"
-  >FOR PEOPLE WHO WANT USEFUL AGENTS WITHOUT BECOMING PLATFORM OPERATORS.</text>
-  <text
-    x="1216"
-    y="590"
-    fill="#0B121B"
-    font-family="SFMono-Regular, 'Cascadia Code', 'Roboto Mono', Consolas, monospace"
-    font-size="13"
-    font-weight="800"
-    letter-spacing="1.4"
-    text-anchor="end"
-  >CREWHELM.APP ↗</text>
 </svg>
