@@ -1,4 +1,5 @@
 import {
+  agentCapabilityConfigurationSchema,
   agentCapabilityConfigurationsSchema,
   agentCapabilityDescriptorSchema,
   agentRuntimePlanSchema,
@@ -91,6 +92,10 @@ export type CapabilityCompilationResult =
       code: CapabilityFailureCode;
       ok: false;
     };
+
+function invalidCapabilityContribution(_contribution: never): CapabilityCompilationResult {
+  return { code: "invalid_configuration", ok: false };
+}
 
 function unavailableDescriptor(
   module: AgentCapabilityModule<unknown>,
@@ -197,6 +202,17 @@ export class AgentCapabilityRegistry {
         return { code: "invalid_configuration", ok: false };
       }
 
+      const canonicalCapability = agentCapabilityConfigurationSchema.safeParse({
+        ...capability,
+        configuration: parsedConfiguration.data,
+      });
+
+      if (!canonicalCapability.success) {
+        return { code: "invalid_configuration", ok: false };
+      }
+
+      capability = canonicalCapability.data;
+
       const resolution = module.resolve(parsedConfiguration.data, context);
 
       if (!resolution.ok) {
@@ -208,34 +224,41 @@ export class AgentCapabilityRegistry {
       }
 
       for (const contribution of resolution.contributions) {
-        if (contribution.kind === "inference") {
-          if (inference !== undefined) {
-            return { code: "capability_conflict", ok: false };
-          }
+        switch (contribution.kind) {
+          case "inference":
+            if (inference !== undefined) {
+              return { code: "capability_conflict", ok: false };
+            }
 
-          inference = {
-            ...contribution.profile,
-            moduleId: capability.id,
-            schemaVersion: capability.schemaVersion,
-          };
-        } else if (contribution.kind === "system-context") {
-          systemContext.push({
-            moduleId: capability.id,
-            schemaVersion: capability.schemaVersion,
-            text: contribution.text,
-          });
-        } else if (contribution.kind === "skill-reference") {
-          skillReferences.push({
-            ...contribution.skill,
-            moduleId: capability.id,
-            schemaVersion: capability.schemaVersion,
-          });
-        } else {
-          tools.push({
-            ...contribution.tool,
-            moduleId: capability.id,
-            schemaVersion: capability.schemaVersion,
-          });
+            inference = {
+              ...contribution.profile,
+              moduleId: capability.id,
+              schemaVersion: capability.schemaVersion,
+            };
+            break;
+          case "runtime-tool":
+            tools.push({
+              ...contribution.tool,
+              moduleId: capability.id,
+              schemaVersion: capability.schemaVersion,
+            });
+            break;
+          case "skill-reference":
+            skillReferences.push({
+              ...contribution.skill,
+              moduleId: capability.id,
+              schemaVersion: capability.schemaVersion,
+            });
+            break;
+          case "system-context":
+            systemContext.push({
+              moduleId: capability.id,
+              schemaVersion: capability.schemaVersion,
+              text: contribution.text,
+            });
+            break;
+          default:
+            return invalidCapabilityContribution(contribution);
         }
       }
 

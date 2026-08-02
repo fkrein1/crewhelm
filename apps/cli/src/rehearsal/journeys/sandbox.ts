@@ -31,7 +31,7 @@ import {
   type TemporaryOwnerMcpSession,
 } from "../../temporary-owner-session.js";
 import { CREWHELM_CLI_VERSION } from "../../version.js";
-import { callRehearsalTool, readRehearsalStatus } from "../mcp.js";
+import { callRehearsalTool, normalizeRehearsalFailure, readRehearsalStatus } from "../mcp.js";
 
 const POLL_INTERVAL_MS = 5_000;
 const TERMINAL_RUN_STATUSES = ["cancelled", "completed", "failed"] as const;
@@ -119,9 +119,8 @@ function skipped(name: CheckName) {
 }
 
 function failure(name: CheckName, error: unknown) {
-  return error instanceof TemporaryOwnerSessionError
-    ? check(name, error.code, error.message)
-    : check(name, "request_failed", "Sandbox rehearsal check failed.");
+  const normalized = normalizeRehearsalFailure(error, "Sandbox rehearsal check failed.");
+  return check(name, normalized.code, normalized.message);
 }
 
 function fixtureSuffix(): string {

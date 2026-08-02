@@ -23,7 +23,7 @@ import {
   type TemporaryOwnerSessionDependencies,
 } from "../../temporary-owner-session.js";
 import { CREWHELM_CLI_VERSION } from "../../version.js";
-import { callRehearsalTool, readRehearsalStatus } from "../mcp.js";
+import { callRehearsalTool, normalizeRehearsalFailure, readRehearsalStatus } from "../mcp.js";
 
 const FULL_SCOPE = "crewhelm:full";
 const MAXIMUM_MCP_SCHEMA_BYTES = 64 * 1_024;
@@ -181,20 +181,8 @@ function failedCheck(
   endpoint: URL,
   error: unknown,
 ): AgentRehearsalCheck {
-  return typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    "message" in error &&
-    typeof error.code === "string" &&
-    typeof error.message === "string" &&
-    temporaryOwnerSessionErrorCodeSchema.safeParse(error.code).success
-    ? createCheck(
-        name,
-        endpoint,
-        temporaryOwnerSessionErrorCodeSchema.parse(error.code),
-        error.message,
-      )
-    : createCheck(name, endpoint, "request_failed", "Agent lifecycle check failed.");
+  const normalized = normalizeRehearsalFailure(error, "Agent lifecycle check failed.");
+  return createCheck(name, endpoint, normalized.code, normalized.message);
 }
 
 function validateToolCatalog(toolList: z.infer<typeof toolListResponseSchema>): void {

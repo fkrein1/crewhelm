@@ -254,6 +254,44 @@ describe("Agent capability registry", () => {
     });
   });
 
+  it("persists the same canonical capability configuration used by the runtime plan", () => {
+    const registry = new AgentCapabilityRegistry([
+      sandboxCodeCapabilityModule,
+      workersAiCapabilityModule,
+    ]);
+    const result = registry.compile(
+      [
+        workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct"),
+        {
+          configuration: { languages: ["python", "python"] },
+          id: "tools.sandbox-code",
+          schemaVersion: 1,
+        },
+      ],
+      {
+        availablePrerequisites: new Set([WORKERS_AI_BINDING_PREREQUISITE, "cloudflare.sandbox"]),
+        checkPrerequisites: true,
+        fleetConfiguration,
+      },
+    );
+
+    expect(result).toMatchObject({
+      capabilities: [
+        workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct"),
+        sandboxCodeCapabilityConfiguration({ languages: ["python"] }),
+      ],
+      ok: true,
+      runtimePlan: {
+        tools: [
+          {
+            kind: "sandbox-code",
+            languages: ["python"],
+          },
+        ],
+      },
+    });
+  });
+
   it("denies Sandbox configuration when its isolated runtime is unavailable", () => {
     const registry = new AgentCapabilityRegistry([
       sandboxCodeCapabilityModule,
@@ -367,6 +405,31 @@ describe("Agent capability registry", () => {
         runtimePlan: result.runtimePlan,
       }),
     ).toBe("Base Agent instructions.\n\nOwner-authored operating context.");
+  });
+
+  it("fails closed when a trusted module returns an unknown contribution kind", () => {
+    const malformedModule = contextModule("context.malformed");
+    Object.defineProperty(malformedModule, "resolve", {
+      value: () => ({
+        contributions: [{ kind: "unknown" }],
+        ok: true,
+      }),
+    });
+    const registry = new AgentCapabilityRegistry([malformedModule, workersAiCapabilityModule]);
+
+    expect(
+      registry.compile(
+        [
+          {
+            configuration: { text: "Malformed contribution fixture." },
+            id: "context.malformed",
+            schemaVersion: 1,
+          },
+          workersAiCapabilityConfiguration("@cf/zai-org/glm-4.7-flash"),
+        ],
+        { availablePrerequisites, checkPrerequisites: true, fleetConfiguration },
+      ),
+    ).toEqual({ code: "invalid_configuration", ok: false });
   });
 
   it("compiles exact Skill references without loading package contents", () => {

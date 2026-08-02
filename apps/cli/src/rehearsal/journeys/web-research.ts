@@ -32,7 +32,7 @@ import {
   type TemporaryOwnerMcpSession,
 } from "../../temporary-owner-session.js";
 import { CREWHELM_CLI_VERSION } from "../../version.js";
-import { callRehearsalTool, readRehearsalStatus } from "../mcp.js";
+import { callRehearsalTool, normalizeRehearsalFailure, readRehearsalStatus } from "../mcp.js";
 
 const REQUIRED_TOOLS = [
   "crewhelm_batch_disable_agents",
@@ -109,9 +109,8 @@ function skipped(name: CheckName) {
 }
 
 function failure(name: CheckName, error: unknown) {
-  return error instanceof TemporaryOwnerSessionError
-    ? check(name, error.code, error.message)
-    : check(name, "request_failed", "Web research rehearsal check failed.");
+  const normalized = normalizeRehearsalFailure(error, "Web research rehearsal check failed.");
+  return check(name, normalized.code, normalized.message);
 }
 
 export function includesOfficialCloudflareDevelopersUrl(output: string): boolean {
