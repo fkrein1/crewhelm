@@ -8,7 +8,10 @@ import { Hono, type Context } from "hono";
 import * as z from "zod";
 
 import { CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX } from "../owner/connections/index.js";
-import { COMPOSIO_WEBHOOK_INGRESS_OBJECT_NAME } from "../owner/watches/index.js";
+import {
+  COMPOSIO_WEBHOOK_INGRESS_OBJECT_NAME,
+  type ComposioWebhookIngressResult,
+} from "../owner/watches/index.js";
 import { createCrewhelmAuth, verifyMcpAccessToken } from "../oauth/auth.js";
 import type { WorkerEnv } from "../env.js";
 import { handleAuthenticatedMcpRequest } from "../mcp/server.js";
@@ -68,6 +71,18 @@ const publicOriginSchema = z
     const url = new URL(value);
     return url.protocol === "https:" && url.origin === value;
   });
+const composioWebhookIngressResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({ ok: z.literal(true) }),
+  z.strictObject({
+    error: z.enum(["invalid_webhook", "webhook_unavailable"]),
+    ok: z.literal(false),
+  }),
+]);
+const boundedComposioWebhookHeadersSchema = z.strictObject({
+  id: z.string().min(1).max(256),
+  signature: z.string().min(1).max(512),
+  timestamp: z.string().min(1).max(32),
+});
 
 function jsonResponse(
   body: string | null,
@@ -208,6 +223,12 @@ async function readBoundedBody(request: Request, maximumBytes: number): Promise<
     }
   } catch {
     return null;
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // The body is already accepted or rejected; the host owns an unreleasable stream lock.
+    }
   }
 
   const body = new Uint8Array(length);
@@ -235,32 +256,49 @@ async function handleComposioWebhook(request: Request, env: WorkerEnv): Promise<
     return jsonResponse(WEBHOOK_DENIED_BODY, WEBHOOK_DENIED_BODY_LENGTH, 400);
   }
 
-  const id = request.headers.get("webhook-id");
-  const signature = request.headers.get("webhook-signature");
-  const timestamp = request.headers.get("webhook-timestamp");
+  const headers = boundedComposioWebhookHeadersSchema.safeParse({
+    id: request.headers.get("webhook-id"),
+    signature: request.headers.get("webhook-signature"),
+    timestamp: request.headers.get("webhook-timestamp"),
+  });
 
-  if (id === null || signature === null || timestamp === null) {
+  if (!headers.success) {
     return jsonResponse(WEBHOOK_DENIED_BODY, WEBHOOK_DENIED_BODY_LENGTH, 401);
   }
 
+  let returned: unknown;
+
   try {
     const ingress = env.OWNER_CONTROL_PLANE.getByName(COMPOSIO_WEBHOOK_INGRESS_OBJECT_NAME);
-    const delivered = await ingress.receiveComposioWebhook({
+    returned = await ingress.receiveComposioWebhook({
       body,
-      headers: { id, signature, timestamp },
+      headers: headers.data,
     });
-
-    if (delivered.ok) {
-      return jsonResponse(WEBHOOK_ACCEPTED_BODY, WEBHOOK_ACCEPTED_BODY_LENGTH, 202);
-    }
-
-    return jsonResponse(
-      WEBHOOK_DENIED_BODY,
-      WEBHOOK_DENIED_BODY_LENGTH,
-      delivered.error === "invalid_webhook" ? 401 : 503,
-    );
   } catch {
     return jsonResponse(WEBHOOK_DENIED_BODY, WEBHOOK_DENIED_BODY_LENGTH, 503);
+  }
+
+  const delivered = composioWebhookIngressResultSchema.safeParse(returned);
+
+  return delivered.success
+    ? composioWebhookResponse(delivered.data)
+    : jsonResponse(WEBHOOK_DENIED_BODY, WEBHOOK_DENIED_BODY_LENGTH, 503);
+}
+
+function composioWebhookResponse(delivered: ComposioWebhookIngressResult): Response {
+  if (delivered.ok) {
+    return jsonResponse(WEBHOOK_ACCEPTED_BODY, WEBHOOK_ACCEPTED_BODY_LENGTH, 202);
+  }
+
+  switch (delivered.error) {
+    case "invalid_webhook":
+      return jsonResponse(WEBHOOK_DENIED_BODY, WEBHOOK_DENIED_BODY_LENGTH, 401);
+    case "webhook_unavailable":
+      return jsonResponse(WEBHOOK_DENIED_BODY, WEBHOOK_DENIED_BODY_LENGTH, 503);
+    default: {
+      const unhandledError: never = delivered.error;
+      return unhandledError;
+    }
   }
 }
 
@@ -352,13 +390,13 @@ export async function handleWorkerRequest(
   env: WorkerEnv,
   context: ExecutionContext,
 ): Promise<Response> {
-  let origin: string;
+  const configuredOrigin = publicOriginSchema.safeParse(env.PUBLIC_ORIGIN);
 
-  try {
-    origin = publicOrigin(env);
-  } catch {
+  if (!configuredOrigin.success) {
     return jsonResponse(INTERNAL_ERROR_BODY, INTERNAL_ERROR_BODY_LENGTH, 500);
   }
+
+  const origin = configuredOrigin.data;
 
   if (new URL(request.url).origin !== origin) {
     return jsonResponse(MISDIRECTED_BODY, MISDIRECTED_BODY_LENGTH, 421);

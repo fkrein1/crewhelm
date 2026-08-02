@@ -24,8 +24,8 @@
     "apps/worker/src/worker-test-entry.ts"
   ],
   "recordedProgress": {
-    "migratedFiles": 56,
-    "migratedUnits": 21,
+    "migratedFiles": 74,
+    "migratedUnits": 24,
     "totalFiles": 159,
     "totalUnits": 30
   },
@@ -59,8 +59,19 @@
       "pathPrefixes": ["apps/cli/src/rehearsal/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": [
+          "packages/composio/src/auth-configs.test.ts",
+          "packages/composio/src/bounded-json.test.ts",
+          "packages/composio/src/index.test.ts",
+          "packages/composio/src/trigger-instances.test.ts",
+          "packages/composio/src/triggers.test.ts",
+          "packages/composio/src/webhook-subscriptions.test.ts"
+        ]
+      },
       "id": "composio",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["packages/composio/src/"]
     },
     {
@@ -134,8 +145,15 @@
       "pathPrefixes": []
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": [
+          "apps/worker/src/http/request-body.test.ts",
+          "apps/worker/src/http/server.test.ts"
+        ]
+      },
       "id": "worker-http",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/http/"]
     },
     {
@@ -144,8 +162,16 @@
       "pathPrefixes": ["apps/worker/src/mcp/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": [
+          "apps/worker/src/oauth/mcp.integration.test.ts",
+          "apps/worker/src/oauth/server.test.ts",
+          "apps/worker/src/oauth/ui.test.ts"
+        ]
+      },
       "id": "worker-oauth",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/oauth/"]
     },
     {

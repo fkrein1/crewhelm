@@ -11,7 +11,11 @@ export async function readBoundedPostRequest(
   if (declaredLength !== null) {
     const length = Number(declaredLength);
 
-    if (!Number.isSafeInteger(length) || length < 0 || length > maximumBytes) {
+    if (
+      !/^(0|[1-9][0-9]*)$/.test(declaredLength) ||
+      !Number.isSafeInteger(length) ||
+      length > maximumBytes
+    ) {
       return null;
     }
   }
@@ -24,21 +28,31 @@ export async function readBoundedPostRequest(
   const chunks: Uint8Array[] = [];
   let totalLength = 0;
 
-  while (true) {
-    const { done, value } = await reader.read();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
 
-    if (done) {
-      break;
+      if (done) {
+        break;
+      }
+
+      totalLength += value.byteLength;
+
+      if (totalLength > maximumBytes) {
+        await reader.cancel();
+        return null;
+      }
+
+      chunks.push(value);
     }
-
-    totalLength += value.byteLength;
-
-    if (totalLength > maximumBytes) {
-      await reader.cancel();
-      return null;
+  } catch {
+    return null;
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // The request is already accepted or rejected; the host owns an unreleasable stream lock.
     }
-
-    chunks.push(value);
   }
 
   const body = new Uint8Array(totalLength);

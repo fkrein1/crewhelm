@@ -150,6 +150,27 @@ describe("Composio managed auth configurations", () => {
     });
   });
 
+  it("reconciles a malformed successful create body instead of abandoning recovery", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ items: [], next_cursor: null }))
+      .mockResolvedValueOnce(
+        new Response("not json", { headers: { "content-type": "application/json" }, status: 201 }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ items: [existingConfig], next_cursor: null }));
+
+    await expect(
+      createComposioAuthConfigs({ apiKey, fetch: fetchMock }).ensureManaged({
+        integrationSlug: "github",
+      }),
+    ).resolves.toMatchObject({
+      authConfig: { authConfigId: existingConfig.id },
+      created: false,
+      ok: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("fails closed for invalid configuration, substituted toolkits, and unbounded responses", async () => {
     const unavailableFetch = vi.fn<typeof fetch>();
 

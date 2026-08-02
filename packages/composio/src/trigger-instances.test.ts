@@ -11,6 +11,10 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function unavailableResponse(): Response {
+  return new Response(null, { status: 503 });
+}
+
 describe("Composio trigger instances", () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -168,6 +172,43 @@ describe("Composio trigger instances", () => {
       ok: false,
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("marks uncertain post-dispatch mutation responses as operation unknown", async () => {
+    const coordinates = {
+      configuration: {},
+      integrationSlug: "github",
+      ownerKey: "owner_23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijk",
+      providerConnectionId: "ca_github",
+      sourceSlug: "GITHUB_ISSUE_CREATED",
+      sourceVersion: "20260802_00",
+    };
+    const expected = {
+      error: {
+        code: "trigger_operation_unknown",
+        message: "Integration trigger request denied.",
+      },
+      ok: false,
+    };
+
+    await expect(
+      createComposioTriggerInstances({
+        apiKey: API_KEY,
+        fetch: vi.fn<typeof fetch>().mockResolvedValue(unavailableResponse()),
+      }).upsert(coordinates),
+    ).resolves.toEqual(expected);
+    await expect(
+      createComposioTriggerInstances({
+        apiKey: API_KEY,
+        fetch: vi.fn<typeof fetch>().mockResolvedValue(unavailableResponse()),
+      }).setEnabled({ enabled: false, providerTriggerId: "ti_issue_created" }),
+    ).resolves.toEqual(expected);
+    await expect(
+      createComposioTriggerInstances({
+        apiKey: API_KEY,
+        fetch: vi.fn<typeof fetch>().mockResolvedValue(unavailableResponse()),
+      }).delete({ providerTriggerId: "ti_issue_created" }),
+    ).resolves.toEqual(expected);
   });
 
   it("does not trust a successful provider response that reflects the project key", async () => {
