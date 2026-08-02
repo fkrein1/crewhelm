@@ -2797,10 +2797,13 @@ export class CrewSession extends Think {
       submission = await super.inspectSubmission(request.data.runId);
     }
 
-    if (
-      !isDrained() ||
-      (await this.ctx.storage.get(sessionRunDrainedKey(request.data.runId))) !== true
-    ) {
+    if (!isDrained()) return false;
+    if ((await this.ctx.storage.get(sessionRunDrainedKey(request.data.runId))) !== true) {
+      // Think can expose a terminal row before an in-memory turn unwinds, and
+      // pre-marker deployments may have no callback left to acknowledge it.
+      // Restarting the exact Session isolate forcibly drains either case; the
+      // next onStart can then backfill quiescence from the terminal row.
+      this.ctx.abort("Expired Session Run is restarting to prove deletion quiescence.");
       return false;
     }
 
