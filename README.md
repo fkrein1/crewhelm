@@ -8,6 +8,7 @@
 
 <p align="center">
   <strong><a href="https://crewhelm.app">Website</a></strong> ·
+  <strong><a href="https://crewhelm.app/docs/">Documentation</a></strong> ·
   <strong><a href="#bring-up-your-helm">Quick start</a></strong> ·
   <strong><a href="docs/reference/mcp-tools.md">MCP reference</a></strong> ·
   <strong><a href="docs/architecture/system.md">Architecture</a></strong>

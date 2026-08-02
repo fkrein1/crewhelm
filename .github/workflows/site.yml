@@ -10,6 +10,7 @@ on:
       - packages/design/**
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
+      - scripts/validate-site-output.mjs
   push:
     branches:
       - main
@@ -21,6 +22,7 @@ on:
       - packages/design/**
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
+      - scripts/validate-site-output.mjs
 
 concurrency:
   group: site-build-${{ github.event.pull_request.number || github.ref }}

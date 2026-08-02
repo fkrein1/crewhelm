@@ -14,7 +14,11 @@ pnpm --filter @crewhelm/site preview
 ```
 
 Astro uses Vite, Tailwind 4 is configured through its Vite plugin, and design tokens are declared
-in `src/styles/global.css` through Tailwind's CSS-first `@theme` interface.
+in `src/styles/global.css` through Tailwind's CSS-first `@theme` interface. Starlight renders the
+static documentation under `/docs`, with Pagefind creating its search index after the Astro build.
+Documentation source lives under `src/content/docs/docs`; `src/content.config.ts` enforces the
+shared frontmatter contract, `src/lib/docs-manifest.ts` owns navigation and public routes, and
+`src/styles/docs.css` adapts Starlight to the Crewhelm design system.
 
 ## Delivery
 

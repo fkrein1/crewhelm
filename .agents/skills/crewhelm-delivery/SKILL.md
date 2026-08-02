@@ -15,6 +15,7 @@ Ship one observable pull-request objective as a complete, green slice.
    - **Sensitive**: authority, secrets, external effects, persistence recovery, sandboxing, remote
      execution, deployment, CI/release permissions, or privileged dependencies.
 2. Read only relevant guidance:
+   - Public documentation: `.agents/skills/crewhelm-docs/SKILL.md`.
    - New capability: `docs/product/philosophy.md`.
    - Authority or execution: `docs/security/invariants.md`.
    - State, trust, dependency, or contract boundary: `docs/architecture/system.md`.

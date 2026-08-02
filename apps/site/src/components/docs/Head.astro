@@ -1,0 +1,25 @@
+---
+import DefaultHead from "@astrojs/starlight/components/Head.astro";
+
+import { CREWHELM_SITE, serializeJsonLd } from "../../lib/seo";
+
+const { entry } = Astro.locals.starlightRoute;
+const url = new URL(Astro.url.pathname, Astro.site);
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": url.pathname === "/docs/" ? "CollectionPage" : "TechArticle",
+  description: entry.data.description,
+  headline: entry.data.title,
+  inLanguage: CREWHELM_SITE.language,
+  isPartOf: {
+    "@type": "WebSite",
+    name: CREWHELM_SITE.name,
+    url: new URL("/", Astro.site),
+  },
+  url,
+};
+const serializedStructuredData = serializeJsonLd(structuredData);
+---
+
+<DefaultHead />
+<script type="application/ld+json" set:html={serializedStructuredData} />

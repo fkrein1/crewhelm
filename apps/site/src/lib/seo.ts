@@ -86,7 +86,13 @@ export function llmsText(): string {
     "",
     "## Source and documentation",
     "",
-    `- [GitHub repository](${CREWHELM_SITE.githubUrl}): Source code, README, setup instructions, and project documentation.`,
+    `- [Documentation](${CREWHELM_SITE.url}/docs/): Start here for Crewhelm concepts, guides, security responsibilities, and reference material.`,
+    `- [Install Crewhelm](${CREWHELM_SITE.url}/docs/start/install/): Bring up an owner-controlled Crewhelm installation.`,
+    `- [Create your first Agent](${CREWHELM_SITE.url}/docs/start/first-agent/): Configure an Agent and complete a bounded first Run.`,
+    `- [Authority and custody](${CREWHELM_SITE.url}/docs/concepts/authority-and-custody/): Understand where identity, credentials, policy, and execution live.`,
+    `- [Diagnose and recover](${CREWHELM_SITE.url}/docs/guides/diagnose-and-recover/): Inspect failures and choose bounded recovery actions.`,
+    `- [MCP tool reference](${CREWHELM_SITE.url}/docs/reference/mcp-tools/): Inspect Crewhelm's authenticated MCP surface.`,
+    `- [GitHub repository](${CREWHELM_SITE.githubUrl}): Source code, contribution guidance, and implementation documentation.`,
     "",
   ].join("\n");
 }

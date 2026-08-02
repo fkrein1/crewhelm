@@ -1,0 +1,16 @@
+{/* Keep documentation aligned with the site-wide system color-scheme contract. */}
+<script is:inline>
+  (() => {
+    const preference = window.matchMedia("(prefers-color-scheme: light)");
+    const applySystemTheme = () => {
+      document.documentElement.dataset.theme = preference.matches ? "light" : "dark";
+    };
+
+    applySystemTheme();
+    preference.addEventListener("change", applySystemTheme);
+
+    window.StarlightThemeProvider = {
+      updatePickers: applySystemTheme,
+    };
+  })();
+</script>

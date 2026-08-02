@@ -4,14 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "astro build",
-    "deploy:production": "astro build && wrangler deploy",
+    "build": "astro build && node ../../scripts/validate-site-output.mjs dist",
+    "deploy:production": "pnpm run build && wrangler deploy",
     "dev": "astro dev",
     "preview": "astro preview",
-    "preview:upload": "astro build && wrangler versions upload"
+    "preview:upload": "pnpm run build && wrangler versions upload"
   },
   "dependencies": {
     "@astrojs/sitemap": "3.7.3",
+    "@astrojs/starlight": "0.41.6",
     "@crewhelm/design": "workspace:*",
     "astro": "7.1.6"
   },
