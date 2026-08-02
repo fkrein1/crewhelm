@@ -240,23 +240,26 @@ export class ToolExecutions {
         ? await evaluateComposioToolAction(gateInput)
         : await evaluateApprovedComposioToolAction(gateInput, approvedDigest);
 
-    if (decision.decision === "deny") {
-      return INVALID_TOOL_EXECUTION;
-    }
-
-    if (decision.decision === "requires_approval") {
-      recordExecutionEvent({
-        outcome: "approval_required",
-        phase: "tool.reservation",
-        runId: request.data.runId,
-        toolCallId: request.data.action.toolCallId,
-      });
-      return reserveToolExecutionResultSchema.parse({
-        actionDigest: decision.actionDigest,
-        effect: decision.effect,
-        ok: true,
-        state: "requires_approval",
-      });
+    switch (decision.decision) {
+      case "deny":
+        return INVALID_TOOL_EXECUTION;
+      case "requires_approval":
+        recordExecutionEvent({
+          outcome: "approval_required",
+          phase: "tool.reservation",
+          runId: request.data.runId,
+          toolCallId: request.data.action.toolCallId,
+        });
+        return reserveToolExecutionResultSchema.parse({
+          actionDigest: decision.actionDigest,
+          effect: decision.effect,
+          ok: true,
+          state: "requires_approval",
+        });
+      case "allow":
+        break;
+      default:
+        throw new Error("Tool reservation received an unhandled gate decision.");
     }
 
     const nonce = createNonce();

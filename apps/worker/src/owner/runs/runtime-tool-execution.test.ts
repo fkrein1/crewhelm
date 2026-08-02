@@ -21,6 +21,20 @@ import { sandboxCodeCapabilityConfiguration } from "../../agent-capabilities/san
 import { webSearchCapabilityConfiguration } from "../../agent-capabilities/web-search.js";
 import { workersAiCapabilityConfiguration } from "../../agent-capabilities/workers-ai.js";
 import { agentInput, authorityFor } from "../testkit.js";
+import { runtimeToolCompletionStatus } from "./runtime-tool-execution.js";
+
+describe("Runtime tool completion control flow", () => {
+  it("classifies every outcome without widening Sandbox uncertainty", () => {
+    expect(runtimeToolCompletionStatus("sandbox.code", "completed", false)).toBe("completed");
+    expect(runtimeToolCompletionStatus("sandbox.code", "failed", false)).toBe("failed");
+    expect(runtimeToolCompletionStatus("sandbox.code", "unknown", false)).toBe("unknown");
+    expect(runtimeToolCompletionStatus("sandbox.code", "completed", true)).toBe("unknown");
+    expect(runtimeToolCompletionStatus("web.fetch", "completed", false)).toBe("completed");
+    expect(runtimeToolCompletionStatus("web.fetch", "failed", false)).toBe("failed");
+    expect(runtimeToolCompletionStatus("web.search", "unknown", false)).toBe("failed");
+    expect(runtimeToolCompletionStatus("web.search", "completed", true)).toBe("failed");
+  });
+});
 
 async function fixture(subject: string, maximumDurationMs = 5_000) {
   const authority = await authorityFor(subject, [

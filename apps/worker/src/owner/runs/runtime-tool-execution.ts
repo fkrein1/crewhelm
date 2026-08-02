@@ -1,6 +1,7 @@
 import {
   RUNTIME_TOOL_EXECUTION_PERMIT_LIFETIME_MS,
   RUNTIME_TOOL_LATE_OPEN_CLEANUP_HORIZON_MS,
+  agentRuntimeToolIdSchema,
   completeRuntimeToolExecutionInputSchema,
   completeRuntimeToolExecutionResultSchema,
   dispatchRuntimeToolExecutionInputSchema,
@@ -45,6 +46,45 @@ type ControlPlaneDatabase = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type ControlPlaneTransaction = Parameters<Parameters<ControlPlaneDatabase["transaction"]>[0]>[0];
 type RuntimeToolExecutionDatabase = ControlPlaneDatabase | ControlPlaneTransaction;
 type RuntimeToolExecutionRequest = ReturnType<typeof reserveRuntimeToolExecutionInputSchema.parse>;
+type RuntimeToolId = RuntimeToolExecutionPermit["action"]["tool"]["id"];
+type RuntimeToolOutcomeStatus = ReturnType<
+  typeof completeRuntimeToolExecutionInputSchema.parse
+>["outcome"]["status"];
+
+export function runtimeToolCompletionStatus(
+  toolId: RuntimeToolId,
+  outcomeStatus: RuntimeToolOutcomeStatus,
+  exceededBounds: boolean,
+): RuntimeToolOutcomeStatus {
+  switch (toolId) {
+    case "sandbox.code":
+      if (exceededBounds) return "unknown";
+
+      switch (outcomeStatus) {
+        case "completed":
+        case "failed":
+        case "unknown":
+          return outcomeStatus;
+        default:
+          throw new Error("Sandbox completion received an unhandled outcome.");
+      }
+    case "web.fetch":
+    case "web.search":
+      if (exceededBounds) return "failed";
+
+      switch (outcomeStatus) {
+        case "completed":
+          return "completed";
+        case "failed":
+        case "unknown":
+          return "failed";
+        default:
+          throw new Error("Web tool completion received an unhandled outcome.");
+      }
+    default:
+      throw new Error("Runtime tool completion received an unhandled tool.");
+  }
+}
 
 function encodeBase64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -361,17 +401,20 @@ export class RuntimeToolExecutions {
         return INVALID_RUNTIME_TOOL_EXECUTION;
       }
 
+      const toolId = agentRuntimeToolIdSchema.safeParse(row.toolId);
+
+      if (!toolId.success) {
+        return INVALID_RUNTIME_TOOL_EXECUTION;
+      }
+
       const completionExceededBounds =
         currentTime > row.expiresAt ||
         request.data.outcome.outputBytes > request.data.permit.constraints.maxOutputBytes;
-      const status =
-        row.toolId === "sandbox.code"
-          ? completionExceededBounds
-            ? "unknown"
-            : request.data.outcome.status
-          : completionExceededBounds || request.data.outcome.status === "unknown"
-            ? "failed"
-            : request.data.outcome.status;
+      const status = runtimeToolCompletionStatus(
+        toolId.data,
+        request.data.outcome.status,
+        completionExceededBounds,
+      );
       completedStatus = status;
       transaction
         .update(runtimeToolExecutions)
