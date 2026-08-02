@@ -18,6 +18,7 @@ import {
   integrationToolkitVersionSchema,
   integrationToolSlugSchema,
 } from "./integrations.js";
+import { remoteMcpConnectionSchema } from "./remote-mcp.js";
 
 export const MAXIMUM_CONNECTION_TOOLS_PER_AGENT = 20;
 
@@ -135,6 +136,21 @@ export const configureAgentConnectionResultSchema = z.discriminatedUnion("ok", [
   }),
 ]);
 
+export const configureAgentRemoteMcpConnectionInputSchema = z.strictObject({
+  agentId: agentIdSchema.describe("Exact Agent id to receive the entire remote MCP tool catalog."),
+  authorization: toolAuthorizationModeSchema.describe(
+    "One authorization mode applied to every tool in this frozen remote MCP catalog.",
+  ),
+  connectionId: connectionIdSchema,
+  expectedRevision: agentRevisionNumberSchema,
+  expiresAt: z.iso.datetime().nullable(),
+  idempotencyKey: agentMutationIdempotencyKeySchema,
+  limits: composioToolLimitsSchema,
+  snapshotDigest: remoteMcpConnectionSchema.shape.snapshotDigest.describe(
+    "Exact catalog digest returned by remote MCP Connection inspection.",
+  ),
+});
+
 export const lookupAgentConnectionConfigurationResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     ok: z.literal(true),
@@ -151,6 +167,9 @@ export type CompleteAgentConnectionConfigurationInput = z.infer<
 >;
 export type ConfigureAgentConnectionInput = z.infer<typeof configureAgentConnectionInputSchema>;
 export type ConfigureAgentConnectionResult = z.infer<typeof configureAgentConnectionResultSchema>;
+export type ConfigureAgentRemoteMcpConnectionInput = z.infer<
+  typeof configureAgentRemoteMcpConnectionInputSchema
+>;
 export type LookupAgentConnectionConfigurationResult = z.infer<
   typeof lookupAgentConnectionConfigurationResultSchema
 >;

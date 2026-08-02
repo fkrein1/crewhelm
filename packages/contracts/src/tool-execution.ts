@@ -1,7 +1,7 @@
 import * as z from "zod";
 
 import {
-  classifiedComposioToolActionSchema,
+  classifiedExternalToolActionSchema,
   sha256DigestSchema,
   toolExecutionEvaluationFailureReasonSchema,
   toolGateDecisionSchema,
@@ -15,13 +15,14 @@ import {
   verifyActiveRunAdmissionInputSchema,
 } from "./run-admission.js";
 import { composioConnectedAccountIdSchema } from "./connections.js";
+import { integrationToolParameterMapSchema } from "./integrations.js";
 
 export const TOOL_EXECUTION_PERMIT_LIFETIME_MS = 5_000;
 export const TOOL_APPROVAL_LIFETIME_MS = 15 * 60 * 1_000;
 export const MAXIMUM_TOOL_APPROVALS_PER_RUN = 100;
 
 export const evaluateToolExecutionInputSchema = verifyActiveRunAdmissionInputSchema.extend({
-  action: classifiedComposioToolActionSchema,
+  action: classifiedExternalToolActionSchema,
 });
 
 const invalidToolExecutionSchema = z.strictObject({
@@ -45,9 +46,9 @@ export const evaluateToolExecutionResultSchema = z.discriminatedUnion("ok", [
 ]);
 
 export const toolExecutionPermitSchema = z.strictObject({
-  action: classifiedComposioToolActionSchema,
+  action: classifiedExternalToolActionSchema,
   actionDigest: sha256DigestSchema,
-  audience: z.literal("composio_adapter"),
+  audience: z.enum(["composio_adapter", "remote_mcp_adapter"]),
   constraints: z.strictObject({
     decisionExpiresAt: z.iso.datetime(),
     maxCostMicrousd: z.number().int().min(0).safe(),
@@ -97,21 +98,41 @@ export const resolveToolExecutionConnectionResultSchema = z.discriminatedUnion("
   invalidToolExecutionSchema,
 ]);
 
+export const executeRemoteMcpToolInputSchema = z
+  .strictObject({
+    arguments: integrationToolParameterMapSchema,
+    permit: toolExecutionPermitSchema,
+  })
+  .refine(
+    (input) => input.permit.action.capabilityId === "remote_mcp.tool.execute",
+    "Expected a remote MCP tool permit.",
+  );
+export const executeRemoteMcpToolResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    ok: z.literal(true),
+    outputJson: z
+      .string()
+      .min(1)
+      .max(10 * 1_024 * 1_024),
+  }),
+  invalidToolExecutionSchema,
+]);
+
 export const pendingToolApprovalSchema = z.strictObject({
   action: z.string().min(1).max(160),
   actionDigest: sha256DigestSchema,
   effect: z.enum(["write", "destructive"]),
   executionId: toolApprovalExecutionIdSchema,
   expiresAt: z.iso.datetime(),
-  grantId: classifiedComposioToolActionSchema.shape.grantId,
+  grantId: classifiedExternalToolActionSchema.options[0].shape.grantId,
   requestedAt: z.iso.datetime(),
   risk: z.enum(["medium", "high"]),
   summary: z.string().min(1).max(240),
-  toolCallId: classifiedComposioToolActionSchema.shape.toolCallId,
+  toolCallId: classifiedExternalToolActionSchema.options[0].shape.toolCallId,
 });
 
 export const listRunToolApprovalsInputSchema = z.strictObject({
-  runId: classifiedComposioToolActionSchema.shape.runId,
+  runId: classifiedExternalToolActionSchema.options[0].shape.runId,
 });
 
 export const listRunToolApprovalsResultSchema = z.discriminatedUnion("ok", [
@@ -139,7 +160,7 @@ export const listRunToolApprovalsResultSchema = z.discriminatedUnion("ok", [
 export const decideRunToolApprovalInputSchema = z.strictObject({
   decision: z.enum(["approve", "reject"]),
   executionId: toolApprovalExecutionIdSchema,
-  runId: classifiedComposioToolActionSchema.shape.runId,
+  runId: classifiedExternalToolActionSchema.options[0].shape.runId,
 });
 
 export const decideRunToolApprovalResultSchema = z.discriminatedUnion("ok", [
@@ -209,6 +230,7 @@ export const decideAdmittedRunToolApprovalResultSchema = z.discriminatedUnion("o
 export type CompleteToolExecutionResult = z.infer<typeof completeToolExecutionResultSchema>;
 export type DecideRunToolApprovalResult = z.infer<typeof decideRunToolApprovalResultSchema>;
 export type EvaluateToolExecutionResult = z.infer<typeof evaluateToolExecutionResultSchema>;
+export type ExecuteRemoteMcpToolResult = z.infer<typeof executeRemoteMcpToolResultSchema>;
 export type ListRunToolApprovalsResult = z.infer<typeof listRunToolApprovalsResultSchema>;
 export type PendingToolApproval = z.infer<typeof pendingToolApprovalSchema>;
 export type ReserveToolExecutionResult = z.infer<typeof reserveToolExecutionResultSchema>;

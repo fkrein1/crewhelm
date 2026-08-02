@@ -32,10 +32,11 @@ used across the public site, browser handoffs, CLI, and future product surfaces.
   validates the final object and never presents invalid model output as typed success.
 - **Context is explicit.** Briefs let an owner attach exact versioned reference material without
   pasting it into every prompt. Capabilities remain on the Agent; inputs remain on the work.
-- **Composio is the integration plane.** Crewhelm uses its catalog, authentication, and execution
-  instead of rebuilding provider adapters.
+- **Integrations use the narrowest dependable plane.** Crewhelm uses Composio for its managed
+  catalog and authentication, and can proxy a reviewed remote MCP Connection without rebuilding
+  the server's provider adapter.
 - **Recipes are the eventual sharing unit.** Once the operating model is mature, a recipe will
-  declare an Agent's job, model needs, Composio tools, connections, and limits without code,
+  declare an Agent's job, model needs, external tools, Connections, and limits without code,
   credentials, or private history.
 - **Safety is product quality.** Authority, secret isolation, data integrity, recovery, and clear
   failure behavior are never deferred polish.

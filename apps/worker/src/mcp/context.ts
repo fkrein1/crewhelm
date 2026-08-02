@@ -9,8 +9,10 @@ export interface OwnerControlPlaneClient {
   cancelAgentWorkflow?(authorityInput: unknown, input: unknown): Promise<unknown>;
   changeAuthority(authorityInput: unknown, input: unknown): Promise<unknown>;
   configureAgentConnection(authorityInput: unknown, input: unknown): Promise<unknown>;
+  configureAgentRemoteMcpConnection?(authorityInput: unknown, input: unknown): Promise<unknown>;
   configureAgentSchedule(authorityInput: unknown, input: unknown): Promise<unknown>;
   createAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
+  createRemoteMcpConnection?(authorityInput: unknown, input: unknown): Promise<unknown>;
   completeConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;
   completeIntegrationEnablement(authorityInput: unknown, input: unknown): Promise<unknown>;
   configureFleetConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -19,16 +21,19 @@ export interface OwnerControlPlaneClient {
   deleteAgentSession?(authorityInput: unknown, input: unknown): Promise<unknown>;
   deleteAgentWorkflow?(authorityInput: unknown, input: unknown): Promise<unknown>;
   deleteBrief(authorityInput: unknown, input: unknown): Promise<unknown>;
+  deleteRemoteMcpConnection?(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgentBlueprint(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgentRevision(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgentSchedule(authorityInput: unknown, input: unknown): Promise<unknown>;
   getFleetConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
   getSkill(authorityInput: unknown, input: unknown): Promise<unknown>;
+  executeRemoteMcpTool?(input: unknown): Promise<unknown>;
   inspectRun(authorityInput: unknown, input: unknown): Promise<unknown>;
   inspectAgentWorkflow?(authorityInput: unknown, input: unknown): Promise<unknown>;
   inspectAgentSession?(authorityInput: unknown, input: unknown): Promise<unknown>;
   inspectBrief(authorityInput: unknown, input: unknown): Promise<unknown>;
+  inspectRemoteMcpConnection?(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgentRevisions(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgentBlueprints(authorityInput: unknown, input: unknown): Promise<unknown>;
   listAgentRuns(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -42,6 +47,7 @@ export interface OwnerControlPlaneClient {
   listUnresolvedToolEffects(authorityInput: unknown, input: unknown): Promise<unknown>;
   listRunToolApprovals(authorityInput: unknown, input: unknown): Promise<unknown>;
   lookupAgentConnectionConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
+  lookupRemoteMcpConnectionCreation?(authorityInput: unknown, input: unknown): Promise<unknown>;
   reserveConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;
   reserveIntegrationEnablement(authorityInput: unknown, input: unknown): Promise<unknown>;
   reconcileToolExecution(authorityInput: unknown, input: unknown): Promise<unknown>;

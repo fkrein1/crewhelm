@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
+  REMOTE_MCP_TOOL_EXECUTE_CAPABILITY_ID,
   type ComposioToolGateInput,
+  type ExternalToolGateInput,
 } from "@crewhelm/contracts";
 import { evaluateApprovedComposioToolAction, evaluateComposioToolAction } from "./policy.js";
 
@@ -99,6 +101,50 @@ function exactInput(): ComposioToolGateInput {
       remainingToolCalls: 2,
       runId,
       sameToolInputCallsUsed: 0,
+    },
+  };
+}
+
+function remoteMcpInput(): ExternalToolGateInput {
+  const input = exactInput();
+  return {
+    action: {
+      agentId,
+      agentRevision: 7,
+      capabilityId: REMOTE_MCP_TOOL_EXECUTE_CAPABILITY_ID,
+      connectionId,
+      effect: "write",
+      estimatedCostMicrousd: 0,
+      grantId,
+      inputDigest,
+      ownerKey,
+      runId,
+      snapshotDigest: "d".repeat(64),
+      targetDigests: [targetDigest],
+      toolCallId,
+      toolName: "projects.read",
+    },
+    grant: {
+      agentId,
+      agentRevision: 7,
+      authorization: "approval_required",
+      capabilityId: REMOTE_MCP_TOOL_EXECUTE_CAPABILITY_ID,
+      connectionId,
+      description: "Read one project.",
+      effect: "write",
+      expiresAt: "2026-07-27T18:30:00.000Z",
+      grantId,
+      inputSchemaJson: '{"type":"object"}',
+      limits: { ...input.grant.limits, maxCostMicrousdPerCall: 0 },
+      ownerKey,
+      snapshotDigest: "d".repeat(64),
+      targetDigests: [targetDigest],
+      toolName: "projects.read",
+    },
+    policy: {
+      ...input.policy,
+      capabilityId: REMOTE_MCP_TOOL_EXECUTE_CAPABILITY_ID,
+      remainingCostMicrousd: 0,
     },
   };
 }
@@ -423,6 +469,43 @@ describe("ToolGate Composio policy", () => {
     expect(await evaluateComposioToolAction(input)).toEqual({
       decision: "deny",
       reason: "invalid_request",
+    });
+  });
+
+  it("applies the same approval gate to one exact frozen remote MCP tool", async () => {
+    const input = remoteMcpInput();
+    const decision = await evaluateComposioToolAction(input);
+
+    expect(decision).toMatchObject({
+      decision: "requires_approval",
+      effect: "write",
+      grantId,
+    });
+    if (decision.decision !== "requires_approval") {
+      throw new Error("Expected remote MCP approval requirement.");
+    }
+    await expect(
+      evaluateApprovedComposioToolAction(input, decision.actionDigest),
+    ).resolves.toMatchObject({
+      action: {
+        capabilityId: REMOTE_MCP_TOOL_EXECUTE_CAPABILITY_ID,
+        snapshotDigest: "d".repeat(64),
+        toolName: "projects.read",
+      },
+      decision: "allow",
+    });
+  });
+
+  it("denies a stale remote MCP catalog binding", async () => {
+    const input = remoteMcpInput();
+    if (input.grant.capabilityId !== REMOTE_MCP_TOOL_EXECUTE_CAPABILITY_ID) {
+      throw new Error("Expected remote MCP grant.");
+    }
+    input.grant.snapshotDigest = "e".repeat(64);
+
+    await expect(evaluateComposioToolAction(input)).resolves.toEqual({
+      decision: "deny",
+      reason: "grant_mismatch",
     });
   });
 });

@@ -1127,6 +1127,7 @@ export class Connections {
       .from(listedConnections)
       .where(
         and(
+          eq(listedConnections.provider, "composio"),
           request.data.authorizationOutcome === undefined
             ? undefined
             : eq(latestAuthorizationOutcome, request.data.authorizationOutcome),
@@ -1151,7 +1152,17 @@ export class Connections {
       .orderBy(asc(listedConnections.connectionId))
       .limit(request.data.limit + 1)
       .all();
-    const summaries = rows.map((row) => this.#summaryFromRow(row));
+    const summaries = rows.flatMap((row) =>
+      row.authConfigId === null || row.providerConnectionId === null
+        ? []
+        : [
+            this.#summaryFromRow({
+              ...row,
+              authConfigId: row.authConfigId,
+              providerConnectionId: row.providerConnectionId,
+            }),
+          ],
+    );
     const hasMore = summaries.length > request.data.limit;
     const page = summaries.slice(0, request.data.limit);
     const nextCursor = hasMore ? (page.at(-1)?.connectionId ?? null) : null;
@@ -1171,6 +1182,7 @@ export class Connections {
         const row = transaction
           .select({
             authConfigId: connections.authConfigId,
+            provider: connections.provider,
             providerConnectionId: connections.providerConnectionId,
             status: connections.status,
           })
@@ -1178,7 +1190,12 @@ export class Connections {
           .where(eq(connections.connectionId, request.data.connectionId))
           .get();
 
-        if (row === undefined) {
+        if (
+          row === undefined ||
+          row.provider !== "composio" ||
+          row.authConfigId === null ||
+          row.providerConnectionId === null
+        ) {
           return { kind: "rejected", reason: "connection_not_found" };
         }
 
@@ -1282,7 +1299,12 @@ export class Connections {
       .where(eq(connections.connectionId, request.data.connectionId))
       .get();
 
-    if (row === undefined) {
+    if (
+      row === undefined ||
+      row.provider !== "composio" ||
+      row.authConfigId === null ||
+      row.providerConnectionId === null
+    ) {
       return deniedConnectionInspect("connection_not_found");
     }
 

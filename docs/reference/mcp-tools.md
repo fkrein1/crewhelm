@@ -2170,6 +2170,127 @@ Attributes: write, destructive, idempotent, open-world.
 
 </details>
 
+## `crewhelm_configure_agent_remote_mcp_connection`
+
+**Attach remote MCP Connection to Agent**
+
+Attach the entire inspected, frozen tool catalog from one active remote MCP Connection to an Agent. One authorization mode and one bounded limit set apply to every tool; no per-tool selection is required.
+
+Attributes: write, destructive, idempotent, open-world.
+
+<details>
+<summary>Input schema</summary>
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "agentId": {
+      "type": "string",
+      "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "Exact Agent id to receive the entire remote MCP tool catalog."
+    },
+    "authorization": {
+      "type": "string",
+      "enum": [
+        "approval_required",
+        "standing"
+      ],
+      "description": "One authorization mode applied to every tool in this frozen remote MCP catalog."
+    },
+    "connectionId": {
+      "type": "string",
+      "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "expectedRevision": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "expiresAt": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "maxCallsPerRun": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Owner-selected per-run call ceiling; choose the smallest useful value."
+        },
+        "maxConcurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "description": "Owner-selected concurrent-call ceiling; use 1 unless parallel calls are required."
+        },
+        "maxCostMicrousdPerCall": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991,
+          "description": "Owner-selected per-call cost ceiling in millionths of one US dollar."
+        },
+        "maxDurationMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300000,
+          "description": "Owner-selected per-call wall-clock ceiling in milliseconds."
+        },
+        "maxOutputBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10485760,
+          "description": "Owner-selected per-call output ceiling in bytes."
+        }
+      },
+      "required": [
+        "maxCallsPerRun",
+        "maxConcurrency",
+        "maxCostMicrousdPerCall",
+        "maxDurationMs",
+        "maxOutputBytes"
+      ],
+      "additionalProperties": false
+    },
+    "snapshotDigest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Exact catalog digest returned by remote MCP Connection inspection."
+    }
+  },
+  "required": [
+    "agentId",
+    "authorization",
+    "connectionId",
+    "expectedRevision",
+    "expiresAt",
+    "idempotencyKey",
+    "limits",
+    "snapshotDigest"
+  ],
+  "additionalProperties": false
+}
+```
+
+</details>
+
 ## `crewhelm_configure_agent_schedule`
 
 **Configure Crewhelm Agent schedule**
@@ -3763,6 +3884,72 @@ Attributes: write, destructive, idempotent, closed-world.
   "required": [
     "resolution",
     "toolCallId"
+  ],
+  "additionalProperties": false
+}
+```
+
+</details>
+
+## `crewhelm_remote_mcp_connection`
+
+**Manage a remote MCP Connection**
+
+Connect, inspect, or revoke one remote Streamable HTTP MCP Connection. Public endpoints connect directly. Bearer endpoints return a short-lived browser setup link so credential material never enters MCP arguments or Agent context.
+
+Attributes: write, destructive, idempotent, open-world.
+
+<details>
+<summary>Input schema</summary>
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "connect",
+        "delete",
+        "inspect"
+      ]
+    },
+    "authKind": {
+      "type": "string",
+      "enum": [
+        "public",
+        "bearer"
+      ]
+    },
+    "connectionId": {
+      "type": "string",
+      "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "endpoint": {
+      "type": "string",
+      "maxLength": 2048,
+      "format": "uri"
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^[ -~]+$"
+    },
+    "snapshotDigest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "action"
   ],
   "additionalProperties": false
 }

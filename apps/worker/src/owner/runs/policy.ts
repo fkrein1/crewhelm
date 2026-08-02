@@ -1,8 +1,8 @@
 import {
-  composioToolGateInputSchema,
+  externalToolGateInputSchema,
   toolGateDecisionSchema,
-  type ClassifiedComposioToolAction,
-  type ComposioToolCapabilityGrant,
+  type ClassifiedExternalToolAction,
+  type ExternalToolCapabilityGrant,
   type ToolGateDecision,
   type ToolGatePolicySnapshot,
 } from "@crewhelm/contracts";
@@ -15,27 +15,37 @@ function deny(reason: Extract<ToolGateDecision, { decision: "deny" }>["reason"])
 }
 
 function hasMatchingBinding(
-  action: ClassifiedComposioToolAction,
-  grant: ComposioToolCapabilityGrant,
+  action: ClassifiedExternalToolAction,
+  grant: ExternalToolCapabilityGrant,
 ): boolean {
-  return (
-    action.ownerKey === grant.ownerKey &&
-    action.agentId === grant.agentId &&
-    action.agentRevision === grant.agentRevision &&
-    action.capabilityId === grant.capabilityId &&
-    action.grantId === grant.grantId &&
-    action.connectionId === grant.connectionId &&
-    action.integrationSlug === grant.integrationSlug &&
-    action.toolSlug === grant.toolSlug &&
-    action.toolkitVersion === grant.toolkitVersion &&
-    action.effect === grant.effect &&
-    action.targetDigests.every((digest) => grant.targetDigests.includes(digest))
-  );
+  if (
+    !(
+      action.ownerKey === grant.ownerKey &&
+      action.agentId === grant.agentId &&
+      action.agentRevision === grant.agentRevision &&
+      action.capabilityId === grant.capabilityId &&
+      action.grantId === grant.grantId &&
+      action.connectionId === grant.connectionId &&
+      action.effect === grant.effect &&
+      action.targetDigests.every((digest) => grant.targetDigests.includes(digest))
+    )
+  ) {
+    return false;
+  }
+
+  return action.capabilityId === "composio.tool.execute"
+    ? grant.capabilityId === "composio.tool.execute" &&
+        action.integrationSlug === grant.integrationSlug &&
+        action.toolSlug === grant.toolSlug &&
+        action.toolkitVersion === grant.toolkitVersion
+    : grant.capabilityId === "remote_mcp.tool.execute" &&
+        action.snapshotDigest === grant.snapshotDigest &&
+        action.toolName === grant.toolName;
 }
 
 function hasMatchingPolicySnapshot(
-  action: ClassifiedComposioToolAction,
-  grant: ComposioToolCapabilityGrant,
+  action: ClassifiedExternalToolAction,
+  grant: ExternalToolCapabilityGrant,
   policy: ToolGatePolicySnapshot,
 ): boolean {
   return (
@@ -55,25 +65,45 @@ function hasMatchingPolicySnapshot(
   );
 }
 
-async function digestAction(action: ClassifiedComposioToolAction): Promise<string> {
-  const canonicalAction = JSON.stringify({
-    schemaVersion: 1,
-    capabilityId: action.capabilityId,
-    grantId: action.grantId,
-    ownerKey: action.ownerKey,
-    agentId: action.agentId,
-    agentRevision: action.agentRevision,
-    runId: action.runId,
-    toolCallId: action.toolCallId,
-    connectionId: action.connectionId,
-    integrationSlug: action.integrationSlug,
-    toolSlug: action.toolSlug,
-    toolkitVersion: action.toolkitVersion,
-    effect: action.effect,
-    targetDigests: action.targetDigests,
-    inputDigest: action.inputDigest,
-    estimatedCostMicrousd: action.estimatedCostMicrousd,
-  });
+async function digestAction(action: ClassifiedExternalToolAction): Promise<string> {
+  const canonicalAction = JSON.stringify(
+    action.capabilityId === "composio.tool.execute"
+      ? {
+          schemaVersion: 1,
+          capabilityId: action.capabilityId,
+          grantId: action.grantId,
+          ownerKey: action.ownerKey,
+          agentId: action.agentId,
+          agentRevision: action.agentRevision,
+          runId: action.runId,
+          toolCallId: action.toolCallId,
+          connectionId: action.connectionId,
+          integrationSlug: action.integrationSlug,
+          toolSlug: action.toolSlug,
+          toolkitVersion: action.toolkitVersion,
+          effect: action.effect,
+          targetDigests: action.targetDigests,
+          inputDigest: action.inputDigest,
+          estimatedCostMicrousd: action.estimatedCostMicrousd,
+        }
+      : {
+          schemaVersion: 1,
+          capabilityId: action.capabilityId,
+          grantId: action.grantId,
+          ownerKey: action.ownerKey,
+          agentId: action.agentId,
+          agentRevision: action.agentRevision,
+          runId: action.runId,
+          toolCallId: action.toolCallId,
+          connectionId: action.connectionId,
+          snapshotDigest: action.snapshotDigest,
+          toolName: action.toolName,
+          effect: action.effect,
+          targetDigests: action.targetDigests,
+          inputDigest: action.inputDigest,
+          estimatedCostMicrousd: action.estimatedCostMicrousd,
+        },
+  );
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalAction));
 
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -83,7 +113,7 @@ async function evaluateComposioToolActionWithApproval(
   input: unknown,
   approvedActionDigest?: string,
 ): Promise<ToolGateDecision> {
-  const request = composioToolGateInputSchema.safeParse(input);
+  const request = externalToolGateInputSchema.safeParse(input);
 
   if (!request.success) {
     return deny("invalid_request");

@@ -18,10 +18,12 @@ import {
   updateAgentInputSchema,
   updateAgentResultSchema,
   classifyComposioToolEffect,
-  composioToolCapabilityGrantSchema,
+  classifyRemoteMcpToolEffect,
+  externalToolCapabilityGrantSchema,
   completeAgentConnectionConfigurationInputSchema,
   configureAgentConnectionInputSchema,
   configureAgentConnectionResultSchema,
+  configureAgentRemoteMcpConnectionInputSchema,
   lookupAgentConnectionConfigurationResultSchema,
   isCredentialBearingComposioTool,
   resolveConnectionForAttachmentInputSchema,
@@ -44,8 +46,9 @@ import {
   type UpdateAgentInput,
   type UpdateAgentResult,
   type ConfigureAgentConnectionResult,
+  type ConfigureAgentRemoteMcpConnectionInput,
   type ConfigureAgentConnectionInput,
-  type ComposioToolCapabilityGrant,
+  type ExternalToolCapabilityGrant,
   type FleetConfigurationData,
   type LookupAgentConnectionConfigurationResult,
   type ResolvedConnectionForAttachment,
@@ -62,6 +65,7 @@ import {
   auditEvents,
   capabilityGrants,
   connections,
+  remoteMcpConnections,
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
 import type { Skills } from "../skills/index.js";
@@ -184,6 +188,12 @@ async function digestConnectionConfiguration(
   );
 }
 
+async function digestRemoteMcpConnectionConfiguration(
+  input: ConfigureAgentRemoteMcpConnectionInput,
+): Promise<string> {
+  return digestCanonicalRequest(JSON.stringify(input));
+}
+
 export function deniedAgent(code: AgentRequestFailure["error"]["code"]): AgentRequestFailure {
   return {
     error: {
@@ -242,6 +252,7 @@ export class AgentRegistry {
     const row = this.#database
       .select({
         currentRevision: agents.currentRevision,
+        provider: connections.provider,
         providerConnectionId: connections.providerConnectionId,
         status: connections.status,
       })
@@ -264,7 +275,12 @@ export class AgentRegistry {
       );
     }
 
-    if (row.status === "revoked" || row.status === "unavailable") {
+    if (
+      row.provider !== "composio" ||
+      row.providerConnectionId === null ||
+      row.status === "revoked" ||
+      row.status === "unavailable"
+    ) {
       return resolvedConnectionForAttachmentSchema.parse(
         deniedConnectionAttachment("connection_not_found"),
       );
@@ -509,7 +525,7 @@ export class AgentRegistry {
         .filter((grant) => grant.connectionId !== request.data.connectionId);
       const revision = currentRow.currentRevision + 1;
       const createdAt = Date.now();
-      const candidateGrants: ComposioToolCapabilityGrant[] = [
+      const candidateGrants: ExternalToolCapabilityGrant[] = [
         ...previousGrants.map((grant) => ({
           ...grant,
           agentRevision: revision,
@@ -540,7 +556,7 @@ export class AgentRegistry {
         })),
       ];
       const parsedGrants = candidateGrants.map((grant) =>
-        composioToolCapabilityGrantSchema.safeParse(grant),
+        externalToolCapabilityGrantSchema.safeParse(grant),
       );
 
       if (parsedGrants.length > 100 || parsedGrants.some((parsedGrant) => !parsedGrant.success)) {
@@ -614,6 +630,242 @@ export class AgentRegistry {
         .insert(auditEvents)
         .values({
           action: detaching ? "agent.connection_detached" : "agent.connection_configured",
+          clientId: authority.clientId,
+          occurredAt: createdAt,
+          subjectId: currentRow.agentId,
+        })
+        .run();
+
+      return configureAgentConnectionResultSchema.parse({
+        agent: {
+          blueprint: currentRow.blueprintProvenance,
+          capabilities: currentRow.capabilities,
+          capabilityGrants: grantIds,
+          createdAt: new Date(currentRow.createdAt).toISOString(),
+          executionLimits: currentRow.executionLimits,
+          id: currentRow.agentId,
+          instructions: currentRow.instructions,
+          model: currentRow.model,
+          name: currentRow.name,
+          revision,
+          status: currentRow.status,
+        },
+        configured: true,
+        ok: true,
+      });
+    });
+  }
+
+  async configureRemoteMcpConnection(
+    authority: OwnerAuthority,
+    input: unknown,
+  ): Promise<ConfigureAgentConnectionResult> {
+    const request = configureAgentRemoteMcpConnectionInputSchema.safeParse(input);
+    if (!request.success) return deniedConnectionAttachment("invalid_request");
+    const requestDigest = await digestRemoteMcpConnectionConfiguration(request.data);
+    const targetDigest = Array.from(
+      new Uint8Array(
+        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(request.data.connectionId)),
+      ),
+      (byte) => byte.toString(16).padStart(2, "0"),
+    ).join("");
+
+    return this.#database.transaction((transaction) => {
+      const existingUpdate = transaction
+        .select({
+          agentId: agents.agentId,
+          blueprintProvenance: agentRevisions.blueprintProvenance,
+          capabilities: agentRevisions.capabilities,
+          capabilityGrants: agentRevisions.capabilityGrants,
+          createdAt: agents.createdAt,
+          currentRevision: agentUpdates.revision,
+          executionLimits: agentRevisions.executionLimits,
+          instructions: agentRevisions.instructions,
+          model: agentRevisions.model,
+          name: agentRevisions.name,
+          requestDigest: agentUpdates.requestDigest,
+          status: agents.status,
+        })
+        .from(agentUpdates)
+        .innerJoin(agents, eq(agents.agentId, agentUpdates.agentId))
+        .innerJoin(
+          agentRevisions,
+          and(
+            eq(agentRevisions.agentId, agentUpdates.agentId),
+            eq(agentRevisions.revision, agentUpdates.revision),
+          ),
+        )
+        .where(
+          and(
+            eq(agentUpdates.clientId, authority.clientId),
+            eq(agentUpdates.idempotencyKey, request.data.idempotencyKey),
+          ),
+        )
+        .get();
+
+      if (existingUpdate !== undefined) {
+        return existingUpdate.requestDigest === requestDigest
+          ? configureAgentConnectionResultSchema.parse({
+              agent: this.#agentFromRow(existingUpdate),
+              configured: false,
+              ok: true,
+            })
+          : deniedConnectionAttachment("idempotency_conflict");
+      }
+
+      const currentRow = transaction
+        .select({
+          agentId: agents.agentId,
+          blueprintProvenance: agentRevisions.blueprintProvenance,
+          capabilities: agentRevisions.capabilities,
+          capabilityGrants: agentRevisions.capabilityGrants,
+          createdAt: agents.createdAt,
+          currentRevision: agents.currentRevision,
+          executionLimits: agentRevisions.executionLimits,
+          instructions: agentRevisions.instructions,
+          model: agentRevisions.model,
+          name: agentRevisions.name,
+          status: agents.status,
+        })
+        .from(agents)
+        .innerJoin(
+          agentRevisions,
+          and(
+            eq(agentRevisions.agentId, agents.agentId),
+            eq(agentRevisions.revision, agents.currentRevision),
+          ),
+        )
+        .where(eq(agents.agentId, request.data.agentId))
+        .get();
+
+      if (currentRow === undefined) return deniedConnectionAttachment("agent_not_found");
+      if (currentRow.currentRevision !== request.data.expectedRevision) {
+        return deniedConnectionAttachment("revision_conflict");
+      }
+      if (currentRow.currentRevision >= MAXIMUM_REVISIONS_PER_AGENT) {
+        return deniedConnectionAttachment("agent_revision_limit_exceeded");
+      }
+
+      const connection = transaction
+        .select({
+          catalog: remoteMcpConnections.catalog,
+          provider: connections.provider,
+          snapshotDigest: remoteMcpConnections.snapshotDigest,
+          status: connections.status,
+        })
+        .from(connections)
+        .innerJoin(
+          remoteMcpConnections,
+          eq(remoteMcpConnections.connectionId, connections.connectionId),
+        )
+        .where(eq(connections.connectionId, request.data.connectionId))
+        .get();
+
+      if (connection === undefined) return deniedConnectionAttachment("connection_not_found");
+      if (
+        connection.provider !== "remote_mcp" ||
+        connection.status !== "active" ||
+        connection.snapshotDigest !== request.data.snapshotDigest
+      ) {
+        return deniedConnectionAttachment("connection_unavailable");
+      }
+
+      const revision = currentRow.currentRevision + 1;
+      const previousGrants = transaction
+        .select({ grant: capabilityGrants.grant })
+        .from(capabilityGrants)
+        .where(
+          and(
+            eq(capabilityGrants.agentId, currentRow.agentId),
+            eq(capabilityGrants.agentRevision, currentRow.currentRevision),
+            eq(capabilityGrants.status, "active"),
+          ),
+        )
+        .all()
+        .map(({ grant }) => grant)
+        .filter(({ connectionId }) => connectionId !== request.data.connectionId);
+      const candidates: ExternalToolCapabilityGrant[] = [
+        ...previousGrants.map((grant) => ({
+          ...grant,
+          agentRevision: revision,
+          grantId: `grant_${crypto.randomUUID()}`,
+        })),
+        ...connection.catalog.map((tool) => ({
+          agentId: currentRow.agentId,
+          agentRevision: revision,
+          authorization: request.data.authorization,
+          capabilityId: "remote_mcp.tool.execute" as const,
+          connectionId: request.data.connectionId,
+          ...(tool.description === undefined ? {} : { description: tool.description }),
+          effect: classifyRemoteMcpToolEffect(tool),
+          expiresAt: request.data.expiresAt,
+          grantId: `grant_${crypto.randomUUID()}`,
+          inputSchemaJson: JSON.stringify(tool.inputSchema),
+          limits: request.data.limits,
+          ownerKey: authority.ownerKey,
+          snapshotDigest: connection.snapshotDigest,
+          targetDigests: [targetDigest],
+          toolName: tool.name,
+        })),
+      ];
+      const parsed = candidates.map((grant) => externalToolCapabilityGrantSchema.safeParse(grant));
+
+      if (parsed.length > 100 || parsed.some((grant) => !grant.success)) {
+        return deniedConnectionAttachment("invalid_request");
+      }
+
+      const grants = parsed.flatMap((grant) => (grant.success ? [grant.data] : []));
+      const grantIds = grants.map(({ grantId }) => grantId).toSorted();
+      const createdAt = Date.now();
+
+      transaction
+        .insert(agentRevisions)
+        .values({
+          agentId: currentRow.agentId,
+          blueprintProvenance: currentRow.blueprintProvenance,
+          capabilities: currentRow.capabilities,
+          capabilityGrants: grantIds,
+          createdAt,
+          executionLimits: currentRow.executionLimits,
+          instructions: currentRow.instructions,
+          model: currentRow.model,
+          name: currentRow.name,
+          revision,
+        })
+        .run();
+      for (const grant of grants) {
+        transaction
+          .insert(capabilityGrants)
+          .values({
+            agentId: grant.agentId,
+            agentRevision: grant.agentRevision,
+            connectionId: grant.connectionId,
+            createdAt,
+            grant,
+            grantId: grant.grantId,
+            status: "active",
+          })
+          .run();
+      }
+      transaction
+        .update(agents)
+        .set({ currentRevision: revision })
+        .where(eq(agents.agentId, currentRow.agentId))
+        .run();
+      transaction
+        .insert(agentUpdates)
+        .values({
+          agentId: currentRow.agentId,
+          clientId: authority.clientId,
+          idempotencyKey: request.data.idempotencyKey,
+          requestDigest,
+          revision,
+        })
+        .run();
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: "agent.remote_mcp_connection_configured",
           clientId: authority.clientId,
           occurredAt: createdAt,
           subjectId: currentRow.agentId,
@@ -981,7 +1233,7 @@ export class AgentRegistry {
           ),
         )
         .all()
-        .map(({ grant }) => composioToolCapabilityGrantSchema.safeParse(grant));
+        .map(({ grant }) => externalToolCapabilityGrantSchema.safeParse(grant));
 
       if (parsedGrants.some((grant) => !grant.success)) {
         return deniedAgent("incompatible_schema");

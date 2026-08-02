@@ -14,7 +14,7 @@ import {
   crewAgentRuntimeConfigSchema,
 } from "./agent-runtime.js";
 import {
-  composioToolCapabilityGrantSchema,
+  externalToolCapabilityGrantSchema,
   runIdSchema,
   sha256DigestSchema,
   toolCallIdSchema,
@@ -196,7 +196,7 @@ export const runBudgetReservationSchema = z.strictObject({
     .max(MAXIMUM_FLEET_RETENTION_SECONDS)
     .default(DEFAULT_FLEET_RUN_RETENTION_SECONDS),
   toolGrants: z
-    .array(composioToolCapabilityGrantSchema)
+    .array(externalToolCapabilityGrantSchema)
     .max(100)
     .refine(
       (grants) =>

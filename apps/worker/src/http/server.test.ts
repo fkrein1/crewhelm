@@ -8,6 +8,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { createConnectionAuthorizationCallback } from "../owner/connections/index.js";
+import { createRemoteMcpBearerSetup } from "../remote-mcp/handoff.js";
 import { createWorker } from "./server.js";
 import { deriveOwnerKey } from "../owner/identity.js";
 import { OAUTH_SCOPES } from "../oauth/scopes.js";
@@ -331,6 +332,48 @@ describe("Crewhelm Worker", () => {
 
     expect(oppositeReturn.status).toBe(400);
     expect(await oppositeReturn.text()).not.toContain(fixture.providerConnectionId);
+  });
+
+  it("serves only authentic, bounded remote MCP bearer handoffs", async () => {
+    const setup = await createRemoteMcpBearerSetup({
+      claims: {
+        endpoint: "https://mcp.example.com/rpc",
+        expiresAt: Date.now() + 60_000,
+        idempotencyKey: "remote-mcp-browser-handoff",
+        name: "Project MCP",
+        ownerKey: `owner_${"r".repeat(43)}`,
+      },
+      origin,
+      signingSecret: env.BETTER_AUTH_SECRET,
+    });
+    const response = await worker.fetch(new Request(setup.url), env);
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("content-security-policy")).toContain("form-action 'self'");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(body).toContain("Project MCP");
+    expect(body).toContain("https://mcp.example.com/rpc");
+    expect(body).toContain('type="password"');
+
+    const getByName = vi.spyOn(env.OWNER_CONTROL_PLANE, "getByName");
+    const forgedUrl = `${setup.url.slice(0, -1)}${setup.url.endsWith("A") ? "B" : "A"}`;
+    const forged = await worker.fetch(new Request(forgedUrl), env);
+    expect(forged.status).toBe(400);
+
+    const malformed = await worker.fetch(
+      new Request(setup.url, {
+        body: "bearerToken=secret&unexpected=credential",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        method: "POST",
+      }),
+      env,
+    );
+    expect(malformed.status).toBe(400);
+    expect(await malformed.text()).not.toContain("secret");
+    expect(getByName).not.toHaveBeenCalled();
+    getByName.mockRestore();
   });
 
   it("records a failed return and rejects malformed or unsupported callback requests", async () => {

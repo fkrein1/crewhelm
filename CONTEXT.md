@@ -24,8 +24,8 @@ A bounded permission to perform a class of actions. Only the control plane can g
 
 ## Connection
 
-An owner's authorization relationship with an external provider. A connection is represented to
-agents by an opaque identifier, never by the underlying credential.
+An owner's authorization relationship with an external provider or remote MCP server. A connection
+is represented to agents by an opaque identifier, never by the underlying credential.
 
 ## Control plane
 
