@@ -25,6 +25,7 @@ import {
   type AgentInboxDeferredReason,
   type AgentInboxResult,
   type AgentWatchOccurrence,
+  type AgentWatchesInput,
   type CancelRunResult,
   type BatchDisableAgentsResult,
   type CreateAgentResult,
@@ -186,6 +187,7 @@ type AuthorityErrorCode =
   | "owner_mismatch";
 type RunAdmissionRequestFailure = Extract<CreateRunAdmissionResult, { ok: false }>;
 type StartRunFailureCode = Extract<StartRunResult, { ok: false }>["error"]["code"];
+type AgentWorkflowFailureCode = Extract<StartAgentWorkflowResult, { ok: false }>["error"]["code"];
 type AuthorityResult =
   | { authority: OwnerAuthority; ok: true }
   | { code: AuthorityErrorCode; ok: false };
@@ -218,7 +220,31 @@ type AgentWatchesRpcResult =
       watchId: string;
     };
 
-function scheduledRunFailureReason(code: StartRunFailureCode): AgentInboxDeferredReason {
+function deniedAgentWorkflow<const Code extends AgentWorkflowFailureCode>(code: Code) {
+  return { error: { code, message: "Agent workflow request denied." }, ok: false } as const;
+}
+
+export function agentWatchRequiredScope(action: AgentWatchesInput["action"]): OwnerScope {
+  switch (action) {
+    case "create":
+    case "delete":
+    case "pause":
+    case "resume":
+    case "update":
+      return AUTONOMY_WRITE_SCOPE;
+    case "sources":
+      return OWNER_READ_SCOPE;
+    case "history":
+    case "inspect":
+    case "list":
+      return AGENTS_READ_SCOPE;
+  }
+
+  action satisfies never;
+  throw new Error("Invariant violated: unsupported Agent Watch action.");
+}
+
+export function scheduledRunFailureReason(code: StartRunFailureCode): AgentInboxDeferredReason {
   switch (code) {
     case "admission_limit_exceeded":
     case "agent_not_found":
@@ -241,9 +267,10 @@ function scheduledRunFailureReason(code: StartRunFailureCode): AgentInboxDeferre
     case "session_busy":
     case "session_not_found":
       return "run_unavailable";
-    default:
-      return "run_unavailable";
   }
+
+  code satisfies never;
+  throw new Error("Invariant violated: unsupported scheduled Run failure.");
 }
 
 export class OwnerControlPlane extends DurableObject {
@@ -865,30 +892,19 @@ export class OwnerControlPlane extends DurableObject {
     if (authorization.ok && request.success && (request.data.briefs?.length ?? 0) > 0) {
       const briefAuthorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
       if (!briefAuthorization.ok) {
-        return {
-          error: { code: briefAuthorization.code, message: "Agent workflow request denied." },
-          ok: false,
-        };
+        return deniedAgentWorkflow(briefAuthorization.code);
       }
     }
 
     return authorization.ok
       ? this.#workflows.start(authorization.authority, input)
-      : {
-          error: { code: authorization.code, message: "Agent workflow request denied." },
-          ok: false,
-        };
+      : deniedAgentWorkflow(authorization.code);
   }
 
   listAgentWorkflows(authorityInput: unknown, input: unknown): ListAgentWorkflowsResult {
     const authorization = this.#authorize(authorityInput, AGENTS_READ_SCOPE);
 
-    return authorization.ok
-      ? this.#workflows.list(input)
-      : {
-          error: { code: authorization.code, message: "Agent workflow request denied." },
-          ok: false,
-        };
+    return authorization.ok ? this.#workflows.list(input) : deniedAgentWorkflow(authorization.code);
   }
 
   inspectAgentWorkflow(
@@ -899,10 +915,7 @@ export class OwnerControlPlane extends DurableObject {
 
     return authorization.ok
       ? this.#workflows.inspect(input)
-      : Promise.resolve({
-          error: { code: authorization.code, message: "Agent workflow request denied." },
-          ok: false,
-        });
+      : Promise.resolve(deniedAgentWorkflow(authorization.code));
   }
 
   async cancelAgentWorkflow(
@@ -913,10 +926,7 @@ export class OwnerControlPlane extends DurableObject {
 
     return authorization.ok
       ? this.#workflows.cancel(authorization.authority, input)
-      : {
-          error: { code: authorization.code, message: "Agent workflow request denied." },
-          ok: false,
-        };
+      : deniedAgentWorkflow(authorization.code);
   }
 
   async deleteAgentWorkflow(
@@ -927,28 +937,19 @@ export class OwnerControlPlane extends DurableObject {
 
     return authorization.ok
       ? this.#workflows.delete(authorization.authority, input)
-      : {
-          error: { code: authorization.code, message: "Agent workflow request denied." },
-          ok: false,
-        };
+      : deniedAgentWorkflow(authorization.code);
   }
 
   dispatchAgentWorkflowStage(input: unknown): Promise<DispatchAgentWorkflowStageResult> {
     return this.#migrationReady
       ? this.#workflows.dispatch(input)
-      : Promise.resolve({
-          error: { code: "incompatible_schema", message: "Agent workflow request denied." },
-          ok: false,
-        });
+      : Promise.resolve(deniedAgentWorkflow("incompatible_schema"));
   }
 
   completeAgentWorkflowStage(input: unknown): Promise<CompleteAgentWorkflowStageResult> {
     return this.#migrationReady
       ? this.#workflows.complete(input)
-      : Promise.resolve({
-          error: { code: "incompatible_schema", message: "Agent workflow request denied." },
-          ok: false,
-        });
+      : Promise.resolve(deniedAgentWorkflow("incompatible_schema"));
   }
 
   markAgentWorkflowStageWaiting(input: unknown): boolean {
@@ -1099,13 +1100,7 @@ export class OwnerControlPlane extends DurableObject {
       return deniedAgentWatch("invalid_request");
     }
 
-    const requiredScope = ["create", "update", "pause", "resume", "delete"].includes(
-      request.data.action,
-    )
-      ? AUTONOMY_WRITE_SCOPE
-      : request.data.action === "sources"
-        ? OWNER_READ_SCOPE
-        : AGENTS_READ_SCOPE;
+    const requiredScope = agentWatchRequiredScope(request.data.action);
     const authorization = this.#authorize(authorityInput, requiredScope);
 
     if (

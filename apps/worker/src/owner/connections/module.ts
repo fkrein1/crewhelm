@@ -29,6 +29,7 @@ import {
   type InspectConnectionResult,
   type ListConnectionsResult,
   type OwnerAuthority,
+  type RecordConnectionAuthorizationReturnInput,
   type RecordConnectionAuthorizationReturnResult,
   type ReserveIntegrationEnablementResult,
   type ReserveConnectionLinkResult,
@@ -59,6 +60,7 @@ type ConnectionAuthorizationReturnFailure = Extract<
   { ok: false }
 >;
 type IntegrationEnablementFailure = Extract<EnableIntegrationResult, { ok: false }>;
+type ConnectionNextAction = Extract<InspectConnectionResult, { ok: true }>["nextAction"];
 type StoredConnectionLinkRow = {
   connectionId: string | null;
   expiresAt: number | null;
@@ -114,6 +116,48 @@ function isCanonicalComposioConnectUrl(value: string): boolean {
     url.search === "" &&
     url.hash === ""
   );
+}
+
+function unexpectedConnectionState(state: never): never {
+  throw new TypeError(`Unexpected connection state: ${String(state)}`);
+}
+
+function authorizationReturnOutcome(
+  status: RecordConnectionAuthorizationReturnInput["status"],
+): "failed" | "returned" {
+  switch (status) {
+    case "failed":
+      return "failed";
+    case "success":
+      return "returned";
+  }
+
+  return unexpectedConnectionState(status);
+}
+
+function nextConnectionAction(summary: ConnectionSummary): ConnectionNextAction {
+  switch (summary.status) {
+    case "revoked":
+      return "reconnect";
+    case "unavailable":
+      return "review_authorization";
+    case "active":
+    case "initiated":
+      break;
+  }
+
+  switch (summary.authorizationOutcome) {
+    case "failed":
+      return "review_authorization";
+    case "pending":
+      return "wait";
+    case "expired":
+    case "returned":
+    case "untracked":
+      return "none";
+  }
+
+  return unexpectedConnectionState(summary.authorizationOutcome);
 }
 
 export function deniedConnectionLink(
@@ -942,7 +986,7 @@ export class Connections {
         return deniedConnectionAuthorizationReturn();
       }
 
-      const desiredOutcome = request.data.status === "success" ? "returned" : "failed";
+      const desiredOutcome = authorizationReturnOutcome(request.data.status);
       const currentOutcome = row.authorizationStatus;
       const storedProviderConnectionId = row.providerConnectionId;
 
@@ -1274,14 +1318,7 @@ export class Connections {
       providerConnectionId: row.providerConnectionId,
       status: row.status,
     });
-    const nextAction =
-      summary.status === "revoked"
-        ? "reconnect"
-        : summary.status === "unavailable" || summary.authorizationOutcome === "failed"
-          ? "review_authorization"
-          : summary.authorizationOutcome === "pending"
-            ? "wait"
-            : "none";
+    const nextAction = nextConnectionAction(summary);
 
     return inspectConnectionResultSchema.parse({
       connection: summary,

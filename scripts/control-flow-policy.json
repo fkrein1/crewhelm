@@ -24,8 +24,8 @@
     "apps/worker/src/worker-test-entry.ts"
   ],
   "recordedProgress": {
-    "migratedFiles": 20,
-    "migratedUnits": 9,
+    "migratedFiles": 33,
+    "migratedUnits": 12,
     "totalFiles": 155,
     "totalUnits": 30
   },
@@ -171,8 +171,15 @@
       "pathPrefixes": ["apps/worker/src/owner/configuration/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": [
+          "apps/worker/src/owner/connections/authorization-return.test.ts",
+          "apps/worker/src/owner/connections/module.test.ts"
+        ]
+      },
       "id": "owner-connections",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/connections/"]
     },
     {
@@ -185,8 +192,17 @@
       "pathPrefixes": ["apps/worker/src/owner/recovery/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": [
+          "apps/worker/src/owner/runs/module.test.ts",
+          "apps/worker/src/owner/runs/policy.test.ts",
+          "apps/worker/src/owner/runs/runtime-tool-execution.test.ts",
+          "apps/worker/src/owner/runs/tool-execution.test.ts"
+        ]
+      },
       "id": "owner-runs",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/runs/"]
     },
     {
@@ -245,8 +261,12 @@
         "apps/worker/src/owner/migrations.ts",
         "apps/worker/src/owner/schema.ts"
       ],
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/owner/durable-object.test.ts"]
+      },
       "id": "owner-control-plane",
-      "status": "legacy"
+      "status": "migrated"
     },
     {
       "files": ["apps/worker/src/env.ts", "apps/worker/src/index.ts", "apps/worker/src/sandbox.ts"],

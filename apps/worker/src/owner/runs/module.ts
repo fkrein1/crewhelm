@@ -60,6 +60,7 @@ import {
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import { AI_GATEWAY_CAPABILITY_ID } from "../../agent-capabilities/ai-gateway.js";
+import type { CapabilityCompilationResult } from "../../agent-capabilities/kernel.js";
 import { agentCapabilityRegistry } from "../../agent-capabilities/registry.js";
 import { WORKERS_AI_CAPABILITY_ID } from "../../agent-capabilities/workers-ai.js";
 import { bindOutputContract, outputContractInstruction } from "../../agent/admitted-runs/index.js";
@@ -93,6 +94,7 @@ type RunAdmissionRequestErrorCode = Extract<
   CreateRunAdmissionResult,
   { ok: false }
 >["error"]["code"];
+type CapabilityCompilationFailure = Extract<CapabilityCompilationResult, { ok: false }>;
 type ControlPlaneDatabase = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type ControlPlaneTransaction = Parameters<Parameters<ControlPlaneDatabase["transaction"]>[0]>[0];
 type RunAdmissionDatabase = ControlPlaneDatabase | ControlPlaneTransaction;
@@ -116,6 +118,26 @@ function watchReference(row: WatchReferenceRow): { watch?: RunWatchReference } {
           sourceKind: row.watchSourceKind,
         },
       };
+}
+
+export function runAdmissionFailureFromCapabilityCompilation(
+  failure: CapabilityCompilationFailure,
+): Extract<RunAdmissionRequestErrorCode, "capability_unavailable" | "model_unavailable"> {
+  switch (failure.code) {
+    case "configuration_unavailable":
+      return failure.moduleId === WORKERS_AI_CAPABILITY_ID ||
+        failure.moduleId === AI_GATEWAY_CAPABILITY_ID
+        ? "model_unavailable"
+        : "capability_unavailable";
+    case "capability_conflict":
+    case "capability_unavailable":
+    case "invalid_configuration":
+    case "missing_required_capability":
+    case "unknown_capability":
+      return "capability_unavailable";
+    default:
+      throw new Error("Run admission received an unhandled capability failure.");
+  }
 }
 
 function projectedRunStatus(currentTime: number) {
@@ -476,11 +498,7 @@ export class RunAdmissions {
 
       if (!compiledCapabilities.ok) {
         return this.#deniedRequest(
-          compiledCapabilities.code === "configuration_unavailable" &&
-            (compiledCapabilities.moduleId === WORKERS_AI_CAPABILITY_ID ||
-              compiledCapabilities.moduleId === AI_GATEWAY_CAPABILITY_ID)
-            ? "model_unavailable"
-            : "capability_unavailable",
+          runAdmissionFailureFromCapabilityCompilation(compiledCapabilities),
         );
       }
 

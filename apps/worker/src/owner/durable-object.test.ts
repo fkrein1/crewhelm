@@ -13,6 +13,10 @@ import {
   OWNER_WRITE_SCOPE,
   RUNS_WRITE_SCOPE,
   runBudgetReservationSchema,
+  type AgentInboxDeferredReason,
+  type AgentWatchesInput,
+  type OwnerScope,
+  type StartRunResult,
 } from "@crewhelm/contracts";
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -34,6 +38,54 @@ import migration22 from "../../control-plane-migrations/0022_adorable_marrow.sql
 import { controlPlaneMigrations } from "../../control-plane-migrations/index.js";
 
 import { agentInput, authorityFor, fixedRunAdmissionFailure } from "./testkit.js";
+import { agentWatchRequiredScope, scheduledRunFailureReason } from "./durable-object.js";
+
+type RunStartFailureCode = Extract<StartRunResult, { ok: false }>["error"]["code"];
+
+const SCHEDULED_RUN_FAILURE_CASES = [
+  ["admission_limit_exceeded", "admission_limit_exceeded"],
+  ["agent_not_found", "agent_not_found"],
+  ["agent_unavailable", "agent_unavailable"],
+  ["branch_revision_conflict", "run_unavailable"],
+  ["brief_context_too_large", "brief_context_too_large"],
+  ["brief_unavailable", "brief_unavailable"],
+  ["budget_exhausted", "budget_exhausted"],
+  ["capability_unavailable", "capability_unavailable"],
+  ["idempotency_conflict", "idempotency_conflict"],
+  ["incompatible_schema", "run_unavailable"],
+  ["insufficient_scope", "run_unavailable"],
+  ["invalid_authority", "run_unavailable"],
+  ["invalid_request", "run_unavailable"],
+  ["model_unavailable", "model_unavailable"],
+  ["owner_mismatch", "run_unavailable"],
+  ["revision_conflict", "revision_conflict"],
+  ["run_unavailable", "run_unavailable"],
+  ["session_busy", "run_unavailable"],
+  ["session_not_found", "run_unavailable"],
+] as const satisfies readonly (readonly [RunStartFailureCode, AgentInboxDeferredReason])[];
+const ALL_RUN_START_FAILURES_ARE_COVERED: Exclude<
+  RunStartFailureCode,
+  (typeof SCHEDULED_RUN_FAILURE_CASES)[number][0]
+> extends never
+  ? true
+  : false = true;
+const WATCH_SCOPE_CASES = [
+  ["create", AUTONOMY_WRITE_SCOPE],
+  ["delete", AUTONOMY_WRITE_SCOPE],
+  ["history", AGENTS_READ_SCOPE],
+  ["inspect", AGENTS_READ_SCOPE],
+  ["list", AGENTS_READ_SCOPE],
+  ["pause", AUTONOMY_WRITE_SCOPE],
+  ["resume", AUTONOMY_WRITE_SCOPE],
+  ["sources", OWNER_READ_SCOPE],
+  ["update", AUTONOMY_WRITE_SCOPE],
+] as const satisfies readonly (readonly [AgentWatchesInput["action"], OwnerScope])[];
+const ALL_WATCH_ACTIONS_ARE_COVERED: Exclude<
+  AgentWatchesInput["action"],
+  (typeof WATCH_SCOPE_CASES)[number][0]
+> extends never
+  ? true
+  : false = true;
 
 function removeSkillLibrarySchema(storage: DurableObjectStorage): void {
   storage.sql.exec("DROP TABLE agent_blueprint_mutations");
@@ -78,6 +130,22 @@ async function migrationChecksum(source: string): Promise<string> {
 
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+
+describe("OwnerControlPlane control flow", () => {
+  it("translates every expected scheduled Run failure", () => {
+    expect(ALL_RUN_START_FAILURES_ARE_COVERED).toBe(true);
+    for (const [failure, reason] of SCHEDULED_RUN_FAILURE_CASES) {
+      expect(scheduledRunFailureReason(failure)).toBe(reason);
+    }
+  });
+
+  it("selects authority scopes exhaustively for every Agent Watch action", () => {
+    expect(ALL_WATCH_ACTIONS_ARE_COVERED).toBe(true);
+    for (const [action, scope] of WATCH_SCOPE_CASES) {
+      expect(agentWatchRequiredScope(action)).toBe(scope);
+    }
+  });
+});
 
 describe("owner identity", () => {
   it("derives a deterministic opaque key without retaining provider identity", async () => {

@@ -19,12 +19,63 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 
 import { digestRunPrompt } from "../../agent/admitted-runs/index.js";
-import { aiGatewayCapabilityConfiguration } from "../../agent-capabilities/ai-gateway.js";
-import { workersAiCapabilityConfiguration } from "../../agent-capabilities/workers-ai.js";
+import {
+  AI_GATEWAY_CAPABILITY_ID,
+  aiGatewayCapabilityConfiguration,
+} from "../../agent-capabilities/ai-gateway.js";
+import {
+  WORKERS_AI_CAPABILITY_ID,
+  workersAiCapabilityConfiguration,
+} from "../../agent-capabilities/workers-ai.js";
 import { skillsCapabilityConfiguration } from "../../agent-capabilities/skills.js";
 import type { OwnerControlPlane } from "../durable-object.js";
 import { R2SkillPackageObjectStore } from "../skills/index.js";
 import { agentInput, agentUpdate, authorityFor, fixedRunAdmissionFailure } from "../testkit.js";
+import { runAdmissionFailureFromCapabilityCompilation } from "./module.js";
+
+describe("Run admission control flow", () => {
+  it("translates every capability compilation failure", () => {
+    expect(
+      runAdmissionFailureFromCapabilityCompilation({
+        code: "configuration_unavailable",
+        moduleId: WORKERS_AI_CAPABILITY_ID,
+        ok: false,
+      }),
+    ).toBe("model_unavailable");
+    expect(
+      runAdmissionFailureFromCapabilityCompilation({
+        code: "configuration_unavailable",
+        moduleId: AI_GATEWAY_CAPABILITY_ID,
+        ok: false,
+      }),
+    ).toBe("model_unavailable");
+    expect(
+      runAdmissionFailureFromCapabilityCompilation({
+        code: "configuration_unavailable",
+        moduleId: "sandbox.code",
+        ok: false,
+      }),
+    ).toBe("capability_unavailable");
+    expect(
+      runAdmissionFailureFromCapabilityCompilation({ code: "capability_conflict", ok: false }),
+    ).toBe("capability_unavailable");
+    expect(
+      runAdmissionFailureFromCapabilityCompilation({ code: "capability_unavailable", ok: false }),
+    ).toBe("capability_unavailable");
+    expect(
+      runAdmissionFailureFromCapabilityCompilation({ code: "invalid_configuration", ok: false }),
+    ).toBe("capability_unavailable");
+    expect(
+      runAdmissionFailureFromCapabilityCompilation({
+        code: "missing_required_capability",
+        ok: false,
+      }),
+    ).toBe("capability_unavailable");
+    expect(
+      runAdmissionFailureFromCapabilityCompilation({ code: "unknown_capability", ok: false }),
+    ).toBe("capability_unavailable");
+  });
+});
 
 describe("OwnerControlPlane runs", () => {
   it("hydrates only exact SKILL.md instructions and snapshots compact provenance", async () => {
