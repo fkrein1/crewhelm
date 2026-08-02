@@ -82,6 +82,10 @@ function sameLocalDateTime(left: LocalDateTime, right: LocalDateTime): boolean {
   );
 }
 
+function unsupportedCalendarFrequency(frequency: never): never {
+  throw new TypeError(`Unsupported calendar frequency: ${String(frequency)}`);
+}
+
 function offsetAt(formatter: Intl.DateTimeFormat, instant: number): number | null {
   const local = localDateTime(formatter, instant);
 
@@ -114,15 +118,31 @@ function firstInstantForLocalDateTime(
 }
 
 function matchesCalendarDate(trigger: CalendarTrigger, date: Date): boolean {
-  if (trigger.frequency === "daily") {
-    return true;
+  const { frequency } = trigger;
+
+  switch (frequency) {
+    case "daily":
+      return true;
+    case "weekly":
+      return trigger.daysOfWeek.includes(WEEKDAYS[date.getUTCDay()] ?? "sunday");
+    case "monthly":
+      return date.getUTCDate() === trigger.dayOfMonth;
   }
 
-  if (trigger.frequency === "weekly") {
-    return trigger.daysOfWeek.includes(WEEKDAYS[date.getUTCDay()] ?? "sunday");
+  return unsupportedCalendarFrequency(frequency);
+}
+
+function sampledOccurrenceCount(frequency: CalendarTrigger["frequency"]): number {
+  switch (frequency) {
+    case "daily":
+      return 370;
+    case "weekly":
+      return 60;
+    case "monthly":
+      return 24;
   }
 
-  return date.getUTCDate() === trigger.dayOfMonth;
+  return unsupportedCalendarFrequency(frequency);
 }
 
 function nextCalendarOccurrence(trigger: CalendarTrigger, after: number): number | null {
@@ -200,8 +220,7 @@ export function minimumAgentScheduleIntervalSeconds(
     return trigger.intervalSeconds;
   }
 
-  const occurrences =
-    trigger.frequency === "daily" ? 370 : trigger.frequency === "weekly" ? 60 : 24;
+  const occurrences = sampledOccurrenceCount(trigger.frequency);
   let previous = nextCalendarOccurrence(trigger, after);
   let minimum = Number.POSITIVE_INFINITY;
 

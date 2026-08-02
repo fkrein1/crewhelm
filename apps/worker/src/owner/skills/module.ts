@@ -48,6 +48,8 @@ type FailureCode = Exclude<
   Extract<RetireSkillResult, { ok: false }>["error"]["code"],
   "skill_storage_corrupt" | "skill_storage_unavailable"
 >;
+type GetSkillFailureCode = Extract<GetSkillResult, { ok: false }>["error"]["code"];
+type SkillRuntimeLoadFailure = Extract<SkillRuntimeLoadResult, { ok: false }>;
 type StoredSummaryRow = {
   createdAt: number;
   currentVersion: number;
@@ -67,6 +69,8 @@ type PublishCandidate = {
   ok: true;
   version: number;
 };
+
+class SkillStorageInvariantError extends Error {}
 
 export interface StoredSkillPackage {
   bytes: Uint8Array;
@@ -234,6 +238,40 @@ function storageUnavailable(nextAction: "contact_operator" | "retry_same_request
   };
 }
 
+function publishStorageFailure(error: unknown) {
+  return storageUnavailable(
+    error instanceof SkillStorageInvariantError ? "contact_operator" : "retry_same_request",
+  );
+}
+
+export function runtimeLoadFailureFromSkill(code: GetSkillFailureCode): SkillRuntimeLoadFailure {
+  switch (code) {
+    case "skill_storage_corrupt":
+      return { code: "storage_corrupt", ok: false };
+    case "skill_storage_unavailable":
+      return { code: "storage_unavailable", ok: false };
+    case "idempotency_conflict":
+    case "incompatible_schema":
+    case "insufficient_scope":
+    case "invalid_authority":
+    case "invalid_request":
+    case "library_capacity_exceeded":
+    case "name_conflict":
+    case "no_changes":
+    case "owner_mismatch":
+    case "package_mismatch":
+    case "skill_limit_exceeded":
+    case "skill_not_found":
+    case "skill_retired":
+    case "suspected_secret":
+    case "version_conflict":
+    case "version_limit_exceeded":
+      return { code: "reference_unavailable", ok: false };
+    default:
+      throw new Error("Skill runtime loading received an unhandled failure.");
+  }
+}
+
 export function deniedSkill(code: FailureCode) {
   return denied(code);
 }
@@ -355,7 +393,7 @@ export class Skills {
           const current = this.#summary(request.data.target.id!, transaction);
 
           if (current === null) {
-            throw new Error("Current Skill summary is unavailable.");
+            throw new SkillStorageInvariantError();
           }
 
           transaction
@@ -456,7 +494,7 @@ export class Skills {
         const summary = this.#summary(skillId, transaction);
 
         if (summary === null) {
-          throw new Error("Published Skill summary is unavailable.");
+          throw new SkillStorageInvariantError();
         }
 
         return publishSkillResultSchema.parse({
@@ -467,8 +505,8 @@ export class Skills {
           version: revalidated.version,
         });
       });
-    } catch {
-      return publishSkillResultSchema.parse(storageUnavailable("retry_same_request"));
+    } catch (error) {
+      return publishSkillResultSchema.parse(publishStorageFailure(error));
     }
   }
 
@@ -673,15 +711,7 @@ export class Skills {
       });
 
       if (!result.ok) {
-        return {
-          code:
-            result.error.code === "skill_storage_unavailable"
-              ? "storage_unavailable"
-              : result.error.code === "skill_storage_corrupt"
-                ? "storage_corrupt"
-                : "reference_unavailable",
-          ok: false,
-        };
+        return runtimeLoadFailureFromSkill(result.error.code);
       }
 
       const skillFile = result.version.files.find(({ path }) => path === "SKILL.md");

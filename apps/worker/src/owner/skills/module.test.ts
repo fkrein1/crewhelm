@@ -5,6 +5,7 @@ import {
   listSkillsResultSchema,
   publishSkillResultSchema,
   retireSkillResultSchema,
+  type GetSkillResult,
   type SkillPackage,
 } from "@crewhelm/contracts";
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
@@ -12,6 +13,31 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
 import { authorityFor } from "../testkit.js";
+import { runtimeLoadFailureFromSkill, type SkillRuntimeLoadResult } from "./module.js";
+
+type GetSkillFailureCode = Extract<GetSkillResult, { ok: false }>["error"]["code"];
+type RuntimeLoadFailureCode = Extract<SkillRuntimeLoadResult, { ok: false }>["code"];
+
+const RUNTIME_FAILURE_BY_SKILL_FAILURE = {
+  idempotency_conflict: "reference_unavailable",
+  incompatible_schema: "reference_unavailable",
+  insufficient_scope: "reference_unavailable",
+  invalid_authority: "reference_unavailable",
+  invalid_request: "reference_unavailable",
+  library_capacity_exceeded: "reference_unavailable",
+  name_conflict: "reference_unavailable",
+  no_changes: "reference_unavailable",
+  owner_mismatch: "reference_unavailable",
+  package_mismatch: "reference_unavailable",
+  skill_limit_exceeded: "reference_unavailable",
+  skill_not_found: "reference_unavailable",
+  skill_retired: "reference_unavailable",
+  skill_storage_corrupt: "storage_corrupt",
+  skill_storage_unavailable: "storage_unavailable",
+  suspected_secret: "reference_unavailable",
+  version_conflict: "reference_unavailable",
+  version_limit_exceeded: "reference_unavailable",
+} as const satisfies Record<GetSkillFailureCode, RuntimeLoadFailureCode>;
 
 function packageInput(
   name = "release-reviewer",
@@ -45,6 +71,38 @@ function publishInput(idempotencyKey: string, skillPackage: SkillPackage = packa
     },
   };
 }
+
+describe("Skills control flow", () => {
+  it("translates every Skill read failure for runtime loading", () => {
+    for (const [skillCode, runtimeCode] of Object.entries(RUNTIME_FAILURE_BY_SKILL_FAILURE)) {
+      const result = getSkillResultSchema.parse({
+        error:
+          skillCode === "skill_storage_corrupt" || skillCode === "skill_storage_unavailable"
+            ? {
+                code: skillCode,
+                message: "Skill storage unavailable.",
+                operation: {
+                  nextAction:
+                    skillCode === "skill_storage_corrupt"
+                      ? "contact_operator"
+                      : "retry_same_request",
+                },
+              }
+            : { code: skillCode, message: "Skill request denied." },
+        ok: false,
+      });
+
+      if (result.ok) {
+        throw new Error("Expected a Skill read failure fixture.");
+      }
+
+      expect(runtimeLoadFailureFromSkill(result.error.code)).toEqual({
+        code: runtimeCode,
+        ok: false,
+      });
+    }
+  });
+});
 
 describe("OwnerControlPlane Skills", () => {
   it("previews, publishes, lists, and reads one immutable package without content in SQLite", async () => {
@@ -471,6 +529,53 @@ describe("OwnerControlPlane Skills", () => {
           },
         },
       },
+    });
+  });
+
+  it("rolls back and reports a violated publication metadata invariant", async () => {
+    const authority = await authorityFor("skills-invariant", [OWNER_READ_SCOPE, OWNER_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const input = publishInput("skill-invariant");
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(`
+        CREATE TRIGGER invalidate_published_skill_summary
+        AFTER INSERT ON audit_events
+        WHEN NEW.action = 'skill.published'
+        BEGIN
+          UPDATE skills
+          SET current_version = current_version + 1
+          WHERE skill_id = NEW.subject_id;
+        END
+      `);
+    });
+    await expect(stub.publishSkill(authority, input)).resolves.toEqual({
+      error: {
+        code: "skill_storage_corrupt",
+        message: "Skill storage unavailable.",
+        operation: { nextAction: "contact_operator" },
+      },
+      ok: false,
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec<{ skills: number; versions: number }>(
+            `SELECT
+               (SELECT count(*) FROM skills) AS skills,
+               (SELECT count(*) FROM skill_versions) AS versions`,
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({ skills: 0, versions: 0 });
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("DROP TRIGGER invalidate_published_skill_summary");
+    });
+    await expect(stub.publishSkill(authority, input)).resolves.toMatchObject({
+      applied: true,
+      ok: true,
+      skill: { currentVersion: 1 },
     });
   });
 

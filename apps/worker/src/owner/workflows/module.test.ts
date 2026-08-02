@@ -11,6 +11,8 @@ import {
   type OwnerAuthority,
   type OutputContract,
   type Run,
+  type StartAgentWorkflowResult,
+  type StartRunResult,
 } from "@crewhelm/contracts";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -26,6 +28,38 @@ import {
 } from "../../agent/admitted-runs/test-agent.js";
 import { admittedRunRecordSchema } from "../../agent/admitted-runs/schema.js";
 import { deriveOwnerKey } from "../identity.js";
+import { agentWorkflowFailureFromRunStart } from "./module.js";
+
+type RunStartFailureCode = Extract<StartRunResult, { ok: false }>["error"]["code"];
+type WorkflowFailureCode = Extract<StartAgentWorkflowResult, { ok: false }>["error"]["code"];
+
+const WORKFLOW_FAILURE_CASES = [
+  ["admission_limit_exceeded", "admission_limit_exceeded"],
+  ["agent_not_found", "agent_not_found"],
+  ["agent_unavailable", "agent_unavailable"],
+  ["branch_revision_conflict", "revision_conflict"],
+  ["brief_context_too_large", "brief_context_too_large"],
+  ["brief_unavailable", "brief_unavailable"],
+  ["budget_exhausted", "budget_exhausted"],
+  ["capability_unavailable", "capability_unavailable"],
+  ["idempotency_conflict", "idempotency_conflict"],
+  ["incompatible_schema", "incompatible_schema"],
+  ["insufficient_scope", "insufficient_scope"],
+  ["invalid_authority", "invalid_authority"],
+  ["invalid_request", "invalid_request"],
+  ["model_unavailable", "model_unavailable"],
+  ["owner_mismatch", "owner_mismatch"],
+  ["revision_conflict", "revision_conflict"],
+  ["run_unavailable", "workflow_unavailable"],
+  ["session_busy", "workflow_busy"],
+  ["session_not_found", "workflow_unavailable"],
+] as const satisfies readonly (readonly [RunStartFailureCode, WorkflowFailureCode])[];
+const ALL_RUN_START_FAILURES_ARE_COVERED: Exclude<
+  RunStartFailureCode,
+  (typeof WORKFLOW_FAILURE_CASES)[number][0]
+> extends never
+  ? true
+  : false = true;
 
 const workflowJsonOutputContract = {
   kind: "json",
@@ -81,6 +115,59 @@ async function enableSessions(ownerKey: string, agentId: string): Promise<void> 
     },
   );
 }
+
+describe("Agent workflow control flow", () => {
+  it("translates every expected Run start failure at the Workflow boundary", () => {
+    expect(ALL_RUN_START_FAILURES_ARE_COVERED).toBe(true);
+    for (const [runCode, workflowCode] of WORKFLOW_FAILURE_CASES) {
+      expect(agentWorkflowFailureFromRunStart(runCode)).toBe(workflowCode);
+    }
+  });
+
+  it("returns typed failures for malformed, unauthorized, and unavailable requests", async () => {
+    const authority = await authorityFor("agent-workflow-boundary-failures");
+    const otherOwner = await authorityFor("agent-workflow-other-owner");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const missingAgentId = "agent_00000000-0000-4000-8000-000000000001";
+    const missingWorkflowId = "workflow_00000000-0000-4000-8000-000000000001";
+    const plan = {
+      agentId: missingAgentId,
+      expectedRevision: 1,
+      idempotencyKey: "workflow-boundary-failures",
+      objective: "Prove Workflow boundary failures remain typed.",
+      stages: [
+        { name: "One", prompt: "First bounded stage." },
+        { name: "Two", prompt: "Second bounded stage." },
+      ],
+    };
+
+    await expect(controlPlane.startAgentWorkflow(authority, {})).resolves.toMatchObject({
+      error: { code: "invalid_request" },
+      ok: false,
+    });
+    await expect(controlPlane.startAgentWorkflow(authority, plan)).resolves.toMatchObject({
+      error: { code: "agent_not_found" },
+      ok: false,
+    });
+    await expect(
+      controlPlane.startAgentWorkflow(
+        { ...authority, scopes: [OWNER_READ_SCOPE] } satisfies OwnerAuthority,
+        plan,
+      ),
+    ).resolves.toMatchObject({ error: { code: "insufficient_scope" }, ok: false });
+    await expect(controlPlane.listAgentWorkflows(otherOwner, {})).resolves.toMatchObject({
+      error: { code: "owner_mismatch" },
+      ok: false,
+    });
+    await expect(controlPlane.listAgentWorkflows({}, {})).resolves.toMatchObject({
+      error: { code: "invalid_authority" },
+      ok: false,
+    });
+    await expect(
+      controlPlane.inspectAgentWorkflow(authority, { workflowId: missingWorkflowId }),
+    ).resolves.toMatchObject({ error: { code: "workflow_not_found" }, ok: false });
+  });
+});
 
 async function terminalRun(
   controlPlane: ReturnType<typeof env.OWNER_CONTROL_PLANE.getByName>,

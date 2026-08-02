@@ -24,8 +24,8 @@
     "apps/worker/src/worker-test-entry.ts"
   ],
   "recordedProgress": {
-    "migratedFiles": 12,
-    "migratedUnits": 6,
+    "migratedFiles": 20,
+    "migratedUnits": 9,
     "totalFiles": 155,
     "totalUnits": 30
   },
@@ -190,13 +190,24 @@
       "pathPrefixes": ["apps/worker/src/owner/runs/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": [
+          "apps/worker/src/owner/schedules/module.test.ts",
+          "apps/worker/src/owner/schedules/recurrence.test.ts"
+        ]
+      },
       "id": "owner-schedules",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/schedules/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/owner/skills/module.test.ts"]
+      },
       "id": "owner-skills",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/skills/"]
     },
     {
@@ -218,8 +229,12 @@
       "pathPrefixes": ["apps/worker/src/owner/watches/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/owner/workflows/module.test.ts"]
+      },
       "id": "owner-workflows",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/workflows/"]
     },
     {
