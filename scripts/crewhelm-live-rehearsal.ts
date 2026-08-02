@@ -821,7 +821,13 @@ async function conversation(options: {
           firstInput,
           startRunResultSchema,
         );
-        if (!first.ok || first.conversation === undefined) {
+        if (!first.ok) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            `Conversation start was denied with ${first.error.code}.`,
+          );
+        }
+        if (first.conversation === undefined) {
           throw new TemporaryOwnerSessionError(
             "invalid_payload",
             "Conversation start did not return a copy-ready handle.",
