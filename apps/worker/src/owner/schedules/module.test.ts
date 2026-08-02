@@ -61,15 +61,6 @@ describe("OwnerControlPlane Agent schedules", () => {
       }),
     ).resolves.toMatchObject({ applied: true, ok: true });
     await expect(
-      controlPlane.agentWatches(authority, { action: "sources" }),
-    ).resolves.toMatchObject({
-      action: "sources",
-      ok: true,
-      sources: [
-        expect.objectContaining({ limits: expect.objectContaining({ minimumEveryMinutes: 2 }) }),
-      ],
-    });
-    await expect(
       controlPlane.configureAgentSchedule(authority, {
         agentId: created.agent.id,
         expectedAgentRevision: created.agent.revision,
@@ -345,46 +336,6 @@ describe("OwnerControlPlane Agent schedules", () => {
 
     expect(reused).toMatchObject({ ok: true });
     expect(reusedScheduleCount).toBe(8);
-
-    const reusedRevision = reused.ok
-      ? reused.schedules.find((schedule) => schedule.id === reusable.id)?.revision
-      : undefined;
-
-    if (reusedRevision === undefined) {
-      throw new Error("Expected the reused schedule revision.");
-    }
-
-    await expect(
-      controlPlane.agentWatches(authority, {
-        action: "delete",
-        agentId: created.agent.id,
-        expectedAgentRevision: created.agent.revision,
-        expectedWatchRevision: reusedRevision,
-        idempotencyKey: "delete-capacity-schedule-slot",
-        watchId: reusable.id,
-      }),
-    ).resolves.toMatchObject({ action: "delete", deleted: true, ok: true });
-    await expect(
-      controlPlane.configureAgentSchedule(authority, {
-        agentId: created.agent.id,
-        expectedAgentRevision: created.agent.revision,
-        expectedScheduleRevision: null,
-        idempotencyKey: "replace-deleted-capacity-schedule-slot",
-        schedule: {
-          name: "Post-deletion responsibility",
-          prompt: "Use capacity released by a deleted Watch.",
-          trigger: { intervalSeconds: 120, type: "interval" },
-        },
-        scheduleId: null,
-      }),
-    ).resolves.toMatchObject({ configured: true, ok: true });
-
-    const afterDeletion = await controlPlane.listAgentSchedules(authority, {
-      agentId: created.agent.id,
-    });
-
-    expect(afterDeletion).toMatchObject({ ok: true });
-    expect(afterDeletion.ok ? afterDeletion.schedules.length : -1).toBe(8);
   });
 
   it("dispatches multiple due Agents independently and exposes their scheduled run history", async () => {

@@ -1,6 +1,6 @@
 import {
   agentInboxInputSchema,
-  agentWatchesInputSchema,
+  agentEventTriggersInputSchema,
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
   AUTONOMY_WRITE_SCOPE,
@@ -28,8 +28,8 @@ import {
   type ControlPlaneStatusResult,
   type AgentInboxDeferredReason,
   type AgentInboxResult,
-  type AgentWatchOccurrence,
-  type AgentWatchesInput,
+  type AgentEventTriggerOccurrence,
+  type AgentEventTriggersInput,
   type CancelRunResult,
   type BatchDisableAgentsResult,
   type CreateAgentResult,
@@ -172,16 +172,15 @@ import {
 import { recordScheduleEvent } from "../observability/schedules.js";
 import { AgentSchedules, deniedAgentSchedule, type DueAgentSchedule } from "./schedules/index.js";
 import {
-  AgentEventWatches,
-  AgentWatches,
+  AgentEventTriggers,
   COMPOSIO_WEBHOOK_INGRESS_OBJECT_NAME,
   ComposioWebhookIngress,
-  deniedAgentWatch,
-  eventWatchIdempotencyKey,
-  eventWatchPrompt,
+  deniedAgentEventTrigger,
+  eventTriggerIdempotencyKey,
+  eventTriggerPrompt,
   type ComposioWebhookIngressResult,
-  type DueAgentEventWatch,
-} from "./watches/index.js";
+  type DueAgentEventTrigger,
+} from "./event-triggers/index.js";
 import { AiGatewayUsage } from "./usage/index.js";
 import { R2SkillPackageObjectStore, Skills, deniedSkill } from "./skills/index.js";
 import { AgentWorkflows } from "./workflows/index.js";
@@ -205,40 +204,41 @@ type AgentWorkflowFailureCode = Extract<StartAgentWorkflowResult, { ok: false }>
 type AuthorityResult =
   | { authority: OwnerAuthority; ok: true }
   | { code: AuthorityErrorCode; ok: false };
-type AgentWatchRpc = {
+type AgentEventTriggerRpc = {
   agentId: string;
   agentRevision: number;
   createdAt: string;
   id: string;
-  lastOccurrence: AgentWatchOccurrence | null;
-  nextCheckAt: string | null;
+  lastOccurrence: AgentEventTriggerOccurrence | null;
   revision: number;
   status: "active" | "paused";
 };
-type AgentWatchesRpcResult =
+type AgentEventTriggersRpcResult =
   | { error: { code: string; message: string }; ok: false }
   | { action: "sources"; ok: true; sources: unknown[] }
   | {
       action: "create" | "pause" | "resume" | "update";
       changed: boolean;
       ok: true;
-      watch: AgentWatchRpc;
+      eventTrigger: AgentEventTriggerRpc;
     }
-  | { action: "delete"; deleted: boolean; ok: true; watchId: string }
-  | { action: "inspect"; ok: true; watch: AgentWatchRpc }
-  | { action: "list"; ok: true; watches: AgentWatchRpc[] }
+  | { action: "delete"; deleted: boolean; ok: true; eventTriggerId: string }
+  | { action: "inspect"; ok: true; eventTrigger: AgentEventTriggerRpc }
+  | { action: "list"; ok: true; eventTriggers: AgentEventTriggerRpc[] }
   | {
       action: "history";
-      occurrences: AgentWatchOccurrence[];
+      occurrences: AgentEventTriggerOccurrence[];
       ok: true;
-      watchId: string;
+      eventTriggerId: string;
     };
 
 function deniedAgentWorkflow<const Code extends AgentWorkflowFailureCode>(code: Code) {
   return { error: { code, message: "Agent workflow request denied." }, ok: false } as const;
 }
 
-export function agentWatchRequiredScope(action: AgentWatchesInput["action"]): OwnerScope {
+export function agentEventTriggerRequiredScope(
+  action: AgentEventTriggersInput["action"],
+): OwnerScope {
   switch (action) {
     case "create":
     case "delete":
@@ -255,7 +255,7 @@ export function agentWatchRequiredScope(action: AgentWatchesInput["action"]): Ow
   }
 
   action satisfies never;
-  throw new Error("Invariant violated: unsupported Agent Watch action.");
+  throw new Error("Invariant violated: unsupported Agent Event Trigger action.");
 }
 
 export function scheduledRunFailureReason(code: StartRunFailureCode): AgentInboxDeferredReason {
@@ -303,8 +303,7 @@ export class OwnerControlPlane extends DurableObject {
   readonly #agentChannel: AgentChannel;
   readonly #authorityControls: AuthorityControls;
   readonly #agentSchedules: AgentSchedules;
-  readonly #agentEventWatches: AgentEventWatches;
-  readonly #agentWatches: AgentWatches;
+  readonly #agentEventTriggers: AgentEventTriggers;
   readonly #fleetConfigurations: FleetConfigurations;
   readonly #aiGatewayUsage: AiGatewayUsage;
   readonly #skills: Skills;
@@ -387,7 +386,7 @@ export class OwnerControlPlane extends DurableObject {
     const ingressStub = environment.OWNER_CONTROL_PLANE.getByName(
       COMPOSIO_WEBHOOK_INGRESS_OBJECT_NAME,
     );
-    this.#agentEventWatches = new AgentEventWatches(
+    this.#agentEventTriggers = new AgentEventTriggers(
       this.#database,
       this.#storage,
       this.#objectName,
@@ -421,7 +420,6 @@ export class OwnerControlPlane extends DurableObject {
         }),
       },
     );
-    this.#agentWatches = new AgentWatches(this.#agentSchedules, this.#agentEventWatches);
     this.#agentChannel = new AgentChannel(
       this.#objectName,
       this.#database,
@@ -1184,30 +1182,26 @@ export class OwnerControlPlane extends DurableObject {
       : deniedAgentSchedule(authorization.code);
   }
 
-  async agentWatches(authorityInput: unknown, input: unknown): Promise<AgentWatchesRpcResult> {
-    const request = agentWatchesInputSchema.safeParse(input);
+  async agentEventTriggers(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<AgentEventTriggersRpcResult> {
+    const request = agentEventTriggersInputSchema.safeParse(input);
 
     if (!request.success) {
-      return deniedAgentWatch("invalid_request");
+      return deniedAgentEventTrigger("invalid_request");
     }
 
-    const requiredScope = agentWatchRequiredScope(request.data.action);
+    const requiredScope = agentEventTriggerRequiredScope(request.data.action);
     const authorization = this.#authorize(authorityInput, requiredScope);
 
-    if (
-      authorization.ok &&
-      ((request.data.action === "sources" && request.data.connectionId !== undefined) ||
-        ((request.data.action === "create" || request.data.action === "update") &&
-          request.data.watch.source.kind === "connection_event") ||
-        ("watchId" in request.data && request.data.watchId.startsWith("watch_"))) &&
-      !authorization.authority.scopes.includes(CONNECTIONS_READ_SCOPE)
-    ) {
-      return deniedAgentWatch("insufficient_scope");
+    if (authorization.ok && !authorization.authority.scopes.includes(CONNECTIONS_READ_SCOPE)) {
+      return deniedAgentEventTrigger("insufficient_scope");
     }
 
     return authorization.ok
-      ? this.#agentWatches.execute(authorization.authority, request.data)
-      : deniedAgentWatch(authorization.code);
+      ? this.#agentEventTriggers.execute(authorization.authority, request.data)
+      : deniedAgentEventTrigger(authorization.code);
   }
 
   async ensureComposioWebhookIngress(): Promise<boolean> {
@@ -1249,7 +1243,7 @@ export class OwnerControlPlane extends DurableObject {
       return false;
     }
 
-    await this.#agentEventWatches.receive(event.data, Date.now());
+    await this.#agentEventTriggers.receive(event.data, Date.now());
     return true;
   }
 
@@ -1346,7 +1340,7 @@ export class OwnerControlPlane extends DurableObject {
     await this.#workflows.recoverQueued();
     await this.#workflows.recoverCancelling();
     await this.#workflows.recoverActive();
-    await this.#agentEventWatches.recoverOne();
+    await this.#agentEventTriggers.recoverOne();
     const dueSchedules = this.#agentSchedules.claimDue(currentTime);
     const dispatches = await Promise.allSettled(
       dueSchedules.map((schedule) => this.#dispatchScheduledRun(schedule, currentTime)),
@@ -1370,23 +1364,23 @@ export class OwnerControlPlane extends DurableObject {
       }
     }
 
-    const dueEvents = this.#agentEventWatches.claimDue(currentTime);
+    const dueEvents = this.#agentEventTriggers.claimDue(currentTime);
     const eventDispatches = await Promise.allSettled(
-      dueEvents.map((watch) => this.#dispatchEventWatchRun(watch, currentTime)),
+      dueEvents.map((eventTrigger) => this.#dispatchEventTriggerRun(eventTrigger, currentTime)),
     );
 
     for (const [index, dispatch] of eventDispatches.entries()) {
-      const watch = dueEvents[index];
+      const eventTrigger = dueEvents[index];
 
-      if (dispatch.status === "rejected" && watch !== undefined) {
-        this.#agentEventWatches.recordRetry(watch, currentTime);
+      if (dispatch.status === "rejected" && eventTrigger !== undefined) {
+        this.#agentEventTriggers.recordRetry(eventTrigger, currentTime);
       }
     }
 
     const nextConnectionCleanup = this.#connections.cleanup(currentTime);
     const nextRunCleanup = this.#runAdmissions.nextCleanupAt();
     const nextScheduledRun = this.#agentSchedules.nextAlarmAt();
-    const nextEventWatch = this.#agentEventWatches.nextAlarmAt();
+    const nextEventTrigger = this.#agentEventTriggers.nextAlarmAt();
     const nextToolReconciliation = this.#toolExecutions.nextReconciliationAt();
     const nextRuntimeToolReconciliation = this.#runtimeToolExecutions.nextReconciliationAt();
     const nextWorkflowAction = this.#workflows.nextAlarmAt();
@@ -1395,7 +1389,7 @@ export class OwnerControlPlane extends DurableObject {
       [
         nextAiUsageReconciliation,
         nextConnectionCleanup,
-        nextEventWatch,
+        nextEventTrigger,
         nextRunCleanup,
         nextRuntimeToolReconciliation,
         nextScheduledRun,
@@ -1786,77 +1780,83 @@ export class OwnerControlPlane extends DurableObject {
     });
   }
 
-  async #dispatchEventWatchRun(watch: DueAgentEventWatch, currentTime: number): Promise<void> {
+  async #dispatchEventTriggerRun(
+    eventTrigger: DueAgentEventTrigger,
+    currentTime: number,
+  ): Promise<void> {
     if (this.#objectName === undefined) {
       return;
     }
 
     const authority: OwnerAuthority = {
-      clientId: "crewhelm:watcher",
+      clientId: "crewhelm:event-trigger",
       ownerKey: this.#objectName,
       scopes: [AGENTS_READ_SCOPE, RUNS_WRITE_SCOPE],
     };
 
-    if (watch.lastRunId !== null) {
-      const previous = await this.#agentChannel.inspect(authority, { runId: watch.lastRunId });
+    if (eventTrigger.lastRunId !== null) {
+      const previous = await this.#agentChannel.inspect(authority, {
+        runId: eventTrigger.lastRunId,
+      });
 
       if (previous.ok && !["cancelled", "completed", "failed"].includes(previous.run.status)) {
-        this.#agentEventWatches.recordRetry(watch, currentTime);
+        this.#agentEventTriggers.recordRetry(eventTrigger, currentTime);
         return;
       }
 
       if (!previous.ok && previous.error.code !== "run_not_found") {
-        this.#agentEventWatches.recordRetry(watch, currentTime);
+        this.#agentEventTriggers.recordRetry(eventTrigger, currentTime);
         return;
       }
     }
 
-    const prompt = eventWatchPrompt(watch);
+    const prompt = eventTriggerPrompt(eventTrigger);
 
     if (prompt === null) {
-      this.#agentEventWatches.recordSkipped(watch, currentTime, "event_too_large");
+      this.#agentEventTriggers.recordSkipped(eventTrigger, currentTime, "event_too_large");
       return;
     }
 
     const started = await this.#agentChannel.start(
       authority,
       {
-        agentId: watch.agentId,
-        expectedRevision: watch.agentRevision,
-        idempotencyKey: await eventWatchIdempotencyKey(watch),
-        ...(watch.outputContract === undefined ? {} : { outputContract: watch.outputContract }),
+        agentId: eventTrigger.agentId,
+        expectedRevision: eventTrigger.agentRevision,
+        idempotencyKey: await eventTriggerIdempotencyKey(eventTrigger),
+        ...(eventTrigger.outputContract === undefined
+          ? {}
+          : { outputContract: eventTrigger.outputContract }),
         prompt,
       },
-      "watch",
+      "event_trigger",
       null,
       null,
       {
-        eventId: watch.eventId,
-        id: watch.watchId,
-        revision: watch.watchRevision,
-        sourceKind: "connection_event",
+        eventId: eventTrigger.eventId,
+        id: eventTrigger.eventTriggerId,
+        revision: eventTrigger.eventTriggerRevision,
       },
     );
 
     if (!started.ok) {
-      this.#agentEventWatches.recordSkipped(
-        watch,
+      this.#agentEventTriggers.recordSkipped(
+        eventTrigger,
         currentTime,
         started.error.code === "revision_conflict" ? "agent_changed" : "agent_unavailable",
       );
       return;
     }
 
-    const recorded = this.#agentEventWatches.recordDispatch({
+    const recorded = this.#agentEventTriggers.recordDispatch({
       dispatchedAt: Date.now(),
-      eventId: watch.eventId,
+      eventId: eventTrigger.eventId,
       runId: started.run.runId,
-      watchId: watch.watchId,
-      watchRevision: watch.watchRevision,
+      eventTriggerId: eventTrigger.eventTriggerId,
+      eventTriggerRevision: eventTrigger.eventTriggerRevision,
     });
     if (!recorded) {
       await this.#agentChannel.cancel(authority, { runId: started.run.runId });
-      this.#agentEventWatches.recordSkipped(watch, currentTime, "record_dispatch_conflict");
+      this.#agentEventTriggers.recordSkipped(eventTrigger, currentTime, "record_dispatch_conflict");
     }
   }
 

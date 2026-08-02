@@ -39,7 +39,7 @@ function trigger(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Composio event catalog adapter", () => {
-  it("discovers only the bounded initial Watch cohort through fixed paginated requests", async () => {
+  it("discovers only the bounded initial Event Trigger cohort through fixed paginated requests", async () => {
     const apiKey = "composio-project-secret";
     const cancellation = new AbortController();
     const fetchMock = vi
@@ -88,7 +88,7 @@ describe("Composio event catalog adapter", () => {
       apiKey,
       fetch: fetchMock,
       signal: cancellation.signal,
-    }).listWatchableEvents({ integrationSlug: "github" });
+    }).listTriggerableEvents({ integrationSlug: "github" });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
@@ -188,8 +188,8 @@ describe("Composio event catalog adapter", () => {
       fetch: fetchMock,
     });
     const results = await Promise.all([
-      catalog.listWatchableEvents({ integrationSlug: "notion" }),
-      catalog.listWatchableEvents({ integrationSlug: "constructor" }),
+      catalog.listTriggerableEvents({ integrationSlug: "notion" }),
+      catalog.listTriggerableEvents({ integrationSlug: "constructor" }),
     ]);
 
     expect(fetchMock).not.toHaveBeenCalled();
@@ -220,7 +220,7 @@ describe("Composio event catalog adapter", () => {
     const result = await createComposioEventCatalog({
       apiKey: "composio-project-secret",
       fetch: fetchMock,
-    }).listWatchableEvents({ integrationSlug: toolkit });
+    }).listTriggerableEvents({ integrationSlug: toolkit });
 
     expect(result).toMatchObject({
       events: [{ slug }],
@@ -247,7 +247,7 @@ describe("Composio event catalog adapter", () => {
       const result = await createComposioEventCatalog({
         apiKey: "composio-project-secret",
         fetch: fetchMock,
-      }).listWatchableEvents({ integrationSlug: "slack" });
+      }).listTriggerableEvents({ integrationSlug: "slack" });
 
       expect(result).toEqual({ events: [], ok: true });
     },
@@ -283,7 +283,7 @@ describe("Composio event catalog adapter", () => {
     const result = await createComposioEventCatalog({
       apiKey: "composio-project-secret",
       fetch: fetchMock,
-    }).listWatchableEvents({ integrationSlug: "slack" });
+    }).listTriggerableEvents({ integrationSlug: "slack" });
 
     expect(result).toMatchObject({
       events: [
@@ -328,7 +328,7 @@ describe("Composio event catalog adapter", () => {
     const result = await createComposioEventCatalog({
       apiKey: "composio-project-secret",
       fetch: fetchMock,
-    }).listWatchableEvents({ integrationSlug: "slack" });
+    }).listTriggerableEvents({ integrationSlug: "slack" });
 
     expect(result).toMatchObject({
       events: [
@@ -395,7 +395,7 @@ describe("Composio event catalog adapter", () => {
     const result = await createComposioEventCatalog({
       apiKey: "composio-project-secret",
       fetch: fetchMock,
-    }).listWatchableEvents({ integrationSlug: "github" });
+    }).listTriggerableEvents({ integrationSlug: "github" });
 
     expect(result).toEqual({ events: [], ok: true });
   });
@@ -409,13 +409,13 @@ describe("Composio event catalog adapter", () => {
           next_cursor: null,
         }),
       ),
-    }).listWatchableEvents({ integrationSlug: "github" });
+    }).listTriggerableEvents({ integrationSlug: "github" });
     const repeatedCursor = await createComposioEventCatalog({
       apiKey: "composio-project-secret",
       fetch: vi
         .fn<typeof fetch>()
         .mockResolvedValue(catalogResponse({ items: [], next_cursor: "same-cursor" })),
-    }).listWatchableEvents({ integrationSlug: "github" });
+    }).listTriggerableEvents({ integrationSlug: "github" });
 
     for (const result of [substituted, repeatedCursor]) {
       expect(result).toEqual({
@@ -439,7 +439,7 @@ describe("Composio event catalog adapter", () => {
     const result = await createComposioEventCatalog({
       apiKey,
       fetch: fetchMock,
-    }).listWatchableEvents({ integrationSlug: "github" });
+    }).listTriggerableEvents({ integrationSlug: "github" });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result.ok).toBe(false);
@@ -461,7 +461,7 @@ describe("Composio event catalog adapter", () => {
     const result = await createComposioEventCatalog({
       apiKey: "composio-project-secret",
       fetch: fetchMock,
-    }).listWatchableEvents({ integrationSlug: "github" });
+    }).listTriggerableEvents({ integrationSlug: "github" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) {
@@ -487,7 +487,7 @@ describe("Composio event catalog adapter", () => {
     const result = await createComposioEventCatalog({
       apiKey: "composio-project-secret",
       fetch: fetchMock,
-    }).listWatchableEvents({ integrationSlug: "github" });
+    }).listTriggerableEvents({ integrationSlug: "github" });
 
     expect(result.ok).toBe(false);
   });
@@ -505,7 +505,7 @@ describe("Composio event catalog adapter", () => {
     const result = await createComposioEventCatalog({
       apiKey: "composio-project-secret",
       fetch: fetchMock,
-    }).listWatchableEvents({ integrationSlug: "github" });
+    }).listTriggerableEvents({ integrationSlug: "github" });
 
     expect(result.ok).toBe(false);
   });
@@ -536,7 +536,7 @@ describe("Composio event catalog adapter", () => {
       const result = await createComposioEventCatalog({
         apiKey,
         fetch: vi.fn<typeof fetch>().mockImplementation(response),
-      }).listWatchableEvents({ integrationSlug: "github" });
+      }).listTriggerableEvents({ integrationSlug: "github" });
 
       expect(result.ok).toBe(false);
     }

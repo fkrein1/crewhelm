@@ -86,7 +86,7 @@
           "packages/contracts/src/agent-blueprints.test.ts",
           "packages/contracts/src/agent-capabilities.test.ts",
           "packages/contracts/src/agent-sessions.test.ts",
-          "packages/contracts/src/agent-watches.test.ts",
+          "packages/contracts/src/agent-event-triggers.test.ts",
           "packages/contracts/src/agent-workflows.test.ts",
           "packages/contracts/src/briefs.test.ts",
           "packages/contracts/src/fleet-reads.test.ts",
@@ -335,10 +335,10 @@
     {
       "evidence": {
         "definitionVersion": 2,
-        "testFiles": ["apps/worker/src/owner/watches/module.test.ts"]
+        "testFiles": ["apps/worker/src/owner/event-triggers/module.test.ts"]
       },
-      "id": "owner-watches",
-      "pathPrefixes": ["apps/worker/src/owner/watches/"]
+      "id": "owner-event-triggers",
+      "pathPrefixes": ["apps/worker/src/owner/event-triggers/"]
     },
     {
       "evidence": {

@@ -47,7 +47,10 @@ import { registerScheduleTools } from "./schedule-tools.js";
 import { registerRecoveryTools } from "./recovery-tools.js";
 import { controlPlaneToolResult } from "./tool-result.js";
 import { MCP_AGENT_WORKFLOWS_TOOL_NAME, registerWorkflowTools } from "./workflow-tools.js";
-import { MCP_AGENT_WATCHES_TOOL_NAME, registerWatchTools } from "./watch-tools.js";
+import {
+  MCP_AGENT_EVENT_TRIGGERS_TOOL_NAME,
+  registerEventTriggerTools,
+} from "./event-trigger-tools.js";
 
 export {
   MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME,
@@ -86,7 +89,7 @@ export {
 } from "./run-tools.js";
 export { MCP_AGENT_SESSIONS_TOOL_NAME, MCP_DELETE_AGENT_SESSION_TOOL_NAME };
 export { MCP_AGENT_WORKFLOWS_TOOL_NAME };
-export { MCP_AGENT_WATCHES_TOOL_NAME };
+export { MCP_AGENT_EVENT_TRIGGERS_TOOL_NAME };
 export {
   MCP_CONFIGURE_AGENT_SCHEDULE_TOOL_NAME,
   MCP_GET_AGENT_SCHEDULE_TOOL_NAME,
@@ -198,7 +201,7 @@ function createMcpServer(
   registerRunTools(server, context);
   registerSessionTools(server, context);
   registerWorkflowTools(server, context);
-  registerWatchTools(server, context);
+  registerEventTriggerTools(server, context);
   registerScheduleTools(server, context);
   registerRecoveryTools(server, context);
   registerConnectionTools(server, context, {

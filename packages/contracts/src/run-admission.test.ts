@@ -45,20 +45,19 @@ describe("run timeline budget", () => {
     ).toBe(false);
   });
 
-  it("requires durable event provenance for an automatic Watch Run", () => {
+  it("requires durable event provenance for an automatic Event Trigger Run", () => {
     const input = {
       agentId,
       expectedRevision: 1,
-      idempotencyKey: "event-watch-run",
+      idempotencyKey: "event-eventTrigger-run",
       promptCharacters: 1,
       promptDigest: "a".repeat(64),
       scheduleRevision: null,
-      trigger: "watch",
-      watch: {
+      trigger: "event_trigger",
+      eventTrigger: {
         eventId: "event_1",
-        id: "watch_00000000-0000-4000-8000-000000000001",
+        id: "event_trigger_00000000-0000-4000-8000-000000000001",
         revision: 1,
-        sourceKind: "connection_event",
       },
     } as const;
 
@@ -66,7 +65,7 @@ describe("run timeline budget", () => {
     expect(
       createRunAdmissionInputSchema.safeParse({
         ...input,
-        watch: undefined,
+        eventTrigger: undefined,
       }).success,
     ).toBe(false);
     expect(
@@ -74,7 +73,7 @@ describe("run timeline budget", () => {
         ...input,
         scheduleRevision: 1,
         trigger: "schedule",
-        watch: undefined,
+        eventTrigger: undefined,
       }).success,
     ).toBe(true);
   });

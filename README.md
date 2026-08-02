@@ -31,7 +31,7 @@ holds provider credentials while Agents receive only bounded use.
 
 > [!NOTE]
 > **Available today:** an authenticated, owner-scoped Agent registry; immutable revisions;
-> bounded manual runs, scheduled Watches, and Composio connected-event Watches; durable ordered
+> bounded manual runs, recurring Schedules, and connected-app Event Triggers; durable ordered
 > workflows; deterministic authority, approval, budget, and recovery controls; and version-pinned
 > Composio tool execution.
 >

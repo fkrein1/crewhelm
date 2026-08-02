@@ -11,7 +11,7 @@ import { CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX } from "../owner/connection
 import {
   COMPOSIO_WEBHOOK_INGRESS_OBJECT_NAME,
   type ComposioWebhookIngressResult,
-} from "../owner/watches/index.js";
+} from "../owner/event-triggers/index.js";
 import { createCrewhelmAuth, verifyMcpAccessToken } from "../oauth/auth.js";
 import type { WorkerEnv } from "../env.js";
 import { handleAuthenticatedMcpRequest } from "../mcp/server.js";

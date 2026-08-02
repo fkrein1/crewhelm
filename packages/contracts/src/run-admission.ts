@@ -108,8 +108,8 @@ export const runStatusSchema = z.enum([
   "cancelled",
   "failed",
 ]);
-export const runTriggerSchema = z.enum(["manual", "schedule", "watch", "workflow"]);
-export const runWatchReferenceSchema = z.strictObject({
+export const runTriggerSchema = z.enum(["manual", "schedule", "event_trigger", "workflow"]);
+export const runEventTriggerReferenceSchema = z.strictObject({
   eventId: z
     .string()
     .min(1)
@@ -118,11 +118,10 @@ export const runWatchReferenceSchema = z.strictObject({
   id: z
     .string()
     .regex(
-      /^watch_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-      "Expected an opaque connected-event Watch ID.",
+      /^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      "Expected an opaque Event Trigger ID.",
     ),
   revision: agentScheduleRevisionNumberSchema,
-  sourceKind: z.literal("connection_event"),
 });
 
 export const createRunAdmissionInputSchema = z
@@ -139,7 +138,7 @@ export const createRunAdmissionInputSchema = z
     promptDigest: sha256DigestSchema,
     scheduleRevision: agentScheduleRevisionNumberSchema.nullable().default(null),
     trigger: runTriggerSchema.default("manual"),
-    watch: runWatchReferenceSchema.optional(),
+    eventTrigger: runEventTriggerReferenceSchema.optional(),
   })
   .superRefine((input, context) => {
     if (input.prompt !== undefined && input.prompt.length !== input.promptCharacters) {
@@ -158,11 +157,11 @@ export const createRunAdmissionInputSchema = z
       });
     }
 
-    if ((input.trigger === "watch") !== (input.watch !== undefined)) {
+    if ((input.trigger === "event_trigger") !== (input.eventTrigger !== undefined)) {
       context.addIssue({
         code: "custom",
-        message: "Watch provenance must match the Run trigger.",
-        path: ["watch"],
+        message: "Event Trigger provenance must match the Run trigger.",
+        path: ["eventTrigger"],
       });
     }
 
@@ -222,7 +221,7 @@ export const runAdmissionPermitSchema = z.strictObject({
   runId: runIdSchema,
   scheduleRevision: agentScheduleRevisionNumberSchema.nullable().default(null),
   trigger: runTriggerSchema.default("manual"),
-  watch: runWatchReferenceSchema.optional(),
+  eventTrigger: runEventTriggerReferenceSchema.optional(),
 });
 
 export const aiGatewayLogIdSchema = z.string().trim().min(1).max(255);
@@ -323,7 +322,7 @@ const runReceiverCapabilityBaseSchema = z.strictObject({
   runId: runIdSchema,
   scheduleRevision: agentScheduleRevisionNumberSchema.nullable().default(null),
   target: z.literal("none"),
-  watch: runWatchReferenceSchema.optional(),
+  eventTrigger: runEventTriggerReferenceSchema.optional(),
 });
 
 export const resumeRunCapabilitySchema = runReceiverCapabilityBaseSchema.extend({
@@ -494,7 +493,7 @@ export const verifyActiveRunAdmissionInputSchema = z.strictObject({
   promptDigest: sha256DigestSchema,
   runId: runIdSchema,
   scheduleRevision: agentScheduleRevisionNumberSchema.nullable().default(null),
-  watch: runWatchReferenceSchema.optional(),
+  eventTrigger: runEventTriggerReferenceSchema.optional(),
 });
 
 export const releaseRunBriefContextInputSchema = z.strictObject({
@@ -531,7 +530,7 @@ export const runSchema = z.strictObject({
   startedAt: z.iso.datetime().optional(),
   status: runStatusSchema,
   trigger: runTriggerSchema.default("manual"),
-  watch: runWatchReferenceSchema.optional(),
+  eventTrigger: runEventTriggerReferenceSchema.optional(),
 });
 
 export const runSummarySchema = runSchema.omit({
@@ -560,7 +559,7 @@ export const listAgentRunsInputSchema = z
       ),
     trigger: runTriggerSchema
       .optional()
-      .describe("Return manual, scheduled, connected-Watch, or workflow runs."),
+      .describe("Return manual, scheduled, event-triggered, or workflow runs."),
   })
   .refine(
     (input) =>
@@ -907,7 +906,7 @@ export type RunAdmissionSummary = z.infer<typeof runAdmissionSummarySchema>;
 export type RunBudgetReservation = z.infer<typeof runBudgetReservationSchema>;
 export type RunReceiverCapability = z.infer<typeof runReceiverCapabilitySchema>;
 export type RunTrigger = z.infer<typeof runTriggerSchema>;
-export type RunWatchReference = z.infer<typeof runWatchReferenceSchema>;
+export type RunEventTriggerReference = z.infer<typeof runEventTriggerReferenceSchema>;
 export type RunTimelineEvent = z.infer<typeof runTimelineEventSchema>;
 export type RunUsage = z.infer<typeof runUsageSchema>;
 export type ResumeRunAdmissionInput = z.infer<typeof resumeRunAdmissionInputSchema>;

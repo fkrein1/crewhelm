@@ -56,7 +56,7 @@ describe("MCP first-use guidance", () => {
     expect(new TextEncoder().encode(MCP_SERVER_INSTRUCTIONS).byteLength).toBeLessThanOrEqual(1_536);
     expect(MCP_SERVER_INSTRUCTIONS).toContain("Start with crewhelm_status");
     expect(MCP_SERVER_INSTRUCTIONS).toContain("choose the action first");
-    expect(MCP_SERVER_INSTRUCTIONS).toContain("schedules, Briefs, integrations, and recovery");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("Schedules, Briefs, integrations, and recovery");
     expect(MCP_SERVER_INSTRUCTIONS).toContain("Preserve the returned conversation");
     expect(MCP_SERVER_INSTRUCTIONS).toContain("crewhelm_agent_workflows");
     expect(MCP_SERVER_INSTRUCTIONS).toContain("tools.web-search");

@@ -33,17 +33,26 @@ requires both Run-write and Agent-read scope, resolves only inside the authentic
 and retains the exact Session branch revision check. A stale handle cannot overwrite, fork, or
 silently append to newer conversation state.
 
-A Watch is an occurrence source, not authority. Its revision freezes one exact Agent revision,
-instruction, source, output contract, and schedule or provider limits. Pausing, resuming, updating,
-and deleting require owner autonomy authority and exact revisions. Source payloads remain untrusted
-context. Each occurrence has one deterministic admission identity; delayed alarm recovery may retry
-that identity but cannot create a second Run, and one alarm claims at most one occurrence per Watch.
-A lifecycle mutation is rejected as busy while an occurrence admission is pending, preventing an
-already-started Run from being relabeled as skipped. Terminal occurrence history is deterministically
-pruned to its documented bound. A stale Agent revision pauses or skips the Watch rather than silently
-widening or retargeting it.
+A Schedule is an occurrence source, not authority. Its revision freezes one exact Agent revision,
+instruction, time trigger, output contract, and schedule limits. Configuring, pausing, resuming, and
+updating require owner autonomy authority and exact revisions. Each occurrence has one deterministic
+admission identity; delayed alarm recovery may retry that identity but cannot create a second Run,
+and one alarm claims at most one occurrence per Schedule. A lifecycle mutation is rejected as busy
+while an occurrence admission is pending, preventing an already-started Run from being relabeled as
+skipped. Terminal occurrence history is deterministically pruned to its documented bound. A stale
+Agent revision pauses or skips the Schedule rather than silently widening or retargeting it.
 
-A connected-event Watch additionally binds one exact active Connection, provider account, auth
+An Event Trigger is an occurrence source, not authority. Its revision freezes one exact Agent
+revision, instruction, connected-event source, output contract, and provider limits. Pausing,
+resuming, updating, and deleting require owner autonomy authority and exact revisions. Source
+payloads remain untrusted context. Each occurrence has one deterministic admission identity;
+delayed alarm recovery may retry that identity but cannot create a second Run, and one alarm claims
+at most one occurrence per Event Trigger. A lifecycle mutation is rejected as busy while an
+occurrence admission is pending, preventing an already-started Run from being relabeled as skipped.
+Terminal occurrence history is deterministically pruned to its documented bound. A stale Agent
+revision pauses or skips the Event Trigger rather than silently widening or retargeting it.
+
+An Event Trigger additionally binds one exact active Connection, provider account, auth
 configuration, event slug, event version, and trigger instance. Public Composio delivery is bounded
 before parsing. One fixed installation ingress verifies the signature over the exact raw bytes in a
 narrow timestamp window before signed owner routing; arbitrary unsigned owner keys cannot create
@@ -52,9 +61,9 @@ secrets are encrypted at rest and never enter Agent prompts. Authenticated unmat
 acknowledged without starting work. Provider trigger creation and lifecycle retries are bounded; an
 unresolved operation cannot silently become active. Stable provider source identities deduplicate
 repeated deliveries, and a provider-supplied source timestamp cannot replay an event from before the
-Watch existed. Pending event count and bytes are bounded per Watch, and terminal occurrence records
-discard the provider payload after admission or skip. Event Runs durably retain exact Watch and
-provider-event provenance.
+Event Trigger existed. Pending event count and bytes are bounded per Event Trigger, and terminal
+occurrence records discard the provider payload after admission or skip. Event Runs durably retain
+exact Event Trigger and provider-event provenance.
 
 Brief contents and Workflow deliverables are untrusted owner data, not authority. Owner-local
 SQLite stores only compact metadata, exact references, digests, and provenance; object content is

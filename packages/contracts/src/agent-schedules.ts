@@ -13,7 +13,8 @@ import { outputContractSchema } from "./output-contracts.js";
 
 export const MINIMUM_AGENT_SCHEDULE_INTERVAL_SECONDS = 60;
 export const MAXIMUM_AGENT_SCHEDULE_INTERVAL_SECONDS = 7 * 24 * 60 * 60;
-export const MAXIMUM_AGENT_SCHEDULES_PER_AGENT = 8;
+export const MAXIMUM_AGENT_SCHEDULES_AND_EVENT_TRIGGERS_PER_AGENT = 8;
+export const MAXIMUM_RETAINED_AGENT_SCHEDULE_OCCURRENCES = 100;
 export const MAXIMUM_AGENT_SCHEDULE_NAME_CHARACTERS = 80;
 export const MAXIMUM_DUE_AGENT_SCHEDULES_PER_ALARM = 25;
 
@@ -262,7 +263,9 @@ export const getAgentScheduleResultSchema = z.discriminatedUnion("ok", [
 export const listAgentSchedulesResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     ok: z.literal(true),
-    schedules: z.array(agentScheduleSchema).max(MAXIMUM_AGENT_SCHEDULES_PER_AGENT),
+    schedules: z
+      .array(agentScheduleSchema)
+      .max(MAXIMUM_AGENT_SCHEDULES_AND_EVENT_TRIGGERS_PER_AGENT),
   }),
   z.strictObject({
     error: agentScheduleErrorSchema,

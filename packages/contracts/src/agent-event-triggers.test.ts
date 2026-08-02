@@ -1,22 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { agentWatchesInputSchema, agentWatchesToolInputSchema } from "./agent-watches.js";
+import {
+  agentEventTriggersInputSchema,
+  agentEventTriggersToolInputSchema,
+} from "./agent-event-triggers.js";
 
-describe("Agent Watch contracts", () => {
-  it("keeps the model-visible scheduled check compact and human-scaled", () => {
+describe("Agent Event Trigger contracts", () => {
+  it("requires an exact Connection when discovering event sources", () => {
     expect(
-      agentWatchesToolInputSchema.parse({
-        action: "create",
-        agentId: "agent_00000000-0000-4000-8000-000000000001",
-        expectedAgentRevision: 1,
-        idempotencyKey: "watch-create",
-        watch: {
-          everyMinutes: 10,
-          instruction: "Check the inbox and report work that needs attention.",
-          name: "Inbox attention",
-        },
+      agentEventTriggersToolInputSchema.parse({
+        action: "sources",
+        connectionId: "connection_00000000-0000-4000-8000-000000000001",
       }),
-    ).toMatchObject({ action: "create", watch: { everyMinutes: 10 } });
+    ).toEqual({
+      action: "sources",
+      connectionId: "connection_00000000-0000-4000-8000-000000000001",
+    });
   });
 
   it("accepts understandable connected-event filters without arbitrary nested payloads", () => {
@@ -24,8 +23,8 @@ describe("Agent Watch contracts", () => {
       action: "create",
       agentId: "agent_00000000-0000-4000-8000-000000000001",
       expectedAgentRevision: 1,
-      idempotencyKey: "watch-event-create",
-      watch: {
+      idempotencyKey: "eventTrigger-event-create",
+      eventTrigger: {
         connectionId: "connection_00000000-0000-4000-8000-000000000001",
         delivery: "realtime",
         eventSlug: "GITHUB_ISSUE_CREATED",
@@ -37,24 +36,24 @@ describe("Agent Watch contracts", () => {
       },
     } as const;
 
-    expect(agentWatchesToolInputSchema.safeParse(input).success).toBe(true);
+    expect(agentEventTriggersToolInputSchema.safeParse(input).success).toBe(true);
     expect(
-      agentWatchesToolInputSchema.safeParse({
+      agentEventTriggersToolInputSchema.safeParse({
         ...input,
-        watch: { ...input.watch, filters: { repository: { owner: "crewhelm" } } },
+        eventTrigger: { ...input.eventTrigger, filters: { repository: { owner: "crewhelm" } } },
       }).success,
     ).toBe(false);
   });
 
   it("rejects fields that belong to another lifecycle action", () => {
     expect(
-      agentWatchesToolInputSchema.safeParse({
+      agentEventTriggersToolInputSchema.safeParse({
         action: "sources",
         agentId: "agent_00000000-0000-4000-8000-000000000001",
       }).success,
     ).toBe(false);
     expect(
-      agentWatchesToolInputSchema.safeParse({
+      agentEventTriggersToolInputSchema.safeParse({
         action: "pause",
         agentId: "agent_00000000-0000-4000-8000-000000000001",
       }).success,
@@ -63,28 +62,33 @@ describe("Agent Watch contracts", () => {
 
   it("requires an exact frozen source descriptor inside the control plane", () => {
     expect(
-      agentWatchesInputSchema.safeParse({
+      agentEventTriggersInputSchema.safeParse({
         action: "create",
         agentId: "agent_00000000-0000-4000-8000-000000000001",
         expectedAgentRevision: 1,
-        idempotencyKey: "watch-create",
-        watch: {
-          instruction: "Check the inbox.",
-          name: "Inbox attention",
+        idempotencyKey: "eventTrigger-create",
+        eventTrigger: {
+          instruction: "Triage the new issue.",
+          name: "New GitHub issues",
           source: {
-            kind: "scheduled_check",
-            trigger: { intervalSeconds: 600, type: "interval" },
+            configuration: { repository: "crewhelm" },
+            connectionId: "connection_00000000-0000-4000-8000-000000000001",
+            delivery: "realtime",
+            integrationSlug: "github",
+            kind: "connection_event",
+            sourceSlug: "GITHUB_ISSUE_CREATED",
+            sourceVersion: "20260802_00",
           },
         },
       }).success,
     ).toBe(true);
     expect(
-      agentWatchesInputSchema.safeParse({
+      agentEventTriggersInputSchema.safeParse({
         action: "create",
         agentId: "agent_00000000-0000-4000-8000-000000000001",
         expectedAgentRevision: 1,
-        idempotencyKey: "watch-create",
-        watch: {
+        idempotencyKey: "eventTrigger-create",
+        eventTrigger: {
           everyMinutes: 10,
           instruction: "Check the inbox.",
           name: "Inbox attention",

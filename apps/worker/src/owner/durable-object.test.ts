@@ -17,7 +17,7 @@ import {
   RUNS_WRITE_SCOPE,
   runBudgetReservationSchema,
   type AgentInboxDeferredReason,
-  type AgentWatchesInput,
+  type AgentEventTriggersInput,
   type OwnerScope,
   type StartRunResult,
 } from "@crewhelm/contracts";
@@ -41,7 +41,7 @@ import migration22 from "../../control-plane-migrations/0022_adorable_marrow.sql
 import { controlPlaneMigrations } from "../../control-plane-migrations/index.js";
 
 import { agentInput, authorityFor, fixedRunAdmissionFailure } from "./testkit.js";
-import { agentWatchRequiredScope, scheduledRunFailureReason } from "./durable-object.js";
+import { agentEventTriggerRequiredScope, scheduledRunFailureReason } from "./durable-object.js";
 
 type RunStartFailureCode = Extract<StartRunResult, { ok: false }>["error"]["code"];
 
@@ -72,7 +72,7 @@ const ALL_RUN_START_FAILURES_ARE_COVERED: Exclude<
 > extends never
   ? true
   : false = true;
-const WATCH_SCOPE_CASES = [
+const EVENT_TRIGGER_SCOPE_CASES = [
   ["create", AUTONOMY_WRITE_SCOPE],
   ["delete", AUTONOMY_WRITE_SCOPE],
   ["history", AGENTS_READ_SCOPE],
@@ -82,10 +82,10 @@ const WATCH_SCOPE_CASES = [
   ["resume", AUTONOMY_WRITE_SCOPE],
   ["sources", OWNER_READ_SCOPE],
   ["update", AUTONOMY_WRITE_SCOPE],
-] as const satisfies readonly (readonly [AgentWatchesInput["action"], OwnerScope])[];
-const ALL_WATCH_ACTIONS_ARE_COVERED: Exclude<
-  AgentWatchesInput["action"],
-  (typeof WATCH_SCOPE_CASES)[number][0]
+] as const satisfies readonly (readonly [AgentEventTriggersInput["action"], OwnerScope])[];
+const ALL_EVENT_TRIGGER_ACTIONS_ARE_COVERED: Exclude<
+  AgentEventTriggersInput["action"],
+  (typeof EVENT_TRIGGER_SCOPE_CASES)[number][0]
 > extends never
   ? true
   : false = true;
@@ -117,12 +117,12 @@ function removeRuntimeToolSchema(storage: DurableObjectStorage): void {
   storage.sql.exec("DROP TABLE runtime_tool_executions");
 }
 
-function removeWatchSchema(storage: DurableObjectStorage): void {
-  storage.sql.exec("DROP TABLE IF EXISTS agent_event_watch_occurrences");
-  storage.sql.exec("DROP TABLE IF EXISTS agent_event_watch_updates");
-  storage.sql.exec("DROP TABLE IF EXISTS agent_event_watches");
-  storage.sql.exec("DROP TABLE IF EXISTS agent_event_watch_revisions");
-  storage.sql.exec("DROP TABLE IF EXISTS composio_watch_webhook");
+function removeEventTriggerSchema(storage: DurableObjectStorage): void {
+  storage.sql.exec("DROP TABLE IF EXISTS agent_event_trigger_occurrences");
+  storage.sql.exec("DROP TABLE IF EXISTS agent_event_trigger_updates");
+  storage.sql.exec("DROP TABLE IF EXISTS agent_event_triggers");
+  storage.sql.exec("DROP TABLE IF EXISTS agent_event_trigger_revisions");
+  storage.sql.exec("DROP TABLE IF EXISTS composio_event_trigger_webhook");
   storage.sql.exec("DROP TABLE IF EXISTS agent_schedule_occurrences");
 }
 
@@ -154,10 +154,10 @@ describe("OwnerControlPlane control flow", () => {
     }
   });
 
-  it("selects authority scopes exhaustively for every Agent Watch action", () => {
-    expect(ALL_WATCH_ACTIONS_ARE_COVERED).toBe(true);
-    for (const [action, scope] of WATCH_SCOPE_CASES) {
-      expect(agentWatchRequiredScope(action)).toBe(scope);
+  it("selects authority scopes exhaustively for every Agent Event Trigger action", () => {
+    expect(ALL_EVENT_TRIGGER_ACTIONS_ARE_COVERED).toBe(true);
+    for (const [action, scope] of EVENT_TRIGGER_SCOPE_CASES) {
+      expect(agentEventTriggerRequiredScope(action)).toBe(scope);
     }
   });
 });
@@ -598,7 +598,7 @@ describe("OwnerControlPlane", () => {
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
       removeRuntimeToolSchema(state.storage);
-      removeWatchSchema(state.storage);
+      removeEventTriggerSchema(state.storage);
       rewindControlPlaneMigrations(state.storage, 18);
       await state.storage.sync();
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
@@ -1199,7 +1199,7 @@ describe("OwnerControlPlane", () => {
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
       removeRuntimeToolSchema(state.storage);
-      removeWatchSchema(state.storage);
+      removeEventTriggerSchema(state.storage);
       rewindControlPlaneMigrations(state.storage, 12);
     });
     await evictDurableObject(stub);
@@ -1263,7 +1263,7 @@ describe("OwnerControlPlane", () => {
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
       removeRuntimeToolSchema(state.storage);
-      removeWatchSchema(state.storage);
+      removeEventTriggerSchema(state.storage);
       rewindControlPlaneMigrations(state.storage, 14);
     });
     await evictDurableObject(stub);
@@ -1380,7 +1380,7 @@ describe("OwnerControlPlane", () => {
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
       removeRuntimeToolSchema(state.storage);
-      removeWatchSchema(state.storage);
+      removeEventTriggerSchema(state.storage);
       rewindControlPlaneMigrations(state.storage, 11);
     });
     await evictDurableObject(stub);
@@ -1718,7 +1718,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec("DROP TABLE integration_usage_events");
       state.storage.sql.exec("DROP TABLE integration_enablement_requests");
       removeRuntimeToolSchema(state.storage);
-      removeWatchSchema(state.storage);
+      removeEventTriggerSchema(state.storage);
       state.storage.sql.exec("DROP TABLE tool_executions");
       state.storage.sql.exec("DROP TABLE tool_approvals");
       state.storage.sql.exec("DROP TABLE capability_grants");
@@ -1786,7 +1786,7 @@ describe("OwnerControlPlane", () => {
       removeSkillLibrarySchema(state.storage);
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
-      removeWatchSchema(state.storage);
+      removeEventTriggerSchema(state.storage);
       rewindControlPlaneMigrations(state.storage, 3);
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
 
@@ -2012,7 +2012,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec("DROP TABLE fleet_configuration_revisions");
       state.storage.sql.exec("DROP TABLE integration_usage_events");
       removeRuntimeToolSchema(state.storage);
-      removeWatchSchema(state.storage);
+      removeEventTriggerSchema(state.storage);
       state.storage.sql.exec(
         `CREATE TABLE legacy_tool_executions AS
          SELECT
@@ -2039,7 +2039,7 @@ describe("OwnerControlPlane", () => {
       removeSkillLibrarySchema(state.storage);
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
-      removeWatchSchema(state.storage);
+      removeEventTriggerSchema(state.storage);
       rewindControlPlaneMigrations(state.storage, 5);
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
     });
@@ -2123,7 +2123,7 @@ describe("OwnerControlPlane", () => {
     await runInDurableObject(stub, (_instance, state) => {
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
-      removeWatchSchema(state.storage);
+      removeEventTriggerSchema(state.storage);
       applyControlPlaneMigrationSql(state.storage, migration22);
       const now = Date.now();
       const fleetRevision = state.storage.sql
@@ -2175,7 +2175,7 @@ describe("OwnerControlPlane", () => {
       );
       rewindControlPlaneMigrations(state.storage, 24);
       removeRuntimeToolSchema(state.storage);
-      removeWatchSchema(state.storage);
+      removeEventTriggerSchema(state.storage);
     });
     await evictDurableObject(stub);
 

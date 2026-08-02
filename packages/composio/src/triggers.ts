@@ -12,7 +12,7 @@ const COMPOSIO_TRIGGER_TYPES_URL = "https://backend.composio.dev/api/v3.1/trigge
 const COMPOSIO_TRIGGER_CATALOG_TIMEOUT_MS = 5_000;
 const MAXIMUM_COMPOSIO_TRIGGER_CATALOG_PAGES = 4;
 const MAXIMUM_COMPOSIO_TRIGGER_RESPONSE_BYTES = 512 * 1_024;
-const MAXIMUM_COMPOSIO_WATCHABLE_EVENTS = 20;
+const MAXIMUM_COMPOSIO_EVENT_TRIGGERABLE_EVENTS = 20;
 const SLACK_CHANNEL_FILTER_SOURCES = new Set([
   "SLACK_RECEIVE_BOT_MESSAGE",
   "SLACK_RECEIVE_MESSAGE",
@@ -74,7 +74,7 @@ const composioTriggerCatalogResponseSchema = z.looseObject({
   next_cursor: z.string().min(1).max(2_048).nullish(),
 });
 
-const supportedWatchCohorts = {
+const supportedEventTriggerCohorts = {
   github: (slug: string) => /(?:^|_)(?:ISSUE|PULL_REQUEST)(?:_|$)/.test(slug),
   gmail: (slug: string) =>
     /(?:^|_)(?:NEW|RECEIVED?)(?:_[A-Z0-9]+)*_MESSAGE(?:_|$)|(?:^|_)MESSAGE(?:_[A-Z0-9]+)*_(?:NEW|RECEIVED?)(?:_|$)/.test(
@@ -84,7 +84,7 @@ const supportedWatchCohorts = {
   slack: (slug: string) => SLACK_CHANNEL_FILTER_SOURCES.has(slug),
 } as const;
 
-export interface ComposioWatchableEventConfigurationField {
+export interface ComposioTriggerableEventConfigurationField {
   description: string | null;
   id: string;
   label: string;
@@ -93,8 +93,8 @@ export interface ComposioWatchableEventConfigurationField {
   type: "boolean" | "number" | "select" | "string";
 }
 
-export interface ComposioWatchableEvent {
-  configuration: ComposioWatchableEventConfigurationField[];
+export interface ComposioTriggerableEvent {
+  configuration: ComposioTriggerableEventConfigurationField[];
   delivery: "provider_polling" | "realtime";
   description: string | null;
   integration: {
@@ -106,8 +106,8 @@ export interface ComposioWatchableEvent {
   version: string;
 }
 
-export type ComposioWatchableEventCatalogResult =
-  | { events: ComposioWatchableEvent[]; ok: true }
+export type ComposioTriggerableEventCatalogResult =
+  | { events: ComposioTriggerableEvent[]; ok: true }
   | {
       error: {
         code: "integration_catalog_unavailable";
@@ -117,9 +117,9 @@ export type ComposioWatchableEventCatalogResult =
     };
 
 export interface ComposioEventCatalog {
-  listWatchableEvents(input: {
+  listTriggerableEvents(input: {
     integrationSlug: string;
-  }): Promise<ComposioWatchableEventCatalogResult>;
+  }): Promise<ComposioTriggerableEventCatalogResult>;
 }
 
 export interface ComposioEventCatalogOptions {
@@ -128,7 +128,7 @@ export interface ComposioEventCatalogOptions {
   signal?: AbortSignal;
 }
 
-function unavailable(): ComposioWatchableEventCatalogResult {
+function unavailable(): ComposioTriggerableEventCatalogResult {
   return {
     error: {
       code: "integration_catalog_unavailable",
@@ -174,11 +174,11 @@ function labelFromId(id: string): string {
 
 function normalizeConfiguration(
   configuration: z.infer<typeof composioTriggerConfigurationSchema>,
-): ComposioWatchableEventConfigurationField[] | null {
+): ComposioTriggerableEventConfigurationField[] | null {
   const jsonSchema = composioTriggerJsonSchemaConfigurationSchema.safeParse(configuration);
   const configurationFields = jsonSchema.success ? jsonSchema.data.properties : configuration;
   const requiredFields = new Set(jsonSchema.success ? (jsonSchema.data.required ?? []) : []);
-  const fields: ComposioWatchableEventConfigurationField[] = [];
+  const fields: ComposioTriggerableEventConfigurationField[] = [];
 
   if ([...requiredFields].some((id) => !Object.hasOwn(configurationFields, id))) {
     return null;
@@ -231,16 +231,16 @@ function normalizeConfiguration(
 
 function normalizeEvent(
   trigger: z.infer<typeof composioTriggerTypeSchema>,
-): ComposioWatchableEvent | null {
+): ComposioTriggerableEvent | null {
   const cohort =
     trigger.toolkit.slug === "github"
-      ? supportedWatchCohorts.github
+      ? supportedEventTriggerCohorts.github
       : trigger.toolkit.slug === "gmail"
-        ? supportedWatchCohorts.gmail
+        ? supportedEventTriggerCohorts.gmail
         : trigger.toolkit.slug === "linear"
-          ? supportedWatchCohorts.linear
+          ? supportedEventTriggerCohorts.linear
           : trigger.toolkit.slug === "slack"
-            ? supportedWatchCohorts.slack
+            ? supportedEventTriggerCohorts.slack
             : undefined;
 
   if (cohort === undefined || !cohort(trigger.slug) || trigger.requires_webhook_endpoint_setup) {
@@ -341,21 +341,21 @@ export function createComposioEventCatalog(
   const fetchImplementation = options.fetch ?? globalThis.fetch;
 
   return {
-    async listWatchableEvents(input) {
+    async listTriggerableEvents(input) {
       const integrationSlug = integrationSlugSchema.safeParse(input.integrationSlug);
 
       if (!apiKey.success || !integrationSlug.success) {
         return unavailable();
       }
 
-      if (!Object.hasOwn(supportedWatchCohorts, integrationSlug.data)) {
+      if (!Object.hasOwn(supportedEventTriggerCohorts, integrationSlug.data)) {
         return { events: [], ok: true };
       }
 
       try {
         const events = new Map<
           string,
-          { event: ComposioWatchableEvent | null; serialized: string | null }
+          { event: ComposioTriggerableEvent | null; serialized: string | null }
         >();
         const seenCursors = new Set<string>();
         let cursor: string | null = null;
@@ -424,16 +424,16 @@ export function createComposioEventCatalog(
           }
 
           if (cursor === null) {
-            const result: ComposioWatchableEventCatalogResult = {
+            const result: ComposioTriggerableEventCatalogResult = {
               events: [...events.values()]
                 .map(({ event }) => event)
-                .filter((event): event is ComposioWatchableEvent => event !== null)
+                .filter((event): event is ComposioTriggerableEvent => event !== null)
                 .toSorted((left, right) =>
                   left.name === right.name
                     ? left.slug.localeCompare(right.slug)
                     : left.name.localeCompare(right.name),
                 )
-                .slice(0, MAXIMUM_COMPOSIO_WATCHABLE_EVENTS),
+                .slice(0, MAXIMUM_COMPOSIO_EVENT_TRIGGERABLE_EVENTS),
               ok: true,
             };
 

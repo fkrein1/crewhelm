@@ -36,9 +36,9 @@ Progressive discovery is primarily a host concern: an MCP host can fetch `tools/
 catalog outside model context, and inject only relevant definitions. Crewhelm therefore optimizes
 for this path without making it mandatory. The 38-tool, 64 KiB input-schema, and 82 KiB complete
 catalog ceilings remain explicit, and increases require evidence that the extra surface improves
-selection or execution accuracy. One consolidated Watch lifecycle lets owners describe scheduled
-checks or connected-app events without programming scheduler, webhook, or bearer-token plumbing;
-later resource sources extend the same tool rather than adding provider-specific surfaces. See the
+selection or execution accuracy. Schedules own time-based starts. One Event Trigger lifecycle lets
+owners describe connected-app events without programming webhook or bearer-token plumbing; later
+resource sources extend the same tool rather than adding provider-specific surfaces. See the
 MCP guidance on
 [progressive discovery](https://modelcontextprotocol.io/docs/develop/clients/client-best-practices).
 

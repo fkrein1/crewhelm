@@ -108,17 +108,15 @@ export class RunReceiverCapabilities {
       runId: admission.runId,
       scheduleRevision: admission.scheduleRevision,
       target: "none",
-      ...(admission.watchId === null ||
-      admission.watchRevision === null ||
-      admission.watchEventId === null ||
-      admission.watchSourceKind === null
+      ...(admission.eventTriggerId === null ||
+      admission.eventTriggerRevision === null ||
+      admission.eventTriggerEventId === null
         ? {}
         : {
-            watch: {
-              eventId: admission.watchEventId,
-              id: admission.watchId,
-              revision: admission.watchRevision,
-              sourceKind: admission.watchSourceKind,
+            eventTrigger: {
+              eventId: admission.eventTriggerEventId,
+              id: admission.eventTriggerId,
+              revision: admission.eventTriggerRevision,
             },
           }),
       ...(descriptor.executionBound ? { executionId } : {}),
