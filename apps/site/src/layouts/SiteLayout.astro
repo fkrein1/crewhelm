@@ -1,6 +1,6 @@
 ---
 import Seo from "../components/Seo.astro";
-import type { JsonLd } from "../lib/seo";
+import type { JsonLd, SocialImage } from "../lib/seo";
 import { CREWHELM_SITE } from "../lib/seo";
 import globalStyles from "../styles/global.css?url";
 
@@ -8,6 +8,7 @@ interface Props {
   canonical?: string | URL | null;
   description?: string;
   index?: boolean;
+  socialImage?: SocialImage | null;
   structuredData?: JsonLd | JsonLd[] | null;
   title?: string;
 }
@@ -16,6 +17,7 @@ const {
   canonical,
   description = CREWHELM_SITE.description,
   index = true,
+  socialImage = CREWHELM_SITE.socialImage,
   structuredData = null,
   title = CREWHELM_SITE.title,
 } = Astro.props;
@@ -26,7 +28,7 @@ const {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <Seo {canonical} {description} {index} {structuredData} {title} />
+    <Seo {canonical} {description} {index} {socialImage} {structuredData} {title} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="/favicon-light.svg" type="image/svg+xml" media="(prefers-color-scheme: light)" />
     <link rel="icon" href="/favicon-dark.svg" type="image/svg+xml" media="(prefers-color-scheme: dark)" />

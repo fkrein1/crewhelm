@@ -33,6 +33,18 @@ describe("Crewhelm site discovery foundation", () => {
     expect(absoluteSiteUrl("/recipes/example")).toBe("https://crewhelm.app/recipes/example");
   });
 
+  it("publishes a large social card from the production origin", () => {
+    expect(absoluteSiteUrl(CREWHELM_SITE.socialImage.url)).toBe(
+      "https://crewhelm.app/crewhelm-social-preview.png",
+    );
+    expect(CREWHELM_SITE.socialImage).toMatchObject({
+      height: 640,
+      mimeType: "image/png",
+      width: 1280,
+    });
+    expect(CREWHELM_SITE.socialImage.alt).toContain("Give Agents a mandate");
+  });
+
   it("publishes a neutral crawler policy and generated sitemap location", () => {
     expect(robotsText()).toBe(
       "User-agent: *\nAllow: /\n\nSitemap: https://crewhelm.app/sitemap-index.xml\n",
