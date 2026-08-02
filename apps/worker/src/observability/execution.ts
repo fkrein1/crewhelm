@@ -168,9 +168,14 @@ function rejectTelemetry(): void {
 }
 
 export function recordExecutionEvent(input: unknown): void {
-  const event = executionEventSchema.safeParse(input);
+  let event: ReturnType<typeof executionEventSchema.safeParse> | undefined;
+  try {
+    event = executionEventSchema.safeParse(input);
+  } catch {
+    event = undefined;
+  }
 
-  if (!event.success) {
+  if (event === undefined || !event.success) {
     rejectTelemetry();
     return;
   }
@@ -189,9 +194,14 @@ export function recordExecutionEvent(input: unknown): void {
 }
 
 export function recordExecutionProviderResponse(input: unknown): void {
-  const event = executionProviderResponseEventSchema.safeParse(input);
+  let event: ReturnType<typeof executionProviderResponseEventSchema.safeParse> | undefined;
+  try {
+    event = executionProviderResponseEventSchema.safeParse(input);
+  } catch {
+    event = undefined;
+  }
 
-  if (!event.success) {
+  if (event === undefined || !event.success) {
     rejectTelemetry();
     return;
   }

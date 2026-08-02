@@ -24,8 +24,8 @@
     "apps/worker/src/worker-test-entry.ts"
   ],
   "recordedProgress": {
-    "migratedFiles": 48,
-    "migratedUnits": 18,
+    "migratedFiles": 56,
+    "migratedUnits": 21,
     "totalFiles": 159,
     "totalUnits": 30
   },
@@ -74,8 +74,12 @@
       "pathPrefixes": ["apps/worker/src/agent-capabilities/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/agent-workflows/agent-task.test.ts"]
+      },
       "id": "worker-agent-workflows",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/agent-workflows/"]
     },
     {
@@ -121,8 +125,12 @@
         "apps/worker/src/agent/durable-object.ts",
         "apps/worker/src/agent/session-directory.ts"
       ],
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/agent/session-directory.test.ts"]
+      },
       "id": "agent-directory",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": []
     },
     {
@@ -141,8 +149,17 @@
       "pathPrefixes": ["apps/worker/src/oauth/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": [
+          "apps/worker/src/observability/execution.test.ts",
+          "apps/worker/src/observability/integrations.test.ts",
+          "apps/worker/src/observability/recovery.test.ts",
+          "apps/worker/src/observability/schedules.test.ts"
+        ]
+      },
       "id": "worker-observability",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/observability/"]
     },
     {

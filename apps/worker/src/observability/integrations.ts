@@ -45,9 +45,14 @@ const connectionLinkCompletionEventSchema = z
   .strict();
 
 export function recordIntegrationProviderResponse(input: unknown): void {
-  const event = integrationProviderResponseEventSchema.safeParse(input);
+  let event: ReturnType<typeof integrationProviderResponseEventSchema.safeParse> | undefined;
+  try {
+    event = integrationProviderResponseEventSchema.safeParse(input);
+  } catch {
+    event = undefined;
+  }
 
-  if (!event.success) {
+  if (event === undefined || !event.success) {
     try {
       console.warn({ event: "crewhelm.integration.provider_response.telemetry_rejected" });
     } catch {
@@ -67,9 +72,14 @@ export function recordIntegrationProviderResponse(input: unknown): void {
 }
 
 export function recordConnectionLinkCompletion(input: unknown): void {
-  const event = connectionLinkCompletionEventSchema.safeParse(input);
+  let event: ReturnType<typeof connectionLinkCompletionEventSchema.safeParse> | undefined;
+  try {
+    event = connectionLinkCompletionEventSchema.safeParse(input);
+  } catch {
+    event = undefined;
+  }
 
-  if (!event.success) {
+  if (event === undefined || !event.success) {
     try {
       console.warn({ event: "crewhelm.integration.connection_link_completion.telemetry_rejected" });
     } catch {

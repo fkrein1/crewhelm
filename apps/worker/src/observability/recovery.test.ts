@@ -46,4 +46,19 @@ describe("recovery observability", () => {
     });
     expect(JSON.stringify(warn.mock.calls)).not.toContain(secret);
   });
+
+  it("does not mask recovery when unknown input cannot be inspected", () => {
+    const hostileInput = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("Untrusted recovery input.");
+        },
+      },
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    expect(() => recordRecoveryEvent(hostileInput)).not.toThrow();
+    expect(warn).toHaveBeenCalledExactlyOnceWith({ event: "crewhelm.recovery.telemetry_rejected" });
+  });
 });

@@ -396,6 +396,7 @@ export class TestCrewSession extends CrewSession {
   #deletionWaiting = false;
   #failDeletionResponse = false;
   #ignoreNextCancellation = false;
+  #refuseNextDeletion = false;
   #rejectNextCancellation = false;
   #releaseDeletion: (() => void) | undefined;
   #releaseNextSlowModel = false;
@@ -763,6 +764,10 @@ export class TestCrewSession extends CrewSession {
     this.#failDeletionResponse = true;
   }
 
+  refuseNextDeletionForTest(): void {
+    this.#refuseNextDeletion = true;
+  }
+
   override async deleteSessionStorage(input: unknown): Promise<boolean> {
     if (this.#delayDeletion) {
       this.#delayDeletion = false;
@@ -772,6 +777,11 @@ export class TestCrewSession extends CrewSession {
       });
       this.#deletionWaiting = false;
       this.#releaseDeletion = undefined;
+    }
+
+    if (this.#refuseNextDeletion) {
+      this.#refuseNextDeletion = false;
+      return false;
     }
 
     const deleted = await super.deleteSessionStorage(input);

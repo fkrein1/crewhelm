@@ -45,7 +45,9 @@ const RUN_SESSION_PREFIX = "crewhelm:run-session:";
 const SESSION_RUN_INDEX_PREFIX = "crewhelm:session-run:";
 const SESSION_DELETE_PREFIX = "crewhelm:session-delete:";
 const SESSION_DELETE_INTENT_PREFIX = "crewhelm:session-deletion-intent:";
+const SESSION_EXPIRY_DELETE_INTENT_PREFIX = "crewhelm:session-expiry-deletion-intent:";
 const SESSION_RUN_PAGE_SIZE = 50;
+const SESSION_EXPIRY_DELETE_RETRY_MILLISECONDS = 60_000;
 const AGENT_WORKFLOW_RECORD_PREFIX = "crewhelm:agent-workflow:";
 const AGENT_WORKFLOW_RUN_PREFIX = "crewhelm:agent-workflow-run:";
 const AGENT_WORKFLOW_RUN_INDEX_PREFIX = "crewhelm:agent-workflow-run-index:";
@@ -133,6 +135,12 @@ const sessionDeleteIntentSchema = z.strictObject({
   sessionId: sessionIdSchema,
 });
 
+const sessionExpiryDeleteIntentSchema = z.strictObject({
+  branchRevision: z.number().int().positive().safe(),
+  claimedAt: z.number().int().positive(),
+  sessionId: sessionIdSchema,
+});
+
 type SessionDirectoryRecord = z.infer<typeof sessionDirectoryRecordSchema>;
 type RunSessionDirectoryRecord = z.infer<typeof runSessionDirectoryRecordSchema>;
 
@@ -158,6 +166,10 @@ function sessionDeleteKey(idempotencyKey: string): string {
 
 function sessionDeleteIntentKey(idempotencyKey: string): string {
   return `${SESSION_DELETE_INTENT_PREFIX}${idempotencyKey}`;
+}
+
+function sessionExpiryDeleteIntentKey(sessionId: string): string {
+  return `${SESSION_EXPIRY_DELETE_INTENT_PREFIX}${sessionId}`;
 }
 
 function agentWorkflowRecordKey(workflowId: string): string {
@@ -205,6 +217,10 @@ function sessionProjection(record: SessionDirectoryRecord): SessionSummary {
     status: record.activeRunId === null && !record.deleting ? "idle" : "active",
     updatedAt: new Date(record.updatedAt).toISOString(),
   });
+}
+
+function isExpiredIdleSession(record: SessionDirectoryRecord, currentTime: number): boolean {
+  return !record.deleting && record.activeRunId === null && record.availableUntil <= currentTime;
 }
 
 const invalidAdmission = {
@@ -513,7 +529,7 @@ export class CrewAgent extends CrewSession {
       return false;
     }
 
-    const record = await this.#readAvailableSession(request.data.sessionId);
+    const record = await this.#readSession(request.data.sessionId);
     if (record === undefined) return true;
     if (record.workflowId !== request.data.workflowId) return false;
     const deleted = await this.deleteAgentSession({
@@ -524,7 +540,10 @@ export class CrewAgent extends CrewSession {
       sessionId: record.sessionId,
       workflowId: request.data.workflowId,
     });
-    return deleted.ok || deleted.error.code === "session_not_found";
+    if (deleted.ok) return true;
+    if (deleted.error.code !== "session_not_found") return false;
+
+    return (await this.#readSession(request.data.sessionId)) === undefined;
   }
 
   async #releaseSessionRunForDeletion(record: SessionDirectoryRecord): Promise<boolean> {
@@ -1434,7 +1453,7 @@ export class CrewAgent extends CrewSession {
   async #readAvailableSession(sessionId: string): Promise<SessionDirectoryRecord | undefined> {
     const record = await this.#readSession(sessionId);
 
-    if (record === undefined || record.deleting || record.availableUntil > Date.now()) {
+    if (record === undefined || !isExpiredIdleSession(record, Date.now())) {
       return record;
     }
 
@@ -1461,9 +1480,32 @@ export class CrewAgent extends CrewSession {
 
   async #cleanupExpiredSessions(): Promise<void> {
     const currentTime = Date.now();
-    const expired = (await this.#sessionRecords()).filter(
-      (record) =>
-        !record.deleting && record.availableUntil <= currentTime && record.activeRunId === null,
+    const expiryDeletionIntents = await this.ctx.storage.list({
+      prefix: SESSION_EXPIRY_DELETE_INTENT_PREFIX,
+    });
+
+    for (const [key, value] of expiryDeletionIntents) {
+      const intent = sessionExpiryDeleteIntentSchema.safeParse(value);
+
+      if (!intent.success) {
+        continue;
+      }
+
+      const record = await this.#readSession(intent.data.sessionId);
+      if (record === undefined) {
+        await this.ctx.storage.delete(key);
+        continue;
+      }
+
+      if (intent.data.claimedAt + SESSION_EXPIRY_DELETE_RETRY_MILLISECONDS > currentTime) {
+        continue;
+      }
+
+      await this.#deleteExpiredSession(record);
+    }
+
+    const expired = (await this.#sessionRecords()).filter((record) =>
+      isExpiredIdleSession(record, currentTime),
     );
 
     for (const record of expired) {
@@ -1496,7 +1538,16 @@ export class CrewAgent extends CrewSession {
         ? [parsed.data.deletedAt + DEFAULT_AGENT_SESSION_RETENTION_SECONDS * 1_000]
         : [];
     });
-    const nextExpiry = [...sessionExpiries, ...deletionExpiries].toSorted(
+    const expiryDeletionIntents = await this.ctx.storage.list({
+      prefix: SESSION_EXPIRY_DELETE_INTENT_PREFIX,
+    });
+    const expiryDeletionRetries = [...expiryDeletionIntents.values()].flatMap((value) => {
+      const parsed = sessionExpiryDeleteIntentSchema.safeParse(value);
+      return parsed.success
+        ? [parsed.data.claimedAt + SESSION_EXPIRY_DELETE_RETRY_MILLISECONDS]
+        : [];
+    });
+    const nextExpiry = [...sessionExpiries, ...deletionExpiries, ...expiryDeletionRetries].toSorted(
       (left, right) => left - right,
     )[0];
 
@@ -1506,25 +1557,85 @@ export class CrewAgent extends CrewSession {
   }
 
   async #deleteExpiredSession(record: SessionDirectoryRecord): Promise<void> {
-    if (record.deleting) {
+    const intentKey = sessionExpiryDeleteIntentKey(record.sessionId);
+    const reserved = await this.ctx.storage.transaction(async (storage) => {
+      const current = sessionDirectoryRecordSchema.safeParse(
+        await storage.get(sessionRecordKey(record.sessionId)),
+      );
+      const intent = sessionExpiryDeleteIntentSchema.safeParse(await storage.get(intentKey));
+      const claimedAt = Date.now();
+
+      if (!current.success) {
+        if (intent.success) {
+          await storage.delete(intentKey);
+        }
+        return undefined;
+      }
+
+      if (intent.success) {
+        if (
+          !current.data.deleting ||
+          current.data.activeRunId !== null ||
+          intent.data.branchRevision !== current.data.branchRevision ||
+          intent.data.sessionId !== current.data.sessionId
+        ) {
+          return undefined;
+        }
+
+        await storage.put(intentKey, { ...intent.data, claimedAt });
+        return current.data;
+      }
+
+      if (
+        current.data.sessionId !== record.sessionId ||
+        current.data.branchRevision !== record.branchRevision ||
+        !isExpiredIdleSession(current.data, claimedAt)
+      ) {
+        return undefined;
+      }
+
+      const claimed = sessionDirectoryRecordSchema.parse({
+        ...current.data,
+        deleting: true,
+        updatedAt: claimedAt,
+      });
+      await storage.put({
+        [intentKey]: {
+          branchRevision: claimed.branchRevision,
+          claimedAt,
+          sessionId: claimed.sessionId,
+        },
+        [sessionRecordKey(claimed.sessionId)]: claimed,
+      });
+      return claimed;
+    });
+
+    if (reserved === undefined) {
       return;
     }
 
     try {
-      await this.#session({
-        branchId: record.branchId,
-        branchRevision: record.branchRevision,
-        sessionId: record.sessionId,
+      const deleted = await this.#session({
+        branchId: reserved.branchId,
+        branchRevision: reserved.branchRevision,
+        sessionId: reserved.sessionId,
       }).deleteSessionStorage({
         objectName: crewSessionObjectName({
-          agentId: record.agentId,
-          ownerKey: record.ownerKey,
-          sessionId: record.sessionId,
+          agentId: reserved.agentId,
+          ownerKey: reserved.ownerKey,
+          sessionId: reserved.sessionId,
         }),
       });
-      await this.#deleteDirectorySession(record.sessionId);
+
+      if (!deleted) {
+        return;
+      }
+
+      await this.#deleteDirectorySession(reserved.sessionId);
+      await this.ctx.storage.delete(intentKey);
     } catch {
-      // Keep the directory record so a later access can retry exact cleanup.
+      // Keep the expiry intent sealed so the alarm can retry exact cleanup without reopening the
+      // possibly emptied child runtime.
     }
   }
 
