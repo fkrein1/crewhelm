@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "definitionVersion": 2,
   "definitionOfMigrated": [
     "Within reusable services, expected domain, dependency, validation, and policy failures use discriminated unions instead of thrown control flow.",
@@ -10,26 +10,6 @@
     "Failure and state unions are handled exhaustively.",
     "Tests cover success, representative expected failure families, and boundary translation."
   ],
-  "sourceRoots": [
-    "apps/cli/src",
-    "apps/worker/control-plane-migrations",
-    "apps/worker/src",
-    "packages/composio/src",
-    "packages/contracts/src"
-  ],
-  "excludedFileSuffixes": [".d.ts", ".test-double.ts", ".test.ts"],
-  "excludedFiles": [
-    "apps/worker/src/agent/admitted-runs/test-agent.ts",
-    "apps/worker/src/oauth/testkit.ts",
-    "apps/worker/src/owner/testkit.ts",
-    "apps/worker/src/worker-test-entry.ts"
-  ],
-  "recordedProgress": {
-    "migratedFiles": 159,
-    "migratedUnits": 30,
-    "totalFiles": 159,
-    "totalUnits": 30
-  },
   "units": [
     {
       "evidence": {
@@ -67,8 +47,7 @@
         "apps/cli/src/version.ts",
         "apps/cli/src/wrangler.ts"
       ],
-      "id": "cli-core",
-      "status": "migrated"
+      "id": "cli-core"
     },
     {
       "evidence": {
@@ -82,7 +61,6 @@
         ]
       },
       "id": "cli-rehearsal",
-      "status": "migrated",
       "pathPrefixes": ["apps/cli/src/rehearsal/"]
     },
     {
@@ -98,7 +76,6 @@
         ]
       },
       "id": "composio",
-      "status": "migrated",
       "pathPrefixes": ["packages/composio/src/"]
     },
     {
@@ -118,7 +95,6 @@
         ]
       },
       "id": "contracts",
-      "status": "migrated",
       "pathPrefixes": ["packages/contracts/src/"]
     },
     {
@@ -127,7 +103,6 @@
         "testFiles": ["apps/worker/src/agent-capabilities/kernel.test.ts"]
       },
       "id": "worker-agent-capabilities",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/agent-capabilities/"]
     },
     {
@@ -136,7 +111,6 @@
         "testFiles": ["apps/worker/src/agent-workflows/agent-task.test.ts"]
       },
       "id": "worker-agent-workflows",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/agent-workflows/"]
     },
     {
@@ -154,8 +128,7 @@
         "apps/worker/src/agent/admitted-runs/protocol.ts",
         "apps/worker/src/agent/admitted-runs/schema.ts"
       ],
-      "id": "admitted-runs-core",
-      "status": "migrated"
+      "id": "admitted-runs-core"
     },
     {
       "files": ["apps/worker/src/agent/admitted-runs/inference-fallback.ts"],
@@ -163,8 +136,7 @@
         "definitionVersion": 2,
         "testFiles": ["apps/worker/src/agent/admitted-runs/inference-fallback.test.ts"]
       },
-      "id": "admitted-runs-inference",
-      "status": "migrated"
+      "id": "admitted-runs-inference"
     },
     {
       "files": ["apps/worker/src/agent/admitted-runs/sandbox-code-execution.ts"],
@@ -172,8 +144,7 @@
         "definitionVersion": 2,
         "testFiles": ["apps/worker/src/agent/admitted-runs/sandbox-code-execution.test.ts"]
       },
-      "id": "admitted-runs-sandbox",
-      "status": "migrated"
+      "id": "admitted-runs-sandbox"
     },
     {
       "files": ["apps/worker/src/agent/admitted-runs/web-research-execution.ts"],
@@ -181,8 +152,7 @@
         "definitionVersion": 2,
         "testFiles": ["apps/worker/src/agent/admitted-runs/web-research-execution.test.ts"]
       },
-      "id": "admitted-runs-web-research",
-      "status": "migrated"
+      "id": "admitted-runs-web-research"
     },
     {
       "files": [
@@ -193,9 +163,7 @@
         "definitionVersion": 2,
         "testFiles": ["apps/worker/src/agent/session-directory.test.ts"]
       },
-      "id": "agent-directory",
-      "status": "migrated",
-      "pathPrefixes": []
+      "id": "agent-directory"
     },
     {
       "evidence": {
@@ -206,7 +174,6 @@
         ]
       },
       "id": "worker-http",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/http/"]
     },
     {
@@ -220,7 +187,6 @@
         ]
       },
       "id": "worker-mcp",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/mcp/"]
     },
     {
@@ -233,7 +199,6 @@
         ]
       },
       "id": "worker-oauth",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/oauth/"]
     },
     {
@@ -247,7 +212,6 @@
         ]
       },
       "id": "worker-observability",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/observability/"]
     },
     {
@@ -256,7 +220,6 @@
         "testFiles": ["apps/worker/src/owner/agent-blueprints/module.test.ts"]
       },
       "id": "owner-agent-blueprints",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/agent-blueprints/"]
     },
     {
@@ -268,7 +231,6 @@
         ]
       },
       "id": "owner-agent-channel",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/agent-channel/"]
     },
     {
@@ -277,7 +239,6 @@
         "testFiles": ["apps/worker/src/owner/agents/module.test.ts"]
       },
       "id": "owner-agents",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/agents/"]
     },
     {
@@ -286,7 +247,6 @@
         "testFiles": ["apps/worker/src/owner/briefs/module.test.ts"]
       },
       "id": "owner-briefs",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/briefs/"]
     },
     {
@@ -295,7 +255,6 @@
         "testFiles": ["apps/worker/src/owner/configuration/module.test.ts"]
       },
       "id": "owner-configuration",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/configuration/"]
     },
     {
@@ -307,7 +266,6 @@
         ]
       },
       "id": "owner-connections",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/connections/"]
     },
     {
@@ -316,7 +274,6 @@
         "testFiles": ["apps/worker/src/owner/recovery/module.test.ts"]
       },
       "id": "owner-recovery",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/recovery/"]
     },
     {
@@ -330,7 +287,6 @@
         ]
       },
       "id": "owner-runs",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/runs/"]
     },
     {
@@ -342,7 +298,6 @@
         ]
       },
       "id": "owner-schedules",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/schedules/"]
     },
     {
@@ -351,7 +306,6 @@
         "testFiles": ["apps/worker/src/owner/skills/module.test.ts"]
       },
       "id": "owner-skills",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/skills/"]
     },
     {
@@ -360,7 +314,6 @@
         "testFiles": ["apps/worker/src/owner/usage/module.test.ts"]
       },
       "id": "owner-usage",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/usage/"]
     },
     {
@@ -369,7 +322,6 @@
         "testFiles": ["apps/worker/src/owner/watches/module.test.ts"]
       },
       "id": "owner-watches",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/watches/"]
     },
     {
@@ -378,7 +330,6 @@
         "testFiles": ["apps/worker/src/owner/workflows/module.test.ts"]
       },
       "id": "owner-workflows",
-      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/workflows/"]
     },
     {
@@ -393,8 +344,7 @@
         "definitionVersion": 2,
         "testFiles": ["apps/worker/src/owner/durable-object.test.ts"]
       },
-      "id": "owner-control-plane",
-      "status": "migrated"
+      "id": "owner-control-plane"
     },
     {
       "files": ["apps/worker/src/env.ts", "apps/worker/src/index.ts", "apps/worker/src/sandbox.ts"],
@@ -402,8 +352,7 @@
         "definitionVersion": 2,
         "testFiles": ["apps/worker/src/sandbox/purge.test.ts"]
       },
-      "id": "worker-runtime",
-      "status": "migrated"
+      "id": "worker-runtime"
     }
   ]
 }
