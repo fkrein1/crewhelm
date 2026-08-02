@@ -1382,10 +1382,28 @@ export class CrewSession extends Think {
     });
     const waitingForToolApproval = submission?.status === "completed" && approvalRecords.size > 0;
 
+    if (submission === null) {
+      if (record?.session !== undefined) {
+        const committedSessionStatus = await this.#commitSessionTerminalStatus(runId, "cancelled");
+        if (committedSessionStatus === "cancelled") {
+          await Promise.all([...approvalRecords.keys()].map((key) => this.ctx.storage.delete(key)));
+          if (Date.now() >= record.deadlineAt) {
+            await this.#discardCancelledSessionBranch(runId);
+            await this.#completeSessionRun(record, runId);
+          }
+          return cancelAdmittedRunResultSchema.parse({ cancelled: true, ok: true });
+        }
+      }
+
+      return cancelAdmittedRunResultSchema.parse({
+        cancelled: false,
+        ok: true,
+      });
+    }
+
     if (
-      submission === null ||
-      (["aborted", "completed", "error", "skipped"].includes(submission.status) &&
-        !waitingForToolApproval)
+      ["aborted", "completed", "error", "skipped"].includes(submission.status) &&
+      !waitingForToolApproval
     ) {
       return cancelAdmittedRunResultSchema.parse({
         cancelled: false,
@@ -2677,8 +2695,8 @@ export class CrewSession extends Think {
     if (terminalStatus.success) {
       const quarantined =
         terminalStatus.data === "cancelled" &&
-        submission !== null &&
-        !["aborted", "completed", "error", "skipped"].includes(submission.status) &&
+        (submission === null ||
+          !["aborted", "completed", "error", "skipped"].includes(submission.status)) &&
         Date.now() < record.deadlineAt;
       if (quarantined) return "running";
       if (terminalStatus.data === "cancelled") {
