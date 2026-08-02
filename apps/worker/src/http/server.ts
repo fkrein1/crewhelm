@@ -21,6 +21,7 @@ import {
   registerAuthServerRoutes,
 } from "../oauth/server.js";
 import { registerOAuthUiRoutes } from "../oauth/ui.js";
+import { readByteStreamChunk } from "./byte-stream.js";
 import { registerConnectionAuthorizationReturnRoutes } from "./connection-authorization-return.js";
 
 const METHOD_NOT_ALLOWED_BODY = `${JSON.stringify({
@@ -206,7 +207,7 @@ async function readBoundedBody(request: Request, maximumBytes: number): Promise<
 
   try {
     while (true) {
-      const next = await reader.read();
+      const next = await readByteStreamChunk(reader);
 
       if (next.done) {
         break;

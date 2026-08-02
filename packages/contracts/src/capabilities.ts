@@ -87,7 +87,9 @@ export function isCredentialBearingComposioTool(input: {
     const current = pending.pop();
 
     if (Array.isArray(current)) {
-      pending.push(...current);
+      for (const item of current as unknown[]) {
+        pending.push(item);
+      }
     } else if (typeof current === "object" && current !== null) {
       for (const [key, item] of Object.entries(current)) {
         const normalizedKey = key.toLowerCase().replaceAll(/[^a-z0-9]/g, "");

@@ -21,6 +21,10 @@ const legacyAiSpendReservationSchema = z.number().int().positive().safe();
 const LEGACY_WORKERS_AI_CAPABILITY_ID = "inference.workers-ai";
 const LEGACY_WORKERS_AI_CAPABILITY_SCHEMA_VERSION = 2;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function legacyWorkersAiCapabilities(model: string) {
   return [
     {
@@ -37,28 +41,23 @@ function normalizeWorkersAiCapabilities(value: unknown): unknown {
   }
 
   let changed = false;
-  const normalized = value.map((capability) => {
+  const capabilities: unknown[] = value;
+  const normalized = capabilities.map((capability) => {
     if (
-      typeof capability !== "object" ||
-      capability === null ||
-      Array.isArray(capability) ||
-      Reflect.get(capability, "id") !== LEGACY_WORKERS_AI_CAPABILITY_ID ||
-      Reflect.get(capability, "schemaVersion") !== 1
+      !isRecord(capability) ||
+      capability.id !== LEGACY_WORKERS_AI_CAPABILITY_ID ||
+      capability.schemaVersion !== 1
     ) {
       return capability;
     }
 
-    const configuration = Reflect.get(capability, "configuration");
+    const configuration = capability.configuration;
 
-    if (
-      typeof configuration !== "object" ||
-      configuration === null ||
-      Array.isArray(configuration)
-    ) {
+    if (!isRecord(configuration)) {
       return capability;
     }
 
-    const model = agentModelSchema.safeParse(Reflect.get(configuration, "model"));
+    const model = agentModelSchema.safeParse(configuration.model);
 
     if (!model.success) {
       return capability;
@@ -90,25 +89,23 @@ function legacyWorkersAiRuntimePlan(model: string) {
 }
 
 function normalizeWorkersAiRuntimePlan(value: unknown): unknown {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return value;
   }
 
-  const inference = Reflect.get(value, "inference");
-  const modules = Reflect.get(value, "modules");
+  const inference = value.inference;
+  const modules = value.modules;
 
   if (
-    typeof inference !== "object" ||
-    inference === null ||
-    Array.isArray(inference) ||
-    Reflect.get(inference, "moduleId") !== LEGACY_WORKERS_AI_CAPABILITY_ID ||
-    Reflect.get(inference, "schemaVersion") !== 1 ||
+    !isRecord(inference) ||
+    inference.moduleId !== LEGACY_WORKERS_AI_CAPABILITY_ID ||
+    inference.schemaVersion !== 1 ||
     !Array.isArray(modules)
   ) {
     return value;
   }
 
-  const model = agentModelSchema.safeParse(Reflect.get(inference, "model"));
+  const model = agentModelSchema.safeParse(inference.model);
 
   if (!model.success) {
     return value;
@@ -121,12 +118,10 @@ function normalizeWorkersAiRuntimePlan(value: unknown): unknown {
       fallbackModels: [],
       schemaVersion: LEGACY_WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
     },
-    modules: modules.map((module) =>
-      typeof module === "object" &&
-      module !== null &&
-      !Array.isArray(module) &&
-      Reflect.get(module, "id") === LEGACY_WORKERS_AI_CAPABILITY_ID &&
-      Reflect.get(module, "schemaVersion") === 1
+    modules: (modules as unknown[]).map((module) =>
+      isRecord(module) &&
+      module.id === LEGACY_WORKERS_AI_CAPABILITY_ID &&
+      module.schemaVersion === 1
         ? { ...module, schemaVersion: LEGACY_WORKERS_AI_CAPABILITY_SCHEMA_VERSION }
         : module,
     ),
@@ -134,20 +129,20 @@ function normalizeWorkersAiRuntimePlan(value: unknown): unknown {
 }
 
 const persistedRunBudgetReservationSchema = z.preprocess((value) => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return value;
   }
 
   const normalized = { ...value };
   let changed = false;
-  const legacyAiReservation = Reflect.get(value, "aiSpendReservationMicrousd");
+  const legacyAiReservation = value.aiSpendReservationMicrousd;
 
   if (legacyAiSpendReservationSchema.safeParse(legacyAiReservation).success) {
     Reflect.deleteProperty(normalized, "aiSpendReservationMicrousd");
     changed = true;
   }
 
-  const legacyModel = agentModelSchema.safeParse(Reflect.get(value, "model"));
+  const legacyModel = agentModelSchema.safeParse(value.model);
 
   if (legacyModel.success) {
     if (!Object.hasOwn(value, "runtimePlan")) {
@@ -157,9 +152,9 @@ const persistedRunBudgetReservationSchema = z.preprocess((value) => {
     changed = true;
   }
 
-  const runtimePlan = normalizeWorkersAiRuntimePlan(Reflect.get(value, "runtimePlan"));
+  const runtimePlan = normalizeWorkersAiRuntimePlan(value.runtimePlan);
 
-  if (runtimePlan !== Reflect.get(value, "runtimePlan")) {
+  if (runtimePlan !== value.runtimePlan) {
     Reflect.set(normalized, "runtimePlan", runtimePlan);
     changed = true;
   }
@@ -168,13 +163,13 @@ const persistedRunBudgetReservationSchema = z.preprocess((value) => {
 }, runBudgetReservationSchema);
 
 const persistedCrewAgentRuntimeConfigSchema = z.preprocess((value) => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return value;
   }
 
   const normalized = { ...value };
   let changed = false;
-  const legacyModel = agentModelSchema.safeParse(Reflect.get(value, "model"));
+  const legacyModel = agentModelSchema.safeParse(value.model);
 
   if (legacyModel.success) {
     if (!Object.hasOwn(value, "capabilities")) {
@@ -187,16 +182,16 @@ const persistedCrewAgentRuntimeConfigSchema = z.preprocess((value) => {
     changed = true;
   }
 
-  const capabilities = normalizeWorkersAiCapabilities(Reflect.get(value, "capabilities"));
+  const capabilities = normalizeWorkersAiCapabilities(value.capabilities);
 
-  if (capabilities !== Reflect.get(value, "capabilities")) {
+  if (capabilities !== value.capabilities) {
     Reflect.set(normalized, "capabilities", capabilities);
     changed = true;
   }
 
-  const runtimePlan = normalizeWorkersAiRuntimePlan(Reflect.get(value, "runtimePlan"));
+  const runtimePlan = normalizeWorkersAiRuntimePlan(value.runtimePlan);
 
-  if (runtimePlan !== Reflect.get(value, "runtimePlan")) {
+  if (runtimePlan !== value.runtimePlan) {
     Reflect.set(normalized, "runtimePlan", runtimePlan);
     changed = true;
   }

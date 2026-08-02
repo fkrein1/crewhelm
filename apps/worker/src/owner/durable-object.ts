@@ -1124,13 +1124,15 @@ export class OwnerControlPlane extends DurableObject {
   }
 
   async receiveComposioWebhook(input: unknown): Promise<ComposioWebhookIngressResult> {
-    const body = typeof input === "object" && input !== null ? Reflect.get(input, "body") : null;
-    const headers =
+    const body: unknown =
+      typeof input === "object" && input !== null ? Reflect.get(input, "body") : null;
+    const headers: unknown =
       typeof input === "object" && input !== null ? Reflect.get(input, "headers") : null;
-    const id = typeof headers === "object" && headers !== null ? Reflect.get(headers, "id") : null;
-    const signature =
+    const id: unknown =
+      typeof headers === "object" && headers !== null ? Reflect.get(headers, "id") : null;
+    const signature: unknown =
       typeof headers === "object" && headers !== null ? Reflect.get(headers, "signature") : null;
-    const timestamp =
+    const timestamp: unknown =
       typeof headers === "object" && headers !== null ? Reflect.get(headers, "timestamp") : null;
 
     if (

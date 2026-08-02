@@ -1366,7 +1366,7 @@ export class CrewSession extends Think {
       ...(request.data.includeDeliverable &&
       committedSessionStatus !== "cancelled" &&
       structuredOutput?.state === "valid"
-        ? { deliverableContent: JSON.parse(structuredOutput.canonical) }
+        ? { deliverableContent: JSON.parse(structuredOutput.canonical) as unknown }
         : {}),
       ok: true,
       run: {
@@ -1836,10 +1836,13 @@ export class CrewSession extends Think {
     ) => Promise<unknown>;
 
     this.#gatewayAiBinding = new Proxy(binding, {
-      get: (target, property) => {
+      get: (target, property): unknown => {
         if (property !== "run") {
-          const value = Reflect.get(target, property, target);
-          return typeof value === "function" ? value.bind(target) : value;
+          const value: unknown = Reflect.get(target, property, target);
+          return typeof value === "function"
+            ? (...arguments_: unknown[]): unknown =>
+                Reflect.apply(value, target, arguments_) as unknown
+            : value;
         }
 
         return async (

@@ -6,6 +6,7 @@ import {
 import * as z from "zod";
 
 import { readBoundedJson } from "./bounded-json.js";
+import { isUnknownRecord } from "./safe-values.js";
 
 const COMPOSIO_TRIGGER_TYPES_URL = "https://backend.composio.dev/api/v3.1/triggers_types";
 const COMPOSIO_TRIGGER_CATALOG_TIMEOUT_MS = 5_000;
@@ -148,11 +149,13 @@ function containsSecret(value: unknown, secret: string): boolean {
     }
 
     if (Array.isArray(current)) {
-      pending.push(...current);
+      for (const item of current as unknown[]) {
+        pending.push(item);
+      }
       continue;
     }
 
-    if (typeof current === "object" && current !== null) {
+    if (isUnknownRecord(current)) {
       pending.push(...Object.values(current));
     }
   }

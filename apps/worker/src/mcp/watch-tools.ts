@@ -8,7 +8,6 @@ export const MCP_AGENT_WATCHES_TOOL_NAME = "crewhelm_agent_watches";
 
 export function registerWatchTools(server: McpServer, context: McpToolContext): void {
   const { authority, controlPlane } = context;
-  const agentWatches = controlPlane.agentWatches?.bind(controlPlane);
 
   server.registerTool(
     MCP_AGENT_WATCHES_TOOL_NAME,
@@ -26,10 +25,10 @@ export function registerWatchTools(server: McpServer, context: McpToolContext): 
     },
     async (input) => {
       return optionalControlPlaneToolResult(
-        agentWatches === undefined
+        controlPlane.agentWatches === undefined
           ? undefined
-          : () =>
-              agentWatches(
+          : async () =>
+              controlPlane.agentWatches?.(
                 authority,
                 input.watch === undefined
                   ? input
