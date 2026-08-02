@@ -25,6 +25,9 @@ importers:
       oxlint-tsgolint:
         specifier: 7.0.2001
         version: 7.0.2001
+      tsx:
+        specifier: 4.23.1
+        version: 4.23.1
       typescript:
         specifier: 7.0.2
         version: 7.0.2
