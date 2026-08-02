@@ -36,6 +36,7 @@
         "apps/cli/src/codex-browser.ts",
         "apps/cli/src/command.ts",
         "apps/cli/src/doctor.ts",
+        "apps/cli/src/errors.ts",
         "apps/cli/src/github-app.ts",
         "apps/cli/src/index.ts",
         "apps/cli/src/installation.ts",
