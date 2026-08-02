@@ -33,6 +33,16 @@ requires both Run-write and Agent-read scope, resolves only inside the authentic
 and retains the exact Session branch revision check. A stale handle cannot overwrite, fork, or
 silently append to newer conversation state.
 
+A Watch is an occurrence source, not authority. Its revision freezes one exact Agent revision,
+instruction, source, output contract, and schedule or provider limits. Pausing, resuming, updating,
+and deleting require owner autonomy authority and exact revisions. Source payloads remain untrusted
+context. Each occurrence has one deterministic admission identity; delayed alarm recovery may retry
+that identity but cannot create a second Run, and one alarm claims at most one occurrence per Watch.
+A lifecycle mutation is rejected as busy while an occurrence admission is pending, preventing an
+already-started Run from being relabeled as skipped. Terminal occurrence history is deterministically
+pruned to its documented bound. A stale Agent revision pauses or skips the Watch rather than silently
+widening or retargeting it.
+
 Brief contents and Workflow deliverables are untrusted owner data, not authority. Owner-local
 SQLite stores only compact metadata, exact references, digests, and provenance; object content is
 read through a bounded Crewhelm adapter and verified before use. Run admission binds the ordered

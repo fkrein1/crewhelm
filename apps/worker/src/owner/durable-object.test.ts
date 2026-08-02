@@ -62,6 +62,10 @@ function removeRuntimeToolSchema(storage: DurableObjectStorage): void {
   storage.sql.exec("DROP TABLE runtime_tool_executions");
 }
 
+function removeWatchSchema(storage: DurableObjectStorage): void {
+  storage.sql.exec("DROP TABLE IF EXISTS agent_schedule_occurrences");
+}
+
 async function migrationChecksum(source: string): Promise<string> {
   const bytes = new Uint8Array(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source)),
@@ -308,6 +312,11 @@ describe("OwnerControlPlane", () => {
           name: "0027_classy_switch",
           version: 28,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0028_purple_impossible_man",
+          version: 29,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });
@@ -400,6 +409,7 @@ describe("OwnerControlPlane", () => {
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
       removeRuntimeToolSchema(state.storage);
+      removeWatchSchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 18");
       await state.storage.sync();
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
@@ -1000,6 +1010,7 @@ describe("OwnerControlPlane", () => {
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
       removeRuntimeToolSchema(state.storage);
+      removeWatchSchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 12");
     });
     await evictDurableObject(stub);
@@ -1063,6 +1074,7 @@ describe("OwnerControlPlane", () => {
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
       removeRuntimeToolSchema(state.storage);
+      removeWatchSchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 14");
     });
     await evictDurableObject(stub);
@@ -1179,6 +1191,7 @@ describe("OwnerControlPlane", () => {
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
       removeRuntimeToolSchema(state.storage);
+      removeWatchSchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 11");
     });
     await evictDurableObject(stub);
@@ -1325,7 +1338,7 @@ describe("OwnerControlPlane", () => {
       AUTONOMY_WRITE_SCOPE,
     ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
-    const legacyMigrations = controlPlaneMigrations.slice(0, -2);
+    const legacyMigrations = controlPlaneMigrations.slice(0, -3);
     const migrations = await Promise.all(
       legacyMigrations.map(async (migration) => ({
         ...migration,
@@ -1516,6 +1529,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec("DROP TABLE integration_usage_events");
       state.storage.sql.exec("DROP TABLE integration_enablement_requests");
       removeRuntimeToolSchema(state.storage);
+      removeWatchSchema(state.storage);
       state.storage.sql.exec("DROP TABLE tool_executions");
       state.storage.sql.exec("DROP TABLE tool_approvals");
       state.storage.sql.exec("DROP TABLE capability_grants");
@@ -1583,6 +1597,7 @@ describe("OwnerControlPlane", () => {
       removeSkillLibrarySchema(state.storage);
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
+      removeWatchSchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 3");
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
 
@@ -1698,6 +1713,7 @@ describe("OwnerControlPlane", () => {
         { version: 26 },
         { version: 27 },
         { version: 28 },
+        { version: 29 },
       ]);
     });
   });
@@ -1803,6 +1819,7 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec("DROP TABLE fleet_configuration_revisions");
       state.storage.sql.exec("DROP TABLE integration_usage_events");
       removeRuntimeToolSchema(state.storage);
+      removeWatchSchema(state.storage);
       state.storage.sql.exec(
         `CREATE TABLE legacy_tool_executions AS
          SELECT
@@ -1829,6 +1846,7 @@ describe("OwnerControlPlane", () => {
       removeSkillLibrarySchema(state.storage);
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
+      removeWatchSchema(state.storage);
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 5");
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
     });
@@ -1912,6 +1930,7 @@ describe("OwnerControlPlane", () => {
     await runInDurableObject(stub, (_instance, state) => {
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
+      removeWatchSchema(state.storage);
       applyControlPlaneMigrationSql(state.storage, migration22);
       const now = Date.now();
       const fleetRevision = state.storage.sql
@@ -1963,6 +1982,7 @@ describe("OwnerControlPlane", () => {
       );
       state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 24");
       removeRuntimeToolSchema(state.storage);
+      removeWatchSchema(state.storage);
     });
     await evictDurableObject(stub);
 
@@ -2007,7 +2027,7 @@ describe("OwnerControlPlane", () => {
       admission: { run_id: admission.permit.runId, trigger: "manual" },
       foreignKeys: [],
       migration: {
-        name: "0027_classy_switch",
+        name: "0028_purple_impossible_man",
         version: CONTROL_PLANE_SCHEMA_VERSION,
       },
       workflow: {

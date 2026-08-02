@@ -34,19 +34,19 @@ conversation. A Cloudflare `AgentTaskWorkflow` may coordinate one frozen ordered
 owner control plane to admit each stage as a normal Run. Retained pre-session runs remain readable
 through the Agent object during migration.
 
-| State owner          | Authoritative facts                                                                                                                                                |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Worker               | Authenticated request context only                                                                                                                                 |
-| Auth D1              | OAuth state, signing keys, rotating refresh tokens, and token revocation                                                                                           |
-| `OwnerControlPlane`  | Agent and connection lifecycle, grants, Briefs, schedules, Workflow plans and projections, Run admission, owner inbox, approvals, effect reconciliation, and audit |
-| Owner content R2     | Immutable Skill files, versioned Brief content, and final Workflow deliverables; owner-local SQLite holds metadata, digests, provenance, and lifecycle             |
-| `CrewAgent`          | Workflow and Session discovery, branch revisions, retention, deletion, and exact event and Run routing                                                             |
-| `AgentTaskWorkflow`  | Durable ordering of identifiers and stage events; no prompts, bearer authority, provider access, or policy decisions                                               |
-| `CrewSession`        | One conversation's Think transcript, submissions, output, deadlines, and approval waits                                                                            |
-| Sandbox container    | One runtime-tool call's ephemeral process and filesystem; never owner authority or credentials; its backing Durable Object is purged after teardown                |
-| Search/fetch adapter | Bounded public evidence reads; provider credentials stay in the Worker and exact source handles expire with their Run                                              |
-| AI Gateway           | Optional installation-wide hard spend ceiling and model-call cost metadata                                                                                         |
-| Composio             | Connected-account credentials and refresh                                                                                                                          |
+| State owner          | Authoritative facts                                                                                                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Worker               | Authenticated request context only                                                                                                                                             |
+| Auth D1              | OAuth state, signing keys, rotating refresh tokens, and token revocation                                                                                                       |
+| `OwnerControlPlane`  | Agent and connection lifecycle, grants, Briefs, Watches and schedules, Workflow plans and projections, Run admission, owner inbox, approvals, effect reconciliation, and audit |
+| Owner content R2     | Immutable Skill files, versioned Brief content, and final Workflow deliverables; owner-local SQLite holds metadata, digests, provenance, and lifecycle                         |
+| `CrewAgent`          | Workflow and Session discovery, branch revisions, retention, deletion, and exact event and Run routing                                                                         |
+| `AgentTaskWorkflow`  | Durable ordering of identifiers and stage events; no prompts, bearer authority, provider access, or policy decisions                                                           |
+| `CrewSession`        | One conversation's Think transcript, submissions, output, deadlines, and approval waits                                                                                        |
+| Sandbox container    | One runtime-tool call's ephemeral process and filesystem; never owner authority or credentials; its backing Durable Object is purged after teardown                            |
+| Search/fetch adapter | Bounded public evidence reads; provider credentials stay in the Worker and exact source handles expire with their Run                                                          |
+| AI Gateway           | Optional installation-wide hard spend ceiling and model-call cost metadata                                                                                                     |
+| Composio             | Connected-account credentials and refresh                                                                                                                                      |
 
 The control plane owns admission and administration; the Agent directory owns conversation
 lifecycle; each session owns execution. Cross-object calls
@@ -107,6 +107,18 @@ schedule-specific audit events. Scheduled Run discovery retains the originating 
 revision. Each Agent has eight bounded schedule slots; an owner reclaims capacity by exactly
 updating a paused schedule, retaining one auditable identity and revision chain for that slot.
 
+The owner-facing Watch lifecycle initially presents those recurring checks as “every N minutes,
+ask this Agent to check,” without exposing alarm or webhook configuration. A Watch occurrence is
+recorded before dispatch, receives one deterministic scheduled-Run idempotency key, and remains
+recoverable if the alarm stops after admission but before its outcome is recorded. Inspectable
+history distinguishes pending, dispatched, and skipped occurrences; Crewhelm retains the latest
+100 terminal occurrences per Watch. Only one occurrence from a Watch is claimed per alarm, and a
+pending admission must settle before pause, resume, update, or deletion so history never hides an
+already-started Run. Lifecycle changes are revision-bound; deletion redacts prior Watch definitions,
+leaves an auditable tombstone revision, releases the Agent's Watch capacity, and hides the Watch
+from ordinary reads. Connected event and resource sources extend this lifecycle rather than creating
+provider-specific automation objects.
+
 An Agent capability module may contribute a native runtime-tool descriptor, but only the owner
 control plane can freeze it into a Run plan and reserve its shared tool-call budget. `CrewSession`
 redeems a short-lived permit for the exact call, dispatches through a Crewhelm-owned adapter, and
@@ -139,6 +151,7 @@ cost-reconciliation controls.
 | Native runtime-tool adapters          | `agent/admitted-runs/`       |
 | Sandbox container boundary            | `sandbox.ts`                 |
 | Recurring Agent schedules             | `owner/schedules/`           |
+| Owner-facing Watch lifecycle          | `owner/watches/`             |
 | Durable Workflow plans and projection | `owner/workflows/`           |
 | Cloudflare Workflow coordination      | `agent-workflows/`           |
 | Disablement, revocation, recovery     | `owner/recovery/`            |

@@ -13,6 +13,13 @@ Use the named `nextAction`. Recovery reads are bounded:
 - `crewhelm_status` with `includeRecentAudit`: recent actions without client IDs.
 - `crewhelm_list_agent_schedules`: exact schedule identities and current trigger state.
 - `crewhelm_get_agent_schedule`: latest dispatch or deferral for one exact schedule.
+- `crewhelm_agent_watches`: available sources plus exact Watch lifecycle and bounded occurrence
+  history. A scheduled check may report a skipped occurrence when its prior Run is still active,
+  its Agent revision changed, or dispatch could not be admitted safely.
+
+`watch_busy` (or the compatible lower-level `schedule_busy`) means one exact occurrence is still
+being admitted or recovered. Inspect Watch history and retry the lifecycle change after that pending
+occurrence settles; do not guess whether its Run started.
 
 ## Ambiguous writes
 
