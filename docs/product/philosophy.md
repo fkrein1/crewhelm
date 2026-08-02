@@ -36,9 +36,10 @@ used across the public site, browser handoffs, CLI, and future product surfaces.
 - **Integrations use the narrowest dependable plane.** Crewhelm uses Composio for its managed
   catalog and authentication, and can proxy a reviewed remote MCP Connection without rebuilding
   the server's provider adapter.
-- **Recipes are the eventual sharing unit.** Once the operating model is mature, a recipe will
-  declare an Agent's job, model needs, external tools, Connections, and limits without code,
-  credentials, or private history.
+- **Recipes are the eventual sharing unit.** A Recipe declares one portable mandate, bounded
+  operations, inputs, deliverables, external requirements, authority requests, and limits without
+  credentials or private history. Exact untrusted Skills are separate pinned dependencies; see the
+  [Recipe product contract](recipes.md).
 - **Safety is product quality.** Authority, secret isolation, data integrity, recovery, and clear
   failure behavior are never deferred polish.
 - **Errors are product state.** A failure must say what is known, whether retrying is safe, and
@@ -70,6 +71,6 @@ Workflow presents its final deliverable without asking the owner to find the las
 - arbitrary executable recipes;
 - custom integrations already served well by Composio;
 - simultaneous support for every model or edge case; and
-- a centralized marketplace backend.
+- hosted Agent execution or an opaque marketplace control plane.
 
 These constrain product investment, not the eventual reach of the underlying frameworks.
