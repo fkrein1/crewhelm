@@ -521,7 +521,7 @@ export function createCrewhelmAuth(env: WorkerEnv, origin: string) {
 }
 
 async function verifyMcpAccessTokenSignature(
-  auth: CrewhelmAuth,
+  auth: Pick<CrewhelmAuth, "handler">,
   origin: string,
   token: string,
 ): Promise<z.infer<typeof accessTokenClaimsSchema> | null> {
@@ -556,7 +556,7 @@ async function verifyMcpAccessTokenSignature(
 
 export async function revokeMcpAccessToken(
   env: Pick<WorkerEnv, "AUTH_DB">,
-  auth: CrewhelmAuth,
+  auth: Pick<CrewhelmAuth, "handler">,
   origin: string,
   token: string,
   clientId: string,
@@ -593,7 +593,7 @@ export async function revokeMcpAccessToken(
 
 export async function verifyMcpAccessToken(
   env: Pick<WorkerEnv, "AUTH_DB">,
-  auth: CrewhelmAuth,
+  auth: Pick<CrewhelmAuth, "handler">,
   origin: string,
   token: string,
 ): Promise<z.infer<typeof accessTokenClaimsSchema> | null> {
