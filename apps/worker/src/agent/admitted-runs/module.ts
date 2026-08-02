@@ -151,6 +151,7 @@ const RUNTIME_ADMISSION_UNAVAILABLE = "CrewAgent runtime admission is not availa
 const INBOX_PROJECTION_PREFIX = "crewhelm:inbox-projection:";
 const RUN_RECORD_PREFIX = "crewhelm:run:";
 const SESSION_RUN_DRAINED_PREFIX = "crewhelm:session-run-drained:";
+const SESSION_RUN_RESTART_PREFIX = "crewhelm:session-run-restart:";
 const SESSION_RUN_TERMINAL_PREFIX = "crewhelm:session-run-terminal:";
 const RUN_TRACE_PREFIX = "crewhelm:run-trace:";
 const RUN_OUTPUT_PREFIX = "crewhelm:run-output:";
@@ -316,6 +317,10 @@ function sessionRunTerminalKey(runId: string): string {
 
 function sessionRunDrainedKey(runId: string): string {
   return `${SESSION_RUN_DRAINED_PREFIX}${runId}`;
+}
+
+function sessionRunRestartKey(runId: string): string {
+  return `${SESSION_RUN_RESTART_PREFIX}${runId}`;
 }
 
 function inboxProjectionKey(runId: string): string {
@@ -1782,6 +1787,7 @@ export class CrewSession extends Think {
       await this.ctx.storage.delete(runOutputMessageKey(validatedOutput.messageId));
     }
     await this.ctx.storage.delete(sessionRunDrainedKey(request.data.runId));
+    await this.ctx.storage.delete(sessionRunRestartKey(request.data.runId));
     await this.ctx.storage.delete(sessionRunTerminalKey(request.data.runId));
     await this.ctx.storage.delete(runRecordKey(request.data.runId));
   }
@@ -2824,8 +2830,14 @@ export class CrewSession extends Think {
     if ((await this.ctx.storage.get(sessionRunDrainedKey(request.data.runId))) !== true) {
       // Think can expose a terminal row before an in-memory turn unwinds, and
       // pre-marker deployments may have no callback left to acknowledge it.
-      // Restarting the exact Session isolate forcibly drains either case; the
-      // next onStart can then backfill quiescence from the terminal row.
+      // Restarting the exact Session isolate forcibly drains either case. The
+      // intent must commit in an earlier wake because ctx.abort can discard
+      // writes from the wake it terminates.
+      const restartKey = sessionRunRestartKey(request.data.runId);
+      if ((await this.ctx.storage.get(restartKey)) !== true) {
+        await this.ctx.storage.put(restartKey, true);
+        return false;
+      }
       this.ctx.abort("Expired Session Run is restarting to prove deletion quiescence.");
       return false;
     }
