@@ -3,7 +3,7 @@ import * as z from "zod";
 import { runIdSchema, sha256DigestSchema } from "./capabilities.js";
 import { agentIdSchema, agentRevisionNumberSchema, ownerKeySchema } from "./control-plane.js";
 import { fleetConfigurationRevisionNumberSchema } from "./fleet-configuration.js";
-import { runAdmissionIdempotencyKeySchema } from "./run-admission.js";
+import { runAdmissionIdempotencyKeySchema, runWatchReferenceSchema } from "./run-admission.js";
 import { agentScheduleIdSchema, agentScheduleRevisionNumberSchema } from "./schedule-revision.js";
 import { agentInboxDeferredReasonSchema } from "./diagnostics.js";
 
@@ -41,6 +41,7 @@ const agentInboxConfigurationSchema = z.strictObject({
   fleetRevision: fleetConfigurationRevisionNumberSchema,
   scheduleId: agentScheduleIdSchema.nullable(),
   scheduleRevision: z.number().int().positive().safe().nullable(),
+  watch: runWatchReferenceSchema.nullable(),
 });
 
 const agentInboxPreviewSchema = z.string().min(1).max(MAXIMUM_AGENT_INBOX_PREVIEW_CHARACTERS);
@@ -198,6 +199,7 @@ export const recordAgentInboxRunInputSchema = z
       promptDigest: sha256DigestSchema,
       runId: runIdSchema,
       scheduleRevision: agentScheduleRevisionNumberSchema.nullable().default(null),
+      watch: runWatchReferenceSchema.optional(),
     }),
   })
   .superRefine((input, context) => {

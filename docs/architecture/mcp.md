@@ -34,9 +34,12 @@ Schema composition support from every MCP-to-model adapter.
 
 Progressive discovery is primarily a host concern: an MCP host can fetch `tools/list`, retain the
 catalog outside model context, and inject only relevant definitions. Crewhelm therefore optimizes
-for this path without making it mandatory. The 35-tool, 64 KiB input-schema, and 72 KiB complete
+for this path without making it mandatory. The 36-tool, 64 KiB input-schema, and 76 KiB complete
 catalog ceilings remain explicit, and increases require evidence that the extra surface improves
-selection or execution accuracy. See the MCP guidance on
+selection or execution accuracy. One consolidated Watch lifecycle lets owners describe scheduled
+checks or connected-app events without programming scheduler, webhook, or bearer-token plumbing;
+later resource sources extend the same tool rather than adding provider-specific surfaces. See the
+MCP guidance on
 [progressive discovery](https://modelcontextprotocol.io/docs/develop/clients/client-best-practices).
 
 Server-side search and code execution are reserved for mechanically large API surfaces where a

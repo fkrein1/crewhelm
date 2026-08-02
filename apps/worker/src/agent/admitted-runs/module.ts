@@ -1161,6 +1161,7 @@ export class CrewSession extends Think {
         promptDigest: permit.promptDigest,
         scheduleRevision: permit.scheduleRevision,
         trigger: permit.trigger,
+        ...(permit.watch === undefined ? {} : { watch: permit.watch }),
         ...(session === undefined
           ? {}
           : {
@@ -2289,6 +2290,7 @@ export class CrewSession extends Think {
           promptDigest: record.promptDigest,
           runId,
           scheduleRevision: record.scheduleRevision,
+          ...(record.watch === undefined ? {} : { watch: record.watch }),
         },
       });
     };
@@ -3132,6 +3134,7 @@ export class CrewSession extends Think {
                 promptDigest: reference.promptDigest,
                 runId: reference.runId,
                 scheduleRevision: record.scheduleRevision,
+                ...(record.watch === undefined ? {} : { watch: record.watch }),
               },
             }),
           ),
@@ -4432,6 +4435,7 @@ export class CrewSession extends Think {
       promptDigest: record.promptDigest,
       runId: metadata.runId,
       scheduleRevision: record.scheduleRevision,
+      ...(record.watch === undefined ? {} : { watch: record.watch }),
     };
   }
 
@@ -5125,6 +5129,7 @@ export class CrewSession extends Think {
       record.clientId === permit.clientId &&
       record.idempotencyKey === permit.idempotencyKey &&
       record.scheduleRevision === permit.scheduleRevision &&
+      JSON.stringify(record.watch) === JSON.stringify(permit.watch) &&
       record.trigger === permit.trigger &&
       JSON.stringify(briefContextSummary(record.briefContext)) ===
         JSON.stringify(permit.briefContext) &&
@@ -5155,6 +5160,7 @@ export class CrewSession extends Think {
       record.promptCharacters === promptCharacters &&
       record.promptDigest === capability.promptDigest &&
       record.scheduleRevision === capability.scheduleRevision &&
+      JSON.stringify(record.watch) === JSON.stringify(capability.watch) &&
       JSON.stringify(briefContextSummary(record.briefContext)) ===
         JSON.stringify(capability.briefContext) &&
       JSON.stringify(record.budgetReservation) === JSON.stringify(capability.budgetReservation) &&

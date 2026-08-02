@@ -107,6 +107,7 @@ const stagedConfigSchema = z.looseObject({
   ratelimits: z.tuple([
     z.looseObject({ namespace_id: z.string() }),
     z.looseObject({ namespace_id: z.string() }),
+    z.looseObject({ namespace_id: z.string() }),
   ]),
   rules: z.tuple([
     z.looseObject({
@@ -336,6 +337,11 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
           name: "MCP_RATE_LIMIT",
           namespace_id: "10002",
           simple: { limit: 60, period: 60 },
+        },
+        {
+          name: "COMPOSIO_WEBHOOK_RATE_LIMIT",
+          namespace_id: "10003",
+          simple: { limit: 600, period: 60 },
         },
       ],
       rules: [{ fallthrough: true, globs: ["**/*.sql"], type: "Text" }],
@@ -575,8 +581,12 @@ describe("Cloudflare bootstrap", () => {
 
     expect(first).toEqual(rateLimitNamespacesForWorker("crewhelm"));
     expect(first.auth).not.toBe(first.mcp);
+    expect(first.auth).not.toBe(first.composio);
+    expect(first.mcp).not.toBe(first.composio);
     expect(second.auth).not.toBe(second.mcp);
-    expect(new Set([...Object.values(first), ...Object.values(second)]).size).toBe(4);
+    expect(second.auth).not.toBe(second.composio);
+    expect(second.mcp).not.toBe(second.composio);
+    expect(new Set([...Object.values(first), ...Object.values(second)]).size).toBe(6);
     expect(
       [...Object.values(first), ...Object.values(second)].every(
         (value) => /^[1-9][0-9]*$/u.test(value) && BigInt(value) <= 2_147_483_647n,

@@ -360,6 +360,14 @@ const deploymentTemplateSchema = z.strictObject({
         period: z.literal(60),
       }),
     }),
+    z.strictObject({
+      name: z.literal("COMPOSIO_WEBHOOK_RATE_LIMIT"),
+      namespace_id: z.literal("10003"),
+      simple: z.strictObject({
+        limit: z.literal(600),
+        period: z.literal(60),
+      }),
+    }),
   ]),
   r2_buckets: z.tuple([
     z.strictObject({
@@ -503,6 +511,7 @@ interface DeploymentAssets {
 export function rateLimitNamespacesForWorker(workerName: string): {
   auth: string;
   mcp: string;
+  composio: string;
 } {
   const digest = createHash("sha256")
     .update("crewhelm:rate-limits:")
@@ -511,10 +520,26 @@ export function rateLimitNamespacesForWorker(workerName: string): {
   const first =
     (BigInt(`0x${digest.slice(0, 32)}`) % RATE_LIMIT_NAMESPACE_PAIR_COUNT) * 2n +
     MINIMUM_DERIVED_RATE_LIMIT_NAMESPACE_ID;
+  const composioDigest = createHash("sha256")
+    .update("crewhelm:rate-limits:composio:")
+    .update(workerName)
+    .digest("hex");
+  let composio =
+    (BigInt(`0x${composioDigest.slice(0, 32)}`) %
+      (MAXIMUM_RATE_LIMIT_NAMESPACE_ID - MINIMUM_DERIVED_RATE_LIMIT_NAMESPACE_ID + 1n)) +
+    MINIMUM_DERIVED_RATE_LIMIT_NAMESPACE_ID;
+
+  while (composio === first || composio === first + 1n) {
+    composio =
+      composio === MAXIMUM_RATE_LIMIT_NAMESPACE_ID
+        ? MINIMUM_DERIVED_RATE_LIMIT_NAMESPACE_ID
+        : composio + 1n;
+  }
 
   return {
     auth: first.toString(),
     mcp: (first + 1n).toString(),
+    composio: composio.toString(),
   };
 }
 
@@ -2262,7 +2287,11 @@ async function stageDeployment(
       ratelimits: assets.template.ratelimits.map((rateLimit) => ({
         ...rateLimit,
         namespace_id:
-          rateLimit.name === "AUTH_RATE_LIMIT" ? rateLimitNamespaces.auth : rateLimitNamespaces.mcp,
+          rateLimit.name === "AUTH_RATE_LIMIT"
+            ? rateLimitNamespaces.auth
+            : rateLimit.name === "MCP_RATE_LIMIT"
+              ? rateLimitNamespaces.mcp
+              : rateLimitNamespaces.composio,
       })),
       r2_buckets: [
         {

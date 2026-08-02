@@ -6,22 +6,26 @@ import { parseArgs } from "node:util";
 import {
   WORKERS_AI_CAPABILITY_ID,
   WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
+  agentWatchesResultSchema,
   batchDisableAgentsResultSchema,
   cancelRunResultSchema,
   configureAgentScheduleResultSchema,
   createAgentResultSchema,
   getAgentScheduleResultSchema,
   inspectRunResultSchema,
+  listConnectionsResultSchema,
   listAgentSchedulesResultSchema,
   manageAgentSessionsResultSchema,
   manageAgentWorkflowsResultSchema,
   startRunResultSchema,
   type BatchDisableAgentsResult,
+  type AgentWatchesResult,
   type ConfigureAgentScheduleResult,
   type CreateAgentResult,
   type GetAgentScheduleResult,
   type ListAgentSchedulesResult,
   type InspectRunResult,
+  type ListConnectionsResult,
   type StartRunResult,
 } from "../packages/contracts/src/index.js";
 
@@ -73,6 +77,17 @@ const SCHEDULE_REHEARSAL_TOOLS = [
   "crewhelm_create_agent",
   "crewhelm_get_agent_schedule",
   "crewhelm_list_agent_schedules",
+] as const;
+const WATCH_REHEARSAL_TOOLS = [
+  "crewhelm_agent_watches",
+  "crewhelm_batch_disable_agents",
+  "crewhelm_create_agent",
+] as const;
+const CONNECTED_WATCH_REHEARSAL_TOOLS = [
+  "crewhelm_agent_watches",
+  "crewhelm_batch_disable_agents",
+  "crewhelm_create_agent",
+  "crewhelm_list_connections",
 ] as const;
 const CONVERSATION_REHEARSAL_TOOLS = [
   "crewhelm_agent_sessions",
@@ -446,6 +461,48 @@ async function callDeniedTool<T>(
   return parsed.data;
 }
 
+async function callToolOutcome<T extends { ok: boolean }>(
+  session: TemporaryOwnerMcpSession,
+  name: string,
+  input: unknown,
+  schema: McpResultSchema<T>,
+): Promise<T> {
+  const response = await session.call(
+    "tools/call",
+    { arguments: input, name },
+    toolCallResponseSchema,
+  );
+  const text = response.result.content.find((content) => content.text !== undefined)?.text;
+  let payload: unknown;
+
+  try {
+    payload = JSON.parse(text ?? "");
+  } catch {
+    throw new TemporaryOwnerSessionError(
+      "invalid_payload",
+      `${name} returned an invalid rehearsal outcome.`,
+    );
+  }
+
+  const parsed = schema.safeParse(payload);
+
+  if (!parsed.success) {
+    throw new TemporaryOwnerSessionError(
+      "invalid_payload",
+      `${name} returned an invalid rehearsal outcome.`,
+    );
+  }
+
+  if (response.result.isError === parsed.data.ok) {
+    throw new TemporaryOwnerSessionError(
+      "invalid_payload",
+      `${name} returned inconsistent rehearsal success metadata.`,
+    );
+  }
+
+  return parsed.data;
+}
+
 function localTime(instant: string, timeZone: string): string {
   const parts = new Intl.DateTimeFormat("en-US-u-ca-iso8601-nu-latn", {
     hour: "2-digit",
@@ -790,6 +847,913 @@ async function schedules(options: {
       result.revocation.status === "revoked",
     operation: result.operation,
     public: publicReport,
+    revocation: result.revocation,
+    schemaVersion: 1,
+  };
+}
+
+async function watches(options: {
+  credentialPath: string;
+  installationPath: string;
+  runTimeoutMs: number;
+  timeoutMs: number;
+}): Promise<unknown> {
+  const target = await resolveRehearsalTarget(options.installationPath);
+  const publicReport = await diagnoseDeployment(
+    { origin: target.origin, timeoutMs: options.timeoutMs },
+    { expectedDeploymentFingerprint: target.expectedDeploymentFingerprint, fetch },
+  );
+
+  if (!publicReport.ok || publicReport.deployment.alignment !== "aligned") {
+    return { ok: false, public: publicReport, schemaVersion: 1 };
+  }
+
+  const credential = await readRehearsalCredential(options.credentialPath);
+  const suffix = crypto.randomUUID().slice(0, 8);
+  let agentId: string | undefined;
+  let watchId: string | undefined;
+  let watchRevision: number | undefined;
+  const result = await runRefreshableOwnerSession(
+    {
+      credential,
+      origin: target.origin,
+      persistCredential: (rotated) => writeRehearsalCredential(options.credentialPath, rotated),
+      timeoutMs: options.timeoutMs,
+    },
+    { expectedDeploymentFingerprint: target.expectedDeploymentFingerprint, fetch },
+    async (session) => {
+      await session.call(
+        "initialize",
+        {
+          capabilities: {},
+          clientInfo: { name: "crewhelm-live-rehearsal", version: CREWHELM_CLI_VERSION },
+          protocolVersion: MCP_PROTOCOL_VERSION,
+        },
+        initializeResponseSchema,
+      );
+      const catalog = await session.call("tools/list", {}, toolListResponseSchema);
+      const names = new Set(catalog.result.tools.map((tool) => tool.name));
+
+      if (!WATCH_REHEARSAL_TOOLS.every((name) => names.has(name))) {
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          "MCP catalog omitted a Watch rehearsal tool.",
+        );
+      }
+
+      const created = await callTool<CreateAgentResult>(
+        session,
+        "crewhelm_create_agent",
+        {
+          capabilities: [
+            {
+              configuration: {
+                fallbackModels: [],
+                primaryModel: "@cf/zai-org/glm-4.7-flash",
+              },
+              id: WORKERS_AI_CAPABILITY_ID,
+              schemaVersion: WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
+            },
+          ],
+          executionLimits: {
+            maxDurationSeconds: 45,
+            maxModelTokens: 512,
+            maxToolCalls: 0,
+            maxTurns: 1,
+          },
+          idempotencyKey: `watch-rehearsal-agent-${suffix}`,
+          instructions: "Complete each bounded Watch check without tools.",
+          name: `Watch rehearsal ${suffix}`,
+        },
+        createAgentResultSchema,
+      );
+
+      if (!created.ok) {
+        throw new TemporaryOwnerSessionError("invalid_payload", "Disposable Agent was denied.");
+      }
+
+      agentId = created.agent.id;
+      let evidence: unknown;
+      let operationFailure: unknown;
+
+      try {
+        const sources = await callTool<AgentWatchesResult>(
+          session,
+          "crewhelm_agent_watches",
+          { action: "sources" },
+          agentWatchesResultSchema,
+        );
+
+        if (
+          !sources.ok ||
+          sources.action !== "sources" ||
+          !sources.sources.some((source) => source.kind === "scheduled_check")
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Watch source discovery omitted scheduled checks.",
+          );
+        }
+
+        const createInput = {
+          action: "create",
+          agentId,
+          everyMinutes: 1,
+          expectedAgentRevision: created.agent.revision,
+          idempotencyKey: `watch-rehearsal-create-${suffix}`,
+          instruction: "Return a short confirmation that this scheduled Watch woke the Agent.",
+          name: "Scheduled wake-up",
+        } as const;
+        const createArguments = {
+          action: createInput.action,
+          agentId: createInput.agentId,
+          expectedAgentRevision: createInput.expectedAgentRevision,
+          idempotencyKey: createInput.idempotencyKey,
+          watch: {
+            everyMinutes: createInput.everyMinutes,
+            instruction: createInput.instruction,
+            name: createInput.name,
+          },
+        };
+        const configured = await callTool<AgentWatchesResult>(
+          session,
+          "crewhelm_agent_watches",
+          createArguments,
+          agentWatchesResultSchema,
+        );
+
+        if (
+          !configured.ok ||
+          configured.action !== "create" ||
+          !configured.changed ||
+          configured.watch.status !== "active"
+        ) {
+          throw new TemporaryOwnerSessionError("invalid_payload", "Watch was not created.");
+        }
+
+        watchId = configured.watch.id;
+        watchRevision = configured.watch.revision;
+        const replay = await callTool<AgentWatchesResult>(
+          session,
+          "crewhelm_agent_watches",
+          createArguments,
+          agentWatchesResultSchema,
+        );
+
+        if (
+          !replay.ok ||
+          replay.action !== "create" ||
+          replay.changed ||
+          replay.watch.id !== watchId ||
+          replay.watch.revision !== watchRevision
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Watch creation did not replay exactly.",
+          );
+        }
+
+        const deadline = Date.now() + options.runTimeoutMs;
+        let occurrence:
+          | Extract<AgentWatchesResult, { action: "history"; ok: true }>["occurrences"][number]
+          | undefined;
+
+        while (Date.now() < deadline) {
+          const history = await callTool<AgentWatchesResult>(
+            session,
+            "crewhelm_agent_watches",
+            { action: "history", agentId, limit: 10, watchId },
+            agentWatchesResultSchema,
+          );
+
+          if (!history.ok || history.action !== "history") {
+            throw new TemporaryOwnerSessionError(
+              "invalid_payload",
+              "Watch occurrence history was unavailable.",
+            );
+          }
+
+          occurrence = history.occurrences.find((item) => item.outcome === "dispatched");
+          if (occurrence !== undefined) break;
+          await new Promise((resolve) => setTimeout(resolve, 5_000));
+        }
+
+        if (occurrence?.runId === null || occurrence?.runId === undefined) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Scheduled Watch did not dispatch in time.",
+          );
+        }
+
+        const paused = await callTool<AgentWatchesResult>(
+          session,
+          "crewhelm_agent_watches",
+          {
+            action: "pause",
+            agentId,
+            expectedAgentRevision: created.agent.revision,
+            expectedWatchRevision: watchRevision,
+            idempotencyKey: `watch-rehearsal-pause-${suffix}`,
+            watchId,
+          },
+          agentWatchesResultSchema,
+        );
+
+        if (!paused.ok || paused.action !== "pause" || paused.watch.status !== "paused") {
+          throw new TemporaryOwnerSessionError("invalid_payload", "Watch was not paused.");
+        }
+        watchRevision = paused.watch.revision;
+
+        const resumed = await callTool<AgentWatchesResult>(
+          session,
+          "crewhelm_agent_watches",
+          {
+            action: "resume",
+            agentId,
+            expectedAgentRevision: created.agent.revision,
+            expectedWatchRevision: watchRevision,
+            idempotencyKey: `watch-rehearsal-resume-${suffix}`,
+            watchId,
+          },
+          agentWatchesResultSchema,
+        );
+
+        if (!resumed.ok || resumed.action !== "resume" || resumed.watch.status !== "active") {
+          throw new TemporaryOwnerSessionError("invalid_payload", "Watch was not resumed.");
+        }
+        watchRevision = resumed.watch.revision;
+
+        const deleted = await callTool<AgentWatchesResult>(
+          session,
+          "crewhelm_agent_watches",
+          {
+            action: "delete",
+            agentId,
+            expectedAgentRevision: created.agent.revision,
+            expectedWatchRevision: watchRevision,
+            idempotencyKey: `watch-rehearsal-delete-${suffix}`,
+            watchId,
+          },
+          agentWatchesResultSchema,
+        );
+
+        if (!deleted.ok || deleted.action !== "delete" || !deleted.deleted) {
+          throw new TemporaryOwnerSessionError("invalid_payload", "Watch was not deleted.");
+        }
+        const deletionReplay = await callTool<AgentWatchesResult>(
+          session,
+          "crewhelm_agent_watches",
+          {
+            action: "delete",
+            agentId,
+            expectedAgentRevision: created.agent.revision,
+            expectedWatchRevision: watchRevision,
+            idempotencyKey: `watch-rehearsal-delete-${suffix}`,
+            watchId,
+          },
+          agentWatchesResultSchema,
+        );
+
+        if (!deletionReplay.ok || deletionReplay.action !== "delete" || deletionReplay.deleted) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Watch deletion did not replay exactly.",
+          );
+        }
+        const listed = await callTool<AgentWatchesResult>(
+          session,
+          "crewhelm_agent_watches",
+          { action: "list", agentId },
+          agentWatchesResultSchema,
+        );
+
+        if (!listed.ok || listed.action !== "list" || listed.watches.length !== 0) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Deleted Watch remained discoverable.",
+          );
+        }
+
+        evidence = {
+          occurrence: {
+            occurredAt: occurrence.occurredAt,
+            runId: occurrence.runId,
+            scheduledFor: occurrence.scheduledFor,
+            watchRevision: occurrence.watchRevision,
+          },
+          revisions: {
+            created: configured.watch.revision,
+            paused: paused.watch.revision,
+            resumed: resumed.watch.revision,
+          },
+          source: "scheduled_check",
+          watchId,
+        };
+        watchId = undefined;
+      } catch (error) {
+        operationFailure = error;
+      }
+
+      if (watchId !== undefined) {
+        let cleanupError: unknown;
+
+        for (let attempt = 0; attempt < 5 && watchId !== undefined; attempt += 1) {
+          try {
+            const inspected = await callToolOutcome<AgentWatchesResult>(
+              session,
+              "crewhelm_agent_watches",
+              { action: "inspect", agentId, watchId },
+              agentWatchesResultSchema,
+            );
+
+            if (!inspected.ok) {
+              if (inspected.error.code === "watch_not_found") {
+                watchId = undefined;
+                break;
+              }
+              throw new TemporaryOwnerSessionError(
+                "invalid_payload",
+                `Watch cleanup inspection was denied: ${inspected.error.code}.`,
+              );
+            }
+
+            if (inspected.action !== "inspect") {
+              throw new TemporaryOwnerSessionError(
+                "invalid_payload",
+                "Watch cleanup inspection returned the wrong action.",
+              );
+            }
+
+            watchRevision = inspected.watch.revision;
+            const cleaned = await callToolOutcome<AgentWatchesResult>(
+              session,
+              "crewhelm_agent_watches",
+              {
+                action: "delete",
+                agentId,
+                expectedAgentRevision: created.agent.revision,
+                expectedWatchRevision: watchRevision,
+                idempotencyKey: `watch-rehearsal-cleanup-${suffix}`,
+                watchId,
+              },
+              agentWatchesResultSchema,
+            );
+
+            if (!cleaned.ok) {
+              if (cleaned.error.code === "watch_busy") {
+                await new Promise((resolve) => setTimeout(resolve, 1_000));
+                continue;
+              }
+              throw new TemporaryOwnerSessionError(
+                "invalid_payload",
+                `Watch cleanup was denied: ${cleaned.error.code}.`,
+              );
+            }
+
+            const verified = await callToolOutcome<AgentWatchesResult>(
+              session,
+              "crewhelm_agent_watches",
+              { action: "inspect", agentId, watchId },
+              agentWatchesResultSchema,
+            );
+
+            if (!verified.ok && verified.error.code === "watch_not_found") {
+              watchId = undefined;
+              break;
+            }
+
+            throw new TemporaryOwnerSessionError(
+              "invalid_payload",
+              "Watch cleanup did not remove the exact Watch.",
+            );
+          } catch (error) {
+            cleanupError = error;
+            await new Promise((resolve) => setTimeout(resolve, 1_000));
+          }
+        }
+
+        if (watchId !== undefined) {
+          operationFailure ??=
+            cleanupError ??
+            new TemporaryOwnerSessionError("invalid_payload", "Watch cleanup did not finish.");
+        }
+      }
+
+      try {
+        const disabled = await callTool<BatchDisableAgentsResult>(
+          session,
+          "crewhelm_batch_disable_agents",
+          { agents: [{ agentId, expectedRevision: created.agent.revision }] },
+          batchDisableAgentsResultSchema,
+        );
+
+        if (
+          !disabled.ok ||
+          disabled.receipts.length !== 1 ||
+          !["already_disabled", "disabled"].includes(disabled.receipts[0]?.outcome ?? "")
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Disposable Watch rehearsal Agent was not disabled.",
+          );
+        }
+      } catch (cleanupError) {
+        operationFailure ??= cleanupError;
+      }
+
+      if (operationFailure !== undefined) throw operationFailure;
+      return evidence;
+    },
+  );
+
+  return {
+    agentId,
+    authorization: result.authorization,
+    evidence: result.operation.status === "completed" ? result.operation.value : undefined,
+    ok:
+      result.authorization.ok &&
+      result.operation.status === "completed" &&
+      result.revocation.status === "revoked",
+    operation: result.operation,
+    public: publicReport,
+    ...(watchId === undefined ? {} : { retainedWatchId: watchId }),
+    revocation: result.revocation,
+    schemaVersion: 1,
+  };
+}
+
+async function connectedWatches(options: {
+  credentialPath: string;
+  installationPath: string;
+  timeoutMs: number;
+}): Promise<unknown> {
+  const target = await resolveRehearsalTarget(options.installationPath);
+  const publicReport = await diagnoseDeployment(
+    { origin: target.origin, timeoutMs: options.timeoutMs },
+    { expectedDeploymentFingerprint: target.expectedDeploymentFingerprint, fetch },
+  );
+
+  if (!publicReport.ok || publicReport.deployment.alignment !== "aligned") {
+    return { ok: false, public: publicReport, schemaVersion: 1 };
+  }
+
+  const missingSignatureIngress = await fetch(new URL("/webhooks/composio", target.origin), {
+    body: JSON.stringify({ metadata: {} }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+    redirect: "manual",
+    signal: AbortSignal.timeout(options.timeoutMs),
+  });
+
+  if (missingSignatureIngress.status !== 401) {
+    return {
+      boundary: { missingSignatureIngressStatus: missingSignatureIngress.status },
+      ok: false,
+      public: publicReport,
+      schemaVersion: 1,
+    };
+  }
+
+  const credential = await readRehearsalCredential(options.credentialPath);
+  const suffix = crypto.randomUUID().slice(0, 8);
+  let agentId: string | undefined;
+  let watchId: string | undefined;
+  let watchRevision: number | undefined;
+  const result = await runRefreshableOwnerSession(
+    {
+      credential,
+      origin: target.origin,
+      persistCredential: (rotated) => writeRehearsalCredential(options.credentialPath, rotated),
+      timeoutMs: options.timeoutMs,
+    },
+    { expectedDeploymentFingerprint: target.expectedDeploymentFingerprint, fetch },
+    async (session) => {
+      await session.call(
+        "initialize",
+        {
+          capabilities: {},
+          clientInfo: { name: "crewhelm-live-rehearsal", version: CREWHELM_CLI_VERSION },
+          protocolVersion: MCP_PROTOCOL_VERSION,
+        },
+        initializeResponseSchema,
+      );
+      const catalog = await session.call("tools/list", {}, toolListResponseSchema);
+      const names = new Set(catalog.result.tools.map((tool) => tool.name));
+
+      if (!CONNECTED_WATCH_REHEARSAL_TOOLS.every((name) => names.has(name))) {
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          "MCP catalog omitted a connected-Watch rehearsal tool.",
+        );
+      }
+
+      const activeAgentsBefore = (await readRehearsalStatus(session)).usage.agents.active;
+      const connections = await callTool<ListConnectionsResult>(
+        session,
+        "crewhelm_list_connections",
+        { authorizationOutcome: "returned", limit: 20, status: "active" },
+        listConnectionsResultSchema,
+      );
+
+      if (!connections.ok || connections.connections.length === 0) {
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          "Connected-Watch rehearsal requires one active returned test connection.",
+        );
+      }
+
+      let source:
+        | Extract<
+            Extract<AgentWatchesResult, { action: "sources"; ok: true }>["sources"][number],
+            { kind: "connection_event" }
+          >
+        | undefined;
+
+      for (const connection of connections.connections) {
+        const sources = await callToolOutcome<AgentWatchesResult>(
+          session,
+          "crewhelm_agent_watches",
+          { action: "sources", connectionId: connection.connectionId },
+          agentWatchesResultSchema,
+        );
+
+        if (!sources.ok || sources.action !== "sources") continue;
+        for (const candidate of sources.sources) {
+          if (
+            candidate.kind === "connection_event" &&
+            candidate.configuration.every((field) => !field.required)
+          ) {
+            source = candidate;
+            break;
+          }
+        }
+        if (source !== undefined) break;
+      }
+
+      if (source === undefined) {
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          "No active test connection exposed a filter-free connected event.",
+        );
+      }
+
+      const created = await callTool<CreateAgentResult>(
+        session,
+        "crewhelm_create_agent",
+        {
+          capabilities: [
+            {
+              configuration: {
+                fallbackModels: [],
+                primaryModel: "@cf/zai-org/glm-4.7-flash",
+              },
+              id: WORKERS_AI_CAPABILITY_ID,
+              schemaVersion: WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
+            },
+          ],
+          executionLimits: {
+            maxDurationSeconds: 45,
+            maxModelTokens: 512,
+            maxToolCalls: 0,
+            maxTurns: 1,
+          },
+          idempotencyKey: `connected-watch-rehearsal-agent-${suffix}`,
+          instructions: "Handle each bounded connected-app Watch event without tools.",
+          name: `Connected Watch rehearsal ${suffix}`,
+        },
+        createAgentResultSchema,
+      );
+
+      if (!created.ok) {
+        throw new TemporaryOwnerSessionError("invalid_payload", "Disposable Agent was denied.");
+      }
+
+      agentId = created.agent.id;
+      const createArguments = {
+        action: "create",
+        agentId,
+        expectedAgentRevision: created.agent.revision,
+        idempotencyKey: `connected-watch-rehearsal-create-${suffix}`,
+        watch: {
+          connectionId: source.connectionId,
+          delivery: source.delivery,
+          eventSlug: source.sourceSlug,
+          eventVersion: source.sourceVersion,
+          filters: {},
+          integrationSlug: source.integration.slug,
+          instruction: "Summarize the matching event and recommend the next owner action.",
+          name: `Connected ${source.name}`.slice(0, 80),
+        },
+      } as const;
+      let evidence: unknown;
+      let operationFailure: unknown;
+
+      try {
+        let configured: AgentWatchesResult | undefined;
+
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          configured = await callToolOutcome<AgentWatchesResult>(
+            session,
+            "crewhelm_agent_watches",
+            createArguments,
+            agentWatchesResultSchema,
+          );
+          if (configured.ok) break;
+          if (configured.error.code !== "watch_operation_unknown") break;
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+        }
+
+        if (
+          configured === undefined ||
+          !configured.ok ||
+          configured.action !== "create" ||
+          configured.watch.status !== "active"
+        ) {
+          const discovered = await callToolOutcome<AgentWatchesResult>(
+            session,
+            "crewhelm_agent_watches",
+            { action: "list", agentId },
+            agentWatchesResultSchema,
+          );
+
+          if (discovered.ok && discovered.action === "list" && discovered.watches.length === 1) {
+            watchId = discovered.watches[0]?.id;
+            watchRevision = discovered.watches[0]?.revision;
+          }
+
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Connected Watch was not created.",
+          );
+        }
+
+        watchId = configured.watch.id;
+        watchRevision = configured.watch.revision;
+        const replay = await callTool<AgentWatchesResult>(
+          session,
+          "crewhelm_agent_watches",
+          createArguments,
+          agentWatchesResultSchema,
+        );
+
+        if (
+          !replay.ok ||
+          replay.action !== "create" ||
+          replay.changed ||
+          replay.watch.id !== watchId ||
+          replay.watch.revision !== watchRevision
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Connected Watch creation did not replay exactly.",
+          );
+        }
+
+        const deniedIngress = await fetch(new URL("/webhooks/composio", target.origin), {
+          body: JSON.stringify({ metadata: {} }),
+          headers: {
+            "content-type": "application/json",
+            "webhook-id": `webhook_rehearsal_${suffix}`,
+            "webhook-signature": "v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "webhook-timestamp": String(Math.floor(Date.now() / 1_000)),
+          },
+          method: "POST",
+          redirect: "manual",
+          signal: AbortSignal.timeout(options.timeoutMs),
+        });
+
+        if (deniedIngress.status !== 401) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Unsigned connected-Watch ingress did not fail closed.",
+          );
+        }
+
+        const paused = await callTool<AgentWatchesResult>(
+          session,
+          "crewhelm_agent_watches",
+          {
+            action: "pause",
+            agentId,
+            expectedAgentRevision: created.agent.revision,
+            expectedWatchRevision: watchRevision,
+            idempotencyKey: `connected-watch-rehearsal-pause-${suffix}`,
+            watchId,
+          },
+          agentWatchesResultSchema,
+        );
+
+        if (!paused.ok || paused.action !== "pause" || paused.watch.status !== "paused") {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Connected Watch was not paused.",
+          );
+        }
+        watchRevision = paused.watch.revision;
+
+        const resumed = await callTool<AgentWatchesResult>(
+          session,
+          "crewhelm_agent_watches",
+          {
+            action: "resume",
+            agentId,
+            expectedAgentRevision: created.agent.revision,
+            expectedWatchRevision: watchRevision,
+            idempotencyKey: `connected-watch-rehearsal-resume-${suffix}`,
+            watchId,
+          },
+          agentWatchesResultSchema,
+        );
+
+        if (!resumed.ok || resumed.action !== "resume" || resumed.watch.status !== "active") {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Connected Watch was not resumed.",
+          );
+        }
+        watchRevision = resumed.watch.revision;
+
+        const deleted = await callTool<AgentWatchesResult>(
+          session,
+          "crewhelm_agent_watches",
+          {
+            action: "delete",
+            agentId,
+            expectedAgentRevision: created.agent.revision,
+            expectedWatchRevision: watchRevision,
+            idempotencyKey: `connected-watch-rehearsal-delete-${suffix}`,
+            watchId,
+          },
+          agentWatchesResultSchema,
+        );
+
+        if (!deleted.ok || deleted.action !== "delete" || !deleted.deleted) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Connected Watch was not deleted.",
+          );
+        }
+
+        const deletionReplay = await callTool<AgentWatchesResult>(
+          session,
+          "crewhelm_agent_watches",
+          {
+            action: "delete",
+            agentId,
+            expectedAgentRevision: created.agent.revision,
+            expectedWatchRevision: watchRevision,
+            idempotencyKey: `connected-watch-rehearsal-delete-${suffix}`,
+            watchId,
+          },
+          agentWatchesResultSchema,
+        );
+        const listed = await callTool<AgentWatchesResult>(
+          session,
+          "crewhelm_agent_watches",
+          { action: "list", agentId },
+          agentWatchesResultSchema,
+        );
+
+        if (
+          !deletionReplay.ok ||
+          deletionReplay.action !== "delete" ||
+          deletionReplay.deleted ||
+          !listed.ok ||
+          listed.action !== "list" ||
+          listed.watches.length !== 0
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Connected Watch cleanup did not replay or disappear exactly.",
+          );
+        }
+
+        evidence = {
+          connectionId: source.connectionId,
+          delivery: source.delivery,
+          eventSlug: source.sourceSlug,
+          eventVersion: source.sourceVersion,
+          integrationSlug: source.integration.slug,
+          revisions: {
+            created: configured.watch.revision,
+            paused: paused.watch.revision,
+            resumed: resumed.watch.revision,
+          },
+          missingSignatureIngressStatus: missingSignatureIngress.status,
+          unsignedIngressStatus: deniedIngress.status,
+          authenticEventDelivery: "not_exercised",
+          watchId,
+        };
+        watchId = undefined;
+      } catch (error) {
+        operationFailure = error;
+      }
+
+      if (watchId !== undefined) {
+        try {
+          for (let attempt = 0; attempt < 5 && watchId !== undefined; attempt += 1) {
+            const listed = await callToolOutcome<AgentWatchesResult>(
+              session,
+              "crewhelm_agent_watches",
+              { action: "list", agentId },
+              agentWatchesResultSchema,
+            );
+
+            if (!listed.ok || listed.action !== "list") {
+              await new Promise((resolve) => setTimeout(resolve, 1_000));
+              continue;
+            }
+
+            const retained = listed.watches.filter((watch) => watch.id === watchId);
+
+            if (retained.length === 0) {
+              watchId = undefined;
+              break;
+            }
+
+            if (retained.length !== 1) break;
+            watchRevision = retained[0]?.revision;
+
+            if (watchRevision === undefined) break;
+
+            const deleted = await callToolOutcome<AgentWatchesResult>(
+              session,
+              "crewhelm_agent_watches",
+              {
+                action: "delete",
+                agentId,
+                expectedAgentRevision: created.agent.revision,
+                expectedWatchRevision: watchRevision,
+                idempotencyKey: `connected-watch-rehearsal-cleanup-${suffix}-${attempt}`,
+                watchId,
+              },
+              agentWatchesResultSchema,
+            );
+            if (deleted.ok && deleted.action === "delete") {
+              watchId = undefined;
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 1_000));
+          }
+        } catch (cleanupError) {
+          operationFailure ??= cleanupError;
+        }
+      }
+
+      if (watchId !== undefined) {
+        operationFailure ??= new TemporaryOwnerSessionError(
+          "invalid_payload",
+          "Connected Watch cleanup did not finish.",
+        );
+      }
+
+      try {
+        const disabled = await callTool<BatchDisableAgentsResult>(
+          session,
+          "crewhelm_batch_disable_agents",
+          { agents: [{ agentId, expectedRevision: created.agent.revision }] },
+          batchDisableAgentsResultSchema,
+        );
+        const activeAgentsAfter = (await readRehearsalStatus(session)).usage.agents.active;
+
+        if (
+          !disabled.ok ||
+          disabled.receipts.length !== 1 ||
+          !["already_disabled", "disabled"].includes(disabled.receipts[0]?.outcome ?? "") ||
+          activeAgentsAfter !== activeAgentsBefore
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Connected-Watch rehearsal did not restore Agent capacity.",
+          );
+        }
+
+        evidence = {
+          ...(typeof evidence === "object" && evidence !== null ? evidence : {}),
+          activeAgentsAfter,
+          activeAgentsBefore,
+        };
+      } catch (cleanupError) {
+        operationFailure ??= cleanupError;
+      }
+
+      if (operationFailure !== undefined) throw operationFailure;
+      return evidence;
+    },
+  );
+
+  return {
+    agentId,
+    authorization: result.authorization,
+    boundary: { missingSignatureIngressStatus: missingSignatureIngress.status },
+    evidence: result.operation.status === "completed" ? result.operation.value : undefined,
+    ok:
+      result.authorization.ok &&
+      result.operation.status === "completed" &&
+      result.revocation.status === "revoked",
+    operation: result.operation,
+    public: publicReport,
+    ...(watchId === undefined ? {} : { retainedWatchId: watchId }),
     revocation: result.revocation,
     schemaVersion: 1,
   };
@@ -1582,18 +2546,20 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
   const [action, ...rest] = arguments_;
   if (
     action !== "authorize" &&
+    action !== "connected-watches" &&
     action !== "conversation" &&
     action !== "inspect-sandbox" &&
     action !== "recover" &&
     action !== "recover-conversation" &&
     action !== "sandbox" &&
     action !== "schedules" &&
+    action !== "watches" &&
     action !== "typed-output" &&
     action !== "web-research" &&
     action !== "workflow"
   ) {
     process.stderr.write(
-      "Usage: crewhelm-live-rehearsal.ts <authorize|conversation|inspect-sandbox|recover|recover-conversation|sandbox|schedules|typed-output|web-research|workflow> [options]\n",
+      "Usage: crewhelm-live-rehearsal.ts <authorize|connected-watches|conversation|inspect-sandbox|recover|recover-conversation|sandbox|schedules|typed-output|watches|web-research|workflow> [options]\n",
     );
     return 2;
   }
@@ -1635,64 +2601,68 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
                   throw new Error("browser must be codex or system.");
                 })(),
         })
-      : action === "conversation"
-        ? await conversation({ ...common, runTimeoutMs })
-        : action === "inspect-sandbox"
-          ? await inspectSandbox({
-              ...common,
-              runId:
-                parsed.values["run-id"] ??
-                (() => {
-                  throw new Error("inspect-sandbox requires run-id.");
-                })(),
-            })
-          : action === "recover-conversation"
-            ? await recoverConversation({
+      : action === "connected-watches"
+        ? await connectedWatches(common)
+        : action === "conversation"
+          ? await conversation({ ...common, runTimeoutMs })
+          : action === "inspect-sandbox"
+            ? await inspectSandbox({
                 ...common,
-                agentId:
-                  parsed.values["agent-id"] ??
+                runId:
+                  parsed.values["run-id"] ??
                   (() => {
-                    throw new Error("recover-conversation requires agent-id.");
-                  })(),
-                sessionId:
-                  parsed.values["session-id"] ??
-                  (() => {
-                    throw new Error("recover-conversation requires session-id.");
+                    throw new Error("inspect-sandbox requires run-id.");
                   })(),
               })
-            : action === "recover"
-              ? await recover({
+            : action === "recover-conversation"
+              ? await recoverConversation({
                   ...common,
                   agentId:
                     parsed.values["agent-id"] ??
                     (() => {
-                      throw new Error("recover requires agent-id.");
+                      throw new Error("recover-conversation requires agent-id.");
                     })(),
-                  runTimeoutMs,
-                  workflowId:
-                    parsed.values["workflow-id"] ??
+                  sessionId:
+                    parsed.values["session-id"] ??
                     (() => {
-                      throw new Error("recover requires workflow-id.");
+                      throw new Error("recover-conversation requires session-id.");
                     })(),
                 })
-              : action === "sandbox"
-                ? await sandbox({
+              : action === "recover"
+                ? await recover({
                     ...common,
+                    agentId:
+                      parsed.values["agent-id"] ??
+                      (() => {
+                        throw new Error("recover requires agent-id.");
+                      })(),
                     runTimeoutMs,
+                    workflowId:
+                      parsed.values["workflow-id"] ??
+                      (() => {
+                        throw new Error("recover requires workflow-id.");
+                      })(),
                   })
-                : action === "schedules"
-                  ? await schedules(common)
-                  : action === "typed-output"
-                    ? await typedOutput({ ...common, runTimeoutMs })
-                    : action === "web-research"
-                      ? await webResearch({
-                          ...common,
-                          runTimeoutMs,
-                        })
-                      : await workflow({
-                          ...common,
-                          runTimeoutMs,
-                        });
+                : action === "sandbox"
+                  ? await sandbox({
+                      ...common,
+                      runTimeoutMs,
+                    })
+                  : action === "schedules"
+                    ? await schedules(common)
+                    : action === "watches"
+                      ? await watches({ ...common, runTimeoutMs })
+                      : action === "typed-output"
+                        ? await typedOutput({ ...common, runTimeoutMs })
+                        : action === "web-research"
+                          ? await webResearch({
+                              ...common,
+                              runTimeoutMs,
+                            })
+                          : await workflow({
+                              ...common,
+                              runTimeoutMs,
+                            });
   process.stdout.write(`${JSON.stringify(report)}\n`);
   return typeof report === "object" && report !== null && Reflect.get(report, "ok") === true
     ? 0

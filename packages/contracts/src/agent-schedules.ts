@@ -230,6 +230,7 @@ const agentScheduleErrorSchema = z.strictObject({
     "no_changes",
     "owner_mismatch",
     "revision_conflict",
+    "schedule_busy",
     "schedule_limit_exceeded",
     "schedule_not_found",
     "schedule_selection_required",

@@ -1,6 +1,8 @@
 import {
   MAXIMUM_AGENT_SCHEDULES_PER_AGENT,
+  MAXIMUM_AGENT_SCHEDULE_INTERVAL_SECONDS,
   MAXIMUM_DUE_AGENT_SCHEDULES_PER_ALARM,
+  MAXIMUM_RETAINED_AGENT_WATCH_OCCURRENCES,
   agentScheduleConfigurationSchema,
   agentScheduleIdSchema,
   agentScheduleSchema,
@@ -12,6 +14,8 @@ import {
   listAgentSchedulesResultSchema,
   type AgentSchedule,
   type AgentScheduleConfiguration,
+  type AgentWatchDefinition,
+  type AgentWatchOccurrence,
   type ConfigureAgentScheduleResult,
   type FleetConfigurationData,
   type GetAgentScheduleResult,
@@ -19,11 +23,26 @@ import {
   type OwnerAuthority,
   type OutputContract,
 } from "@crewhelm/contracts";
-import { and, asc, desc, eq, lte, max, min } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  isNotNull,
+  lte,
+  max,
+  min,
+  ne,
+  notExists,
+  notInArray,
+} from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import {
   agentInboxItems,
+  agentEventWatches,
+  agentScheduleOccurrences,
   agentScheduleRevisions,
   agentSchedules,
   agentScheduleUpdates,
@@ -38,6 +57,7 @@ import {
 } from "./recurrence.js";
 
 type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
+type DatabaseTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 type ScheduleFailure = Extract<ConfigureAgentScheduleResult, { ok: false }>;
 type ScheduleRevisionRow = {
   agentId: string;
@@ -55,8 +75,12 @@ type ScheduleStateRow = {
   lastRunId: string | null;
   nextRunAt: number | null;
   scheduleId: string;
-  status: "active" | "paused";
+  status: "active" | "deleted" | "paused";
 };
+
+export type DeleteAgentWatchResult =
+  | { deleted: boolean; ok: true; watchId: string }
+  | ScheduleFailure;
 
 export type DueAgentSchedule = {
   agentId: string;
@@ -70,6 +94,45 @@ export type DueAgentSchedule = {
   scheduleRevision: number;
   scheduledAt: number;
 };
+
+const WATCH_OCCURRENCE_RECOVERY_DELAY_MS = 60_000;
+const MAXIMUM_WATCH_OCCURRENCE_ATTEMPTS = 5;
+
+function pruneOccurrenceHistory(transaction: DatabaseTransaction, scheduleId: string): void {
+  const stale = transaction
+    .select({
+      scheduleRevision: agentScheduleOccurrences.scheduleRevision,
+      scheduledAt: agentScheduleOccurrences.scheduledAt,
+    })
+    .from(agentScheduleOccurrences)
+    .where(
+      and(
+        eq(agentScheduleOccurrences.scheduleId, scheduleId),
+        ne(agentScheduleOccurrences.status, "pending"),
+      ),
+    )
+    .orderBy(
+      desc(agentScheduleOccurrences.occurredAt),
+      desc(agentScheduleOccurrences.scheduledAt),
+      desc(agentScheduleOccurrences.scheduleRevision),
+    )
+    .limit(MAXIMUM_RETAINED_AGENT_WATCH_OCCURRENCES)
+    .offset(MAXIMUM_RETAINED_AGENT_WATCH_OCCURRENCES)
+    .all();
+
+  for (const occurrence of stale) {
+    transaction
+      .delete(agentScheduleOccurrences)
+      .where(
+        and(
+          eq(agentScheduleOccurrences.scheduleId, scheduleId),
+          eq(agentScheduleOccurrences.scheduleRevision, occurrence.scheduleRevision),
+          eq(agentScheduleOccurrences.scheduledAt, occurrence.scheduledAt),
+        ),
+      )
+      .run();
+  }
+}
 
 function encodeBase64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -204,6 +267,10 @@ export class AgentSchedules {
           .where(eq(agentSchedules.scheduleId, replay.scheduleId))
           .get();
 
+        if (current?.status === "deleted") {
+          return deniedAgentSchedule("schedule_not_found");
+        }
+
         return configureAgentScheduleResultSchema.parse({
           configured: false,
           ok: true,
@@ -255,7 +322,12 @@ export class AgentSchedules {
             eq(agentScheduleRevisions.revision, agentSchedules.currentRevision),
           ),
         )
-        .where(eq(agentSchedules.agentId, request.data.agentId))
+        .where(
+          and(
+            eq(agentSchedules.agentId, request.data.agentId),
+            ne(agentSchedules.status, "deleted"),
+          ),
+        )
         .orderBy(asc(agentSchedules.scheduleId))
         .all();
       const current =
@@ -286,7 +358,39 @@ export class AgentSchedules {
         return deniedAgentSchedule("revision_conflict");
       }
 
-      if (current === undefined && schedules.length >= MAXIMUM_AGENT_SCHEDULES_PER_AGENT) {
+      if (
+        current !== undefined &&
+        transaction
+          .select({ scheduleId: agentScheduleOccurrences.scheduleId })
+          .from(agentScheduleOccurrences)
+          .where(
+            and(
+              eq(agentScheduleOccurrences.scheduleId, current.scheduleId),
+              eq(agentScheduleOccurrences.status, "pending"),
+            ),
+          )
+          .limit(1)
+          .get() !== undefined
+      ) {
+        return deniedAgentSchedule("schedule_busy");
+      }
+
+      const eventWatchCount =
+        transaction
+          .select({ value: count() })
+          .from(agentEventWatches)
+          .where(
+            and(
+              eq(agentEventWatches.agentId, request.data.agentId),
+              ne(agentEventWatches.status, "deleted"),
+            ),
+          )
+          .get()?.value ?? 0;
+
+      if (
+        current === undefined &&
+        schedules.length + eventWatchCount >= MAXIMUM_AGENT_SCHEDULES_PER_AGENT
+      ) {
         return deniedAgentSchedule("schedule_limit_exceeded");
       }
 
@@ -403,6 +507,22 @@ export class AgentSchedules {
     return result;
   }
 
+  watchSourceLimits(): {
+    maximumEveryMinutes: number;
+    maximumWatchesPerAgent: number;
+    minimumEveryMinutes: number;
+    retainedOccurrences: number;
+  } {
+    return {
+      maximumEveryMinutes: MAXIMUM_AGENT_SCHEDULE_INTERVAL_SECONDS / 60,
+      maximumWatchesPerAgent: MAXIMUM_AGENT_SCHEDULES_PER_AGENT,
+      minimumEveryMinutes: Math.ceil(
+        this.#currentFleetConfiguration().schedules.minimumIntervalSeconds / 60,
+      ),
+      retainedOccurrences: MAXIMUM_RETAINED_AGENT_WATCH_OCCURRENCES,
+    };
+  }
+
   get(input: unknown): GetAgentScheduleResult {
     const request = getAgentScheduleInputSchema.safeParse(input);
 
@@ -453,8 +573,347 @@ export class AgentSchedules {
         });
   }
 
+  resumableWatchDefinition(agentId: string, scheduleId: string): AgentWatchDefinition | null {
+    const revision = this.#database
+      .select({
+        configuration: agentScheduleRevisions.configuration,
+        name: agentScheduleRevisions.name,
+      })
+      .from(agentScheduleRevisions)
+      .where(
+        and(
+          eq(agentScheduleRevisions.agentId, agentId),
+          eq(agentScheduleRevisions.scheduleId, scheduleId),
+          isNotNull(agentScheduleRevisions.configuration),
+        ),
+      )
+      .orderBy(desc(agentScheduleRevisions.revision))
+      .limit(1)
+      .get();
+    const configuration = agentScheduleConfigurationSchema.safeParse(revision?.configuration);
+
+    if (revision === undefined || !configuration.success) {
+      return null;
+    }
+
+    return {
+      instruction: configuration.data.prompt,
+      name: revision.name,
+      ...("outputContract" in configuration.data && configuration.data.outputContract !== undefined
+        ? { outputContract: configuration.data.outputContract }
+        : {}),
+      source: {
+        kind: "scheduled_check",
+        trigger:
+          "trigger" in configuration.data
+            ? configuration.data.trigger
+            : { intervalSeconds: configuration.data.intervalSeconds, type: "interval" },
+      },
+    };
+  }
+
+  async deleteWatch(
+    authority: OwnerAuthority,
+    input: {
+      agentId: string;
+      expectedAgentRevision: number;
+      expectedWatchRevision: number;
+      idempotencyKey: string;
+      watchId: string;
+    },
+  ): Promise<DeleteAgentWatchResult> {
+    const requestDigest = await digestRequest({ action: "delete", ...input });
+    const deletedAt = Date.now();
+
+    return this.#database.transaction((transaction) => {
+      const replay = transaction
+        .select({
+          requestDigest: agentScheduleUpdates.requestDigest,
+          revision: agentScheduleUpdates.revision,
+          scheduleId: agentScheduleRevisions.scheduleId,
+        })
+        .from(agentScheduleUpdates)
+        .innerJoin(
+          agentScheduleRevisions,
+          and(
+            eq(agentScheduleRevisions.agentId, agentScheduleUpdates.agentId),
+            eq(agentScheduleRevisions.revision, agentScheduleUpdates.revision),
+          ),
+        )
+        .where(
+          and(
+            eq(agentScheduleUpdates.clientId, authority.clientId),
+            eq(agentScheduleUpdates.idempotencyKey, input.idempotencyKey),
+          ),
+        )
+        .get();
+
+      if (replay !== undefined) {
+        return replay.requestDigest === requestDigest && replay.scheduleId === input.watchId
+          ? { deleted: false, ok: true as const, watchId: input.watchId }
+          : deniedAgentSchedule("idempotency_conflict");
+      }
+
+      const agent = transaction
+        .select({ currentRevision: agents.currentRevision })
+        .from(agents)
+        .where(eq(agents.agentId, input.agentId))
+        .get();
+
+      if (agent === undefined) {
+        return deniedAgentSchedule("agent_not_found");
+      }
+
+      if (agent.currentRevision !== input.expectedAgentRevision) {
+        return deniedAgentSchedule("revision_conflict");
+      }
+
+      const current = transaction
+        .select({
+          currentRevision: agentSchedules.currentRevision,
+        })
+        .from(agentSchedules)
+        .innerJoin(
+          agentScheduleRevisions,
+          and(
+            eq(agentScheduleRevisions.scheduleId, agentSchedules.scheduleId),
+            eq(agentScheduleRevisions.agentId, agentSchedules.agentId),
+            eq(agentScheduleRevisions.revision, agentSchedules.currentRevision),
+          ),
+        )
+        .where(
+          and(
+            eq(agentSchedules.agentId, input.agentId),
+            eq(agentSchedules.scheduleId, input.watchId),
+            ne(agentSchedules.status, "deleted"),
+          ),
+        )
+        .get();
+
+      if (current === undefined) {
+        return deniedAgentSchedule("schedule_not_found");
+      }
+
+      if (current.currentRevision !== input.expectedWatchRevision) {
+        return deniedAgentSchedule("revision_conflict");
+      }
+
+      if (
+        transaction
+          .select({ scheduleId: agentScheduleOccurrences.scheduleId })
+          .from(agentScheduleOccurrences)
+          .where(
+            and(
+              eq(agentScheduleOccurrences.scheduleId, input.watchId),
+              eq(agentScheduleOccurrences.status, "pending"),
+            ),
+          )
+          .limit(1)
+          .get() !== undefined
+      ) {
+        return deniedAgentSchedule("schedule_busy");
+      }
+
+      const revision =
+        (transaction
+          .select({ value: max(agentScheduleRevisions.revision) })
+          .from(agentScheduleRevisions)
+          .where(eq(agentScheduleRevisions.agentId, input.agentId))
+          .get()?.value ?? 0) + 1;
+
+      transaction
+        .insert(agentScheduleRevisions)
+        .values({
+          agentId: input.agentId,
+          agentRevision: input.expectedAgentRevision,
+          configuration: null,
+          createdAt: deletedAt,
+          name: "Deleted Watch",
+          revision,
+          scheduleId: input.watchId,
+        })
+        .run();
+      transaction
+        .update(agentSchedules)
+        .set({ currentRevision: revision, nextRunAt: null, status: "deleted" })
+        .where(eq(agentSchedules.scheduleId, input.watchId))
+        .run();
+      transaction
+        .update(agentScheduleRevisions)
+        .set({ configuration: null, name: "Deleted Watch" })
+        .where(
+          and(
+            eq(agentScheduleRevisions.scheduleId, input.watchId),
+            ne(agentScheduleRevisions.revision, revision),
+          ),
+        )
+        .run();
+      transaction
+        .insert(agentScheduleUpdates)
+        .values({
+          agentId: input.agentId,
+          clientId: authority.clientId,
+          idempotencyKey: input.idempotencyKey,
+          requestDigest,
+          revision,
+        })
+        .run();
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: "agent.watch_deleted",
+          clientId: authority.clientId,
+          occurredAt: deletedAt,
+          subjectId: input.watchId,
+        })
+        .run();
+
+      return { deleted: true, ok: true as const, watchId: input.watchId };
+    });
+  }
+
+  watchHistory(agentId: string, scheduleId: string, limit: number): AgentWatchOccurrence[] | null {
+    const current = this.#database
+      .select({ scheduleId: agentSchedules.scheduleId })
+      .from(agentSchedules)
+      .where(
+        and(
+          eq(agentSchedules.agentId, agentId),
+          eq(agentSchedules.scheduleId, scheduleId),
+          ne(agentSchedules.status, "deleted"),
+        ),
+      )
+      .get();
+
+    if (current === undefined) {
+      return null;
+    }
+
+    return this.#database
+      .select({
+        occurredAt: agentScheduleOccurrences.occurredAt,
+        reason: agentScheduleOccurrences.reason,
+        runId: agentScheduleOccurrences.runId,
+        scheduledAt: agentScheduleOccurrences.scheduledAt,
+        status: agentScheduleOccurrences.status,
+        watchRevision: agentScheduleOccurrences.scheduleRevision,
+      })
+      .from(agentScheduleOccurrences)
+      .where(eq(agentScheduleOccurrences.scheduleId, scheduleId))
+      .orderBy(desc(agentScheduleOccurrences.occurredAt))
+      .limit(limit)
+      .all()
+      .map((occurrence) => ({
+        eventId: null,
+        occurredAt: new Date(occurrence.occurredAt).toISOString(),
+        outcome: occurrence.status,
+        reason: occurrence.reason,
+        runId: occurrence.runId,
+        scheduledFor: new Date(occurrence.scheduledAt).toISOString(),
+        sourceKind: "scheduled_check" as const,
+        watchRevision: occurrence.watchRevision,
+      }));
+  }
+
   claimDue(currentTime: number): DueAgentSchedule[] {
     return this.#database.transaction((transaction) => {
+      const due: DueAgentSchedule[] = [];
+      const handledScheduleIds = new Set<string>();
+      const recoverable = transaction
+        .select({
+          agentId: agentScheduleOccurrences.agentId,
+          agentRevision: agentScheduleRevisions.agentRevision,
+          attempts: agentScheduleOccurrences.attempts,
+          configuration: agentScheduleRevisions.configuration,
+          lastRunId: agentSchedules.lastRunId,
+          name: agentScheduleRevisions.name,
+          scheduledAt: agentScheduleOccurrences.scheduledAt,
+          scheduleId: agentScheduleOccurrences.scheduleId,
+          scheduleRevision: agentScheduleOccurrences.scheduleRevision,
+        })
+        .from(agentScheduleOccurrences)
+        .innerJoin(
+          agentScheduleRevisions,
+          and(
+            eq(agentScheduleRevisions.scheduleId, agentScheduleOccurrences.scheduleId),
+            eq(agentScheduleRevisions.agentId, agentScheduleOccurrences.agentId),
+            eq(agentScheduleRevisions.revision, agentScheduleOccurrences.scheduleRevision),
+          ),
+        )
+        .innerJoin(
+          agentSchedules,
+          and(
+            eq(agentSchedules.scheduleId, agentScheduleOccurrences.scheduleId),
+            eq(agentSchedules.currentRevision, agentScheduleOccurrences.scheduleRevision),
+            eq(agentSchedules.status, "active"),
+          ),
+        )
+        .where(
+          and(
+            eq(agentScheduleOccurrences.status, "pending"),
+            lte(agentScheduleOccurrences.nextAttemptAt, currentTime),
+          ),
+        )
+        .orderBy(asc(agentScheduleOccurrences.nextAttemptAt))
+        .limit(MAXIMUM_DUE_AGENT_SCHEDULES_PER_ALARM)
+        .all();
+
+      for (const row of recoverable) {
+        if (handledScheduleIds.has(row.scheduleId)) continue;
+        handledScheduleIds.add(row.scheduleId);
+        const configuration = agentScheduleConfigurationSchema.safeParse(row.configuration);
+
+        if (!configuration.success || row.attempts >= MAXIMUM_WATCH_OCCURRENCE_ATTEMPTS) {
+          transaction
+            .update(agentScheduleOccurrences)
+            .set({
+              nextAttemptAt: null,
+              reason: configuration.success ? "dispatch_exception" : "agent_changed",
+              status: "skipped",
+            })
+            .where(
+              and(
+                eq(agentScheduleOccurrences.scheduleId, row.scheduleId),
+                eq(agentScheduleOccurrences.scheduleRevision, row.scheduleRevision),
+                eq(agentScheduleOccurrences.scheduledAt, row.scheduledAt),
+                eq(agentScheduleOccurrences.status, "pending"),
+              ),
+            )
+            .run();
+          pruneOccurrenceHistory(transaction, row.scheduleId);
+          continue;
+        }
+
+        transaction
+          .update(agentScheduleOccurrences)
+          .set({
+            attempts: row.attempts + 1,
+            nextAttemptAt: currentTime + WATCH_OCCURRENCE_RECOVERY_DELAY_MS,
+          })
+          .where(
+            and(
+              eq(agentScheduleOccurrences.scheduleId, row.scheduleId),
+              eq(agentScheduleOccurrences.scheduleRevision, row.scheduleRevision),
+              eq(agentScheduleOccurrences.scheduledAt, row.scheduledAt),
+              eq(agentScheduleOccurrences.status, "pending"),
+            ),
+          )
+          .run();
+        due.push({
+          agentId: row.agentId,
+          agentRevision: row.agentRevision,
+          lastRunId: row.lastRunId,
+          name: row.name,
+          outputContract:
+            "outputContract" in configuration.data ? configuration.data.outputContract : undefined,
+          prompt: configuration.data.prompt,
+          retryAt: currentTime + WATCH_OCCURRENCE_RECOVERY_DELAY_MS,
+          scheduleId: row.scheduleId,
+          scheduleRevision: row.scheduleRevision,
+          scheduledAt: row.scheduledAt,
+        });
+      }
+
       const rows = transaction
         .select({
           agentId: agentSchedules.agentId,
@@ -478,10 +937,28 @@ export class AgentSchedules {
           ),
         )
         .innerJoin(agents, eq(agents.agentId, agentSchedules.agentId))
-        .where(and(eq(agentSchedules.status, "active"), lte(agentSchedules.nextRunAt, currentTime)))
-        .limit(MAXIMUM_DUE_AGENT_SCHEDULES_PER_ALARM)
+        .where(
+          and(
+            eq(agentSchedules.status, "active"),
+            lte(agentSchedules.nextRunAt, currentTime),
+            handledScheduleIds.size === 0
+              ? undefined
+              : notInArray(agentSchedules.scheduleId, [...handledScheduleIds]),
+            notExists(
+              transaction
+                .select({ scheduleId: agentScheduleOccurrences.scheduleId })
+                .from(agentScheduleOccurrences)
+                .where(
+                  and(
+                    eq(agentScheduleOccurrences.scheduleId, agentSchedules.scheduleId),
+                    eq(agentScheduleOccurrences.status, "pending"),
+                  ),
+                ),
+            ),
+          ),
+        )
+        .limit(Math.max(0, MAXIMUM_DUE_AGENT_SCHEDULES_PER_ALARM - due.length))
         .all();
-      const due: DueAgentSchedule[] = [];
 
       for (const row of rows) {
         const configuration = agentScheduleConfigurationSchema.safeParse(row.configuration);
@@ -533,6 +1010,22 @@ export class AgentSchedules {
           .all();
 
         if (claimed.length === 1) {
+          transaction
+            .insert(agentScheduleOccurrences)
+            .values({
+              agentId: row.agentId,
+              attempts: 1,
+              nextAttemptAt: currentTime + WATCH_OCCURRENCE_RECOVERY_DELAY_MS,
+              occurredAt: currentTime,
+              reason: null,
+              runId: null,
+              scheduledAt: row.nextRunAt,
+              scheduleId: row.scheduleId,
+              scheduleRevision: row.scheduleRevision,
+              status: "pending",
+            })
+            .onConflictDoNothing()
+            .run();
           due.push({
             agentId: row.agentId,
             agentRevision: row.agentRevision,
@@ -560,8 +1053,26 @@ export class AgentSchedules {
     runId: string;
     scheduleId: string;
     scheduleRevision: number;
+    scheduledAt: number;
   }): boolean {
     return this.#database.transaction((transaction) => {
+      const pending = transaction
+        .select({ scheduleId: agentScheduleOccurrences.scheduleId })
+        .from(agentScheduleOccurrences)
+        .where(
+          and(
+            eq(agentScheduleOccurrences.scheduleId, input.scheduleId),
+            eq(agentScheduleOccurrences.scheduleRevision, input.scheduleRevision),
+            eq(agentScheduleOccurrences.scheduledAt, input.scheduledAt),
+            eq(agentScheduleOccurrences.status, "pending"),
+          ),
+        )
+        .get();
+
+      if (pending === undefined) {
+        return false;
+      }
+
       const updated = transaction
         .update(agentSchedules)
         .set({
@@ -582,6 +1093,31 @@ export class AgentSchedules {
         return false;
       }
 
+      const occurrence = transaction
+        .update(agentScheduleOccurrences)
+        .set({
+          nextAttemptAt: null,
+          reason: null,
+          runId: input.runId,
+          status: "dispatched",
+        })
+        .where(
+          and(
+            eq(agentScheduleOccurrences.scheduleId, input.scheduleId),
+            eq(agentScheduleOccurrences.scheduleRevision, input.scheduleRevision),
+            eq(agentScheduleOccurrences.scheduledAt, input.scheduledAt),
+            eq(agentScheduleOccurrences.status, "pending"),
+          ),
+        )
+        .returning({ scheduleId: agentScheduleOccurrences.scheduleId })
+        .all();
+
+      if (occurrence.length !== 1) {
+        return false;
+      }
+
+      pruneOccurrenceHistory(transaction, input.scheduleId);
+
       transaction
         .insert(auditEvents)
         .values({
@@ -596,28 +1132,75 @@ export class AgentSchedules {
   }
 
   recordSkipped(
-    scheduleId: string,
+    schedule: Pick<DueAgentSchedule, "scheduleId" | "scheduleRevision" | "scheduledAt">,
     currentTime: number,
-    reason: "active_run" | "unavailable",
+    reason:
+      | "active_run"
+      | "agent_unavailable"
+      | "dispatch_exception"
+      | "record_dispatch_conflict"
+      | "run_unavailable",
+  ): void {
+    this.#database.transaction((transaction) => {
+      transaction
+        .update(agentScheduleOccurrences)
+        .set({ nextAttemptAt: null, reason, status: "skipped" })
+        .where(
+          and(
+            eq(agentScheduleOccurrences.scheduleId, schedule.scheduleId),
+            eq(agentScheduleOccurrences.scheduleRevision, schedule.scheduleRevision),
+            eq(agentScheduleOccurrences.scheduledAt, schedule.scheduledAt),
+            eq(agentScheduleOccurrences.status, "pending"),
+          ),
+        )
+        .run();
+      pruneOccurrenceHistory(transaction, schedule.scheduleId);
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: `agent.schedule_skipped_${reason}`,
+          clientId: "crewhelm:scheduler",
+          occurredAt: currentTime,
+          subjectId: schedule.scheduleId,
+        })
+        .run();
+    });
+  }
+
+  recordPendingRetry(
+    schedule: Pick<DueAgentSchedule, "scheduleId">,
+    currentTime: number,
+    reason: "dispatch_exception",
   ): void {
     this.#database
       .insert(auditEvents)
       .values({
-        action: `agent.schedule_skipped_${reason}`,
+        action: `agent.schedule_retry_${reason}`,
         clientId: "crewhelm:scheduler",
         occurredAt: currentTime,
-        subjectId: scheduleId,
+        subjectId: schedule.scheduleId,
       })
       .run();
   }
 
   nextAlarmAt(): number | null {
-    return (
+    const nextSchedule =
       this.#database
         .select({ value: min(agentSchedules.nextRunAt) })
         .from(agentSchedules)
         .where(eq(agentSchedules.status, "active"))
-        .get()?.value ?? null
+        .get()?.value ?? null;
+    const nextRecovery =
+      this.#database
+        .select({ value: min(agentScheduleOccurrences.nextAttemptAt) })
+        .from(agentScheduleOccurrences)
+        .where(eq(agentScheduleOccurrences.status, "pending"))
+        .get()?.value ?? null;
+
+    return (
+      [nextSchedule, nextRecovery]
+        .filter((candidate): candidate is number => candidate !== null)
+        .toSorted((left, right) => left - right)[0] ?? null
     );
   }
 
@@ -646,7 +1229,7 @@ export class AgentSchedules {
           eq(agentScheduleRevisions.revision, agentSchedules.currentRevision),
         ),
       )
-      .where(eq(agentSchedules.agentId, agentId))
+      .where(and(eq(agentSchedules.agentId, agentId), ne(agentSchedules.status, "deleted")))
       .orderBy(asc(agentSchedules.createdAt), asc(agentSchedules.scheduleId))
       .all();
   }

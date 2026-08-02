@@ -63,6 +63,17 @@ pnpm exec tsx scripts/crewhelm-live-rehearsal.ts conversation \
   --credential .crewhelm-rehearsal-credential.json
 ```
 
+Run the Composio connected-event Watch journey to discover a filter-free event on an existing
+active test connection, create one provider trigger, prove exact replay and lifecycle controls,
+deny unsigned ingress, delete the trigger and Watch, restore Agent capacity, and revoke the
+short-lived access token:
+
+```sh
+pnpm exec tsx scripts/crewhelm-live-rehearsal.ts connected-watches \
+  --installation crewhelm.testing.installation.json \
+  --credential .crewhelm-rehearsal-credential.json
+```
+
 If a conversation rehearsal reports retained exact IDs, resume its cleanup before creating another
 fixture:
 
