@@ -53,6 +53,16 @@ pnpm exec tsx scripts/crewhelm-live-rehearsal.ts workflow \
   --credential .crewhelm-rehearsal-credential.json
 ```
 
+Run the owner-private MCP conversation journey to prove first message, follow-up, replay, stale
+revision denial, lost-handle recovery, bounded discovery, Session cleanup, and Agent-capacity
+restoration:
+
+```sh
+pnpm exec tsx scripts/crewhelm-live-rehearsal.ts conversation \
+  --installation crewhelm.testing.installation.json \
+  --credential .crewhelm-rehearsal-credential.json
+```
+
 The journey polls no faster than the public MCP rate-limit budget allows. If a prior attempt exits
 with retained exact fixture IDs, resume cleanup rather than creating another fixture:
 
