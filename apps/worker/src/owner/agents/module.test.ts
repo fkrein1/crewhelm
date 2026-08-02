@@ -13,12 +13,27 @@ import {
   getAgentRevisionResultSchema,
   getAgentResultSchema,
   listAgentRevisionsResultSchema,
+  type ResolvedConnectionForAttachment,
 } from "@crewhelm/contracts";
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
 import { agentInput, agentUpdate, authorityFor, fixedAgentFailure } from "../testkit.js";
+
+type ConnectionResolutionFailure = Extract<ResolvedConnectionForAttachment, { ok: false }>;
+
+function fixedConnectionResolutionFailure(
+  code: ConnectionResolutionFailure["error"]["code"],
+): ConnectionResolutionFailure {
+  return {
+    error: {
+      code,
+      message: "Connection attachment request denied.",
+    },
+    ok: false,
+  };
+}
 
 describe("OwnerControlPlane agents", () => {
   it("uses fleet defaults when Agent creation omits capabilities and execution limits", async () => {
@@ -541,6 +556,76 @@ describe("OwnerControlPlane agents", () => {
       configured: true,
       ok: true,
     });
+  });
+
+  it("returns explicit failures while resolving a connection for attachment", async () => {
+    const authority = await authorityFor("connection-resolution", [
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      CONNECTIONS_READ_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, agentInput("connection-resolution"));
+
+    if (!created.ok) {
+      throw new Error("Expected Agent creation to succeed.");
+    }
+
+    const connectionId = "connection_33333333-3333-4333-8333-333333333333";
+    const providerConnectionId = "ca_project_resolution";
+
+    await expect(
+      stub.resolveConnectionForAttachment(authority, { unexpected: "input" }),
+    ).resolves.toEqual(fixedConnectionResolutionFailure("invalid_request"));
+    await expect(
+      stub.resolveConnectionForAttachment(authority, {
+        agentId: "agent_33333333-3333-4333-8333-333333333333",
+        connectionId,
+        expectedRevision: 1,
+      }),
+    ).resolves.toEqual(fixedConnectionResolutionFailure("agent_not_found"));
+    await expect(
+      stub.resolveConnectionForAttachment(authority, {
+        agentId: created.agent.id,
+        connectionId,
+        expectedRevision: 1,
+      }),
+    ).resolves.toEqual(fixedConnectionResolutionFailure("connection_not_found"));
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO connections
+           (connection_id, provider, provider_connection_id, auth_config_id, status, created_at)
+         VALUES (?, 'composio', ?, 'ac_project_resolution', 'initiated', ?)`,
+        connectionId,
+        providerConnectionId,
+        Date.now(),
+      );
+    });
+
+    await expect(
+      stub.resolveConnectionForAttachment(authority, {
+        agentId: created.agent.id,
+        connectionId,
+        expectedRevision: 2,
+      }),
+    ).resolves.toEqual(fixedConnectionResolutionFailure("revision_conflict"));
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE connections SET status = 'revoked', revoked_at = ? WHERE connection_id = ?",
+        Date.now(),
+        connectionId,
+      );
+    });
+
+    await expect(
+      stub.resolveConnectionForAttachment(authority, {
+        agentId: created.agent.id,
+        connectionId,
+        expectedRevision: 1,
+      }),
+    ).resolves.toEqual(fixedConnectionResolutionFailure("connection_not_found"));
   });
 
   it("paginates immutable Agent revisions newest first and reads exact history", async () => {

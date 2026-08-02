@@ -232,6 +232,99 @@ describe("OwnerControlPlane Agent blueprints", () => {
     ).resolves.toMatchObject({ created: false, ok: true });
   }, 30_000);
 
+  it("returns typed failures for invalid, unavailable, conflicting, and retired requests", async () => {
+    const authority = await authorityFor("blueprint-failures", [
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const missingBlueprintId = "blueprint_00000000-0000-4000-8000-000000000001";
+
+    await expect(stub.getAgentBlueprint(authority, {})).resolves.toMatchObject({
+      error: { code: "invalid_request" },
+      ok: false,
+    });
+    await expect(
+      stub.instantiateAgentBlueprint(authority, {
+        mode: "preview",
+        target: {
+          id: missingBlueprintId,
+          kind: "agent-blueprint-instance",
+          parameters: {},
+          version: 1,
+        },
+      }),
+    ).resolves.toMatchObject({ error: { code: "blueprint_not_found" }, ok: false });
+
+    const published = publishAgentBlueprintResultSchema.parse(
+      await stub.publishAgentBlueprint(authority, {
+        idempotencyKey: "publish-blueprint-failures",
+        mode: "apply",
+        target: { kind: "agent-blueprint-package", package: packageInput() },
+      }),
+    );
+
+    if (!published.ok || published.blueprint === undefined) {
+      throw new Error("Expected Agent blueprint publication.");
+    }
+
+    await expect(
+      stub.publishAgentBlueprint(authority, {
+        idempotencyKey: "publish-blueprint-no-changes",
+        mode: "apply",
+        target: {
+          expectedVersion: 1,
+          id: published.blueprint.id,
+          kind: "agent-blueprint-package",
+          package: packageInput(),
+        },
+      }),
+    ).resolves.toMatchObject({ error: { code: "no_changes" }, ok: false });
+    await expect(
+      stub.publishAgentBlueprint(authority, {
+        idempotencyKey: "publish-blueprint-name-conflict",
+        mode: "apply",
+        target: { kind: "agent-blueprint-package", package: packageInput() },
+      }),
+    ).resolves.toMatchObject({ error: { code: "name_conflict" }, ok: false });
+    await expect(
+      stub.publishAgentBlueprint(authority, {
+        idempotencyKey: "publish-blueprint-version-conflict",
+        mode: "apply",
+        target: {
+          expectedVersion: 2,
+          id: published.blueprint.id,
+          kind: "agent-blueprint-package",
+          package: packageInput("renamed-helper"),
+        },
+      }),
+    ).resolves.toMatchObject({ error: { code: "version_conflict" }, ok: false });
+
+    await expect(
+      stub.retireAgentBlueprint(authority, {
+        idempotencyKey: "retire-blueprint-failures",
+        mode: "apply",
+        target: {
+          expectedVersion: 1,
+          id: published.blueprint.id,
+          kind: "agent-blueprint-retirement",
+        },
+      }),
+    ).resolves.toMatchObject({ applied: true, ok: true });
+    await expect(
+      stub.instantiateAgentBlueprint(authority, {
+        idempotencyKey: "instantiate-retired-blueprint",
+        mode: "apply",
+        target: {
+          id: published.blueprint.id,
+          kind: "agent-blueprint-instance",
+          parameters: { audience: "Operator" },
+          version: 1,
+        },
+      }),
+    ).resolves.toMatchObject({ error: { code: "blueprint_retired" }, ok: false });
+  });
+
   it("shows missing exact Skill prerequisites and retains old versions after retirement", async () => {
     const authority = await authorityFor("blueprint-prerequisites", [
       OWNER_READ_SCOPE,

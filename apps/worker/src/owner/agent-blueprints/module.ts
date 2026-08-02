@@ -22,6 +22,7 @@ import {
   type AgentBlueprintPackage,
   type AgentBlueprintPreview,
   type AgentBlueprintSummary,
+  type CreateAgentResult,
   type GetAgentBlueprintResult,
   type InstantiateAgentBlueprintInput,
   type InstantiateAgentBlueprintResult,
@@ -46,6 +47,8 @@ import type { AgentRegistry } from "../agents/index.js";
 
 type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type FailureCode = Extract<InstantiateAgentBlueprintResult, { ok: false }>["error"]["code"];
+type AgentCreationFailureCode = Extract<CreateAgentResult, { ok: false }>["error"]["code"];
+type AgentBlueprintParameter = AgentBlueprintPackage["parameters"][number];
 type StoredSummaryRow = {
   blueprintId: string;
   createdAt: number;
@@ -126,6 +129,51 @@ function denied(code: FailureCode) {
     },
     ok: false as const,
   };
+}
+
+function agentCreationFailureCode(code: AgentCreationFailureCode): FailureCode {
+  switch (code) {
+    case "agent_limit_exceeded":
+      return "agent_limit_exceeded";
+    case "idempotency_conflict":
+      return "idempotency_conflict";
+    case "agent_not_found":
+    case "agent_revision_limit_exceeded":
+    case "agent_unavailable":
+    case "incompatible_schema":
+    case "insufficient_scope":
+    case "invalid_authority":
+    case "invalid_request":
+    case "no_changes":
+    case "owner_mismatch":
+    case "revision_conflict":
+      return "invalid_request";
+  }
+
+  code satisfies never;
+  throw new Error("Invariant violated: unsupported Agent creation failure.");
+}
+
+function validParameterValue(
+  parameter: AgentBlueprintParameter,
+  value: unknown,
+): value is string | number | boolean {
+  switch (parameter.type) {
+    case "boolean":
+      return typeof value === "boolean";
+    case "integer":
+      return (
+        typeof value === "number" &&
+        Number.isSafeInteger(value) &&
+        (parameter.minimum === undefined || value >= parameter.minimum) &&
+        (parameter.maximum === undefined || value <= parameter.maximum)
+      );
+    case "string":
+      return typeof value === "string";
+  }
+
+  parameter satisfies never;
+  return false;
 }
 
 export function deniedAgentBlueprint(code: FailureCode) {
@@ -298,7 +346,7 @@ export class AgentBlueprints {
       const blueprint = this.#summary(blueprintId, transaction);
 
       if (blueprint === null) {
-        throw new Error("Published Agent blueprint is unavailable.");
+        throw new Error("Invariant violated: published Agent blueprint is unavailable.");
       }
 
       return publishAgentBlueprintResultSchema.parse({
@@ -470,13 +518,7 @@ export class AgentBlueprints {
     );
 
     if (!created.ok) {
-      return denied(
-        created.error.code === "agent_limit_exceeded"
-          ? "agent_limit_exceeded"
-          : created.error.code === "idempotency_conflict"
-            ? "idempotency_conflict"
-            : "invalid_request",
-      );
+      return denied(agentCreationFailureCode(created.error.code));
     }
 
     return instantiateAgentBlueprintResultSchema.parse({
@@ -633,16 +675,7 @@ export class AgentBlueprints {
     for (const parameter of result.version.package.parameters) {
       const value = supplied[parameter.name] ?? parameter.default;
 
-      if (
-        value === undefined ||
-        (parameter.type === "string" && typeof value !== "string") ||
-        (parameter.type === "integer" &&
-          (typeof value !== "number" ||
-            !Number.isSafeInteger(value) ||
-            (parameter.minimum !== undefined && value < parameter.minimum) ||
-            (parameter.maximum !== undefined && value > parameter.maximum))) ||
-        (parameter.type === "boolean" && typeof value !== "boolean")
-      ) {
+      if (!validParameterValue(parameter, value)) {
         return denied("invalid_request");
       }
 
