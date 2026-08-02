@@ -3895,7 +3895,7 @@ Attributes: write, destructive, idempotent, closed-world.
 
 **Manage a remote MCP Connection**
 
-Connect, inspect, or revoke one remote Streamable HTTP MCP Connection. Public endpoints connect directly. Bearer endpoints return a short-lived browser setup link so credential material never enters MCP arguments or Agent context.
+Connect, inspect, reauthenticate, or revoke one remote Streamable HTTP MCP Connection. Public endpoints connect directly. Bearer and OAuth endpoints use a short-lived browser setup link so credential material never enters MCP arguments or Agent context.
 
 Attributes: write, destructive, idempotent, open-world.
 
@@ -3912,14 +3912,16 @@ Attributes: write, destructive, idempotent, open-world.
       "enum": [
         "connect",
         "delete",
-        "inspect"
+        "inspect",
+        "reauthenticate"
       ]
     },
     "authKind": {
       "type": "string",
       "enum": [
         "public",
-        "bearer"
+        "bearer",
+        "oauth"
       ]
     },
     "connectionId": {
@@ -3942,6 +3944,16 @@ Attributes: write, destructive, idempotent, open-world.
       "minLength": 1,
       "maxLength": 80,
       "pattern": "^[ -~]+$"
+    },
+    "oauthScopes": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[\\x21\\x23-\\x5b\\x5d-\\x7e]+$"
+      }
     },
     "snapshotDigest": {
       "type": "string",

@@ -1,27 +1,59 @@
 import {
+  beginRemoteMcpOAuthInputSchema,
+  beginRemoteMcpOAuthResultSchema,
+  completeRemoteMcpOAuthInputSchema,
+  completeRemoteMcpOAuthResultSchema,
   createRemoteMcpConnectionInputSchema,
   createRemoteMcpConnectionResultSchema,
   deleteRemoteMcpConnectionInputSchema,
   deleteRemoteMcpConnectionResultSchema,
+  failRemoteMcpOAuthInputSchema,
+  failRemoteMcpOAuthResultSchema,
   inspectRemoteMcpConnectionInputSchema,
   inspectRemoteMcpConnectionResultSchema,
   lookupRemoteMcpConnectionCreationInputSchema,
   lookupRemoteMcpConnectionCreationResultSchema,
   remoteMcpCatalogSchema,
+  remoteMcpConnectionOperationInputSchema,
+  remoteMcpConnectionOperationResultSchema,
   remoteMcpConnectionSchema,
+  type BeginRemoteMcpOAuthResult,
+  type CompleteRemoteMcpOAuthResult,
   type CreateRemoteMcpConnectionResult,
   type DeleteRemoteMcpConnectionResult,
   type FleetConfigurationData,
+  type FailRemoteMcpOAuthResult,
   type InspectRemoteMcpConnectionResult,
   type LookupRemoteMcpConnectionCreationResult,
   type OwnerAuthority,
   type RemoteMcpAuthKind,
   type RemoteMcpCatalog,
+  type RemoteMcpConnectionOperationResult,
 } from "@crewhelm/contracts";
-import { and, count, eq } from "drizzle-orm";
+import { and, count, eq, gt, inArray, lt } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
-import { callRemoteMcpTool, normalizeRemoteMcpEndpoint } from "../../remote-mcp/client.js";
+import {
+  callRemoteMcpTool,
+  discoverRemoteMcpTools,
+  normalizeRemoteMcpEndpoint,
+} from "../../remote-mcp/client.js";
+import {
+  beginRemoteMcpOAuthAuthorization,
+  completeRemoteMcpOAuthAuthorization,
+  refreshRemoteMcpOAuthCredential,
+  remoteMcpOAuthAccessToken,
+  remoteMcpOAuthAuthorizationSchema,
+  remoteMcpOAuthCredentialSchema,
+  revokeRemoteMcpOAuthCredential,
+  type RemoteMcpOAuthCredential,
+} from "../../remote-mcp/oauth.js";
+import {
+  createRemoteMcpOAuthSetup,
+  createRemoteMcpOAuthState,
+  REMOTE_MCP_OAUTH_CALLBACK_PATH,
+  REMOTE_MCP_OAUTH_CLIENT_METADATA_PATH,
+} from "../../remote-mcp/handoff.js";
 import { createRemoteMcpInputSchema } from "../../remote-mcp/schema.js";
 
 import {
@@ -30,10 +62,13 @@ import {
   connections,
   remoteMcpConnectionMutations,
   remoteMcpConnections,
+  remoteMcpOAuthRequests,
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
 
 type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
+type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+type QueryableDatabase = Database | Transaction;
 type RequestFailure = Extract<CreateRemoteMcpConnectionResult, { ok: false }>;
 type StoredConnection = {
   accountLabel: string | null;
@@ -42,7 +77,10 @@ type StoredConnection = {
   catalogBytes: number;
   connectionId: string;
   createdAt: number;
+  credentialCiphertext: string | null;
+  credentialNonce: string | null;
   endpoint: string;
+  oauthScopes: string[];
   serverName: string;
   serverVersion: string;
   snapshotDigest: string;
@@ -50,6 +88,9 @@ type StoredConnection = {
 };
 
 const encoder = new TextEncoder();
+const MAXIMUM_OAUTH_REQUESTS_PER_OWNER = 32;
+const OAUTH_REQUEST_TTL_MS = 10 * 60 * 1_000;
+const OAUTH_NETWORK_TIMEOUT_MS = 15_000;
 
 function denied(code: RequestFailure["error"]["code"]): RequestFailure {
   return {
@@ -144,7 +185,10 @@ async function requestDigest(secret: string, input: unknown): Promise<string> {
     .join("");
 }
 
-function storedConnection(database: Database, connectionId: string): StoredConnection | undefined {
+function storedConnection(
+  database: QueryableDatabase,
+  connectionId: string,
+): StoredConnection | undefined {
   return database
     .select({
       accountLabel: connections.accountLabel,
@@ -153,7 +197,10 @@ function storedConnection(database: Database, connectionId: string): StoredConne
       catalogBytes: remoteMcpConnections.catalogBytes,
       connectionId: connections.connectionId,
       createdAt: connections.createdAt,
+      credentialCiphertext: remoteMcpConnections.credentialCiphertext,
+      credentialNonce: remoteMcpConnections.credentialNonce,
       endpoint: remoteMcpConnections.endpoint,
+      oauthScopes: remoteMcpConnections.oauthScopes,
       serverName: remoteMcpConnections.serverName,
       serverVersion: remoteMcpConnections.serverVersion,
       snapshotDigest: remoteMcpConnections.snapshotDigest,
@@ -181,6 +228,7 @@ function present(row: StoredConnection) {
     createdAt: new Date(row.createdAt).toISOString(),
     endpoint: row.endpoint,
     name: row.accountLabel,
+    oauthScopes: row.oauthScopes,
     server: { name: row.serverName, version: row.serverVersion },
     snapshotDigest: row.snapshotDigest,
     status: row.status,
@@ -191,15 +239,780 @@ export class RemoteMcpConnections {
   readonly #currentFleetConfiguration: () => FleetConfigurationData;
   readonly #database: Database;
   readonly #encryptionSecret: string;
+  readonly #publicOrigin: string;
 
   constructor(
     database: Database,
     currentFleetConfiguration: () => FleetConfigurationData,
     encryptionSecret: string,
+    publicOrigin: string,
   ) {
     this.#currentFleetConfiguration = currentFleetConfiguration;
     this.#database = database;
     this.#encryptionSecret = encryptionSecret;
+    this.#publicOrigin = publicOrigin;
+  }
+
+  async reserveOAuth(
+    authority: OwnerAuthority,
+    input: unknown,
+  ): Promise<RemoteMcpConnectionOperationResult> {
+    const request = remoteMcpConnectionOperationInputSchema.safeParse(input);
+    if (
+      !request.success ||
+      !(
+        (request.data.action === "connect" && request.data.authKind === "oauth") ||
+        request.data.action === "reauthenticate"
+      )
+    ) {
+      return denied("invalid_request");
+    }
+
+    const currentTime = Date.now();
+    this.#database
+      .delete(remoteMcpOAuthRequests)
+      .where(lt(remoteMcpOAuthRequests.expiresAt, currentTime))
+      .run();
+
+    let connection: StoredConnection | undefined;
+    let operation: "create" | "reauthenticate";
+    let endpoint: string;
+    let name: string;
+    let oauthScopes: string[];
+    let connectionId: string | null;
+    let snapshotDigest: string | null;
+
+    if (request.data.action === "connect") {
+      operation = "create";
+      endpoint = normalizeRemoteMcpEndpoint(request.data.endpoint);
+      name = request.data.name;
+      oauthScopes = request.data.oauthScopes;
+      connectionId = null;
+      snapshotDigest = null;
+
+      const replay = this.lookupCreation(authority, {
+        authKind: "oauth",
+        endpoint,
+        idempotencyKey: request.data.idempotencyKey,
+        name,
+        oauthScopes,
+      });
+      if (!replay.ok) return replay;
+      if (replay.connection !== null) {
+        return remoteMcpConnectionOperationResultSchema.parse({
+          connection: replay.connection,
+          created: false,
+          ok: true,
+          state: "connected",
+        });
+      }
+    } else {
+      operation = "reauthenticate";
+      connection = storedConnection(this.#database, request.data.connectionId);
+      if (
+        connection === undefined ||
+        connection.authKind !== "oauth" ||
+        !["active", "unavailable"].includes(connection.status)
+      ) {
+        return denied("connection_not_found");
+      }
+      if (connection.snapshotDigest !== request.data.snapshotDigest) {
+        return denied("revision_conflict");
+      }
+      if (connection.accountLabel === null) return denied("invalid_request");
+      endpoint = connection.endpoint;
+      name = connection.accountLabel;
+      oauthScopes = connection.oauthScopes;
+      connectionId = connection.connectionId;
+      snapshotDigest = connection.snapshotDigest;
+    }
+
+    const idempotencyKey = request.data.idempotencyKey;
+    const digest = await requestDigest(this.#encryptionSecret, {
+      connectionId,
+      endpoint,
+      name,
+      oauthScopes,
+      operation,
+      snapshotDigest,
+    });
+    const existing = this.#database
+      .select()
+      .from(remoteMcpOAuthRequests)
+      .where(
+        and(
+          eq(remoteMcpOAuthRequests.clientId, authority.clientId),
+          eq(remoteMcpOAuthRequests.idempotencyKey, idempotencyKey),
+        ),
+      )
+      .get();
+    if (existing !== undefined) {
+      if (existing.requestDigest !== digest || existing.operation !== operation) {
+        return denied("idempotency_conflict");
+      }
+      if (existing.status === "completed" && existing.connectionId !== null) {
+        const completed = storedConnection(this.#database, existing.connectionId);
+        return completed === undefined
+          ? denied("connection_not_found")
+          : remoteMcpConnectionOperationResultSchema.parse({
+              connection: present(completed),
+              created: false,
+              ok: true,
+              state: "connected",
+            });
+      }
+      if (!["reserved", "pending"].includes(existing.status)) {
+        return denied("remote_mcp_unavailable");
+      }
+      const setup = await createRemoteMcpOAuthSetup({
+        claims: {
+          expiresAt: existing.expiresAt,
+          ownerKey: authority.ownerKey,
+          requestId: existing.requestId,
+        },
+        origin: this.#publicOrigin,
+        signingSecret: this.#encryptionSecret,
+      });
+      return remoteMcpConnectionOperationResultSchema.parse({
+        ok: true,
+        setup,
+        state: "setup_required",
+      });
+    }
+
+    const requestCount =
+      this.#database.select({ value: count() }).from(remoteMcpOAuthRequests).get()?.value ?? 0;
+    if (requestCount >= MAXIMUM_OAUTH_REQUESTS_PER_OWNER) {
+      return denied("connection_limit_exceeded");
+    }
+    if (operation === "create") {
+      const connectionCount =
+        this.#database.select({ value: count() }).from(connections).get()?.value ?? 0;
+      const pendingCount =
+        this.#database
+          .select({ value: count() })
+          .from(remoteMcpOAuthRequests)
+          .where(
+            and(
+              eq(remoteMcpOAuthRequests.operation, "create"),
+              gt(remoteMcpOAuthRequests.expiresAt, currentTime),
+              inArray(remoteMcpOAuthRequests.status, [
+                "reserved",
+                "starting",
+                "pending",
+                "exchanging",
+              ]),
+            ),
+          )
+          .get()?.value ?? 0;
+      if (
+        connectionCount + pendingCount >=
+        this.#currentFleetConfiguration().capacity.maxConnections
+      ) {
+        return denied("connection_limit_exceeded");
+      }
+    }
+
+    const requestId = `remote_mcp_oauth_${crypto.randomUUID()}`;
+    const expiresAt = currentTime + OAUTH_REQUEST_TTL_MS;
+    const claims = { expiresAt, ownerKey: authority.ownerKey, requestId };
+    const [setup, state] = await Promise.all([
+      createRemoteMcpOAuthSetup({
+        claims,
+        origin: this.#publicOrigin,
+        signingSecret: this.#encryptionSecret,
+      }),
+      createRemoteMcpOAuthState({ claims, signingSecret: this.#encryptionSecret }),
+    ]);
+    const stateDigest = await sha256(state);
+
+    this.#database.transaction((transaction) => {
+      transaction
+        .insert(remoteMcpOAuthRequests)
+        .values({
+          accountLabel: name,
+          clientId: authority.clientId,
+          connectionId,
+          createdAt: currentTime,
+          endpoint,
+          expiresAt,
+          idempotencyKey,
+          oauthScopes,
+          operation,
+          requestDigest: digest,
+          requestId,
+          snapshotDigest,
+          stateDigest,
+          status: "reserved",
+        })
+        .run();
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: `connection.remote_mcp_oauth_${operation}_reserved`,
+          clientId: authority.clientId,
+          occurredAt: currentTime,
+          subjectId: requestId,
+        })
+        .run();
+    });
+    return remoteMcpConnectionOperationResultSchema.parse({
+      ok: true,
+      setup,
+      state: "setup_required",
+    });
+  }
+
+  async beginOAuth(authority: OwnerAuthority, input: unknown): Promise<BeginRemoteMcpOAuthResult> {
+    const request = beginRemoteMcpOAuthInputSchema.safeParse(input);
+    if (!request.success) return denied("invalid_request");
+    const row = this.#database
+      .select()
+      .from(remoteMcpOAuthRequests)
+      .where(eq(remoteMcpOAuthRequests.requestId, request.data.requestId))
+      .get();
+    const currentTime = Date.now();
+    if (row === undefined || row.expiresAt <= currentTime) {
+      return denied("remote_mcp_unavailable");
+    }
+    if (row.status === "pending" && row.authorizationUrl !== null) {
+      return beginRemoteMcpOAuthResultSchema.parse({
+        authorizationUrl: row.authorizationUrl,
+        ok: true,
+      });
+    }
+    if (row.status !== "reserved") return denied("remote_mcp_unavailable");
+
+    const claimed = this.#database
+      .update(remoteMcpOAuthRequests)
+      .set({ status: "starting" })
+      .where(
+        and(
+          eq(remoteMcpOAuthRequests.requestId, row.requestId),
+          eq(remoteMcpOAuthRequests.status, "reserved"),
+        ),
+      )
+      .returning({ requestId: remoteMcpOAuthRequests.requestId })
+      .all();
+    if (claimed.length !== 1) return denied("remote_mcp_unavailable");
+
+    try {
+      const claims = {
+        expiresAt: row.expiresAt,
+        ownerKey: authority.ownerKey,
+        requestId: row.requestId,
+      };
+      const state = await createRemoteMcpOAuthState({
+        claims,
+        signingSecret: this.#encryptionSecret,
+      });
+      if ((await sha256(state)) !== row.stateDigest) {
+        throw new Error("Remote MCP OAuth state binding failed.");
+      }
+
+      let priorCredential: RemoteMcpOAuthCredential | undefined;
+      if (row.operation === "reauthenticate") {
+        if (row.connectionId === null) throw new Error("OAuth Connection is missing.");
+        const existing = storedConnection(this.#database, row.connectionId);
+        if (
+          existing === undefined ||
+          existing.authKind !== "oauth" ||
+          existing.snapshotDigest !== row.snapshotDigest ||
+          existing.credentialCiphertext === null ||
+          existing.credentialNonce === null
+        ) {
+          throw new Error("OAuth Connection is unavailable.");
+        }
+        priorCredential = remoteMcpOAuthCredentialSchema.parse(
+          JSON.parse(
+            await decryptCredential(
+              this.#encryptionSecret,
+              existing.connectionId,
+              existing.credentialCiphertext,
+              existing.credentialNonce,
+            ),
+          ),
+        );
+      }
+
+      const started = await beginRemoteMcpOAuthAuthorization({
+        ...(priorCredential === undefined
+          ? {}
+          : { clientInformation: priorCredential.clientInformation }),
+        clientMetadataUrl: `${this.#publicOrigin}${REMOTE_MCP_OAUTH_CLIENT_METADATA_PATH}`,
+        endpoint: row.endpoint,
+        redirectUrl: `${this.#publicOrigin}${REMOTE_MCP_OAUTH_CALLBACK_PATH}`,
+        requestedScopes: row.oauthScopes,
+        signal: AbortSignal.timeout(OAUTH_NETWORK_TIMEOUT_MS),
+        state,
+      });
+      if (
+        priorCredential !== undefined &&
+        started.authorization.authorizationServerUrl !== priorCredential.authorizationServerUrl
+      ) {
+        throw new Error("OAuth authorization-server identity changed.");
+      }
+      const encrypted = await encryptCredential(
+        this.#encryptionSecret,
+        row.requestId,
+        JSON.stringify(started.authorization),
+      );
+      const updated = this.#database
+        .update(remoteMcpOAuthRequests)
+        .set({
+          authorizationUrl: started.authorizationUrl,
+          credentialCiphertext: encrypted.ciphertext,
+          credentialNonce: encrypted.nonce,
+          status: "pending",
+        })
+        .where(
+          and(
+            eq(remoteMcpOAuthRequests.requestId, row.requestId),
+            eq(remoteMcpOAuthRequests.status, "starting"),
+          ),
+        )
+        .returning({ requestId: remoteMcpOAuthRequests.requestId })
+        .all();
+      if (updated.length !== 1) throw new Error("OAuth request changed during setup.");
+      return beginRemoteMcpOAuthResultSchema.parse({
+        authorizationUrl: started.authorizationUrl,
+        ok: true,
+      });
+    } catch {
+      this.#failOAuthRequest(row.requestId, currentTime);
+      return denied("remote_mcp_unavailable");
+    }
+  }
+
+  async completeOAuth(
+    _authority: OwnerAuthority,
+    input: unknown,
+  ): Promise<CompleteRemoteMcpOAuthResult> {
+    const request = completeRemoteMcpOAuthInputSchema.safeParse(input);
+    if (!request.success) return denied("invalid_request");
+    const row = this.#database
+      .select()
+      .from(remoteMcpOAuthRequests)
+      .where(eq(remoteMcpOAuthRequests.requestId, request.data.requestId))
+      .get();
+    const currentTime = Date.now();
+    if (row === undefined || row.expiresAt <= currentTime) {
+      return denied("remote_mcp_unavailable");
+    }
+    if (row.status === "completed" && row.connectionId !== null) {
+      const replay = storedConnection(this.#database, row.connectionId);
+      return replay === undefined
+        ? denied("connection_not_found")
+        : completeRemoteMcpOAuthResultSchema.parse({
+            connection: present(replay),
+            ok: true,
+            operation: row.operation === "create" ? "created" : "reauthenticated",
+          });
+    }
+    if (
+      row.status !== "pending" ||
+      row.credentialCiphertext === null ||
+      row.credentialNonce === null
+    ) {
+      return denied("remote_mcp_unavailable");
+    }
+
+    const claimed = this.#database
+      .update(remoteMcpOAuthRequests)
+      .set({ status: "exchanging" })
+      .where(
+        and(
+          eq(remoteMcpOAuthRequests.requestId, row.requestId),
+          eq(remoteMcpOAuthRequests.status, "pending"),
+        ),
+      )
+      .returning({ requestId: remoteMcpOAuthRequests.requestId })
+      .all();
+    if (claimed.length !== 1) return denied("remote_mcp_unavailable");
+
+    try {
+      const authorization = remoteMcpOAuthAuthorizationSchema.parse(
+        JSON.parse(
+          await decryptCredential(
+            this.#encryptionSecret,
+            row.requestId,
+            row.credentialCiphertext,
+            row.credentialNonce,
+          ),
+        ),
+      );
+      if (
+        request.data.authorizationServerIssuer !== undefined &&
+        request.data.authorizationServerIssuer !== authorization.authorizationServerMetadata.issuer
+      ) {
+        throw new Error("OAuth authorization-server issuer does not match.");
+      }
+      const credential = await completeRemoteMcpOAuthAuthorization({
+        authorization,
+        authorizationCode: request.data.authorizationCode,
+        redirectUrl: `${this.#publicOrigin}${REMOTE_MCP_OAUTH_CALLBACK_PATH}`,
+        signal: AbortSignal.timeout(OAUTH_NETWORK_TIMEOUT_MS),
+      });
+      const discovered = await discoverRemoteMcpTools({
+        bearerToken: credential.tokens.accessToken,
+        endpoint: row.endpoint,
+        signal: AbortSignal.timeout(OAUTH_NETWORK_TIMEOUT_MS),
+      });
+
+      if (row.operation === "create") {
+        const connectionId = `connection_${crypto.randomUUID()}`;
+        const encrypted = await encryptCredential(
+          this.#encryptionSecret,
+          connectionId,
+          JSON.stringify(credential),
+        );
+        const completedAt = Date.now();
+        this.#database.transaction((transaction) => {
+          const currentRequest = transaction
+            .select({
+              expiresAt: remoteMcpOAuthRequests.expiresAt,
+              status: remoteMcpOAuthRequests.status,
+            })
+            .from(remoteMcpOAuthRequests)
+            .where(eq(remoteMcpOAuthRequests.requestId, row.requestId))
+            .get();
+          const existingMutation = transaction
+            .select({ connectionId: remoteMcpConnectionMutations.connectionId })
+            .from(remoteMcpConnectionMutations)
+            .where(
+              and(
+                eq(remoteMcpConnectionMutations.clientId, row.clientId),
+                eq(remoteMcpConnectionMutations.idempotencyKey, row.idempotencyKey),
+              ),
+            )
+            .get();
+          const usage = transaction.select({ value: count() }).from(connections).get()?.value ?? 0;
+          if (
+            currentRequest === undefined ||
+            currentRequest.status !== "exchanging" ||
+            currentRequest.expiresAt <= completedAt ||
+            existingMutation !== undefined ||
+            usage >= this.#currentFleetConfiguration().capacity.maxConnections
+          ) {
+            throw new Error("OAuth Connection completion is no longer valid.");
+          }
+          transaction
+            .insert(connections)
+            .values({
+              accountLabel: row.accountLabel,
+              authConfigId: null,
+              connectionId,
+              createdAt: completedAt,
+              provider: "remote_mcp",
+              providerConnectionId: null,
+              status: "active",
+            })
+            .run();
+          transaction
+            .insert(remoteMcpConnections)
+            .values({
+              authKind: "oauth",
+              catalog: discovered.tools,
+              catalogBytes: discovered.catalogBytes,
+              connectionId,
+              credentialCiphertext: encrypted.ciphertext,
+              credentialNonce: encrypted.nonce,
+              endpoint: row.endpoint,
+              oauthScopes: credential.grantedScopes,
+              serverName: discovered.server.name,
+              serverVersion: discovered.server.version,
+              snapshotDigest: discovered.digest,
+            })
+            .run();
+          transaction
+            .insert(remoteMcpConnectionMutations)
+            .values({
+              clientId: row.clientId,
+              connectionId,
+              idempotencyKey: row.idempotencyKey,
+              occurredAt: completedAt,
+              operation: "create",
+              requestDigest: row.requestDigest,
+            })
+            .run();
+          const completed = transaction
+            .update(remoteMcpOAuthRequests)
+            .set({
+              authorizationUrl: null,
+              completedAt,
+              connectionId,
+              credentialCiphertext: null,
+              credentialNonce: null,
+              oauthScopes: credential.grantedScopes,
+              status: "completed",
+            })
+            .where(
+              and(
+                eq(remoteMcpOAuthRequests.requestId, row.requestId),
+                eq(remoteMcpOAuthRequests.status, "exchanging"),
+                gt(remoteMcpOAuthRequests.expiresAt, completedAt),
+              ),
+            )
+            .returning({ requestId: remoteMcpOAuthRequests.requestId })
+            .all();
+          if (completed.length !== 1) {
+            throw new Error("OAuth Connection request changed during completion.");
+          }
+          transaction
+            .insert(auditEvents)
+            .values({
+              action: "connection.remote_mcp_oauth_created",
+              clientId: row.clientId,
+              occurredAt: completedAt,
+              subjectId: connectionId,
+            })
+            .run();
+        });
+        const created = storedConnection(this.#database, connectionId);
+        if (created === undefined) throw new Error("OAuth Connection creation failed.");
+        return completeRemoteMcpOAuthResultSchema.parse({
+          connection: present(created),
+          ok: true,
+          operation: "created",
+        });
+      }
+
+      if (row.connectionId === null || row.snapshotDigest === null) {
+        throw new Error("OAuth reauthentication target is missing.");
+      }
+      const existing = storedConnection(this.#database, row.connectionId);
+      if (
+        existing === undefined ||
+        existing.authKind !== "oauth" ||
+        existing.snapshotDigest !== row.snapshotDigest ||
+        existing.credentialCiphertext === null ||
+        existing.credentialNonce === null ||
+        discovered.digest !== existing.snapshotDigest ||
+        discovered.server.name !== existing.serverName ||
+        discovered.server.version !== existing.serverVersion
+      ) {
+        throw new Error("OAuth Connection snapshot changed.");
+      }
+      const priorCredential = remoteMcpOAuthCredentialSchema.parse(
+        JSON.parse(
+          await decryptCredential(
+            this.#encryptionSecret,
+            existing.connectionId,
+            existing.credentialCiphertext,
+            existing.credentialNonce,
+          ),
+        ),
+      );
+      if (
+        credential.authorizationServerUrl !== priorCredential.authorizationServerUrl ||
+        credential.grantedScopes.some((scope) => !priorCredential.grantedScopes.includes(scope))
+      ) {
+        throw new Error("OAuth reauthentication widened authority.");
+      }
+      const encrypted = await encryptCredential(
+        this.#encryptionSecret,
+        existing.connectionId,
+        JSON.stringify(credential),
+      );
+      const completedAt = Date.now();
+      this.#database.transaction((transaction) => {
+        const completed = transaction
+          .update(remoteMcpOAuthRequests)
+          .set({
+            authorizationUrl: null,
+            completedAt,
+            credentialCiphertext: null,
+            credentialNonce: null,
+            oauthScopes: credential.grantedScopes,
+            status: "completed",
+          })
+          .where(
+            and(
+              eq(remoteMcpOAuthRequests.requestId, row.requestId),
+              eq(remoteMcpOAuthRequests.status, "exchanging"),
+              gt(remoteMcpOAuthRequests.expiresAt, completedAt),
+            ),
+          )
+          .returning({ requestId: remoteMcpOAuthRequests.requestId })
+          .all();
+        const current = storedConnection(transaction, existing.connectionId);
+        if (
+          completed.length !== 1 ||
+          current === undefined ||
+          current.authKind !== "oauth" ||
+          !["active", "unavailable"].includes(current.status) ||
+          current.snapshotDigest !== existing.snapshotDigest ||
+          current.serverName !== existing.serverName ||
+          current.serverVersion !== existing.serverVersion ||
+          current.credentialCiphertext !== existing.credentialCiphertext ||
+          current.credentialNonce !== existing.credentialNonce
+        ) {
+          throw new Error("OAuth reauthentication completion is no longer valid.");
+        }
+        const credentialUpdated = transaction
+          .update(remoteMcpConnections)
+          .set({
+            credentialCiphertext: encrypted.ciphertext,
+            credentialNonce: encrypted.nonce,
+            oauthScopes: credential.grantedScopes,
+          })
+          .where(eq(remoteMcpConnections.connectionId, existing.connectionId))
+          .returning({ connectionId: remoteMcpConnections.connectionId })
+          .all();
+        const connectionUpdated = transaction
+          .update(connections)
+          .set({ status: "active" })
+          .where(
+            and(
+              eq(connections.connectionId, existing.connectionId),
+              eq(connections.provider, "remote_mcp"),
+              inArray(connections.status, ["active", "unavailable"]),
+            ),
+          )
+          .returning({ connectionId: connections.connectionId })
+          .all();
+        if (credentialUpdated.length !== 1 || connectionUpdated.length !== 1) {
+          throw new Error("OAuth reauthentication target changed during completion.");
+        }
+        transaction
+          .insert(auditEvents)
+          .values({
+            action: "connection.remote_mcp_oauth_reauthenticated",
+            clientId: row.clientId,
+            occurredAt: completedAt,
+            subjectId: existing.connectionId,
+          })
+          .run();
+      });
+      const reauthenticated = storedConnection(this.#database, existing.connectionId);
+      if (reauthenticated === undefined) throw new Error("OAuth reauthentication failed.");
+      return completeRemoteMcpOAuthResultSchema.parse({
+        connection: present(reauthenticated),
+        ok: true,
+        operation: "reauthenticated",
+      });
+    } catch {
+      this.#failOAuthRequest(row.requestId, currentTime);
+      return denied("remote_mcp_unavailable");
+    }
+  }
+
+  failOAuth(input: unknown): FailRemoteMcpOAuthResult {
+    const request = failRemoteMcpOAuthInputSchema.safeParse(input);
+    if (!request.success) return denied("invalid_request");
+    const failed = this.#failOAuthRequest(request.data.requestId, Date.now());
+    return failRemoteMcpOAuthResultSchema.parse({ failed, ok: true });
+  }
+
+  async prepareExecution(input: {
+    connectionId: string;
+    snapshotDigest: string;
+  }): Promise<boolean> {
+    const row = storedConnection(this.#database, input.connectionId);
+    if (
+      row === undefined ||
+      row.status !== "active" ||
+      row.snapshotDigest !== input.snapshotDigest
+    ) {
+      return false;
+    }
+    if (row.authKind !== "oauth") return true;
+    if (row.credentialCiphertext === null || row.credentialNonce === null) return false;
+
+    let credential: RemoteMcpOAuthCredential;
+    try {
+      credential = remoteMcpOAuthCredentialSchema.parse(
+        JSON.parse(
+          await decryptCredential(
+            this.#encryptionSecret,
+            row.connectionId,
+            row.credentialCiphertext,
+            row.credentialNonce,
+          ),
+        ),
+      );
+    } catch {
+      return false;
+    }
+    if (remoteMcpOAuthAccessToken(credential) !== null) return true;
+
+    try {
+      const refreshed = await refreshRemoteMcpOAuthCredential({
+        credential,
+        signal: AbortSignal.timeout(OAUTH_NETWORK_TIMEOUT_MS),
+      });
+      const encrypted = await encryptCredential(
+        this.#encryptionSecret,
+        row.connectionId,
+        JSON.stringify(refreshed),
+      );
+      const refreshedAt = Date.now();
+      const updated = this.#database.transaction((transaction) => {
+        const current = storedConnection(transaction, row.connectionId);
+        if (
+          current === undefined ||
+          current.status !== "active" ||
+          current.snapshotDigest !== row.snapshotDigest ||
+          current.credentialCiphertext !== row.credentialCiphertext
+        ) {
+          return false;
+        }
+        transaction
+          .update(remoteMcpConnections)
+          .set({
+            credentialCiphertext: encrypted.ciphertext,
+            credentialNonce: encrypted.nonce,
+            oauthScopes: refreshed.grantedScopes,
+          })
+          .where(eq(remoteMcpConnections.connectionId, row.connectionId))
+          .run();
+        transaction
+          .insert(auditEvents)
+          .values({
+            action: "connection.remote_mcp_oauth_refreshed",
+            clientId: "crewhelm:remote-mcp-oauth-refresh",
+            occurredAt: refreshedAt,
+            subjectId: row.connectionId,
+          })
+          .run();
+        return true;
+      });
+      return updated;
+    } catch {
+      const failedAt = Date.now();
+      this.#database.transaction((transaction) => {
+        const current = storedConnection(transaction, row.connectionId);
+        if (
+          current === undefined ||
+          current.status !== "active" ||
+          current.snapshotDigest !== row.snapshotDigest ||
+          current.credentialCiphertext !== row.credentialCiphertext
+        ) {
+          return;
+        }
+        transaction
+          .update(connections)
+          .set({ status: "unavailable" })
+          .where(
+            and(
+              eq(connections.connectionId, row.connectionId),
+              eq(connections.provider, "remote_mcp"),
+              eq(connections.status, "active"),
+            ),
+          )
+          .run();
+        transaction
+          .insert(auditEvents)
+          .values({
+            action: "connection.remote_mcp_oauth_reauthentication_required",
+            clientId: "crewhelm:remote-mcp-oauth-refresh",
+            occurredAt: failedAt,
+            subjectId: row.connectionId,
+          })
+          .run();
+      });
+      return false;
+    }
   }
 
   lookupCreation(
@@ -238,7 +1051,8 @@ export class RemoteMcpConnections {
     if (
       row.authKind !== request.data.authKind ||
       row.endpoint !== request.data.endpoint ||
-      row.accountLabel !== request.data.name
+      row.accountLabel !== request.data.name ||
+      JSON.stringify(row.oauthScopes) !== JSON.stringify(request.data.oauthScopes)
     ) {
       return denied("idempotency_conflict");
     }
@@ -337,6 +1151,7 @@ export class RemoteMcpConnections {
           credentialCiphertext: encrypted?.ciphertext,
           credentialNonce: encrypted?.nonce,
           endpoint: request.data.endpoint,
+          oauthScopes: [],
           serverName: request.data.server.name,
           serverVersion: request.data.server.version,
           snapshotDigest,
@@ -408,6 +1223,27 @@ export class RemoteMcpConnections {
     const row = storedConnection(this.#database, request.data.connectionId);
     if (row === undefined) return denied("connection_not_found");
     if (row.snapshotDigest !== request.data.snapshotDigest) return denied("revision_conflict");
+    let oauthCredential: RemoteMcpOAuthCredential | undefined;
+    if (
+      row.authKind === "oauth" &&
+      row.credentialCiphertext !== null &&
+      row.credentialNonce !== null
+    ) {
+      try {
+        oauthCredential = remoteMcpOAuthCredentialSchema.parse(
+          JSON.parse(
+            await decryptCredential(
+              this.#encryptionSecret,
+              row.connectionId,
+              row.credentialCiphertext,
+              row.credentialNonce,
+            ),
+          ),
+        );
+      } catch {
+        oauthCredential = undefined;
+      }
+    }
     const deleted = row.status !== "revoked";
     const occurredAt = Date.now();
 
@@ -459,6 +1295,25 @@ export class RemoteMcpConnections {
         .run();
     });
 
+    if (deleted && row.authKind === "oauth") {
+      const revocation =
+        oauthCredential === undefined
+          ? "unconfirmed"
+          : await revokeRemoteMcpOAuthCredential({
+              credential: oauthCredential,
+              signal: AbortSignal.timeout(OAUTH_NETWORK_TIMEOUT_MS),
+            });
+      this.#database
+        .insert(auditEvents)
+        .values({
+          action: `connection.remote_mcp_oauth_revocation_${revocation}`,
+          clientId: authority.clientId,
+          occurredAt: Date.now(),
+          subjectId: row.connectionId,
+        })
+        .run();
+    }
+
     return deleteRemoteMcpConnectionResultSchema.parse({ deleted, ok: true });
   }
 
@@ -495,7 +1350,7 @@ export class RemoteMcpConnections {
       row.status !== "active" ||
       row.snapshotDigest !== input.snapshotDigest ||
       tool === undefined ||
-      (row.authKind === "bearer" && (row.ciphertext === null || row.nonce === null))
+      (row.authKind !== "public" && (row.ciphertext === null || row.nonce === null))
     ) {
       throw new Error("Remote MCP execution denied.");
     }
@@ -509,15 +1364,22 @@ export class RemoteMcpConnections {
       throw new Error("Remote MCP execution denied.");
     }
 
-    const bearerToken =
-      row.authKind === "bearer" && row.ciphertext !== null && row.nonce !== null
-        ? await decryptCredential(
-            this.#encryptionSecret,
-            input.connectionId,
-            row.ciphertext,
-            row.nonce,
-          )
-        : undefined;
+    let bearerToken: string | undefined;
+    if (row.authKind !== "public" && row.ciphertext !== null && row.nonce !== null) {
+      const plaintext = await decryptCredential(
+        this.#encryptionSecret,
+        input.connectionId,
+        row.ciphertext,
+        row.nonce,
+      );
+      if (row.authKind === "bearer") {
+        bearerToken = plaintext;
+      } else {
+        const credential = remoteMcpOAuthCredentialSchema.parse(JSON.parse(plaintext));
+        bearerToken = remoteMcpOAuthAccessToken(credential) ?? undefined;
+        if (bearerToken === undefined) throw new Error("Remote MCP execution denied.");
+      }
+    }
 
     return callRemoteMcpTool({
       arguments: input.arguments,
@@ -527,5 +1389,32 @@ export class RemoteMcpConnections {
       signal: AbortSignal.timeout(input.maximumDurationMs),
       toolName: input.toolName,
     });
+  }
+
+  #failOAuthRequest(requestId: string, occurredAt: number): boolean {
+    return (
+      this.#database
+        .update(remoteMcpOAuthRequests)
+        .set({
+          authorizationUrl: null,
+          completedAt: occurredAt,
+          credentialCiphertext: null,
+          credentialNonce: null,
+          status: "failed",
+        })
+        .where(
+          and(
+            eq(remoteMcpOAuthRequests.requestId, requestId),
+            inArray(remoteMcpOAuthRequests.status, [
+              "reserved",
+              "starting",
+              "pending",
+              "exchanging",
+            ]),
+          ),
+        )
+        .returning({ requestId: remoteMcpOAuthRequests.requestId })
+        .all().length === 1
+    );
   }
 }

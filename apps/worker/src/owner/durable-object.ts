@@ -39,6 +39,9 @@ import {
   type CreateRunAdmissionResult,
   type CreateRemoteMcpConnectionResult,
   type DeleteRemoteMcpConnectionResult,
+  type BeginRemoteMcpOAuthResult,
+  type CompleteRemoteMcpOAuthResult,
+  type FailRemoteMcpOAuthResult,
   type GetAgentRevisionResult,
   type GetAgentResult,
   type ListAgentRevisionsResult,
@@ -103,6 +106,7 @@ import {
   type InspectBriefResult,
   type InspectRemoteMcpConnectionResult,
   type LookupRemoteMcpConnectionCreationResult,
+  type RemoteMcpConnectionOperationResult,
   type ExecuteRemoteMcpToolResult,
   type ReadBriefResult,
   type DeleteBriefResult,
@@ -374,6 +378,7 @@ export class OwnerControlPlane extends DurableObject {
       this.#database,
       () => this.#fleetConfigurations.currentData(),
       environment.BETTER_AUTH_SECRET,
+      environment.PUBLIC_ORIGIN,
     );
     this.#authorityControls = new AuthorityControls(this.#database);
     this.#agentSchedules = new AgentSchedules(this.#database, this.#storage, () =>
@@ -767,7 +772,11 @@ export class OwnerControlPlane extends DurableObject {
   async executeRemoteMcpTool(input: unknown): Promise<ExecuteRemoteMcpToolResult> {
     const request = executeRemoteMcpToolInputSchema.safeParse(input);
     if (!this.#migrationReady || !request.success) {
-      return { error: { code: "invalid_execution", message: "Tool execution denied." }, ok: false };
+      return {
+        dispatched: false,
+        error: { code: "invalid_execution", message: "Tool execution denied." },
+        ok: false,
+      };
     }
 
     const argumentDigest = Array.from(
@@ -780,12 +789,45 @@ export class OwnerControlPlane extends DurableObject {
       (byte) => byte.toString(16).padStart(2, "0"),
     ).join("");
     if (argumentDigest !== request.data.permit.action.inputDigest) {
-      return { error: { code: "invalid_execution", message: "Tool execution denied." }, ok: false };
+      return {
+        dispatched: false,
+        error: { code: "invalid_execution", message: "Tool execution denied." },
+        ok: false,
+      };
+    }
+    if (request.data.permit.action.capabilityId !== "remote_mcp.tool.execute") {
+      return {
+        dispatched: false,
+        error: { code: "invalid_execution", message: "Tool execution denied." },
+        ok: false,
+      };
+    }
+
+    const preflight = await this.#toolExecutions.preflightRemoteMcp(request.data.permit);
+    if (preflight === undefined) {
+      return {
+        dispatched: false,
+        error: { code: "invalid_execution", message: "Tool execution denied." },
+        ok: false,
+      };
+    }
+
+    const prepared = await this.#remoteMcpConnections.prepareExecution(preflight);
+    if (!prepared) {
+      return {
+        dispatched: false,
+        error: { code: "invalid_execution", message: "Tool execution denied." },
+        ok: false,
+      };
     }
 
     const dispatch = await this.#toolExecutions.claimRemoteMcp(request.data.permit);
     if (dispatch === undefined) {
-      return { error: { code: "invalid_execution", message: "Tool execution denied." }, ok: false };
+      return {
+        dispatched: false,
+        error: { code: "invalid_execution", message: "Tool execution denied." },
+        ok: false,
+      };
     }
 
     const output = await this.#remoteMcpConnections.execute({
@@ -1514,6 +1556,67 @@ export class OwnerControlPlane extends DurableObject {
 
     return authorization.ok
       ? this.#remoteMcpConnections.create(authorization.authority, input)
+      : {
+          error: {
+            code: authorization.code,
+            message: "Remote MCP Connection request denied.",
+          },
+          ok: false,
+        };
+  }
+
+  reserveRemoteMcpOAuthSetup(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<RemoteMcpConnectionOperationResult> | RemoteMcpConnectionOperationResult {
+    const authorization = this.#authorize(authorityInput, CONNECTIONS_WRITE_SCOPE);
+    return authorization.ok
+      ? this.#remoteMcpConnections.reserveOAuth(authorization.authority, input)
+      : {
+          error: {
+            code: authorization.code,
+            message: "Remote MCP Connection request denied.",
+          },
+          ok: false,
+        };
+  }
+
+  beginRemoteMcpOAuth(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<BeginRemoteMcpOAuthResult> | BeginRemoteMcpOAuthResult {
+    const authorization = this.#authorize(authorityInput, CONNECTIONS_WRITE_SCOPE);
+    return authorization.ok
+      ? this.#remoteMcpConnections.beginOAuth(authorization.authority, input)
+      : {
+          error: {
+            code: authorization.code,
+            message: "Remote MCP Connection request denied.",
+          },
+          ok: false,
+        };
+  }
+
+  completeRemoteMcpOAuth(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<CompleteRemoteMcpOAuthResult> | CompleteRemoteMcpOAuthResult {
+    const authorization = this.#authorize(authorityInput, CONNECTIONS_WRITE_SCOPE);
+    return authorization.ok
+      ? this.#remoteMcpConnections.completeOAuth(authorization.authority, input)
+      : {
+          error: {
+            code: authorization.code,
+            message: "Remote MCP Connection request denied.",
+          },
+          ok: false,
+        };
+  }
+
+  failRemoteMcpOAuth(authorityInput: unknown, input: unknown): FailRemoteMcpOAuthResult {
+    const authorization = this.#authorize(authorityInput, CONNECTIONS_WRITE_SCOPE);
+    return authorization.ok
+      ? this.#remoteMcpConnections.failOAuth(input)
       : {
           error: {
             code: authorization.code,

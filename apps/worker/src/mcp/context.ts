@@ -13,6 +13,8 @@ export interface OwnerControlPlaneClient {
   configureAgentSchedule(authorityInput: unknown, input: unknown): Promise<unknown>;
   createAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
   createRemoteMcpConnection?(authorityInput: unknown, input: unknown): Promise<unknown>;
+  beginRemoteMcpOAuth?(authorityInput: unknown, input: unknown): Promise<unknown>;
+  completeRemoteMcpOAuth?(authorityInput: unknown, input: unknown): Promise<unknown>;
   completeConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;
   completeIntegrationEnablement(authorityInput: unknown, input: unknown): Promise<unknown>;
   configureFleetConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -22,6 +24,7 @@ export interface OwnerControlPlaneClient {
   deleteAgentWorkflow?(authorityInput: unknown, input: unknown): Promise<unknown>;
   deleteBrief(authorityInput: unknown, input: unknown): Promise<unknown>;
   deleteRemoteMcpConnection?(authorityInput: unknown, input: unknown): Promise<unknown>;
+  failRemoteMcpOAuth?(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgent(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgentBlueprint(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgentRevision(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -49,6 +52,7 @@ export interface OwnerControlPlaneClient {
   lookupAgentConnectionConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
   lookupRemoteMcpConnectionCreation?(authorityInput: unknown, input: unknown): Promise<unknown>;
   reserveConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;
+  reserveRemoteMcpOAuthSetup?(authorityInput: unknown, input: unknown): Promise<unknown>;
   reserveIntegrationEnablement(authorityInput: unknown, input: unknown): Promise<unknown>;
   reconcileToolExecution(authorityInput: unknown, input: unknown): Promise<unknown>;
   readBrief(authorityInput: unknown, input: unknown): Promise<unknown>;

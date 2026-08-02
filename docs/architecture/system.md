@@ -48,7 +48,7 @@ through the Agent object during migration.
 | Search/fetch adapter | Bounded public evidence reads; provider credentials stay in the Worker and exact source handles expire with their Run                                                          |
 | AI Gateway           | Optional installation-wide hard spend ceiling and model-call cost metadata                                                                                                     |
 | Composio             | Connected-account credentials and refresh                                                                                                                                      |
-| Remote MCP server    | Untrusted tool catalog and tool results; Crewhelm retains any bearer credential                                                                                                |
+| Remote MCP server    | Untrusted tool catalog and tool results; Crewhelm retains encrypted bearer or OAuth credentials                                                                                |
 
 The control plane owns admission and administration; the Agent directory owns conversation
 lifecycle; each session owns execution. Cross-object calls

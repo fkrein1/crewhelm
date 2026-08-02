@@ -65,7 +65,7 @@ export function registerRemoteMcpConnectionTools(
         readOnlyHint: false,
       },
       description:
-        "Connect, inspect, or revoke one remote Streamable HTTP MCP Connection. Public endpoints connect directly. Bearer endpoints return a short-lived browser setup link so credential material never enters MCP arguments or Agent context.",
+        "Connect, inspect, reauthenticate, or revoke one remote Streamable HTTP MCP Connection. Public endpoints connect directly. Bearer and OAuth endpoints use a short-lived browser setup link so credential material never enters MCP arguments or Agent context.",
       inputSchema: remoteMcpConnectionToolInputSchema,
       title: "Manage a remote MCP Connection",
     },
@@ -81,6 +81,18 @@ export function registerRemoteMcpConnectionTools(
             }
 
             const endpoint = normalizeRemoteMcpEndpoint(request.data.endpoint);
+
+            if (request.data.authKind === "oauth") {
+              if (controlPlane.reserveRemoteMcpOAuthSetup === undefined) {
+                return result(denied("remote_mcp_unavailable"));
+              }
+              const reserved = remoteMcpConnectionOperationResultSchema.safeParse(
+                await controlPlane.reserveRemoteMcpOAuthSetup(authority, request.data),
+              );
+              return !reserved.success
+                ? result(denied("remote_mcp_unavailable"))
+                : result(reserved.data);
+            }
 
             if (request.data.authKind === "bearer") {
               const setup = await createRemoteMcpBearerSetup({
@@ -186,6 +198,20 @@ export function registerRemoteMcpConnectionTools(
               : deleted.data.ok
                 ? result({ ...deleted.data, state: "deleted" })
                 : result(deleted.data);
+          }
+          case "reauthenticate": {
+            if (!authority.scopes.includes(CONNECTIONS_WRITE_SCOPE)) {
+              return result(denied("insufficient_scope"));
+            }
+            if (controlPlane.reserveRemoteMcpOAuthSetup === undefined) {
+              return result(denied("remote_mcp_unavailable"));
+            }
+            const reserved = remoteMcpConnectionOperationResultSchema.safeParse(
+              await controlPlane.reserveRemoteMcpOAuthSetup(authority, request.data),
+            );
+            return !reserved.success
+              ? result(denied("remote_mcp_unavailable"))
+              : result(reserved.data);
           }
         }
         return result(denied("invalid_request"));

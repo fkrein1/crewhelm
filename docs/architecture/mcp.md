@@ -58,10 +58,12 @@ control-plane catalog. One Connection lifecycle operation discovers and freezes 
 public HTTPS Streamable HTTP server; one attachment operation adds that whole reviewed snapshot to
 an Agent revision. Multiple Connections may be attached. Catalog and fleet bounds protect storage,
 transport, and execution safety rather than attempting to optimize the owner's Agent design.
-Public and bearer servers are supported through the same owner-side adapter; bearer material enters
-through a signed browser setup handoff and never through model-visible MCP arguments. OAuth,
-resources, prompts, subscriptions, persistent sessions, custom headers, and catalog refresh are
-separate future slices.
+Public, bearer, and OAuth servers are supported through the same owner-side adapter. Bearer
+material enters through a signed browser setup handoff. OAuth uses standards discovery,
+authorization code with PKCE, URL client IDs or dynamic registration, encrypted token storage,
+lazy refresh, same-Connection reauthentication, and best-effort provider revocation. Credentials
+never pass through model-visible MCP arguments. Resources, prompts, subscriptions, persistent
+sessions, custom headers, and catalog refresh remain separate future slices.
 Tool input schemas must fit Crewhelm's bounded, runtime-compatible JSON Schema subset. Defaults,
 regex, references, conditionals, unevaluated-property rules, and schemas beyond the depth, node,
 property, or byte ceilings are rejected when the Connection is created.

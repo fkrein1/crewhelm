@@ -24,7 +24,13 @@ import { registerOAuthUiRoutes } from "../oauth/ui.js";
 import { readByteStreamChunk } from "./byte-stream.js";
 import { registerConnectionAuthorizationReturnRoutes } from "./connection-authorization-return.js";
 import { registerRemoteMcpBearerSetupRoutes } from "./remote-mcp-bearer-setup.js";
-import { REMOTE_MCP_BEARER_SETUP_PATH_PREFIX } from "../remote-mcp/handoff.js";
+import { registerRemoteMcpOAuthRoutes } from "./remote-mcp-oauth.js";
+import {
+  REMOTE_MCP_BEARER_SETUP_PATH_PREFIX,
+  REMOTE_MCP_OAUTH_CALLBACK_PATH,
+  REMOTE_MCP_OAUTH_CLIENT_METADATA_PATH,
+  REMOTE_MCP_OAUTH_SETUP_PATH_PREFIX,
+} from "../remote-mcp/handoff.js";
 
 const METHOD_NOT_ALLOWED_BODY = `${JSON.stringify({
   error: {
@@ -348,6 +354,7 @@ export function createWorker(): Hono<{ Bindings: WorkerEnv }> {
   registerAuthServerRoutes(worker, createAuth);
   registerConnectionAuthorizationReturnRoutes(worker);
   registerRemoteMcpBearerSetupRoutes(worker);
+  registerRemoteMcpOAuthRoutes(worker);
   worker.post("/webhooks/composio", (context) =>
     handleComposioWebhook(context.req.raw, context.env),
   );
@@ -378,6 +385,9 @@ function isRateLimitedPath(path: string): "auth" | "composio" | "mcp" | null {
     path.startsWith("/api/auth/") ||
     path.startsWith(CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX) ||
     path.startsWith(REMOTE_MCP_BEARER_SETUP_PATH_PREFIX) ||
+    path.startsWith(REMOTE_MCP_OAUTH_SETUP_PATH_PREFIX) ||
+    path === REMOTE_MCP_OAUTH_CALLBACK_PATH ||
+    path === REMOTE_MCP_OAUTH_CLIENT_METADATA_PATH ||
     path === "/oauth/login" ||
     path === "/oauth/login/continue" ||
     path === "/oauth/consent" ||

@@ -115,7 +115,7 @@ export const executeRemoteMcpToolResultSchema = z.discriminatedUnion("ok", [
       .min(1)
       .max(10 * 1_024 * 1_024),
   }),
-  invalidToolExecutionSchema,
+  invalidToolExecutionSchema.extend({ dispatched: z.literal(false) }),
 ]);
 
 export const pendingToolApprovalSchema = z.strictObject({

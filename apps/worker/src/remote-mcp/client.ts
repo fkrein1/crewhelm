@@ -74,7 +74,10 @@ function isDeniedIpv4(hostname: string): boolean {
   );
 }
 
-export function normalizeRemoteMcpEndpoint(value: string): string {
+export function normalizeRemoteMcpPublicHttpsUrl(
+  value: string,
+  options: { allowQuery: boolean },
+): string {
   let url: URL;
 
   try {
@@ -91,7 +94,7 @@ export function normalizeRemoteMcpEndpoint(value: string): string {
     url.username !== "" ||
     url.password !== "" ||
     (url.port !== "" && url.port !== "443") ||
-    url.search !== "" ||
+    (!options.allowQuery && url.search !== "") ||
     url.hash !== "" ||
     hostname.length === 0 ||
     !hostname.includes(".") ||
@@ -110,6 +113,10 @@ export function normalizeRemoteMcpEndpoint(value: string): string {
   url.hostname = hostname;
   if (url.port === "443") url.port = "";
   return url.toString();
+}
+
+export function normalizeRemoteMcpEndpoint(value: string): string {
+  return normalizeRemoteMcpPublicHttpsUrl(value, { allowQuery: false });
 }
 
 function encodeHex(bytes: Uint8Array): string {

@@ -1,9 +1,14 @@
-import { SELF, env } from "cloudflare:test";
+import { SELF, env, runInDurableObject } from "cloudflare:test";
 import {
+  AGENTS_WRITE_SCOPE,
+  AUTONOMY_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   healthReportSchema,
   ownerAuthoritySchema,
+  OWNER_WRITE_SCOPE,
+  remoteMcpConnectionOperationResultSchema,
+  RUNS_WRITE_SCOPE,
 } from "@crewhelm/contracts";
 import { describe, expect, it, vi } from "vitest";
 
@@ -16,11 +21,123 @@ import { registerAuthTestDatabase } from "../oauth/testkit.js";
 
 const origin = "https://crewhelm.test";
 const worker = createWorker();
+const encoder = new TextEncoder();
 
 registerAuthTestDatabase();
 
 function request(path: string, init?: RequestInit): Promise<Response> | Response {
   return worker.fetch(new Request(`${origin}${path}`, init), env);
+}
+
+async function digest(value: string): Promise<string> {
+  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value)))]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function remoteMcpOAuthFetch() {
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = input instanceof Request ? input.url : input.toString();
+    const method = (
+      init?.method ?? (input instanceof Request ? input.method : "GET")
+    ).toUpperCase();
+    if (url === "https://mcp.example.com/.well-known/oauth-protected-resource/rpc") {
+      return Response.json({
+        authorization_servers: ["https://auth.example.com"],
+        resource: "https://mcp.example.com/rpc",
+        scopes_supported: ["records.read"],
+      });
+    }
+    if (url === "https://auth.example.com/.well-known/oauth-authorization-server") {
+      return Response.json({
+        authorization_endpoint: "https://auth.example.com/authorize",
+        client_id_metadata_document_supported: true,
+        code_challenge_methods_supported: ["S256"],
+        grant_types_supported: ["authorization_code", "refresh_token"],
+        issuer: "https://auth.example.com",
+        response_types_supported: ["code"],
+        revocation_endpoint: "https://auth.example.com/revoke",
+        token_endpoint: "https://auth.example.com/token",
+        token_endpoint_auth_methods_supported: ["none"],
+      });
+    }
+    if (url === "https://auth.example.com/token" && method === "POST") {
+      const parameters = init?.body instanceof URLSearchParams ? init.body : undefined;
+      if (parameters?.get("grant_type") === "refresh_token") {
+        return Response.json({
+          access_token: "oauth-refreshed-secret",
+          expires_in: 3_600,
+          refresh_token: "oauth-refresh-secret",
+          scope: "records.read",
+          token_type: "Bearer",
+        });
+      }
+      return Response.json({
+        access_token: "oauth-access-secret",
+        expires_in: 1,
+        refresh_token: "oauth-refresh-secret",
+        scope: "records.read",
+        token_type: "Bearer",
+      });
+    }
+    if (url === "https://auth.example.com/revoke" && method === "POST") {
+      return new Response(null, { status: 200 });
+    }
+    if (url === "https://mcp.example.com/rpc" && method === "POST") {
+      const authorization = new Headers(init?.headers).get("authorization");
+      if (
+        authorization !== "Bearer oauth-access-secret" &&
+        authorization !== "Bearer oauth-refreshed-secret"
+      ) {
+        return new Response(null, { status: 401 });
+      }
+      if (typeof init?.body !== "string") throw new Error("Expected MCP request body.");
+      const rpc: unknown = JSON.parse(init.body);
+      if (typeof rpc !== "object" || rpc === null || Array.isArray(rpc)) {
+        throw new Error("Expected MCP request object.");
+      }
+      const id = Reflect.get(rpc, "id");
+      const rpcMethod = Reflect.get(rpc, "method");
+      if (rpcMethod === "initialize") {
+        return Response.json({
+          id,
+          jsonrpc: "2.0",
+          result: {
+            capabilities: { tools: {} },
+            protocolVersion: "2025-06-18",
+            serverInfo: { name: "oauth-server", version: "1.0.0" },
+          },
+        });
+      }
+      if (rpcMethod === "notifications/initialized") {
+        return new Response(null, { status: 202 });
+      }
+      if (rpcMethod === "tools/list") {
+        return Response.json({
+          id,
+          jsonrpc: "2.0",
+          result: {
+            tools: [{ inputSchema: { type: "object" }, name: "records.read" }],
+          },
+        });
+      }
+      if (rpcMethod === "tools/call") {
+        return Response.json({
+          id,
+          jsonrpc: "2.0",
+          result: {
+            content: [
+              {
+                text: `refreshed:${authorization === "Bearer oauth-refreshed-secret"}`,
+                type: "text",
+              },
+            ],
+          },
+        });
+      }
+    }
+    throw new Error(`Unexpected OAuth fixture request: ${method} ${url}`);
+  });
 }
 
 async function connectionAuthorizationFixture(subject: string) {
@@ -168,6 +285,22 @@ describe("Crewhelm Worker", () => {
       });
     },
   );
+
+  it("publishes remote MCP OAuth client metadata", async () => {
+    const response = await request("/.well-known/oauth-client/crewhelm");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toMatchObject({
+      client_uri: origin,
+      grant_types: ["authorization_code", "refresh_token"],
+      redirect_uris: [`${origin}/connections/remote-mcp/oauth/callback`],
+      response_types: ["code"],
+      token_endpoint_auth_method: "none",
+    });
+    const head = await request("/.well-known/oauth-client/crewhelm", { method: "HEAD" });
+    expect(head.status).toBe(200);
+    await expect(head.text()).resolves.toBe("");
+  });
 
   it("reports fixed liveness metadata without caching", async () => {
     const response = await request("/health");
@@ -374,6 +507,280 @@ describe("Crewhelm Worker", () => {
     expect(await malformed.text()).not.toContain("secret");
     expect(getByName).not.toHaveBeenCalled();
     getByName.mockRestore();
+  });
+
+  it("completes remote MCP OAuth in the browser without exposing stored credentials", async () => {
+    const ownerKey = await deriveOwnerKey({
+      issuer: "https://github.com",
+      subject: "remote-mcp-oauth-browser",
+    });
+    const authority = ownerAuthoritySchema.parse({
+      clientId: "remote-mcp-oauth-browser-client",
+      ownerKey,
+      scopes: [
+        AGENTS_WRITE_SCOPE,
+        AUTONOMY_WRITE_SCOPE,
+        CONNECTIONS_READ_SCOPE,
+        CONNECTIONS_WRITE_SCOPE,
+        OWNER_WRITE_SCOPE,
+        RUNS_WRITE_SCOPE,
+      ],
+    });
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(ownerKey);
+    const reservation = remoteMcpConnectionOperationResultSchema.parse(
+      await controlPlane.reserveRemoteMcpOAuthSetup(authority, {
+        action: "connect",
+        authKind: "oauth",
+        endpoint: "https://mcp.example.com/rpc",
+        idempotencyKey: "remote-mcp-oauth-browser-connect",
+        name: "OAuth Project MCP",
+        oauthScopes: ["records.read"],
+      }),
+    );
+    if (!reservation.ok || reservation.state !== "setup_required") {
+      throw new Error("Expected OAuth setup reservation.");
+    }
+
+    const fetchMock = remoteMcpOAuthFetch();
+    const setupResponse = await worker.fetch(new Request(reservation.setup.url), env);
+    expect(setupResponse.status).toBe(302);
+    expect(setupResponse.headers.get("cache-control")).toBe("no-store");
+    expect(setupResponse.headers.get("referrer-policy")).toBe("no-referrer");
+    const authorizationUrl = new URL(setupResponse.headers.get("location") ?? "");
+    expect(authorizationUrl.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(authorizationUrl.searchParams.get("scope")).toBe("records.read");
+
+    const callback = new URL(`${origin}/connections/remote-mcp/oauth/callback`);
+    callback.searchParams.set("code", "browser-authorization-code");
+    callback.searchParams.set("iss", "https://auth.example.com");
+    callback.searchParams.set("state", authorizationUrl.searchParams.get("state") ?? "");
+    const callbackResponse = await worker.fetch(new Request(callback), env);
+    const callbackBody = await callbackResponse.text();
+    expect(callbackResponse.status).toBe(200);
+    expect(callbackResponse.headers.get("cache-control")).toBe("no-store");
+    expect(callbackResponse.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(callbackBody).toContain("OAuth Project MCP");
+    expect(callbackBody).not.toContain("oauth-access-secret");
+
+    const replay = remoteMcpConnectionOperationResultSchema.parse(
+      await controlPlane.reserveRemoteMcpOAuthSetup(authority, {
+        action: "connect",
+        authKind: "oauth",
+        endpoint: "https://mcp.example.com/rpc",
+        idempotencyKey: "remote-mcp-oauth-browser-connect",
+        name: "OAuth Project MCP",
+        oauthScopes: ["records.read"],
+      }),
+    );
+    expect(replay).toMatchObject({
+      connection: { authKind: "oauth", oauthScopes: ["records.read"], status: "active" },
+      created: false,
+      ok: true,
+      state: "connected",
+    });
+    if (!replay.ok || replay.state !== "connected") {
+      throw new Error("Expected connected OAuth replay.");
+    }
+
+    const stored = await runInDurableObject(controlPlane, (_instance, state) =>
+      state.storage.sql
+        .exec(
+          `SELECT credential_ciphertext, credential_nonce
+           FROM remote_mcp_connections WHERE connection_id = ?`,
+          replay.connection.connectionId,
+        )
+        .one(),
+    );
+    expect(stored).toEqual({
+      credential_ciphertext: expect.any(String),
+      credential_nonce: expect.any(String),
+    });
+    expect(JSON.stringify(stored)).not.toContain("oauth-access-secret");
+    expect(JSON.stringify(stored)).not.toContain("oauth-refresh-secret");
+
+    const agent = await controlPlane.createAgent(authority, {
+      executionLimits: {
+        maxDurationSeconds: 45,
+        maxModelTokens: 2_000,
+        maxToolCalls: 4,
+        maxTurns: 4,
+      },
+      idempotencyKey: "remote-mcp-oauth-browser-agent",
+      instructions: "Use the attached remote MCP tool.",
+      name: "OAuth remote MCP Agent",
+    });
+    if (!agent.ok) throw new Error("Expected Agent creation.");
+    const configured = await controlPlane.configureAgentRemoteMcpConnection(authority, {
+      agentId: agent.agent.id,
+      authorization: "standing",
+      connectionId: replay.connection.connectionId,
+      expectedRevision: agent.agent.revision,
+      expiresAt: null,
+      idempotencyKey: "remote-mcp-oauth-browser-attachment",
+      limits: {
+        maxCallsPerRun: 4,
+        maxConcurrency: 1,
+        maxCostMicrousdPerCall: 0,
+        maxDurationMs: 10_000,
+        maxOutputBytes: 32_000,
+      },
+      snapshotDigest: replay.connection.snapshotDigest,
+    });
+    if (!configured.ok) throw new Error("Expected remote MCP attachment.");
+    const prompt = "Read OAuth records.";
+    const admission = await controlPlane.createRunAdmission(authority, {
+      agentId: configured.agent.id,
+      expectedRevision: configured.agent.revision,
+      idempotencyKey: "remote-mcp-oauth-browser-run",
+      promptCharacters: prompt.length,
+      promptDigest: await digest(prompt),
+    });
+    if (!admission.ok || admission.state !== "issued") {
+      throw new Error("Expected OAuth remote MCP Run admission.");
+    }
+    await controlPlane.confirmRunAdmission(admission.permit);
+    const grant = admission.permit.budgetReservation.toolGrants[0];
+    if (grant?.capabilityId !== "remote_mcp.tool.execute") {
+      throw new Error("Expected OAuth remote MCP grant.");
+    }
+    const action = {
+      agentId: grant.agentId,
+      agentRevision: grant.agentRevision,
+      capabilityId: grant.capabilityId,
+      connectionId: grant.connectionId,
+      effect: grant.effect,
+      estimatedCostMicrousd: 0 as const,
+      grantId: grant.grantId,
+      inputDigest: await digest("{}"),
+      ownerKey: grant.ownerKey,
+      runId: admission.permit.runId,
+      snapshotDigest: grant.snapshotDigest,
+      targetDigests: grant.targetDigests,
+      toolCallId: `tool_call_${crypto.randomUUID()}`,
+      toolName: grant.toolName,
+    };
+    const reserved = await controlPlane.reserveToolExecution({
+      agentId: admission.permit.agentId,
+      agentRevision: admission.permit.agentRevision,
+      budgetReservation: admission.permit.budgetReservation,
+      clientId: admission.permit.clientId,
+      idempotencyKey: admission.permit.idempotencyKey,
+      ownerKey: admission.permit.ownerKey,
+      promptDigest: admission.permit.promptDigest,
+      runId: admission.permit.runId,
+      action,
+    });
+    if (!reserved.ok || reserved.state !== "allowed") {
+      throw new Error("Expected OAuth remote MCP tool reservation.");
+    }
+    const refreshRequests = () =>
+      fetchMock.mock.calls.filter(([, init]) => {
+        const body = init?.body;
+        return body instanceof URLSearchParams && body.get("grant_type") === "refresh_token";
+      }).length;
+    const refreshesBeforeForgedPermit = refreshRequests();
+    await expect(
+      controlPlane.executeRemoteMcpTool({
+        arguments: {},
+        permit: { ...reserved.permit, actionDigest: "a".repeat(43) },
+      }),
+    ).resolves.toEqual({
+      dispatched: false,
+      error: { code: "invalid_execution", message: "Tool execution denied." },
+      ok: false,
+    });
+    expect(refreshRequests()).toBe(refreshesBeforeForgedPermit);
+
+    const executed = await controlPlane.executeRemoteMcpTool({
+      arguments: {},
+      permit: reserved.permit,
+    });
+    expect(executed).toMatchObject({ ok: true });
+    if (!executed.ok) throw new Error("Expected OAuth remote MCP execution.");
+    expect(JSON.parse(executed.outputJson)).toMatchObject({
+      content: [{ text: "refreshed:true", type: "text" }],
+    });
+    await expect(
+      controlPlane.completeToolExecution({
+        outcome: {
+          outputBytes: encoder.encode(executed.outputJson).byteLength,
+          status: "completed",
+        },
+        permit: reserved.permit,
+      }),
+    ).resolves.toEqual({ completed: true, ok: true });
+
+    const reauthentication = remoteMcpConnectionOperationResultSchema.parse(
+      await controlPlane.reserveRemoteMcpOAuthSetup(authority, {
+        action: "reauthenticate",
+        connectionId: replay.connection.connectionId,
+        idempotencyKey: "remote-mcp-oauth-browser-reauthenticate",
+        snapshotDigest: replay.connection.snapshotDigest,
+      }),
+    );
+    if (!reauthentication.ok || reauthentication.state !== "setup_required") {
+      throw new Error("Expected OAuth reauthentication setup.");
+    }
+    const reauthenticationSetup = await worker.fetch(new Request(reauthentication.setup.url), env);
+    const reauthenticationAuthorization = new URL(
+      reauthenticationSetup.headers.get("location") ?? "",
+    );
+    const reauthenticationCallback = new URL(`${origin}/connections/remote-mcp/oauth/callback`);
+    reauthenticationCallback.searchParams.set("code", "reauthorization-code");
+    reauthenticationCallback.searchParams.set("iss", "https://auth.example.com");
+    reauthenticationCallback.searchParams.set(
+      "state",
+      reauthenticationAuthorization.searchParams.get("state") ?? "",
+    );
+    const reauthenticated = await worker.fetch(new Request(reauthenticationCallback), env);
+    expect(reauthenticated.status).toBe(200);
+    expect(await reauthenticated.text()).toContain("reauthenticated");
+    await expect(
+      controlPlane.inspectRemoteMcpConnection(authority, {
+        connectionId: replay.connection.connectionId,
+      }),
+    ).resolves.toMatchObject({
+      connection: {
+        connectionId: replay.connection.connectionId,
+        oauthScopes: ["records.read"],
+        snapshotDigest: replay.connection.snapshotDigest,
+        status: "active",
+      },
+      ok: true,
+    });
+    await expect(
+      runInDurableObject(controlPlane, (_instance, state) =>
+        state.storage.sql
+          .exec(
+            "SELECT connection_id, status FROM capability_grants WHERE grant_id = ?",
+            grant.grantId,
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({
+      connection_id: replay.connection.connectionId,
+      status: "active",
+    });
+
+    await expect(
+      controlPlane.deleteRemoteMcpConnection(authority, {
+        connectionId: replay.connection.connectionId,
+        idempotencyKey: "remote-mcp-oauth-browser-delete",
+        snapshotDigest: replay.connection.snapshotDigest,
+      }),
+    ).resolves.toEqual({ deleted: true, ok: true });
+    await expect(
+      runInDurableObject(controlPlane, (_instance, state) =>
+        state.storage.sql
+          .exec(
+            `SELECT credential_ciphertext, credential_nonce
+             FROM remote_mcp_connections WHERE connection_id = ?`,
+            replay.connection.connectionId,
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({ credential_ciphertext: null, credential_nonce: null });
+    fetchMock.mockRestore();
   });
 
   it("records a failed return and rejects malformed or unsupported callback requests", async () => {

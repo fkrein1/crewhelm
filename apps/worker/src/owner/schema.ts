@@ -301,7 +301,7 @@ export const remoteMcpConnections = sqliteTable(
   {
     connectionId: text("connection_id").primaryKey(),
     endpoint: text("endpoint").notNull(),
-    authKind: text("auth_kind", { enum: ["public", "bearer"] }).notNull(),
+    authKind: text("auth_kind", { enum: ["public", "bearer", "oauth"] }).notNull(),
     catalog: text("catalog", { mode: "json" }).$type<RemoteMcpCatalog>().notNull(),
     catalogBytes: integer("catalog_bytes").notNull(),
     snapshotDigest: text("snapshot_digest").notNull(),
@@ -309,6 +309,10 @@ export const remoteMcpConnections = sqliteTable(
     serverVersion: text("server_version").notNull(),
     credentialCiphertext: text("credential_ciphertext"),
     credentialNonce: text("credential_nonce"),
+    oauthScopes: text("oauth_scopes", { mode: "json" })
+      .$type<string[]>()
+      .notNull()
+      .default(sql`'[]'`),
   },
   (table) => [
     foreignKey({
@@ -322,7 +326,7 @@ export const remoteMcpConnections = sqliteTable(
         (${table.authKind} = 'public'
           AND ${table.credentialCiphertext} IS NULL
           AND ${table.credentialNonce} IS NULL)
-        OR (${table.authKind} = 'bearer'
+        OR (${table.authKind} IN ('bearer', 'oauth')
           AND ((${table.credentialCiphertext} IS NOT NULL
               AND ${table.credentialNonce} IS NOT NULL)
             OR (${table.credentialCiphertext} IS NULL
@@ -330,6 +334,14 @@ export const remoteMcpConnections = sqliteTable(
       )`,
     ),
     check("remote_mcp_connections_catalog_json", sql`json_valid(${table.catalog})`),
+    check(
+      "remote_mcp_connections_oauth_scopes_json",
+      sql`json_valid(${table.oauthScopes}) AND json_type(${table.oauthScopes}) = 'array'`,
+    ),
+    check(
+      "remote_mcp_connections_oauth_scopes_auth_kind",
+      sql`${table.authKind} = 'oauth' OR json_array_length(${table.oauthScopes}) = 0`,
+    ),
     check("remote_mcp_connections_catalog_bytes", sql`${table.catalogBytes} BETWEEN 2 AND 524288`),
     check(
       "remote_mcp_connections_snapshot_digest",
@@ -340,6 +352,103 @@ export const remoteMcpConnections = sqliteTable(
     check(
       "remote_mcp_connections_server_version",
       sql`length(${table.serverVersion}) BETWEEN 1 AND 160`,
+    ),
+  ],
+);
+
+export const remoteMcpOAuthRequests = sqliteTable(
+  "remote_mcp_oauth_requests",
+  {
+    requestId: text("request_id").primaryKey(),
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    operation: text("operation", { enum: ["create", "reauthenticate"] }).notNull(),
+    connectionId: text("connection_id"),
+    endpoint: text("endpoint").notNull(),
+    accountLabel: text("account_label").notNull(),
+    oauthScopes: text("oauth_scopes", { mode: "json" }).$type<string[]>().notNull(),
+    snapshotDigest: text("snapshot_digest"),
+    stateDigest: text("state_digest").notNull(),
+    authorizationUrl: text("authorization_url"),
+    credentialCiphertext: text("credential_ciphertext"),
+    credentialNonce: text("credential_nonce"),
+    status: text("status", {
+      enum: ["reserved", "starting", "pending", "exchanging", "completed", "failed"],
+    }).notNull(),
+    createdAt: integer("created_at").notNull(),
+    expiresAt: integer("expires_at").notNull(),
+    completedAt: integer("completed_at"),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.connectionId],
+      foreignColumns: [connections.connectionId],
+    }).onDelete("restrict"),
+    uniqueIndex("remote_mcp_oauth_requests_client_idempotency").on(
+      table.clientId,
+      table.idempotencyKey,
+    ),
+    index("remote_mcp_oauth_requests_expiry").on(table.expiresAt),
+    check(
+      "remote_mcp_oauth_requests_operation",
+      sql`${table.operation} IN ('create', 'reauthenticate')`,
+    ),
+    check(
+      "remote_mcp_oauth_requests_digest",
+      sql`length(${table.requestDigest}) = 64
+        AND ${table.requestDigest} NOT GLOB '*[^0-9a-f]*'
+        AND length(${table.stateDigest}) = 64
+        AND ${table.stateDigest} NOT GLOB '*[^0-9a-f]*'`,
+    ),
+    check(
+      "remote_mcp_oauth_requests_status",
+      sql`${table.status} IN ('reserved', 'starting', 'pending', 'exchanging', 'completed', 'failed')`,
+    ),
+    check(
+      "remote_mcp_oauth_requests_credential_pair",
+      sql`(${table.credentialCiphertext} IS NULL) = (${table.credentialNonce} IS NULL)`,
+    ),
+    check(
+      "remote_mcp_oauth_requests_scopes_json",
+      sql`json_valid(${table.oauthScopes}) AND json_type(${table.oauthScopes}) = 'array'`,
+    ),
+    check(
+      "remote_mcp_oauth_requests_target",
+      sql`(${table.operation} = 'create'
+          AND ${table.snapshotDigest} IS NULL
+          AND ((${table.status} = 'completed' AND ${table.connectionId} IS NOT NULL)
+            OR (${table.status} != 'completed' AND ${table.connectionId} IS NULL)))
+        OR (${table.operation} = 'reauthenticate'
+          AND ${table.connectionId} IS NOT NULL
+          AND ${table.snapshotDigest} IS NOT NULL)`,
+    ),
+    check(
+      "remote_mcp_oauth_requests_times",
+      sql`${table.createdAt} > 0
+        AND ${table.expiresAt} > ${table.createdAt}
+        AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.createdAt})`,
+    ),
+    check(
+      "remote_mcp_oauth_requests_completion",
+      sql`(
+        (${table.status} IN ('completed', 'failed')
+          AND ${table.completedAt} IS NOT NULL
+          AND ${table.authorizationUrl} IS NULL
+          AND ${table.credentialCiphertext} IS NULL)
+        OR (${table.status} NOT IN ('completed', 'failed') AND ${table.completedAt} IS NULL)
+      )`,
+    ),
+    check(
+      "remote_mcp_oauth_requests_pending_material",
+      sql`(
+        (${table.status} IN ('pending', 'exchanging')
+          AND ${table.authorizationUrl} IS NOT NULL
+          AND ${table.credentialCiphertext} IS NOT NULL)
+        OR (${table.status} NOT IN ('pending', 'exchanging')
+          AND ${table.authorizationUrl} IS NULL
+          AND ${table.credentialCiphertext} IS NULL)
+      )`,
     ),
   ],
 );
@@ -2102,6 +2211,7 @@ export const controlPlaneSchema = {
   connections,
   remoteMcpConnections,
   remoteMcpConnectionMutations,
+  remoteMcpOAuthRequests,
   composioWatchWebhook,
   controlPlane,
   controlPlaneMigrations,

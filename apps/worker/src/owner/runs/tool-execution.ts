@@ -77,6 +77,18 @@ type ToolExecutionRequest = ReturnType<typeof evaluateToolExecutionInputSchema.p
 type GateInputResult =
   | { input: ExternalToolGateInput; ok: true }
   | { ok: false; reason: ToolExecutionEvaluationFailureReason };
+type RemoteMcpExecution = {
+  connectionId: string;
+  maximumDurationMs: number;
+  maximumOutputBytes: number;
+  snapshotDigest: string;
+  toolName: string;
+};
+type RemoteMcpPermit = {
+  action: ReturnType<typeof classifiedRemoteMcpToolActionSchema.parse>;
+  permit: ToolExecutionPermit;
+  reservedPermitDigest: string;
+};
 
 function encodeBase64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -898,92 +910,30 @@ export class ToolExecutions {
     return result;
   }
 
-  async claimRemoteMcp(input: unknown): Promise<
-    | {
-        connectionId: string;
-        maximumDurationMs: number;
-        maximumOutputBytes: number;
-        snapshotDigest: string;
-        toolName: string;
-      }
-    | undefined
-  > {
-    const permit = toolExecutionPermitSchema.safeParse(input);
-    if (
-      !permit.success ||
-      permit.data.audience !== "remote_mcp_adapter" ||
-      permit.data.action.capabilityId !== "remote_mcp.tool.execute" ||
-      permit.data.action.ownerKey !== this.#objectName ||
-      Date.parse(permit.data.constraints.decisionExpiresAt) <= Date.now()
-    ) {
-      return undefined;
-    }
-    const action = classifiedRemoteMcpToolActionSchema.parse(permit.data.action);
-    const reservedPermitDigest = await digestToolExecutionPermit(permit.data, "reserved");
-    const dispatchedPermitDigest = await digestToolExecutionPermit(permit.data, "dispatched");
+  async preflightRemoteMcp(input: unknown): Promise<RemoteMcpExecution | undefined> {
+    const permit = await this.#remoteMcpPermit(input);
+    if (permit === undefined) return undefined;
+    return this.#inspectRemoteMcpPermit(this.#database, permit, Date.now())?.execution;
+  }
+
+  async claimRemoteMcp(input: unknown): Promise<RemoteMcpExecution | undefined> {
+    const permit = await this.#remoteMcpPermit(input);
+    if (permit === undefined) return undefined;
+    const dispatchedPermitDigest = await digestToolExecutionPermit(permit.permit, "dispatched");
     const dispatchedAt = Date.now();
 
     const claimed = this.#database.transaction((transaction) => {
-      const row = transaction
-        .select({
-          actionDigest: toolExecutions.actionDigest,
-          agentStatus: agents.status,
-          budgetReservation: runAdmissions.budgetReservation,
-          cancellationRequestedAt: runAdmissions.cancellationRequestedAt,
-          clientId: runAdmissions.clientId,
-          connectionId: capabilityGrants.connectionId,
-          connectionStatus: connections.status,
-          currentAgentRevision: agents.currentRevision,
-          expiresAt: toolExecutions.expiresAt,
-          grant: capabilityGrants.grant,
-          grantId: toolExecutions.grantId,
-          grantStatus: capabilityGrants.status,
-          nonceDigest: toolExecutions.nonceDigest,
-          provider: connections.provider,
-          runId: toolExecutions.runId,
-          status: toolExecutions.status,
-        })
-        .from(toolExecutions)
-        .innerJoin(capabilityGrants, eq(capabilityGrants.grantId, toolExecutions.grantId))
-        .innerJoin(connections, eq(connections.connectionId, capabilityGrants.connectionId))
-        .innerJoin(runAdmissions, eq(runAdmissions.runId, toolExecutions.runId))
-        .innerJoin(agents, eq(agents.agentId, runAdmissions.agentId))
-        .where(eq(toolExecutions.toolCallId, action.toolCallId))
-        .get();
-      const grant = remoteMcpToolCapabilityGrantSchema.safeParse(row?.grant);
-
-      if (
-        row === undefined ||
-        !grant.success ||
-        row.status !== "reserved" ||
-        row.expiresAt <= dispatchedAt ||
-        row.cancellationRequestedAt !== null ||
-        row.budgetReservation.fleetConfigurationRevision !==
-          this.#currentFleetConfiguration().revision ||
-        row.agentStatus !== "active" ||
-        row.currentAgentRevision !== action.agentRevision ||
-        row.provider !== "remote_mcp" ||
-        row.connectionStatus !== "active" ||
-        row.grantStatus !== "active" ||
-        row.nonceDigest !== reservedPermitDigest ||
-        row.actionDigest !== permit.data.actionDigest ||
-        row.runId !== action.runId ||
-        row.grantId !== action.grantId ||
-        row.connectionId !== action.connectionId ||
-        grant.data.snapshotDigest !== action.snapshotDigest ||
-        grant.data.toolName !== action.toolName
-      ) {
-        return undefined;
-      }
+      const inspected = this.#inspectRemoteMcpPermit(transaction, permit, dispatchedAt);
+      if (inspected === undefined) return undefined;
 
       const updated = transaction
         .update(toolExecutions)
         .set({ dispatchedAt, nonceDigest: dispatchedPermitDigest })
         .where(
           and(
-            eq(toolExecutions.toolCallId, action.toolCallId),
+            eq(toolExecutions.toolCallId, permit.action.toolCallId),
             eq(toolExecutions.status, "reserved"),
-            eq(toolExecutions.nonceDigest, reservedPermitDigest),
+            eq(toolExecutions.nonceDigest, permit.reservedPermitDigest),
           ),
         )
         .returning({ toolCallId: toolExecutions.toolCallId })
@@ -994,30 +944,113 @@ export class ToolExecutions {
         .insert(auditEvents)
         .values({
           action: "tool.execution_dispatched",
-          clientId: row.clientId,
+          clientId: inspected.clientId,
           occurredAt: dispatchedAt,
-          subjectId: action.toolCallId,
+          subjectId: permit.action.toolCallId,
         })
         .run();
 
-      return {
-        connectionId: action.connectionId,
-        maximumDurationMs: permit.data.constraints.maxDurationMs,
-        maximumOutputBytes: permit.data.constraints.maxOutputBytes,
-        snapshotDigest: action.snapshotDigest,
-        toolName: action.toolName,
-      };
+      return inspected.execution;
     });
 
     if (claimed !== undefined) {
       recordExecutionEvent({
         outcome: "claimed",
         phase: "tool.dispatch",
-        runId: action.runId,
-        toolCallId: action.toolCallId,
+        runId: permit.action.runId,
+        toolCallId: permit.action.toolCallId,
       });
     }
     return claimed;
+  }
+
+  async #remoteMcpPermit(input: unknown): Promise<RemoteMcpPermit | undefined> {
+    const permit = toolExecutionPermitSchema.safeParse(input);
+    if (
+      !permit.success ||
+      permit.data.audience !== "remote_mcp_adapter" ||
+      permit.data.action.capabilityId !== "remote_mcp.tool.execute" ||
+      permit.data.action.ownerKey !== this.#objectName
+    ) {
+      return undefined;
+    }
+    const action = classifiedRemoteMcpToolActionSchema.safeParse(permit.data.action);
+    if (!action.success) return undefined;
+    return {
+      action: action.data,
+      permit: permit.data,
+      reservedPermitDigest: await digestToolExecutionPermit(permit.data, "reserved"),
+    };
+  }
+
+  #inspectRemoteMcpPermit(
+    database: ToolExecutionDatabase,
+    permit: RemoteMcpPermit,
+    evaluatedAt: number,
+  ): { clientId: string; execution: RemoteMcpExecution } | undefined {
+    if (Date.parse(permit.permit.constraints.decisionExpiresAt) <= evaluatedAt) return undefined;
+    const row = database
+      .select({
+        actionDigest: toolExecutions.actionDigest,
+        agentStatus: agents.status,
+        budgetReservation: runAdmissions.budgetReservation,
+        cancellationRequestedAt: runAdmissions.cancellationRequestedAt,
+        clientId: runAdmissions.clientId,
+        connectionId: capabilityGrants.connectionId,
+        connectionStatus: connections.status,
+        currentAgentRevision: agents.currentRevision,
+        expiresAt: toolExecutions.expiresAt,
+        grant: capabilityGrants.grant,
+        grantId: toolExecutions.grantId,
+        grantStatus: capabilityGrants.status,
+        nonceDigest: toolExecutions.nonceDigest,
+        provider: connections.provider,
+        runId: toolExecutions.runId,
+        status: toolExecutions.status,
+      })
+      .from(toolExecutions)
+      .innerJoin(capabilityGrants, eq(capabilityGrants.grantId, toolExecutions.grantId))
+      .innerJoin(connections, eq(connections.connectionId, capabilityGrants.connectionId))
+      .innerJoin(runAdmissions, eq(runAdmissions.runId, toolExecutions.runId))
+      .innerJoin(agents, eq(agents.agentId, runAdmissions.agentId))
+      .where(eq(toolExecutions.toolCallId, permit.action.toolCallId))
+      .get();
+    const grant = remoteMcpToolCapabilityGrantSchema.safeParse(row?.grant);
+
+    if (
+      row === undefined ||
+      !grant.success ||
+      row.status !== "reserved" ||
+      row.expiresAt <= evaluatedAt ||
+      row.cancellationRequestedAt !== null ||
+      row.budgetReservation.fleetConfigurationRevision !==
+        this.#currentFleetConfiguration().revision ||
+      row.agentStatus !== "active" ||
+      row.currentAgentRevision !== permit.action.agentRevision ||
+      row.provider !== "remote_mcp" ||
+      row.connectionStatus !== "active" ||
+      row.grantStatus !== "active" ||
+      row.nonceDigest !== permit.reservedPermitDigest ||
+      row.actionDigest !== permit.permit.actionDigest ||
+      row.runId !== permit.action.runId ||
+      row.grantId !== permit.action.grantId ||
+      row.connectionId !== permit.action.connectionId ||
+      grant.data.snapshotDigest !== permit.action.snapshotDigest ||
+      grant.data.toolName !== permit.action.toolName
+    ) {
+      return undefined;
+    }
+
+    return {
+      clientId: row.clientId,
+      execution: {
+        connectionId: permit.action.connectionId,
+        maximumDurationMs: permit.permit.constraints.maxDurationMs,
+        maximumOutputBytes: permit.permit.constraints.maxOutputBytes,
+        snapshotDigest: permit.action.snapshotDigest,
+        toolName: permit.action.toolName,
+      },
+    };
   }
 
   async #scheduleReconciliation(reconcileAt: number): Promise<void> {
