@@ -1385,7 +1385,7 @@ export class AgentChannel {
       const capability = this.#capabilities.issue(authority, admission, "cancel");
 
       if (capability === undefined) {
-        return deniedCancelRun("run_unavailable");
+        return this.#settleExpiredCancellationOrDeny(authority, admission);
       }
 
       let cancelled: unknown;
@@ -1393,20 +1393,20 @@ export class AgentChannel {
       try {
         cancelled = await agent.cancelAdmittedRun({ capability });
       } catch {
-        return deniedCancelRun("run_unavailable");
+        return this.#settleExpiredCancellationOrDeny(authority, admission);
       }
 
       const result = cancelAdmittedRunResultSchema.safeParse(cancelled);
 
       if (!result.success || !result.data.ok) {
-        return deniedCancelRun("run_unavailable");
+        return this.#settleExpiredCancellationOrDeny(authority, admission);
       }
 
       if (!result.data.cancelled) {
         const inspected = await this.#inspectAdmittedRun(authority, admission, agent);
 
         if (inspected === undefined) {
-          return deniedCancelRun("run_unavailable");
+          return this.#settleExpiredCancellationOrDeny(authority, admission);
         }
 
         if (inspected.run.status === "cancelled") {
@@ -1441,6 +1441,25 @@ export class AgentChannel {
 
     await this.#recordCancellationOutcome(authority, admission, new Date().toISOString());
 
+    return cancelRunResultSchema.parse({
+      cancelled: true,
+      ok: true,
+      runId: admission.runId,
+    });
+  }
+
+  async #settleExpiredCancellationOrDeny(
+    authority: OwnerAuthority,
+    admission: StoredRunAdmission,
+  ): Promise<CancelRunResult> {
+    if (
+      !this.#admissions.cancellationDeadlineElapsed(admission.runId) ||
+      !this.#admissions.completeCancellation(authority, admission.runId)
+    ) {
+      return deniedCancelRun("run_unavailable");
+    }
+
+    await this.#recordCancellationOutcome(authority, admission, new Date().toISOString());
     return cancelRunResultSchema.parse({
       cancelled: true,
       ok: true,
