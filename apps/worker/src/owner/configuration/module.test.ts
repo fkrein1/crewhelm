@@ -203,4 +203,51 @@ describe("OwnerControlPlane fleet configuration", () => {
       }),
     ).resolves.toMatchObject({ error: { code: "revision_conflict" }, ok: false });
   });
+
+  it("reports an unusable stored revision as an expected public failure", async () => {
+    const authority = await authorityFor("fleet-configuration-incompatible", [
+      OWNER_READ_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+
+    await expect(
+      stub.getFleetConfiguration(authority, { target: { kind: "fleet" } }),
+    ).resolves.toMatchObject({ ok: true });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE fleet_configuration_revisions SET configuration = json('{}') WHERE revision = 1",
+      );
+    });
+
+    await expect(
+      stub.getFleetConfiguration(authority, { target: { kind: "fleet" } }),
+    ).resolves.toEqual({
+      error: {
+        code: "incompatible_schema",
+        message: "Fleet configuration request denied.",
+      },
+      ok: false,
+    });
+    await expect(
+      stub.configureFleetConfiguration(authority, {
+        expectedRevision: 1,
+        mode: "preview",
+        patch: { integrations: { callsPerDay: 200 } },
+        target: { kind: "fleet" },
+      }),
+    ).resolves.toEqual({
+      error: {
+        code: "incompatible_schema",
+        message: "Fleet configuration request denied.",
+      },
+      ok: false,
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) => {
+        const database = drizzle(state.storage, { schema: controlPlaneSchema });
+        return new FleetConfigurations(database).current();
+      }),
+    ).rejects.toThrow("Fleet configuration invariant violated");
+  });
 });

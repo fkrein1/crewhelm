@@ -23,6 +23,42 @@ const firstGrantId = "grant_90000000-0000-4000-8000-000000000002";
 const secondGrantId = "grant_90000000-0000-4000-8000-000000000003";
 
 describe("owner recovery controls", () => {
+  it("returns target-specific failures as values at the Durable Object boundary", async () => {
+    const authority = await authorityFor("recovery-missing-targets", [
+      AGENTS_WRITE_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+
+    await expect(
+      controlPlane.changeAuthority(authority, {
+        agentId: "agent_90000000-0000-4000-8000-000000000010",
+        target: "agent",
+      }),
+    ).resolves.toEqual({
+      error: { code: "agent_not_found", message: "Authority control request denied." },
+      ok: false,
+    });
+    await expect(
+      controlPlane.changeAuthority(authority, {
+        connectionId: "connection_90000000-0000-4000-8000-000000000011",
+        target: "connection",
+      }),
+    ).resolves.toEqual({
+      error: { code: "connection_not_found", message: "Authority control request denied." },
+      ok: false,
+    });
+    await expect(
+      controlPlane.changeAuthority(authority, {
+        grantId: "grant_90000000-0000-4000-8000-000000000012",
+        target: "capability",
+      }),
+    ).resolves.toEqual({
+      error: { code: "capability_not_found", message: "Authority control request denied." },
+      ok: false,
+    });
+  });
+
   it("disables an Agent idempotently and invalidates issued and new admissions", async () => {
     const authority = await authorityFor("recovery-agent", [
       OWNER_WRITE_SCOPE,

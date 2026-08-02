@@ -39,7 +39,11 @@ import {
 } from "../schema.js";
 
 type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
+type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 type Failure = Extract<ConfigureFleetConfigurationResult, { ok: false }>;
+type ConfigurationLookup =
+  | { configuration: FleetConfiguration; status: "available" }
+  | { status: "unavailable" };
 
 function encodeBase64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -111,7 +115,13 @@ export class FleetConfigurations {
   }
 
   current(): FleetConfiguration {
-    return this.#current();
+    const result = this.#lookupCurrent();
+
+    if (result.status === "unavailable") {
+      throw new Error("Fleet configuration invariant violated: no usable current revision.");
+    }
+
+    return result.configuration;
   }
 
   get(input: unknown): GetFleetConfigurationResult {
@@ -119,8 +129,14 @@ export class FleetConfigurations {
       return deniedFleetConfiguration("invalid_request");
     }
 
+    const result = this.#lookupCurrent();
+
+    if (result.status === "unavailable") {
+      return deniedFleetConfiguration("incompatible_schema");
+    }
+
     return getFleetConfigurationResultSchema.parse({
-      configuration: this.#current(),
+      configuration: result.configuration,
       ok: true,
     });
   }
@@ -174,43 +190,38 @@ export class FleetConfigurations {
             return deniedFleetConfiguration("idempotency_conflict");
           }
 
+          const replayConfiguration = this.#configurationFromRow(replay);
+
+          if (replayConfiguration.status === "unavailable") {
+            return deniedFleetConfiguration("incompatible_schema");
+          }
+
           return configureFleetConfigurationResultSchema.parse({
             applied: false,
-            configuration: this.#fromRow(replay),
+            configuration: replayConfiguration.configuration,
             ok: true,
           });
         }
       }
 
-      const current = transaction
-        .select({
-          configuration: fleetConfigurationRevisions.configuration,
-          createdAt: fleetConfigurationRevisions.createdAt,
-          revision: fleetConfigurationRevisions.revision,
-        })
-        .from(fleetConfigurations)
-        .innerJoin(
-          fleetConfigurationRevisions,
-          eq(fleetConfigurationRevisions.revision, fleetConfigurations.currentRevision),
-        )
-        .where(eq(fleetConfigurations.singleton, 1))
-        .get();
+      const currentLookup = this.#findCurrent(transaction);
 
-      if (current === undefined) {
+      if (currentLookup.status === "unavailable") {
         return deniedFleetConfiguration("incompatible_schema");
       }
+      const current = currentLookup.configuration;
 
       if (current.revision !== request.data.expectedRevision) {
         return deniedFleetConfiguration("revision_conflict");
       }
 
-      const nextData = mergeConfiguration(current.configuration, request.data.patch);
+      const nextData = mergeConfiguration(current.data, request.data.patch);
 
       if (nextData === null) {
         return deniedFleetConfiguration("invalid_request");
       }
 
-      if (JSON.stringify(nextData) === JSON.stringify(current.configuration)) {
+      if (JSON.stringify(nextData) === JSON.stringify(current.data)) {
         return deniedFleetConfiguration("no_changes");
       }
 
@@ -278,31 +289,31 @@ export class FleetConfigurations {
     });
   }
 
-  #current(): FleetConfiguration {
+  #lookupCurrent(): ConfigurationLookup {
     const currentTime = Date.now();
 
     return this.#database.transaction((transaction) => {
       this.#ensureDefault(transaction, currentTime);
-      const row = transaction
-        .select({
-          configuration: fleetConfigurationRevisions.configuration,
-          createdAt: fleetConfigurationRevisions.createdAt,
-          revision: fleetConfigurationRevisions.revision,
-        })
-        .from(fleetConfigurations)
-        .innerJoin(
-          fleetConfigurationRevisions,
-          eq(fleetConfigurationRevisions.revision, fleetConfigurations.currentRevision),
-        )
-        .where(eq(fleetConfigurations.singleton, 1))
-        .get();
-
-      if (row === undefined) {
-        throw new Error("Fleet configuration is unavailable.");
-      }
-
-      return this.#fromRow(row);
+      return this.#findCurrent(transaction);
     });
+  }
+
+  #findCurrent(database: Transaction): ConfigurationLookup {
+    const row = database
+      .select({
+        configuration: fleetConfigurationRevisions.configuration,
+        createdAt: fleetConfigurationRevisions.createdAt,
+        revision: fleetConfigurationRevisions.revision,
+      })
+      .from(fleetConfigurations)
+      .innerJoin(
+        fleetConfigurationRevisions,
+        eq(fleetConfigurationRevisions.revision, fleetConfigurations.currentRevision),
+      )
+      .where(eq(fleetConfigurations.singleton, 1))
+      .get();
+
+    return row === undefined ? { status: "unavailable" } : this.#configurationFromRow(row);
   }
 
   #defaultData(): FleetConfigurationData {
@@ -328,10 +339,7 @@ export class FleetConfigurations {
     });
   }
 
-  #ensureDefault(
-    database: Parameters<Parameters<Database["transaction"]>[0]>[0],
-    createdAt: number,
-  ): void {
+  #ensureDefault(database: Transaction, createdAt: number): void {
     if (
       database
         .select({ singleton: fleetConfigurations.singleton })
@@ -354,15 +362,25 @@ export class FleetConfigurations {
       .run();
   }
 
-  #fromRow(row: {
+  #configurationFromRow(row: {
     configuration: FleetConfigurationData;
     createdAt: number;
     revision: number;
-  }): FleetConfiguration {
-    return fleetConfigurationSchema.parse({
-      configuredAt: new Date(row.createdAt).toISOString(),
+  }): ConfigurationLookup {
+    const configuredAt = new Date(row.createdAt);
+
+    if (Number.isNaN(configuredAt.valueOf())) {
+      return { status: "unavailable" };
+    }
+
+    const configuration = fleetConfigurationSchema.safeParse({
+      configuredAt: configuredAt.toISOString(),
       data: row.configuration,
       revision: row.revision,
     });
+
+    return configuration.success
+      ? { configuration: configuration.data, status: "available" }
+      : { status: "unavailable" };
   }
 }

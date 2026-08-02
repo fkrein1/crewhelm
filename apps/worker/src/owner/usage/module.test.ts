@@ -10,7 +10,7 @@ import { agentInput, authorityFor } from "../testkit.js";
 import { AiGatewayUsage } from "./module.js";
 
 describe("OwnerControlPlane AI Gateway usage", () => {
-  it("settles exact Gateway logs idempotently for cost observability", async () => {
+  it("settles ready Gateway logs and retries not-ready or unavailable logs", async () => {
     const authority = await authorityFor("ai-usage-owner-1", [
       OWNER_WRITE_SCOPE,
       AGENTS_WRITE_SCOPE,
@@ -41,13 +41,13 @@ describe("OwnerControlPlane AI Gateway usage", () => {
     });
 
     const { expiresAt: _expiresAt, nonce: _nonce, ...reference } = admission.permit;
-    const getLog = vi.fn<(logId: string) => Promise<AiGatewayLog>>(async () => {
+    const gatewayLog = (id: string): AiGatewayLog => {
       return {
         cached: false,
         cost: 0.012_345,
         created_at: new Date(),
         duration: 10,
-        id: "gateway-log-1",
+        id,
         metadata: {
           crewhelm_agent: admission.permit.agentId,
           crewhelm_run: admission.permit.runId,
@@ -69,6 +69,18 @@ describe("OwnerControlPlane AI Gateway usage", () => {
         tokens_in: 123,
         tokens_out: 45,
       };
+    };
+    const getLog = vi.fn<(logId: string) => Promise<AiGatewayLog>>(async (logId) => {
+      switch (logId) {
+        case "gateway-log-ready":
+          return gatewayLog(logId);
+        case "gateway-log-not-ready":
+          return gatewayLog("different-gateway-log");
+        case "gateway-log-unavailable":
+          throw new Error("Gateway read failed.");
+        default:
+          throw new Error(`Unexpected Gateway log: ${logId}`);
+      }
     });
 
     await runInDurableObject(stub, async (_instance, state) => {
@@ -85,16 +97,24 @@ describe("OwnerControlPlane AI Gateway usage", () => {
         "crewhelm",
       );
 
-      await usage.record({ gatewayLogId: "gateway-log-1", reference });
-      await usage.record({ gatewayLogId: "gateway-log-1", reference });
+      await usage.record({ gatewayLogId: "gateway-log-ready", reference });
+      await usage.record({ gatewayLogId: "gateway-log-ready", reference });
+      await usage.record({ gatewayLogId: "gateway-log-not-ready", reference });
+      await usage.record({ gatewayLogId: "gateway-log-unavailable", reference });
       const noGatewayUsage = new AiGatewayUsage(database, state.storage, {
         gateway: () => ({ getLog }),
       });
       await noGatewayUsage.record({ gatewayLogId: "gateway-log-skipped", reference });
       await noGatewayUsage.reconcilePending(Date.now());
 
-      expect(getLog).toHaveBeenCalledTimes(1);
+      expect(getLog.mock.calls).toEqual([
+        ["gateway-log-ready"],
+        ["gateway-log-not-ready"],
+        ["gateway-log-unavailable"],
+      ]);
       expect(noGatewayUsage.nextReconciliationAt()).toBeNull();
+      expect(usage.nextReconciliationAt()).toEqual(expect.any(Number));
+      await expect(state.storage.getAlarm()).resolves.toEqual(expect.any(Number));
       expect(
         state.storage.sql
           .exec(
@@ -104,18 +124,41 @@ describe("OwnerControlPlane AI Gateway usage", () => {
                reservation_microusd,
                cost_microusd,
                input_tokens,
-               output_tokens
-             FROM ai_gateway_calls`,
+               output_tokens,
+               reconciliation_attempts
+             FROM ai_gateway_calls
+             ORDER BY gateway_log_id`,
           )
-          .one(),
-      ).toEqual({
-        cost_microusd: 12_345,
-        gateway_log_id: "gateway-log-1",
-        input_tokens: 123,
-        output_tokens: 45,
-        reservation_microusd: 50_000,
-        status: "settled",
-      });
+          .toArray(),
+      ).toEqual([
+        {
+          cost_microusd: null,
+          gateway_log_id: "gateway-log-not-ready",
+          input_tokens: null,
+          output_tokens: null,
+          reconciliation_attempts: 1,
+          reservation_microusd: 50_000,
+          status: "pending",
+        },
+        {
+          cost_microusd: 12_345,
+          gateway_log_id: "gateway-log-ready",
+          input_tokens: 123,
+          output_tokens: 45,
+          reconciliation_attempts: 0,
+          reservation_microusd: 50_000,
+          status: "settled",
+        },
+        {
+          cost_microusd: null,
+          gateway_log_id: "gateway-log-unavailable",
+          input_tokens: null,
+          output_tokens: null,
+          reconciliation_attempts: 1,
+          reservation_microusd: 50_000,
+          status: "pending",
+        },
+      ]);
     });
   });
 });

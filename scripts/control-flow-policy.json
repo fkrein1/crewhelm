@@ -24,8 +24,8 @@
     "apps/worker/src/worker-test-entry.ts"
   ],
   "recordedProgress": {
-    "migratedFiles": 0,
-    "migratedUnits": 0,
+    "migratedFiles": 6,
+    "migratedUnits": 3,
     "totalFiles": 155,
     "totalUnits": 30
   },
@@ -154,8 +154,12 @@
       "pathPrefixes": ["apps/worker/src/owner/briefs/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/owner/configuration/module.test.ts"]
+      },
       "id": "owner-configuration",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/configuration/"]
     },
     {
@@ -164,8 +168,12 @@
       "pathPrefixes": ["apps/worker/src/owner/connections/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/owner/recovery/module.test.ts"]
+      },
       "id": "owner-recovery",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/recovery/"]
     },
     {
@@ -184,8 +192,12 @@
       "pathPrefixes": ["apps/worker/src/owner/skills/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/owner/usage/module.test.ts"]
+      },
       "id": "owner-usage",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/usage/"]
     },
     {

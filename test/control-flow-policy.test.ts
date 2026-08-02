@@ -43,11 +43,13 @@ describe("control-flow migration policy", () => {
 
     expect(result.errors).toEqual([]);
     expect(result.summary).toMatchObject({
-      migratedFilePercentage: 0,
-      migratedFiles: 0,
-      migratedUnitPercentage: 0,
-      migratedUnits: 0,
+      migratedFiles: policy.recordedProgress.migratedFiles,
+      migratedUnits: policy.recordedProgress.migratedUnits,
+      totalFiles: policy.recordedProgress.totalFiles,
+      totalUnits: policy.recordedProgress.totalUnits,
     });
+    expect(result.summary.migratedFilePercentage).toBeGreaterThan(0);
+    expect(result.summary.migratedUnitPercentage).toBeGreaterThan(0);
     expect(result.summary.totalFiles).toBeGreaterThan(100);
     expect(result.summary.totalUnits).toBeGreaterThan(20);
   });
