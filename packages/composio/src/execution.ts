@@ -15,10 +15,19 @@ const COMPOSIO_TOOL_EXECUTION_URL = "https://backend.composio.dev/api/v3/tools/e
 const MAXIMUM_CONNECTION_RESPONSE_BYTES = 256 * 1_024;
 
 const composioApiKeySchema = z.string().min(16).max(4_096).regex(/^\S+$/);
+const connectedAccountStatusSchema = z.enum([
+  "ACTIVE",
+  "EXPIRED",
+  "FAILED",
+  "INACTIVE",
+  "INITIALIZING",
+  "INITIATED",
+  "REVOKED",
+]);
 const connectedAccountSchema = z.object({
   alias: z.unknown().optional(),
   id: composioConnectedAccountIdSchema,
-  status: z.literal("ACTIVE"),
+  status: connectedAccountStatusSchema,
   toolkit: z.object({
     slug: integrationSlugSchema,
   }),
@@ -56,8 +65,21 @@ export interface ComposioRuntime {
   verifyConnection(
     providerConnectionId: string,
     signal?: AbortSignal,
-  ): Promise<{ accountLabel: string | null; ok: true; toolkitSlug: string } | { ok: false }>;
+  ): Promise<ComposioConnectionVerificationResult>;
 }
+
+export type ComposioConnectionVerificationResult =
+  | { accountLabel: string | null; ok: true; toolkitSlug: string }
+  | {
+      ok: false;
+      reason:
+        | "configuration_unavailable"
+        | "invalid_request"
+        | "invalid_response"
+        | "provider_rejected"
+        | "provider_unavailable"
+        | "transport_error";
+    };
 
 export interface ComposioRuntimeOptions {
   apiKey: string | undefined;
@@ -82,7 +104,13 @@ export type ComposioRuntimeResponseEvent =
   | {
       durationMs: number;
       operation: "verify";
-      outcome: "accepted" | "invalid_response" | "provider_rejected" | "transport_error";
+      outcome:
+        | "accepted"
+        | "configuration_unavailable"
+        | "invalid_response"
+        | "provider_rejected"
+        | "provider_unavailable"
+        | "transport_error";
       status: number | null;
     };
 
@@ -421,13 +449,13 @@ export function createComposioRuntime(options: ComposioRuntimeOptions): Composio
 
     async verifyConnection(providerConnectionId, signal) {
       if (!apiKey.success) {
-        return { ok: false };
+        return { ok: false, reason: "configuration_unavailable" };
       }
 
       const parsedId = composioConnectedAccountIdSchema.safeParse(providerConnectionId);
 
       if (!parsedId.success) {
-        return { ok: false };
+        return { ok: false, reason: "invalid_request" };
       }
 
       const endpoint = new URL(
@@ -446,19 +474,39 @@ export function createComposioRuntime(options: ComposioRuntimeOptions): Composio
           signal: requestSignal(signal, 5_000),
         });
 
-        if (
-          response.status !== 200 ||
-          !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
-        ) {
+        if (response.status !== 200) {
+          const configurationUnavailable = response.status === 401 || response.status === 403;
+          const unavailable = response.status === 429 || response.status >= 500;
+          const outcome = configurationUnavailable
+            ? "configuration_unavailable"
+            : unavailable
+              ? "provider_unavailable"
+              : "provider_rejected";
+
           recordResponse(
             {
               operation: "verify",
-              outcome: "provider_rejected",
+              outcome,
               status: response.status,
             },
             startedAt,
           );
-          return { ok: false };
+          return {
+            ok: false,
+            reason: outcome,
+          };
+        }
+
+        if (!response.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
+          recordResponse(
+            {
+              operation: "verify",
+              outcome: "invalid_response",
+              status: response.status,
+            },
+            startedAt,
+          );
+          return { ok: false, reason: "invalid_response" };
         }
 
         const accountBody = await readBoundedJson(response, MAXIMUM_CONNECTION_RESPONSE_BYTES);
@@ -472,7 +520,7 @@ export function createComposioRuntime(options: ComposioRuntimeOptions): Composio
             },
             startedAt,
           );
-          return { ok: false };
+          return { ok: false, reason: "invalid_response" };
         }
 
         const account = connectedAccountSchema.safeParse(accountBody.value);
@@ -490,7 +538,19 @@ export function createComposioRuntime(options: ComposioRuntimeOptions): Composio
             },
             startedAt,
           );
-          return { ok: false };
+          return { ok: false, reason: "invalid_response" };
+        }
+
+        if (account.data.status !== "ACTIVE") {
+          recordResponse(
+            {
+              operation: "verify",
+              outcome: "provider_rejected",
+              status: response.status,
+            },
+            startedAt,
+          );
+          return { ok: false, reason: "provider_rejected" };
         }
 
         recordResponse(
@@ -515,7 +575,7 @@ export function createComposioRuntime(options: ComposioRuntimeOptions): Composio
           },
           startedAt,
         );
-        return { ok: false };
+        return { ok: false, reason: "transport_error" };
       }
     },
   };

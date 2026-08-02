@@ -1338,11 +1338,17 @@ export class AgentEventWatches {
         return deniedAgentWatch("watch_operation_unknown");
       }
 
+      const providerConfiguration = composioProviderTriggerConfiguration(
+        row.definition.source.sourceSlug,
+        row.definition.source.configuration,
+      );
+
+      if (!providerConfiguration.ok) {
+        return deniedAgentWatch("watch_operation_unknown");
+      }
+
       const created = await this.#triggerInstances.upsert({
-        configuration: composioProviderTriggerConfiguration(
-          row.definition.source.sourceSlug,
-          row.definition.source.configuration,
-        ),
+        configuration: providerConfiguration.configuration,
         integrationSlug: row.definition.source.integrationSlug,
         ownerKey: this.#ownerKey,
         providerConnectionId: connection.connection.providerConnectionId,
@@ -1411,11 +1417,17 @@ export class AgentEventWatches {
         return deniedAgentWatch("watch_operation_unknown");
       }
 
+      const providerConfiguration = composioProviderTriggerConfiguration(
+        row.definition.source.sourceSlug,
+        row.definition.source.configuration,
+      );
+
+      if (!providerConfiguration.ok) {
+        return deniedAgentWatch("watch_operation_unknown");
+      }
+
       const found = await this.#triggerInstances.find({
-        configuration: composioProviderTriggerConfiguration(
-          row.definition.source.sourceSlug,
-          row.definition.source.configuration,
-        ),
+        configuration: providerConfiguration.configuration,
         ownerKey: this.#ownerKey,
         providerConnectionId: connection.connection.providerConnectionId,
         sourceSlug: row.definition.source.sourceSlug,

@@ -192,15 +192,16 @@ const SLACK_MESSAGE_TRIGGER_SLUGS = new Set(["SLACK_RECEIVE_BOT_MESSAGE", "SLACK
 
 interface SlackMessageIdentity {
   channel: string;
+  kind: "valid";
   timestamp: string;
 }
 
 function slackMessageIdentity(
   sourceSlug: string,
   data: Record<string, IntegrationToolParameterValue>,
-): SlackMessageIdentity | null {
+): SlackMessageIdentity | { kind: "invalid" } | { kind: "not_slack" } {
   if (!SLACK_MESSAGE_TRIGGER_SLUGS.has(sourceSlug)) {
-    return null;
+    return { kind: "not_slack" };
   }
 
   const channel = data.channel;
@@ -212,10 +213,10 @@ function slackMessageIdentity(
     typeof timestamp !== "string" ||
     !/^\d{10,11}(?:\.\d{1,9})?$/u.test(timestamp)
   ) {
-    return null;
+    return { kind: "invalid" };
   }
 
-  return { channel, timestamp };
+  return { channel, kind: "valid", timestamp };
 }
 
 function encodeBase64Url(bytes: Uint8Array): string {
@@ -228,15 +229,29 @@ function encodeBase64Url(bytes: Uint8Array): string {
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
 }
 
-async function stableProviderEventId(
+type ProviderEventIdentityResult =
+  | { eventId: string; ok: true; providerOccurredAt: string | null }
+  | { ok: false };
+
+async function providerEventIdentity(
   sourceSlug: string,
   data: Record<string, IntegrationToolParameterValue>,
   deliveryId: string,
-): Promise<string> {
+): Promise<ProviderEventIdentityResult> {
   const identity = slackMessageIdentity(sourceSlug, data);
 
-  if (identity === null) {
-    return deliveryId;
+  if (identity.kind === "not_slack") {
+    return { eventId: deliveryId, ok: true, providerOccurredAt: null };
+  }
+
+  if (identity.kind === "invalid") {
+    return { ok: false };
+  }
+
+  const milliseconds = Math.trunc(Number(identity.timestamp) * 1_000);
+
+  if (!Number.isSafeInteger(milliseconds) || milliseconds <= 0) {
+    return { ok: false };
   }
 
   const digest = await crypto.subtle.digest(
@@ -244,29 +259,14 @@ async function stableProviderEventId(
     new TextEncoder().encode(`${identity.channel}\u0000${identity.timestamp}`),
   );
 
-  return `slack_${encodeBase64Url(new Uint8Array(digest))}`;
-}
-
-function slackMessageOccurredAt(
-  sourceSlug: string,
-  data: Record<string, IntegrationToolParameterValue>,
-): string | null {
-  const identity = slackMessageIdentity(sourceSlug, data);
-
-  if (identity === null) {
-    return null;
-  }
-
-  const milliseconds = Math.trunc(Number(identity.timestamp) * 1_000);
-
-  if (!Number.isSafeInteger(milliseconds) || milliseconds <= 0) {
-    return null;
-  }
-
   try {
-    return new Date(milliseconds).toISOString();
+    return {
+      eventId: `slack_${encodeBase64Url(new Uint8Array(digest))}`,
+      ok: true,
+      providerOccurredAt: new Date(milliseconds).toISOString(),
+    };
   } catch {
-    return null;
+    return { ok: false };
   }
 }
 
@@ -634,22 +634,25 @@ export async function verifyComposioTriggerEvent(
       return invalidWebhook();
     }
 
+    const identity = await providerEventIdentity(
+      parsed.data.metadata.trigger_slug,
+      parsed.data.data,
+      parsed.data.metadata.log_id,
+    );
+
+    if (!identity.ok) {
+      return invalidWebhook();
+    }
+
     return {
       event: {
         authConfigId: parsed.data.metadata.auth_config_id,
         data: parsed.data.data,
-        eventId: await stableProviderEventId(
-          parsed.data.metadata.trigger_slug,
-          parsed.data.data,
-          parsed.data.metadata.log_id,
-        ),
+        eventId: identity.eventId,
         occurredAt: parsed.data.timestamp,
         ownerKey: parsed.data.metadata.user_id,
         providerConnectionId: parsed.data.metadata.connected_account_id,
-        providerOccurredAt: slackMessageOccurredAt(
-          parsed.data.metadata.trigger_slug,
-          parsed.data.data,
-        ),
+        providerOccurredAt: identity.providerOccurredAt,
         providerTriggerId: parsed.data.metadata.trigger_id,
         sourceSlug: parsed.data.metadata.trigger_slug,
       },

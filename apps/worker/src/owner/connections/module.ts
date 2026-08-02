@@ -61,6 +61,18 @@ type ConnectionAuthorizationReturnFailure = Extract<
 >;
 type IntegrationEnablementFailure = Extract<EnableIntegrationResult, { ok: false }>;
 type ConnectionNextAction = Extract<InspectConnectionResult, { ok: true }>["nextAction"];
+type VerifiedConnectionActivationResult =
+  | { kind: "activated" }
+  | {
+      kind: "rejected";
+      reason:
+        | "authorization_not_returned"
+        | "concurrent_change"
+        | "connection_not_found"
+        | "connection_unavailable"
+        | "integration_mismatch"
+        | "provider_connection_mismatch";
+    };
 type StoredConnectionLinkRow = {
   connectionId: string | null;
   expiresAt: number | null;
@@ -1154,99 +1166,105 @@ export class Connections {
       return deniedConnectionRead("invalid_request");
     }
 
-    const activated = this.#database.transaction((transaction) => {
-      const row = transaction
-        .select({
-          authConfigId: connections.authConfigId,
-          providerConnectionId: connections.providerConnectionId,
-          status: connections.status,
-        })
-        .from(connections)
-        .where(eq(connections.connectionId, request.data.connectionId))
-        .get();
-
-      if (
-        row === undefined ||
-        row.providerConnectionId !== request.data.providerConnectionId ||
-        row.status === "revoked" ||
-        row.status === "unavailable"
-      ) {
-        return false;
-      }
-
-      const authorization = transaction
-        .select({ status: connectionAuthorizationReturns.status })
-        .from(connectionAuthorizationReturns)
-        .where(eq(connectionAuthorizationReturns.connectionId, request.data.connectionId))
-        .orderBy(
-          desc(connectionAuthorizationReturns.completedAt),
-          desc(connectionAuthorizationReturns.reservationId),
-        )
-        .get();
-      const integration = transaction
-        .select({ slug: integrationEnablementRequests.integrationSlug })
-        .from(integrationEnablementRequests)
-        .where(
-          and(
-            eq(integrationEnablementRequests.authConfigId, row.authConfigId),
-            eq(integrationEnablementRequests.status, "completed"),
-          ),
-        )
-        .orderBy(
-          desc(integrationEnablementRequests.completedAt),
-          desc(integrationEnablementRequests.reservationId),
-        )
-        .get();
-
-      if (
-        authorization?.status !== "returned" ||
-        integration?.slug !== request.data.verifiedIntegrationSlug
-      ) {
-        return false;
-      }
-
-      if (row.status === "active") {
-        transaction
-          .update(connections)
-          .set({ accountLabel: request.data.accountLabel })
+    const activation = this.#database.transaction(
+      (transaction): VerifiedConnectionActivationResult => {
+        const row = transaction
+          .select({
+            authConfigId: connections.authConfigId,
+            providerConnectionId: connections.providerConnectionId,
+            status: connections.status,
+          })
+          .from(connections)
           .where(eq(connections.connectionId, request.data.connectionId))
+          .get();
+
+        if (row === undefined) {
+          return { kind: "rejected", reason: "connection_not_found" };
+        }
+
+        if (row.providerConnectionId !== request.data.providerConnectionId) {
+          return { kind: "rejected", reason: "provider_connection_mismatch" };
+        }
+
+        if (row.status === "revoked" || row.status === "unavailable") {
+          return { kind: "rejected", reason: "connection_unavailable" };
+        }
+
+        const authorization = transaction
+          .select({ status: connectionAuthorizationReturns.status })
+          .from(connectionAuthorizationReturns)
+          .where(eq(connectionAuthorizationReturns.connectionId, request.data.connectionId))
+          .orderBy(
+            desc(connectionAuthorizationReturns.completedAt),
+            desc(connectionAuthorizationReturns.reservationId),
+          )
+          .get();
+        const integration = transaction
+          .select({ slug: integrationEnablementRequests.integrationSlug })
+          .from(integrationEnablementRequests)
+          .where(
+            and(
+              eq(integrationEnablementRequests.authConfigId, row.authConfigId),
+              eq(integrationEnablementRequests.status, "completed"),
+            ),
+          )
+          .orderBy(
+            desc(integrationEnablementRequests.completedAt),
+            desc(integrationEnablementRequests.reservationId),
+          )
+          .get();
+
+        if (authorization?.status !== "returned") {
+          return { kind: "rejected", reason: "authorization_not_returned" };
+        }
+
+        if (integration?.slug !== request.data.verifiedIntegrationSlug) {
+          return { kind: "rejected", reason: "integration_mismatch" };
+        }
+
+        if (row.status === "active") {
+          transaction
+            .update(connections)
+            .set({ accountLabel: request.data.accountLabel })
+            .where(eq(connections.connectionId, request.data.connectionId))
+            .run();
+          return { kind: "activated" };
+        }
+
+        const updated = transaction
+          .update(connections)
+          .set({
+            accountLabel: request.data.accountLabel,
+            status: "active",
+          })
+          .where(
+            and(
+              eq(connections.connectionId, request.data.connectionId),
+              eq(connections.providerConnectionId, request.data.providerConnectionId),
+              eq(connections.status, "initiated"),
+            ),
+          )
+          .returning({ connectionId: connections.connectionId })
+          .all()[0];
+
+        if (updated === undefined) {
+          return { kind: "rejected", reason: "concurrent_change" };
+        }
+
+        transaction
+          .insert(auditEvents)
+          .values({
+            action: "connection.activated",
+            clientId: authority.clientId,
+            occurredAt: Date.now(),
+            subjectId: request.data.connectionId,
+          })
           .run();
-        return true;
-      }
+        return { kind: "activated" };
+      },
+    );
 
-      const updated = transaction
-        .update(connections)
-        .set({
-          accountLabel: request.data.accountLabel,
-          status: "active",
-        })
-        .where(
-          and(
-            eq(connections.connectionId, request.data.connectionId),
-            eq(connections.providerConnectionId, request.data.providerConnectionId),
-            eq(connections.status, "initiated"),
-          ),
-        )
-        .returning({ connectionId: connections.connectionId })
-        .all()[0];
-
-      if (updated === undefined) {
-        return false;
-      }
-
-      transaction
-        .insert(auditEvents)
-        .values({
-          action: "connection.activated",
-          clientId: authority.clientId,
-          occurredAt: Date.now(),
-          subjectId: request.data.connectionId,
-        })
-        .run();
-      return true;
-    });
-
-    return activated
+    return activation.kind === "activated"
       ? this.list({ connectionId: request.data.connectionId })
       : deniedConnectionRead("invalid_request");
   }

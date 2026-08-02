@@ -297,6 +297,12 @@ describe("Composio event catalog adapter", () => {
               required: true,
               type: "select",
             },
+            {
+              id: "channelId",
+              label: "Slack channel",
+              required: true,
+              type: "string",
+            },
           ],
           slug: "SLACK_RECEIVE_MESSAGE",
         },
@@ -344,7 +350,10 @@ describe("Composio event catalog adapter", () => {
       composioProviderTriggerConfiguration("SLACK_RECEIVE_MESSAGE", {
         channelId: "C0BM0EQS27R",
       }),
-    ).toEqual({});
+    ).toEqual({ configuration: {}, ok: true });
+    expect(composioProviderTriggerConfiguration("SLACK_RECEIVE_MESSAGE", {})).toEqual({
+      ok: false,
+    });
     expect(
       composioEventMatchesConfiguration(
         "SLACK_RECEIVE_MESSAGE",
@@ -358,6 +367,12 @@ describe("Composio event catalog adapter", () => {
         { channelId: "C0BM0EQS27R" },
         { channel: "CGTGMUMNC" },
       ),
+    ).toBe(false);
+    expect(
+      composioEventMatchesConfiguration("SLACK_RECEIVE_MESSAGE", {}, { channel: "C0BM0EQS27R" }),
+    ).toBe(false);
+    expect(
+      composioEventMatchesConfiguration("SLACK_RECEIVE_MESSAGE", { channelId: "C0BM0EQS27R" }, {}),
     ).toBe(false);
   });
 

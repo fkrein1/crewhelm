@@ -88,6 +88,58 @@ describe("execution observability", () => {
     });
   });
 
+  it("records provider unavailability while verifying a connection", () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    recordExecutionProviderResponse({
+      durationMs: 157,
+      operation: "verify",
+      outcome: "provider_unavailable",
+      runId,
+      status: 503,
+      toolCallId,
+    });
+
+    expect(info).toHaveBeenCalledExactlyOnceWith({
+      event: "crewhelm.execution.provider_response",
+      durationMs: 157,
+      operation: "verify",
+      outcome: "provider_unavailable",
+      parentSpanId: runId,
+      runId,
+      spanId: toolCallId,
+      status: 503,
+      toolCallId,
+      traceId: runId,
+    });
+  });
+
+  it("records provider configuration failure while verifying a connection", () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    recordExecutionProviderResponse({
+      durationMs: 157,
+      operation: "verify",
+      outcome: "configuration_unavailable",
+      runId,
+      status: 403,
+      toolCallId,
+    });
+
+    expect(info).toHaveBeenCalledExactlyOnceWith({
+      event: "crewhelm.execution.provider_response",
+      durationMs: 157,
+      operation: "verify",
+      outcome: "configuration_unavailable",
+      parentSpanId: runId,
+      runId,
+      spanId: toolCallId,
+      status: 403,
+      toolCallId,
+      traceId: runId,
+    });
+  });
+
   it("records a safe authorization root cause as a correlated tool span", () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
 

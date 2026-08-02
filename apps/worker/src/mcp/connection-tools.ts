@@ -6,9 +6,15 @@ import {
   listConnectionsInputSchema,
   listConnectionsResultSchema,
   reserveConnectionLinkResultSchema,
+  type ListConnectionsInput,
+  type ListConnectionsResult,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
-import type { ComposioConnectionLinks, ComposioRuntime } from "@crewhelm/composio";
+import type {
+  ComposioConnectionLinks,
+  ComposioConnectionVerificationResult,
+  ComposioRuntime,
+} from "@crewhelm/composio";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { createConnectionAuthorizationCallback } from "../owner/connections/index.js";
@@ -25,6 +31,8 @@ interface ConnectionToolConfiguration {
   signingSecret: string;
   signal: AbortSignal;
 }
+
+type ConnectionVerificationFailure = Extract<ComposioConnectionVerificationResult, { ok: false }>;
 
 function connectionLinkMcpResult(result: unknown) {
   return validatedToolResult(result, createConnectionLinkResultSchema, {
@@ -51,6 +59,45 @@ function unknownConnectionLinkMcpResult(operation: {
     },
     ok: false,
   });
+}
+
+function deniedConnectionRead(code: "insufficient_scope" | "invalid_request") {
+  return {
+    error: { code, message: "Connection request denied." as const },
+    ok: false as const,
+  };
+}
+
+function unexpectedConnectionVerificationFailure(reason: never): never {
+  throw new TypeError(`Unexpected connection verification failure: ${String(reason)}`);
+}
+
+function connectionVerificationFailureResult(
+  failure: ConnectionVerificationFailure,
+  local: ListConnectionsResult,
+) {
+  switch (failure.reason) {
+    case "provider_rejected":
+      return validatedToolResult(local, listConnectionsResultSchema);
+    case "provider_unavailable":
+    case "transport_error":
+      return unavailableToolResult({
+        code: "integration_provider_unavailable",
+        phase: "integration.rpc",
+        reason: failure.reason,
+      });
+    case "configuration_unavailable":
+    case "invalid_request":
+    case "invalid_response":
+      return unavailableToolResult({
+        code: "invalid_integration_response",
+        disposition: "contact_operator",
+        phase: "integration.response",
+        reason: failure.reason,
+      });
+  }
+
+  return unexpectedConnectionVerificationFailure(failure.reason);
 }
 
 async function createConnectionLink(
@@ -181,21 +228,35 @@ async function listConnections(
   authority: OwnerAuthority,
   controlPlane: OwnerControlPlaneClient,
   configuration: ConnectionToolConfiguration,
-  input: z.infer<typeof listConnectionsInputSchema>,
+  input: ListConnectionsInput,
 ) {
-  let local: z.infer<typeof listConnectionsResultSchema>;
+  let localResponse: unknown;
 
   try {
-    local = listConnectionsResultSchema.parse(await controlPlane.listConnections(authority, input));
+    localResponse = await controlPlane.listConnections(authority, input);
   } catch {
-    return unavailableToolResult();
+    return unavailableToolResult({
+      phase: "control_plane.rpc",
+      reason: "transport_error",
+    });
   }
 
-  if (!local.ok || input.connectionId === undefined) {
-    return validatedToolResult(local, listConnectionsResultSchema);
+  const local = listConnectionsResultSchema.safeParse(localResponse);
+
+  if (!local.success) {
+    return unavailableToolResult({
+      code: "invalid_control_plane_response",
+      disposition: "contact_operator",
+      phase: "control_plane.response",
+      reason: "invalid_response",
+    });
   }
 
-  const connection = local.connections[0];
+  if (!local.data.ok || input.connectionId === undefined) {
+    return validatedToolResult(local.data, listConnectionsResultSchema);
+  }
+
+  const connection = local.data.connections[0];
 
   if (
     connection === undefined ||
@@ -203,15 +264,12 @@ async function listConnections(
     connection.authorizationOutcome !== "returned" ||
     connection.integrationSlug === null
   ) {
-    return validatedToolResult(local, listConnectionsResultSchema);
+    return validatedToolResult(local.data, listConnectionsResultSchema);
   }
 
   if (!authority.scopes.includes(CONNECTIONS_WRITE_SCOPE)) {
     return validatedToolResult(
-      {
-        error: { code: "insufficient_scope", message: "Connection request denied." },
-        ok: false,
-      },
+      deniedConnectionRead("insufficient_scope"),
       listConnectionsResultSchema,
     );
   }
@@ -224,11 +282,22 @@ async function listConnections(
       configuration.signal,
     );
   } catch {
-    return validatedToolResult(local, listConnectionsResultSchema);
+    return unavailableToolResult({
+      code: "integration_provider_unavailable",
+      phase: "integration.rpc",
+      reason: "transport_error",
+    });
   }
 
-  if (!verified.ok || verified.toolkitSlug !== connection.integrationSlug) {
-    return validatedToolResult(local, listConnectionsResultSchema);
+  if (!verified.ok) {
+    return connectionVerificationFailureResult(verified, local.data);
+  }
+
+  if (verified.toolkitSlug !== connection.integrationSlug) {
+    return validatedToolResult(
+      deniedConnectionRead("invalid_request"),
+      listConnectionsResultSchema,
+    );
   }
 
   if (controlPlane.activateVerifiedConnection === undefined) {

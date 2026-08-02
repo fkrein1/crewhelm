@@ -133,7 +133,14 @@ const executionProviderResponseEventSchema = z.discriminatedUnion("operation", [
     .object({
       durationMs: durationMsSchema,
       operation: z.literal("verify"),
-      outcome: z.enum(["accepted", "invalid_response", "provider_rejected", "transport_error"]),
+      outcome: z.enum([
+        "accepted",
+        "configuration_unavailable",
+        "invalid_response",
+        "provider_rejected",
+        "provider_unavailable",
+        "transport_error",
+      ]),
       runId: runIdSchema,
       status: providerStatusSchema,
       toolCallId: toolCallIdSchema,
