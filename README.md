@@ -31,8 +31,9 @@ holds provider credentials while Agents receive only bounded use.
 
 > [!NOTE]
 > **Available today:** an authenticated, owner-scoped Agent registry; immutable revisions;
-> bounded manual and scheduled runs; durable ordered workflows; deterministic authority,
-> approval, budget, and recovery controls; and version-pinned Composio tool execution.
+> bounded manual runs, scheduled Watches, and Composio connected-event Watches; durable ordered
+> workflows; deterministic authority, approval, budget, and recovery controls; and version-pinned
+> Composio tool execution.
 >
 > Declarative, shareable Agent recipes remain part of the longer-term product vision.
 

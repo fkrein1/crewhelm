@@ -27,6 +27,8 @@ import migration25 from "./0025_charming_squadron_supreme.sql";
 import migration26 from "./0026_fresh_white_queen.sql";
 import migration27 from "./0027_classy_switch.sql";
 import migration28 from "./0028_purple_impossible_man.sql";
+import migration29 from "./0029_mushy_legion.sql";
+import migration30 from "./0030_mixed_corsair.sql";
 
 export const controlPlaneMigrations = [
   {
@@ -173,6 +175,16 @@ export const controlPlaneMigrations = [
     name: "0028_purple_impossible_man",
     sql: migration28,
     version: 29,
+  },
+  {
+    name: "0029_mushy_legion",
+    sql: migration29,
+    version: 30,
+  },
+  {
+    name: "0030_mixed_corsair",
+    sql: migration30,
+    version: 31,
   },
 ] as const;
 

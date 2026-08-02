@@ -43,6 +43,18 @@ already-started Run from being relabeled as skipped. Terminal occurrence history
 pruned to its documented bound. A stale Agent revision pauses or skips the Watch rather than silently
 widening or retargeting it.
 
+A connected-event Watch additionally binds one exact active Connection, provider account, auth
+configuration, event slug, event version, and trigger instance. Public Composio delivery is bounded
+before parsing. One fixed installation ingress verifies the signature over the exact raw bytes in a
+narrow timestamp window before signed owner routing; arbitrary unsigned owner keys cannot create
+owner Durable Objects. Secret reconciliation is TTL- and cooldown-bounded, and installation webhook
+secrets are encrypted at rest and never enter Agent prompts. Authenticated unmatched deliveries are
+acknowledged without starting work. Provider trigger creation and lifecycle retries are bounded; an
+unresolved operation cannot silently become active. Duplicate event identities cannot create a
+second occurrence, pending event count and bytes are bounded per Watch, and terminal occurrence
+records discard the provider payload after admission or skip. Event Runs durably retain exact Watch
+and provider-event provenance.
+
 Brief contents and Workflow deliverables are untrusted owner data, not authority. Owner-local
 SQLite stores only compact metadata, exact references, digests, and provenance; object content is
 read through a bounded Crewhelm adapter and verified before use. Run admission binds the ordered

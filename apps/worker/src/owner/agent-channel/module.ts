@@ -854,7 +854,13 @@ export class AgentChannel {
     deliverableContent?: unknown,
   ): Extract<InspectRunResult, { ok: true }> {
     const schedule = this.#runSchedule(admission);
-    const presentedRun: Run = schedule === undefined ? run : { ...run, schedule };
+    const watch = this.#runWatch(admission);
+    const presentedRun: Run = {
+      ...run,
+      ...(schedule === undefined ? {} : { schedule }),
+      trigger: admission.trigger,
+      ...(watch === undefined ? {} : { watch }),
+    };
     const start = Math.min(input.timelineCursor, timeline.length);
     const page = timeline.slice(start, start + input.timelineLimit);
     const nextCursor = start + page.length < timeline.length ? start + page.length : null;
@@ -965,6 +971,20 @@ export class AgentChannel {
       : { id: revision.id, revision: admission.scheduleRevision };
   }
 
+  #runWatch(admission: StoredRunAdmission): Run["watch"] {
+    return admission.watchId === null ||
+      admission.watchRevision === null ||
+      admission.watchEventId === null ||
+      admission.watchSourceKind === null
+      ? undefined
+      : {
+          eventId: admission.watchEventId,
+          id: admission.watchId,
+          revision: admission.watchRevision,
+          sourceKind: admission.watchSourceKind,
+        };
+  }
+
   #authoritativeRun(run: Run, authorizationTrace: RunTimelineEvent[]): Run {
     if (run.status !== "completed") {
       return run;
@@ -998,9 +1018,10 @@ export class AgentChannel {
   async start(
     authority: OwnerAuthority,
     input: unknown,
-    trigger: "manual" | "schedule" | "workflow" = "manual",
+    trigger: Run["trigger"] = "manual",
     scheduleRevision: number | null = null,
     expectedFleetRevision: number | null = null,
+    watchReference?: Run["watch"],
   ): Promise<StartRunResult> {
     const request = startRunInputSchema.safeParse(input);
 
@@ -1075,6 +1096,7 @@ export class AgentChannel {
       promptDigest: await digestRunPrompt(request.data.prompt),
       scheduleRevision,
       trigger,
+      ...(watchReference === undefined ? {} : { watch: watchReference }),
     });
 
     if (!admission.ok) {
@@ -1091,6 +1113,7 @@ export class AgentChannel {
     const { agentId, agentRevision } = storedAdmission;
     const agent = this.#agent(authority, storedAdmission);
     const schedule = this.#runSchedule(storedAdmission);
+    const watch = this.#runWatch(storedAdmission);
 
     if (storedAdmission.cancellationRequestedAt !== null) {
       return startRunResultSchema.parse({
@@ -1105,6 +1128,7 @@ export class AgentChannel {
             : { completedAt: new Date(storedAdmission.cancelledAt).toISOString() }),
           runId,
           ...(schedule === undefined ? {} : { schedule }),
+          ...(watch === undefined ? {} : { watch }),
           status: storedAdmission.cancelledAt === null ? "cancelling" : "cancelled",
           trigger: storedAdmission.trigger,
         },
@@ -1121,6 +1145,7 @@ export class AgentChannel {
           createdAt: new Date(storedAdmission.createdAt).toISOString(),
           runId,
           ...(schedule === undefined ? {} : { schedule }),
+          ...(watch === undefined ? {} : { watch }),
           status: "failed",
           trigger: storedAdmission.trigger,
         },
@@ -1185,6 +1210,7 @@ export class AgentChannel {
       createdAt: new Date(storedAdmission.createdAt).toISOString(),
       ...(schedule === undefined ? {} : { schedule }),
       trigger: storedAdmission.trigger,
+      ...(watch === undefined ? {} : { watch }),
     };
 
     this.#toolExecutions.reconcileExpired(Date.now());

@@ -103,6 +103,7 @@ function integrationEnv(
     AI_GATEWAY_ID: "crewhelm-test",
     AUTH_DB: env.AUTH_DB,
     AUTH_RATE_LIMIT: rateLimit,
+    COMPOSIO_WEBHOOK_RATE_LIMIT: rateLimit,
     BETTER_AUTH_SECRET: "test-better-auth-secret-that-is-at-least-32-bytes",
     COMPOSIO_API_KEY: "test-composio-api-key",
     CREW_AGENT: env.CREW_AGENT,

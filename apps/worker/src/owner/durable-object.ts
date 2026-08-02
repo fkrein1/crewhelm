@@ -24,7 +24,7 @@ import {
   type ControlPlaneStatusResult,
   type AgentInboxDeferredReason,
   type AgentInboxResult,
-  type AgentWatchesResult,
+  type AgentWatchOccurrence,
   type CancelRunResult,
   type BatchDisableAgentsResult,
   type CreateAgentResult,
@@ -97,6 +97,12 @@ import {
   type ReadBriefResult,
   type DeleteBriefResult,
 } from "@crewhelm/contracts";
+import {
+  createComposioEventCatalog,
+  createComposioTriggerInstances,
+  createComposioWebhookSubscriptions,
+  verifiedComposioTriggerEventSchema,
+} from "@crewhelm/composio";
 import { DurableObject } from "cloudflare:workers";
 import { and, count, desc, eq, gte, isNull, lt, lte } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
@@ -150,7 +156,17 @@ import {
 } from "./runs/index.js";
 import { recordScheduleEvent } from "../observability/schedules.js";
 import { AgentSchedules, deniedAgentSchedule, type DueAgentSchedule } from "./schedules/index.js";
-import { AgentWatches, deniedAgentWatch } from "./watches/index.js";
+import {
+  AgentEventWatches,
+  AgentWatches,
+  COMPOSIO_WEBHOOK_INGRESS_OBJECT_NAME,
+  ComposioWebhookIngress,
+  deniedAgentWatch,
+  eventWatchIdempotencyKey,
+  eventWatchPrompt,
+  type ComposioWebhookIngressResult,
+  type DueAgentEventWatch,
+} from "./watches/index.js";
 import { AiGatewayUsage } from "./usage/index.js";
 import { R2SkillPackageObjectStore, Skills, deniedSkill } from "./skills/index.js";
 import { AgentWorkflows } from "./workflows/index.js";
@@ -173,6 +189,34 @@ type StartRunFailureCode = Extract<StartRunResult, { ok: false }>["error"]["code
 type AuthorityResult =
   | { authority: OwnerAuthority; ok: true }
   | { code: AuthorityErrorCode; ok: false };
+type AgentWatchRpc = {
+  agentId: string;
+  agentRevision: number;
+  createdAt: string;
+  id: string;
+  lastOccurrence: AgentWatchOccurrence | null;
+  nextCheckAt: string | null;
+  revision: number;
+  status: "active" | "paused";
+};
+type AgentWatchesRpcResult =
+  | { error: { code: string; message: string }; ok: false }
+  | { action: "sources"; ok: true; sources: unknown[] }
+  | {
+      action: "create" | "pause" | "resume" | "update";
+      changed: boolean;
+      ok: true;
+      watch: AgentWatchRpc;
+    }
+  | { action: "delete"; deleted: boolean; ok: true; watchId: string }
+  | { action: "inspect"; ok: true; watch: AgentWatchRpc }
+  | { action: "list"; ok: true; watches: AgentWatchRpc[] }
+  | {
+      action: "history";
+      occurrences: AgentWatchOccurrence[];
+      ok: true;
+      watchId: string;
+    };
 
 function scheduledRunFailureReason(code: StartRunFailureCode): AgentInboxDeferredReason {
   switch (code) {
@@ -201,6 +245,7 @@ function scheduledRunFailureReason(code: StartRunFailureCode): AgentInboxDeferre
 
 export class OwnerControlPlane extends DurableObject {
   readonly #database: DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
+  readonly #composioWebhookIngress: ComposioWebhookIngress;
   readonly #objectName: string | undefined;
   readonly #storage: DurableObjectStorage;
   #migrationReady = false;
@@ -213,6 +258,7 @@ export class OwnerControlPlane extends DurableObject {
   readonly #agentChannel: AgentChannel;
   readonly #authorityControls: AuthorityControls;
   readonly #agentSchedules: AgentSchedules;
+  readonly #agentEventWatches: AgentEventWatches;
   readonly #agentWatches: AgentWatches;
   readonly #fleetConfigurations: FleetConfigurations;
   readonly #aiGatewayUsage: AiGatewayUsage;
@@ -287,7 +333,44 @@ export class OwnerControlPlane extends DurableObject {
     this.#agentSchedules = new AgentSchedules(this.#database, this.#storage, () =>
       this.#fleetConfigurations.currentData(),
     );
-    this.#agentWatches = new AgentWatches(this.#agentSchedules);
+    const ingressStub = environment.OWNER_CONTROL_PLANE.getByName(
+      COMPOSIO_WEBHOOK_INGRESS_OBJECT_NAME,
+    );
+    this.#agentEventWatches = new AgentEventWatches(
+      this.#database,
+      this.#storage,
+      this.#objectName,
+      this.#connections,
+      {
+        eventCatalog: createComposioEventCatalog({ apiKey: environment.COMPOSIO_API_KEY }),
+        triggerInstances: createComposioTriggerInstances({ apiKey: environment.COMPOSIO_API_KEY }),
+        webhookIngress: {
+          ensure: () => ingressStub.ensureComposioWebhookIngress(),
+        },
+      },
+    );
+    this.#composioWebhookIngress = new ComposioWebhookIngress(
+      this.#database,
+      this.#storage,
+      this.#objectName,
+      {
+        deliver: async (event) => {
+          const owner = environment.OWNER_CONTROL_PLANE.getByName(event.ownerKey);
+          const delivered = await owner.deliverVerifiedComposioEvent(event);
+
+          if (!delivered) {
+            throw new Error("Composio webhook delivery is unavailable.");
+          }
+        },
+        encryptionSecret: environment.BETTER_AUTH_SECRET,
+        projectApiKey: environment.COMPOSIO_API_KEY,
+        subscriptions: createComposioWebhookSubscriptions({
+          apiKey: environment.COMPOSIO_API_KEY,
+          publicOrigin: environment.PUBLIC_ORIGIN,
+        }),
+      },
+    );
+    this.#agentWatches = new AgentWatches(this.#agentSchedules, this.#agentEventWatches);
     this.#agentChannel = new AgentChannel(
       this.#objectName,
       this.#database,
@@ -1006,7 +1089,7 @@ export class OwnerControlPlane extends DurableObject {
       : deniedAgentSchedule(authorization.code);
   }
 
-  async agentWatches(authorityInput: unknown, input: unknown): Promise<AgentWatchesResult> {
+  async agentWatches(authorityInput: unknown, input: unknown): Promise<AgentWatchesRpcResult> {
     const request = agentWatchesInputSchema.safeParse(input);
 
     if (!request.success) {
@@ -1022,9 +1105,61 @@ export class OwnerControlPlane extends DurableObject {
         : AGENTS_READ_SCOPE;
     const authorization = this.#authorize(authorityInput, requiredScope);
 
+    if (
+      authorization.ok &&
+      ((request.data.action === "sources" && request.data.connectionId !== undefined) ||
+        ((request.data.action === "create" || request.data.action === "update") &&
+          request.data.watch.source.kind === "connection_event") ||
+        ("watchId" in request.data && request.data.watchId.startsWith("watch_"))) &&
+      !authorization.authority.scopes.includes(CONNECTIONS_READ_SCOPE)
+    ) {
+      return deniedAgentWatch("insufficient_scope");
+    }
+
     return authorization.ok
       ? this.#agentWatches.execute(authorization.authority, request.data)
       : deniedAgentWatch(authorization.code);
+  }
+
+  async ensureComposioWebhookIngress(): Promise<boolean> {
+    return this.#composioWebhookIngress.ensure();
+  }
+
+  async receiveComposioWebhook(input: unknown): Promise<ComposioWebhookIngressResult> {
+    const body = typeof input === "object" && input !== null ? Reflect.get(input, "body") : null;
+    const headers =
+      typeof input === "object" && input !== null ? Reflect.get(input, "headers") : null;
+    const id = typeof headers === "object" && headers !== null ? Reflect.get(headers, "id") : null;
+    const signature =
+      typeof headers === "object" && headers !== null ? Reflect.get(headers, "signature") : null;
+    const timestamp =
+      typeof headers === "object" && headers !== null ? Reflect.get(headers, "timestamp") : null;
+
+    if (
+      !(body instanceof Uint8Array) ||
+      body.byteLength > 256 * 1_024 ||
+      typeof id !== "string" ||
+      typeof signature !== "string" ||
+      typeof timestamp !== "string"
+    ) {
+      return { error: "invalid_webhook", ok: false };
+    }
+
+    return this.#composioWebhookIngress.receive({
+      body,
+      headers: { id, signature, timestamp },
+    });
+  }
+
+  async deliverVerifiedComposioEvent(input: unknown): Promise<boolean> {
+    const event = verifiedComposioTriggerEventSchema.safeParse(input);
+
+    if (!event.success || event.data.ownerKey !== this.#objectName) {
+      return false;
+    }
+
+    await this.#agentEventWatches.receive(event.data, Date.now());
+    return true;
   }
 
   async listRunToolApprovals(
@@ -1120,6 +1255,7 @@ export class OwnerControlPlane extends DurableObject {
     await this.#workflows.recoverQueued();
     await this.#workflows.recoverCancelling();
     await this.#workflows.recoverActive();
+    await this.#agentEventWatches.recoverOne();
     const dueSchedules = this.#agentSchedules.claimDue(currentTime);
     const dispatches = await Promise.allSettled(
       dueSchedules.map((schedule) => this.#dispatchScheduledRun(schedule, currentTime)),
@@ -1143,9 +1279,23 @@ export class OwnerControlPlane extends DurableObject {
       }
     }
 
+    const dueEvents = this.#agentEventWatches.claimDue(currentTime);
+    const eventDispatches = await Promise.allSettled(
+      dueEvents.map((watch) => this.#dispatchEventWatchRun(watch, currentTime)),
+    );
+
+    for (const [index, dispatch] of eventDispatches.entries()) {
+      const watch = dueEvents[index];
+
+      if (dispatch.status === "rejected" && watch !== undefined) {
+        this.#agentEventWatches.recordRetry(watch, currentTime);
+      }
+    }
+
     const nextConnectionCleanup = this.#connections.cleanup(currentTime);
     const nextRunCleanup = this.#runAdmissions.nextCleanupAt();
     const nextScheduledRun = this.#agentSchedules.nextAlarmAt();
+    const nextEventWatch = this.#agentEventWatches.nextAlarmAt();
     const nextToolReconciliation = this.#toolExecutions.nextReconciliationAt();
     const nextRuntimeToolReconciliation = this.#runtimeToolExecutions.nextReconciliationAt();
     const nextWorkflowAction = this.#workflows.nextAlarmAt();
@@ -1154,6 +1304,7 @@ export class OwnerControlPlane extends DurableObject {
       [
         nextAiUsageReconciliation,
         nextConnectionCleanup,
+        nextEventWatch,
         nextRunCleanup,
         nextRuntimeToolReconciliation,
         nextScheduledRun,
@@ -1379,6 +1530,80 @@ export class OwnerControlPlane extends DurableObject {
       outcome: "dispatched",
       runId: started.run.runId,
     });
+  }
+
+  async #dispatchEventWatchRun(watch: DueAgentEventWatch, currentTime: number): Promise<void> {
+    if (this.#objectName === undefined) {
+      return;
+    }
+
+    const authority: OwnerAuthority = {
+      clientId: "crewhelm:watcher",
+      ownerKey: this.#objectName,
+      scopes: [AGENTS_READ_SCOPE, RUNS_WRITE_SCOPE],
+    };
+
+    if (watch.lastRunId !== null) {
+      const previous = await this.#agentChannel.inspect(authority, { runId: watch.lastRunId });
+
+      if (previous.ok && !["cancelled", "completed", "failed"].includes(previous.run.status)) {
+        this.#agentEventWatches.recordRetry(watch, currentTime);
+        return;
+      }
+
+      if (!previous.ok && previous.error.code !== "run_not_found") {
+        this.#agentEventWatches.recordRetry(watch, currentTime);
+        return;
+      }
+    }
+
+    const prompt = eventWatchPrompt(watch);
+
+    if (prompt === null) {
+      this.#agentEventWatches.recordSkipped(watch, currentTime, "event_too_large");
+      return;
+    }
+
+    const started = await this.#agentChannel.start(
+      authority,
+      {
+        agentId: watch.agentId,
+        expectedRevision: watch.agentRevision,
+        idempotencyKey: await eventWatchIdempotencyKey(watch),
+        ...(watch.outputContract === undefined ? {} : { outputContract: watch.outputContract }),
+        prompt,
+      },
+      "watch",
+      null,
+      null,
+      {
+        eventId: watch.eventId,
+        id: watch.watchId,
+        revision: watch.watchRevision,
+        sourceKind: "connection_event",
+      },
+    );
+
+    if (!started.ok) {
+      this.#agentEventWatches.recordSkipped(
+        watch,
+        currentTime,
+        started.error.code === "revision_conflict" ? "agent_changed" : "agent_unavailable",
+      );
+      return;
+    }
+
+    const recorded = this.#agentEventWatches.recordDispatch({
+      dispatchedAt: Date.now(),
+      eventId: watch.eventId,
+      runId: started.run.runId,
+      watchId: watch.watchId,
+      watchRevision: watch.watchRevision,
+    });
+    if (!recorded) {
+      await this.#agentChannel.cancel(authority, { runId: started.run.runId });
+      this.#agentEventWatches.recordSkipped(watch, currentTime, "record_dispatch_conflict");
+    }
   }
 
   #recordScheduledDeferral(

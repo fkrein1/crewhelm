@@ -19,6 +19,33 @@ describe("Agent Watch contracts", () => {
     ).toMatchObject({ action: "create", watch: { everyMinutes: 10 } });
   });
 
+  it("accepts understandable connected-event filters without arbitrary nested payloads", () => {
+    const input = {
+      action: "create",
+      agentId: "agent_00000000-0000-4000-8000-000000000001",
+      expectedAgentRevision: 1,
+      idempotencyKey: "watch-event-create",
+      watch: {
+        connectionId: "connection_00000000-0000-4000-8000-000000000001",
+        delivery: "realtime",
+        eventSlug: "GITHUB_ISSUE_CREATED",
+        eventVersion: "20260802_00",
+        filters: { includeDrafts: false, repository: "crewhelm" },
+        integrationSlug: "github",
+        instruction: "Triage the new issue and recommend the next owner action.",
+        name: "New GitHub issues",
+      },
+    } as const;
+
+    expect(agentWatchesToolInputSchema.safeParse(input).success).toBe(true);
+    expect(
+      agentWatchesToolInputSchema.safeParse({
+        ...input,
+        watch: { ...input.watch, filters: { repository: { owner: "crewhelm" } } },
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects fields that belong to another lifecycle action", () => {
     expect(
       agentWatchesToolInputSchema.safeParse({

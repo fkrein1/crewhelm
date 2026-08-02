@@ -8,6 +8,7 @@ import { Hono, type Context } from "hono";
 import * as z from "zod";
 
 import { CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX } from "../owner/connections/index.js";
+import { COMPOSIO_WEBHOOK_INGRESS_OBJECT_NAME } from "../owner/watches/index.js";
 import { createCrewhelmAuth, verifyMcpAccessToken } from "../oauth/auth.js";
 import type { WorkerEnv } from "../env.js";
 import { handleAuthenticatedMcpRequest } from "../mcp/server.js";
@@ -55,6 +56,11 @@ const MISDIRECTED_BODY = `${JSON.stringify({
     message: "Request denied.",
   },
 })}\n`;
+const WEBHOOK_ACCEPTED_BODY = `${JSON.stringify({ accepted: true })}\n`;
+const WEBHOOK_DENIED_BODY = `${JSON.stringify({
+  error: { code: "invalid_webhook", message: "Webhook request denied." },
+})}\n`;
+const MAXIMUM_COMPOSIO_WEBHOOK_BODY_BYTES = 256 * 1_024;
 const publicOriginSchema = z
   .url()
   .max(2_048)
@@ -88,6 +94,8 @@ const INTERNAL_ERROR_BODY_LENGTH = byteLength(INTERNAL_ERROR_BODY);
 const RATE_LIMITED_BODY_LENGTH = byteLength(RATE_LIMITED_BODY);
 const INVALID_AUTH_BODY_LENGTH = byteLength(INVALID_AUTH_BODY);
 const MISDIRECTED_BODY_LENGTH = byteLength(MISDIRECTED_BODY);
+const WEBHOOK_ACCEPTED_BODY_LENGTH = byteLength(WEBHOOK_ACCEPTED_BODY);
+const WEBHOOK_DENIED_BODY_LENGTH = byteLength(WEBHOOK_DENIED_BODY);
 
 function publicOrigin(env: Pick<WorkerEnv, "PUBLIC_ORIGIN">): string {
   return publicOriginSchema.parse(env.PUBLIC_ORIGIN);
@@ -163,6 +171,99 @@ async function handleMcpRequest(request: Request, env: WorkerEnv): Promise<Respo
   });
 }
 
+async function readBoundedBody(request: Request, maximumBytes: number): Promise<Uint8Array | null> {
+  const declaredLength = request.headers.get("content-length");
+
+  if (
+    declaredLength !== null &&
+    (!/^(0|[1-9][0-9]*)$/.test(declaredLength) || Number(declaredLength) > maximumBytes)
+  ) {
+    return null;
+  }
+
+  if (request.body === null) {
+    return null;
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+
+  try {
+    while (true) {
+      const next = await reader.read();
+
+      if (next.done) {
+        break;
+      }
+
+      length += next.value.byteLength;
+
+      if (length > maximumBytes) {
+        await reader.cancel();
+        return null;
+      }
+
+      chunks.push(next.value);
+    }
+  } catch {
+    return null;
+  }
+
+  const body = new Uint8Array(length);
+  let offset = 0;
+
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return body;
+}
+
+async function handleComposioWebhook(request: Request, env: WorkerEnv): Promise<Response> {
+  if (
+    request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !==
+    "application/json"
+  ) {
+    return jsonResponse(WEBHOOK_DENIED_BODY, WEBHOOK_DENIED_BODY_LENGTH, 400);
+  }
+
+  const body = await readBoundedBody(request, MAXIMUM_COMPOSIO_WEBHOOK_BODY_BYTES);
+
+  if (body === null) {
+    return jsonResponse(WEBHOOK_DENIED_BODY, WEBHOOK_DENIED_BODY_LENGTH, 400);
+  }
+
+  const id = request.headers.get("webhook-id");
+  const signature = request.headers.get("webhook-signature");
+  const timestamp = request.headers.get("webhook-timestamp");
+
+  if (id === null || signature === null || timestamp === null) {
+    return jsonResponse(WEBHOOK_DENIED_BODY, WEBHOOK_DENIED_BODY_LENGTH, 401);
+  }
+
+  try {
+    const ingress = env.OWNER_CONTROL_PLANE.getByName(COMPOSIO_WEBHOOK_INGRESS_OBJECT_NAME);
+    const delivered = await ingress.receiveComposioWebhook({
+      body,
+      headers: { id, signature, timestamp },
+    });
+
+    if (delivered.ok) {
+      return jsonResponse(WEBHOOK_ACCEPTED_BODY, WEBHOOK_ACCEPTED_BODY_LENGTH, 202);
+    }
+
+    return jsonResponse(
+      WEBHOOK_DENIED_BODY,
+      WEBHOOK_DENIED_BODY_LENGTH,
+      delivered.error === "invalid_webhook" ? 401 : 503,
+    );
+  } catch {
+    return jsonResponse(WEBHOOK_DENIED_BODY, WEBHOOK_DENIED_BODY_LENGTH, 503);
+  }
+}
+
 export function createWorker(): Hono<{ Bindings: WorkerEnv }> {
   const worker = new Hono<{ Bindings: WorkerEnv }>({
     getPath: (request) => new URL(request.url).pathname,
@@ -205,6 +306,12 @@ export function createWorker(): Hono<{ Bindings: WorkerEnv }> {
   registerOAuthUiRoutes(worker, createAuth);
   registerAuthServerRoutes(worker, createAuth);
   registerConnectionAuthorizationReturnRoutes(worker);
+  worker.post("/webhooks/composio", (context) =>
+    handleComposioWebhook(context.req.raw, context.env),
+  );
+  worker.all("/webhooks/composio", () =>
+    jsonResponse(METHOD_NOT_ALLOWED_BODY, METHOD_NOT_ALLOWED_BODY_LENGTH, 405, { allow: "POST" }),
+  );
   worker.all("/mcp", (context) => handleMcpRequest(context.req.raw, context.env));
 
   worker.notFound((context) =>
@@ -216,9 +323,13 @@ export function createWorker(): Hono<{ Bindings: WorkerEnv }> {
 
 const defaultApp = createWorker();
 
-function isRateLimitedPath(path: string): "auth" | "mcp" | null {
+function isRateLimitedPath(path: string): "auth" | "composio" | "mcp" | null {
   if (path === "/mcp") {
     return "mcp";
+  }
+
+  if (path === "/webhooks/composio") {
+    return "composio";
   }
 
   if (
@@ -264,7 +375,13 @@ export async function handleWorkerRequest(
     let rateLimit: RateLimitOutcome;
 
     try {
-      rateLimit = await (limitedPath === "mcp" ? env.MCP_RATE_LIMIT : env.AUTH_RATE_LIMIT).limit({
+      const limiter =
+        limitedPath === "mcp"
+          ? env.MCP_RATE_LIMIT
+          : limitedPath === "composio"
+            ? env.COMPOSIO_WEBHOOK_RATE_LIMIT
+            : env.AUTH_RATE_LIMIT;
+      rateLimit = await limiter.limit({
         key: `${rateLimitKeyPath}:${clientAddress.slice(0, 64)}`,
       });
     } catch {

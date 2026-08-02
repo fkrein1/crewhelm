@@ -199,6 +199,11 @@ async function createDeploymentAssetsDirectory(): Promise<string> {
           namespace_id: "10002",
           simple: { limit: 60, period: 60 },
         },
+        {
+          name: "COMPOSIO_WEBHOOK_RATE_LIMIT",
+          namespace_id: "10003",
+          simple: { limit: 600, period: 60 },
+        },
       ],
       rules: [{ fallthrough: true, globs: ["**/*.sql"], type: "Text" }],
       triggers: { crons: ["17 * * * *"] },

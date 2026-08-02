@@ -89,6 +89,19 @@ export class RunReceiverCapabilities {
       runId: admission.runId,
       scheduleRevision: admission.scheduleRevision,
       target: "none",
+      ...(admission.watchId === null ||
+      admission.watchRevision === null ||
+      admission.watchEventId === null ||
+      admission.watchSourceKind === null
+        ? {}
+        : {
+            watch: {
+              eventId: admission.watchEventId,
+              id: admission.watchId,
+              revision: admission.watchRevision,
+              sourceKind: admission.watchSourceKind,
+            },
+          }),
       ...(["approve_tool", "reject_tool"].includes(action) ? { executionId } : {}),
     });
 

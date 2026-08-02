@@ -794,6 +794,7 @@ function rehearsalHarness(options: HarnessOptions = {}): Harness {
               fleetRevision: 1,
               scheduleId: scheduleLastRunId === null ? null : scheduleId,
               scheduleRevision: scheduleLastRunId === null ? null : 1,
+              watch: null,
             },
             itemId: `inbox_${runId}`,
             kind: "outcome",

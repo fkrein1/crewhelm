@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { MAXIMUM_RUN_TIMELINE_EVENTS, startRunInputSchema } from "./run-admission.js";
+import {
+  MAXIMUM_RUN_TIMELINE_EVENTS,
+  createRunAdmissionInputSchema,
+  startRunInputSchema,
+} from "./run-admission.js";
 
 const agentId = "agent_00000000-0000-4000-8000-000000000001";
 const branchId = "branch_00000000-0000-4000-8000-000000000001";
@@ -39,5 +43,39 @@ describe("run timeline budget", () => {
         conversation: { expectedRevision: 2, id: sessionId },
       }).success,
     ).toBe(false);
+  });
+
+  it("requires durable event provenance for an automatic Watch Run", () => {
+    const input = {
+      agentId,
+      expectedRevision: 1,
+      idempotencyKey: "event-watch-run",
+      promptCharacters: 1,
+      promptDigest: "a".repeat(64),
+      scheduleRevision: null,
+      trigger: "watch",
+      watch: {
+        eventId: "event_1",
+        id: "watch_00000000-0000-4000-8000-000000000001",
+        revision: 1,
+        sourceKind: "connection_event",
+      },
+    } as const;
+
+    expect(createRunAdmissionInputSchema.safeParse(input).success).toBe(true);
+    expect(
+      createRunAdmissionInputSchema.safeParse({
+        ...input,
+        watch: undefined,
+      }).success,
+    ).toBe(false);
+    expect(
+      createRunAdmissionInputSchema.safeParse({
+        ...input,
+        scheduleRevision: 1,
+        trigger: "schedule",
+        watch: undefined,
+      }).success,
+    ).toBe(true);
   });
 });
