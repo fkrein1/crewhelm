@@ -17,6 +17,7 @@ crewhelm.*.installation.json
 crewhelm.smoke-receipt.json
 crewhelm.upgrade-receipt.json
 .crewhelm-bugbash.md
+.crewhelm-control-flow-migration.md
 .crewhelm-resilience-review.md
 .crewhelm-rehearsal-credential.json
 

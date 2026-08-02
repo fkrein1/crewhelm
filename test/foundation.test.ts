@@ -266,6 +266,7 @@ describe("repository foundation", () => {
     expect(isRecord(scripts)).toBe(true);
     expect([...verificationChecks]).toEqual([
       "format:check",
+      "control-flow:check",
       "lint",
       "typecheck",
       "test",
@@ -281,6 +282,8 @@ describe("repository foundation", () => {
     ]);
     expect(scripts).toMatchObject({
       build: "node ./scripts/build.mjs",
+      "control-flow:check": "node ./scripts/control-flow-policy.mjs --check",
+      "control-flow:report": "node ./scripts/control-flow-policy.mjs --report",
       "docs:mcp": "vitest run apps/worker/src/mcp/documentation.test.ts --update --maxWorkers=50%",
       "docs:mcp:check": "vitest run apps/worker/src/mcp/documentation.test.ts --maxWorkers=50%",
       "format:check": "oxfmt --check .",
@@ -291,6 +294,30 @@ describe("repository foundation", () => {
       typecheck:
         "tsc --noEmit && tsc --noEmit --project apps/worker/tsconfig.json && tsc --noEmit --project apps/worker/src/tsconfig.json",
       verify: "node ./scripts/verify.mjs",
+    });
+  });
+
+  it("enforces exhaustive backend control flow and unknown catch values", async () => {
+    const lintConfig = parseJsonObject(await read(".oxlintrc.json"));
+    const lintRules = lintConfig["rules"];
+    const typescriptConfig = parseJsonObject(await read("tsconfig.json"));
+    const compilerOptions = typescriptConfig["compilerOptions"];
+
+    expect(isRecord(lintRules)).toBe(true);
+    expect(isRecord(compilerOptions)).toBe(true);
+    expect(lintRules).toMatchObject({
+      "typescript/switch-exhaustiveness-check": [
+        "error",
+        { considerDefaultExhaustiveForUnions: false },
+      ],
+    });
+    expect(compilerOptions).toMatchObject({
+      exactOptionalPropertyTypes: true,
+      noFallthroughCasesInSwitch: true,
+      noImplicitReturns: true,
+      noUncheckedIndexedAccess: true,
+      strict: true,
+      useUnknownInCatchVariables: true,
     });
   });
 
@@ -1001,6 +1028,7 @@ describe("repository foundation", () => {
     });
     expect(continuousIntegrationCommands).toEqual([
       "pnpm install --frozen-lockfile",
+      "pnpm control-flow:check",
       "pnpm format:check",
       "pnpm lint",
       "pnpm typecheck",
@@ -1017,6 +1045,23 @@ describe("repository foundation", () => {
     if (!isRecord(continuousIntegrationJobs)) {
       throw new TypeError("Expected CI jobs.");
     }
+    const checksJob = continuousIntegrationJobs["checks"];
+    expect(isRecord(checksJob)).toBe(true);
+    if (!isRecord(checksJob) || !Array.isArray(checksJob["steps"])) {
+      throw new TypeError("Expected CI checks steps.");
+    }
+    expect(checksJob["steps"]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          env: {
+            CONTROL_FLOW_BASE_REF:
+              "${{ github.event.pull_request.base.sha || github.event.before }}",
+          },
+          name: "Check control-flow migration",
+          run: "pnpm control-flow:check",
+        }),
+      ]),
+    );
     expect(continuousIntegrationJobs["worker-tests"]).toMatchObject({
       name: "Worker tests (${{ matrix.shard }}/2)",
       "runs-on": "ubuntu-24.04",

@@ -6,6 +6,7 @@ import { validateToolchain } from "./toolchain-policy.mjs";
 
 export const verificationChecks = Object.freeze([
   "format:check",
+  "control-flow:check",
   "lint",
   "typecheck",
   "test",
