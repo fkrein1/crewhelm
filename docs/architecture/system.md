@@ -116,16 +116,18 @@ stops after admission but before its outcome is recorded. Each connected event s
 Run; ongoing human conversation remains a separate Channel concern.
 
 Composio is the first connected-event source. Crewhelm discovers the event catalog for one active
-Connection, freezes the exact event slug, version, provider filters, Agent revision, instruction,
-and optional output contract, then owns the trigger-instance lifecycle. One installation-level V3
+Connection, freezes the exact event slug, version, provider and Crewhelm-side filters, Agent
+revision, instruction, and optional output contract, then owns the trigger-instance lifecycle. One
+installation-level V3
 webhook reaches a bounded public ingress and a dedicated high-capacity rate policy. One fixed
 installation ingress object verifies the signature over the exact raw bytes and timestamp before it
 reads the signed owner identity or routes to any owner object. Its encrypted secret is reconciled on
 a bounded TTL and cooldown rather than on every invalid request. The owner then matches the exact
 Connection, auth config, trigger, source slug, and source version frozen by the Watch. Authenticated
 but unmatched stale deliveries are safely acknowledged without starting a Run. Provider lifecycle
-retries are bounded, duplicate event IDs are idempotent, and terminal occurrences discard provider
-payload data.
+retries are bounded, stable source identities make repeated deliveries idempotent, and terminal
+occurrences discard provider payload data. When a provider supplies an authenticated source
+timestamp, an event from before the Watch was created is acknowledged without starting work.
 
 Inspectable history distinguishes pending, dispatched, and skipped occurrences; Crewhelm retains
 the latest 100 terminal occurrences per Watch. A connected Watch retains at most 20 pending events

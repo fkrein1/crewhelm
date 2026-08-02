@@ -409,8 +409,8 @@ describe("authenticated MCP handler", () => {
     expect(connectionListTool?.annotations).toMatchObject({
       destructiveHint: false,
       idempotentHint: true,
-      openWorldHint: false,
-      readOnlyHint: true,
+      openWorldHint: true,
+      readOnlyHint: false,
     });
     expect(unresolvedEffectsTool?.annotations).toMatchObject({
       destructiveHint: false,
@@ -2891,6 +2891,116 @@ describe("authenticated MCP handler", () => {
       },
       ok: false,
     });
+    fetchMock.mockRestore();
+  });
+
+  it("independently verifies and activates one exact returned connection", async () => {
+    const authority = await ownerAuthority("mcp-activate-returned-connection", [
+      CONNECTION_CONFIGS_WRITE_SCOPE,
+      CONNECTIONS_READ_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const enablement = await stub.reserveIntegrationEnablement(authority, {
+      idempotencyKey: "mcp-activate-returned-connection-enable",
+      integrationSlug: "todoist",
+    });
+
+    if (!enablement.ok || enablement.state !== "dispatch") {
+      throw new Error("Expected integration enablement reservation.");
+    }
+
+    await stub.completeIntegrationEnablement(authority, {
+      authConfigId: "ac_todoist_mcp_activation",
+      authScheme: "oauth2",
+      created: true,
+      integrationSlug: "todoist",
+      managed: true,
+      reservationId: enablement.reservationId,
+    });
+    const reservation = await stub.reserveConnectionLink(authority, {
+      authConfigId: "ac_todoist_mcp_activation",
+      idempotencyKey: "mcp-activate-returned-connection-link",
+    });
+
+    if (!reservation.ok || reservation.state !== "dispatch") {
+      throw new Error("Expected connection-link reservation.");
+    }
+
+    const providerConnectionId = "ca_todoist_mcp_activation";
+    const completion = await stub.completeConnectionLink(authority, {
+      authorizationToken: reservation.authorizationToken,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+      providerConnectionId,
+      reservationId: reservation.reservationId,
+      url: "https://connect.composio.dev/link/ln_todoist_mcp_activation",
+    });
+
+    if (!completion.ok) {
+      throw new Error("Expected connection-link completion.");
+    }
+
+    await stub.recordConnectionAuthorizationReturn({
+      authorizationToken: reservation.authorizationToken,
+      providerConnectionId,
+      reservationId: reservation.reservationId,
+      status: "success",
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        alias: "Personal Todoist",
+        id: providerConnectionId,
+        state: { val: { access_token: "provider-secret" } },
+        status: "ACTIVE",
+        toolkit: { slug: "todoist" },
+      }),
+    );
+    const request = toolRequest(
+      JSON.stringify({
+        id: 146,
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: {
+          arguments: { connectionId: completion.connectionLink.connectionId },
+          name: MCP_LIST_CONNECTIONS_TOOL_NAME,
+        },
+      }),
+    );
+    const readOnlyResponse = await handleAuthenticatedMcpRequest(request.clone(), env, {
+      authority: { ...authority, scopes: [CONNECTIONS_READ_SCOPE] },
+    });
+    const readOnlyPayload = jsonRpcToolResultSchema.parse(await readOnlyResponse.json()).result;
+
+    expect(readOnlyPayload.isError).toBe(true);
+    expect(
+      listConnectionsResultSchema.parse(JSON.parse(readOnlyPayload.content[0]?.text ?? "")),
+    ).toEqual({
+      error: { code: "insufficient_scope", message: "Connection request denied." },
+      ok: false,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    const response = await handleAuthenticatedMcpRequest(request, env, { authority });
+    const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+    const result = listConnectionsResultSchema.parse(JSON.parse(payload.content[0]?.text ?? ""));
+
+    expect(payload.isError).toBe(false);
+    expect(result).toMatchObject({
+      connections: [
+        {
+          accountLabel: "Personal Todoist",
+          connectionId: completion.connectionLink.connectionId,
+          integrationSlug: "todoist",
+          providerConnectionId,
+          status: "active",
+        },
+      ],
+      ok: true,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[0]).toEqual(
+      new URL(`https://backend.composio.dev/api/v3.1/connected_accounts/${providerConnectionId}`),
+    );
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
     fetchMock.mockRestore();
   });
 

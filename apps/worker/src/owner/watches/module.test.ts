@@ -427,7 +427,7 @@ describe("OwnerControlPlane Agent Watches", () => {
           metadata: {
             auth_config_id: "ac_watch_github",
             connected_account_id: "ca_watch_github",
-            log_id: "log_issue_42",
+            log_id: eventId,
             trigger_id: triggerId,
             trigger_slug: "GITHUB_ISSUE_CREATED",
             user_id: authority.ownerKey,

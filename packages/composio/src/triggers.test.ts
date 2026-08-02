@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createComposioEventCatalog } from "./triggers.js";
+import {
+  composioEventMatchesConfiguration,
+  composioProviderTriggerConfiguration,
+  createComposioEventCatalog,
+} from "./triggers.js";
 
 function catalogResponse(body: unknown, init?: ResponseInit): Response {
   const headers = new Headers(init?.headers);
@@ -195,6 +199,168 @@ describe("Composio event catalog adapter", () => {
     ]);
   });
 
+  it.each([
+    ["gmail", "GMAIL_NEW_MESSAGE"],
+    ["gmail", "GMAIL_MESSAGE_RECEIVED"],
+  ])("accepts supported %s message-event aliases", async (toolkit, slug) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      catalogResponse({
+        items: [
+          trigger({
+            config: {},
+            name: "Message received",
+            slug,
+            toolkit: { name: toolkit, slug: toolkit },
+          }),
+        ],
+        next_cursor: null,
+      }),
+    );
+
+    const result = await createComposioEventCatalog({
+      apiKey: "composio-project-secret",
+      fetch: fetchMock,
+    }).listWatchableEvents({ integrationSlug: toolkit });
+
+    expect(result).toMatchObject({
+      events: [{ slug }],
+      ok: true,
+    });
+  });
+
+  it.each(["SLACK_NEW_CHANNEL_MESSAGE", "SLACK_CHANNEL_MESSAGE_RECEIVED"])(
+    "excludes unverified Slack message source %s",
+    async (slug) => {
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+        catalogResponse({
+          items: [
+            trigger({
+              config: {},
+              name: "Message received",
+              slug,
+              toolkit: { name: "Slack", slug: "slack" },
+            }),
+          ],
+          next_cursor: null,
+        }),
+      );
+      const result = await createComposioEventCatalog({
+        apiKey: "composio-project-secret",
+        fetch: fetchMock,
+      }).listWatchableEvents({ integrationSlug: "slack" });
+
+      expect(result).toEqual({ events: [], ok: true });
+    },
+  );
+
+  it("normalizes current JSON Schema trigger configurations", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      catalogResponse({
+        items: [
+          trigger({
+            config: {
+              properties: {
+                channel: {
+                  description: "Optional channel",
+                  enum: ["general", "rehearsals"],
+                  title: "Slack channel",
+                  type: "string",
+                },
+              },
+              required: ["channel"],
+              title: "Slack message trigger",
+              type: "object",
+            },
+            name: "Message received",
+            slug: "SLACK_RECEIVE_MESSAGE",
+            toolkit: { name: "Slack", slug: "slack" },
+          }),
+        ],
+        next_cursor: null,
+      }),
+    );
+
+    const result = await createComposioEventCatalog({
+      apiKey: "composio-project-secret",
+      fetch: fetchMock,
+    }).listWatchableEvents({ integrationSlug: "slack" });
+
+    expect(result).toMatchObject({
+      events: [
+        {
+          configuration: [
+            {
+              description: "Optional channel",
+              id: "channel",
+              label: "Slack channel",
+              options: ["general", "rehearsals"],
+              required: true,
+              type: "select",
+            },
+          ],
+          slug: "SLACK_RECEIVE_MESSAGE",
+        },
+      ],
+      ok: true,
+    });
+  });
+
+  it("requires and locally enforces a channel for unfiltered Slack message sources", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      catalogResponse({
+        items: [
+          trigger({
+            config: {},
+            name: "Message received",
+            slug: "SLACK_RECEIVE_MESSAGE",
+            toolkit: { name: "Slack", slug: "slack" },
+          }),
+        ],
+        next_cursor: null,
+      }),
+    );
+    const result = await createComposioEventCatalog({
+      apiKey: "composio-project-secret",
+      fetch: fetchMock,
+    }).listWatchableEvents({ integrationSlug: "slack" });
+
+    expect(result).toMatchObject({
+      events: [
+        {
+          configuration: [
+            {
+              id: "channelId",
+              label: "Slack channel",
+              required: true,
+              type: "string",
+            },
+          ],
+          slug: "SLACK_RECEIVE_MESSAGE",
+        },
+      ],
+      ok: true,
+    });
+    expect(
+      composioProviderTriggerConfiguration("SLACK_RECEIVE_MESSAGE", {
+        channelId: "C0BM0EQS27R",
+      }),
+    ).toEqual({});
+    expect(
+      composioEventMatchesConfiguration(
+        "SLACK_RECEIVE_MESSAGE",
+        { channelId: "C0BM0EQS27R" },
+        { channel: "C0BM0EQS27R" },
+      ),
+    ).toBe(true);
+    expect(
+      composioEventMatchesConfiguration(
+        "SLACK_RECEIVE_MESSAGE",
+        { channelId: "C0BM0EQS27R" },
+        { channel: "CGTGMUMNC" },
+      ),
+    ).toBe(false);
+  });
+
   it("omits provider-setup and unsupported-configuration triggers", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       catalogResponse({
@@ -311,13 +477,13 @@ describe("Composio event catalog adapter", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("rejects duplicate identities that disagree about Watch eligibility", async () => {
+  it("rejects duplicate identities that disagree about configuration eligibility", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(catalogResponse({ items: [trigger()], next_cursor: "second-page" }))
       .mockResolvedValueOnce(
         catalogResponse({
-          items: [trigger({ requires_webhook_endpoint_setup: true })],
+          items: [trigger({ config: { repository: { type: "secret-provider-shape" } } })],
           next_cursor: null,
         }),
       );

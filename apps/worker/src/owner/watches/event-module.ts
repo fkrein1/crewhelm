@@ -19,6 +19,10 @@ import type {
   ComposioWatchableEventConfigurationField,
   VerifiedComposioTriggerEvent,
 } from "@crewhelm/composio";
+import {
+  composioEventMatchesConfiguration,
+  composioProviderTriggerConfiguration,
+} from "@crewhelm/composio";
 import { and, asc, count, desc, eq, lte, min, ne, sql } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
@@ -66,6 +70,13 @@ const MAXIMUM_PENDING_EVENT_WATCH_BYTES = 128 * 1_024;
 
 function isEventDefinition(definition: AgentWatchDefinition): definition is EventWatchDefinition {
   return definition.source.kind === "connection_event";
+}
+
+function providerEventPrecedesWatch(
+  event: Pick<VerifiedComposioTriggerEvent, "providerOccurredAt">,
+  watchCreatedAt: number,
+): boolean {
+  return event.providerOccurredAt !== null && Date.parse(event.providerOccurredAt) < watchCreatedAt;
 }
 
 function encodeBase64Url(bytes: Uint8Array): string {
@@ -676,6 +687,7 @@ export class AgentEventWatches {
         agentId: agentEventWatches.agentId,
         agentRevision: agentEventWatchRevisions.agentRevision,
         connectionId: agentEventWatches.connectionId,
+        createdAt: agentEventWatches.createdAt,
         currentRevision: agentEventWatches.currentRevision,
         definition: agentEventWatchRevisions.definition,
         providerOperation: agentEventWatches.providerOperation,
@@ -705,6 +717,20 @@ export class AgentEventWatches {
       connection.connection.providerConnectionId !== event.providerConnectionId ||
       connection.connection.authConfigId !== event.authConfigId ||
       row.sourceSlug !== event.sourceSlug
+    ) {
+      return;
+    }
+
+    if (providerEventPrecedesWatch(event, row.createdAt)) {
+      return;
+    }
+
+    if (
+      !composioEventMatchesConfiguration(
+        row.sourceSlug,
+        row.definition.source.configuration,
+        event.data,
+      )
     ) {
       return;
     }
@@ -1316,7 +1342,10 @@ export class AgentEventWatches {
       }
 
       const created = await this.#triggerInstances.upsert({
-        configuration: row.definition.source.configuration,
+        configuration: composioProviderTriggerConfiguration(
+          row.definition.source.sourceSlug,
+          row.definition.source.configuration,
+        ),
         integrationSlug: row.definition.source.integrationSlug,
         ownerKey: this.#ownerKey,
         providerConnectionId: connection.connection.providerConnectionId,
@@ -1386,7 +1415,10 @@ export class AgentEventWatches {
       }
 
       const found = await this.#triggerInstances.find({
-        configuration: row.definition.source.configuration,
+        configuration: composioProviderTriggerConfiguration(
+          row.definition.source.sourceSlug,
+          row.definition.source.configuration,
+        ),
         ownerKey: this.#ownerKey,
         providerConnectionId: connection.connection.providerConnectionId,
         sourceSlug: row.definition.source.sourceSlug,

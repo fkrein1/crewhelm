@@ -1,4 +1,8 @@
-import { integrationSlugSchema, integrationToolkitVersionSchema } from "@crewhelm/contracts";
+import {
+  integrationSlugSchema,
+  integrationToolkitVersionSchema,
+  type IntegrationToolParameterValue,
+} from "@crewhelm/contracts";
 import * as z from "zod";
 
 import { readBoundedJson } from "./bounded-json.js";
@@ -8,21 +12,28 @@ const COMPOSIO_TRIGGER_CATALOG_TIMEOUT_MS = 5_000;
 const MAXIMUM_COMPOSIO_TRIGGER_CATALOG_PAGES = 4;
 const MAXIMUM_COMPOSIO_TRIGGER_RESPONSE_BYTES = 512 * 1_024;
 const MAXIMUM_COMPOSIO_WATCHABLE_EVENTS = 20;
+const SLACK_CHANNEL_FILTER_SOURCES = new Set([
+  "SLACK_RECEIVE_BOT_MESSAGE",
+  "SLACK_RECEIVE_MESSAGE",
+]);
+const SLACK_CHANNEL_FILTER_ID = "channelId";
 
 const composioApiKeySchema = z.string().min(16).max(4_096).regex(/^\S+$/);
+const composioTriggerConfigurationFieldIdSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9_.-]+$/);
 const composioTriggerConfigurationSchema = z
-  .record(
-    z
-      .string()
-      .min(1)
-      .max(128)
-      .regex(/^[A-Za-z0-9_.-]+$/),
-    z.unknown(),
-  )
+  .record(composioTriggerConfigurationFieldIdSchema, z.unknown())
   .refine((configuration) => Object.keys(configuration).length <= 32);
 const composioTriggerConfigurationFieldSchema = z.looseObject({
   description: z.string().min(1).max(300).nullish(),
   display_name: z.string().min(1).max(120).nullish(),
+  enum: z
+    .array(z.union([z.string().min(1).max(160), z.number().finite(), z.boolean()]))
+    .max(50)
+    .optional(),
   label: z.string().min(1).max(120).nullish(),
   name: z.string().min(1).max(120).nullish(),
   options: z
@@ -30,7 +41,15 @@ const composioTriggerConfigurationFieldSchema = z.looseObject({
     .max(50)
     .optional(),
   required: z.boolean().optional(),
+  title: z.string().min(1).max(120).nullish(),
   type: z.string().min(1).max(32),
+});
+const composioTriggerJsonSchemaConfigurationSchema = z.looseObject({
+  properties: z
+    .record(composioTriggerConfigurationFieldIdSchema, z.unknown())
+    .refine((properties) => Object.keys(properties).length <= 32),
+  required: z.array(composioTriggerConfigurationFieldIdSchema).max(32).optional(),
+  type: z.literal("object"),
 });
 const composioTriggerTypeSchema = z.looseObject({
   config: composioTriggerConfigurationSchema,
@@ -56,9 +75,12 @@ const composioTriggerCatalogResponseSchema = z.looseObject({
 
 const supportedWatchCohorts = {
   github: (slug: string) => /(?:^|_)(?:ISSUE|PULL_REQUEST)(?:_|$)/.test(slug),
-  gmail: (slug: string) => slug === "GMAIL_NEW_GMAIL_MESSAGE",
+  gmail: (slug: string) =>
+    /(?:^|_)(?:NEW|RECEIVED?)(?:_[A-Z0-9]+)*_MESSAGE(?:_|$)|(?:^|_)MESSAGE(?:_[A-Z0-9]+)*_(?:NEW|RECEIVED?)(?:_|$)/.test(
+      slug,
+    ),
   linear: (slug: string) => /(?:^|_)ISSUE(?:_|$)/.test(slug),
-  slack: (slug: string) => slug === "SLACK_CHANNEL_MESSAGE_RECEIVED",
+  slack: (slug: string) => SLACK_CHANNEL_FILTER_SOURCES.has(slug),
 } as const;
 
 export interface ComposioWatchableEventConfigurationField {
@@ -150,9 +172,16 @@ function labelFromId(id: string): string {
 function normalizeConfiguration(
   configuration: z.infer<typeof composioTriggerConfigurationSchema>,
 ): ComposioWatchableEventConfigurationField[] | null {
+  const jsonSchema = composioTriggerJsonSchemaConfigurationSchema.safeParse(configuration);
+  const configurationFields = jsonSchema.success ? jsonSchema.data.properties : configuration;
+  const requiredFields = new Set(jsonSchema.success ? (jsonSchema.data.required ?? []) : []);
   const fields: ComposioWatchableEventConfigurationField[] = [];
 
-  for (const [id, value] of Object.entries(configuration).toSorted(([left], [right]) =>
+  if ([...requiredFields].some((id) => !Object.hasOwn(configurationFields, id))) {
+    return null;
+  }
+
+  for (const [id, value] of Object.entries(configurationFields).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
     const parsed = composioTriggerConfigurationFieldSchema.safeParse(value);
@@ -167,7 +196,9 @@ function normalizeConfiguration(
         ? "boolean"
         : providerType === "integer" || providerType === "number"
           ? "number"
-          : providerType === "enum" || parsed.data.options !== undefined
+          : providerType === "enum" ||
+              parsed.data.options !== undefined ||
+              parsed.data.enum !== undefined
             ? "select"
             : providerType === "string"
               ? "string"
@@ -180,9 +211,14 @@ function normalizeConfiguration(
     fields.push({
       description: parsed.data.description ?? null,
       id,
-      label: parsed.data.display_name ?? parsed.data.label ?? parsed.data.name ?? labelFromId(id),
-      options: parsed.data.options ?? [],
-      required: parsed.data.required ?? false,
+      label:
+        parsed.data.display_name ??
+        parsed.data.label ??
+        parsed.data.title ??
+        parsed.data.name ??
+        labelFromId(id),
+      options: parsed.data.options ?? parsed.data.enum ?? [],
+      required: requiredFields.has(id) || (parsed.data.required ?? false),
       type,
     });
   }
@@ -221,6 +257,17 @@ function normalizeEvent(
     return null;
   }
 
+  if (SLACK_CHANNEL_FILTER_SOURCES.has(trigger.slug) && configuration.length === 0) {
+    configuration.push({
+      description: "Only messages from this Slack channel are sent to the Agent.",
+      id: SLACK_CHANNEL_FILTER_ID,
+      label: "Slack channel",
+      options: [],
+      required: true,
+      type: "string",
+    });
+  }
+
   return {
     configuration,
     delivery,
@@ -233,6 +280,35 @@ function normalizeEvent(
     slug: trigger.slug,
     version: trigger.version,
   };
+}
+
+export function composioProviderTriggerConfiguration(
+  sourceSlug: string,
+  configuration: Record<string, IntegrationToolParameterValue>,
+): Record<string, IntegrationToolParameterValue> {
+  if (!SLACK_CHANNEL_FILTER_SOURCES.has(sourceSlug)) {
+    return configuration;
+  }
+
+  const providerConfiguration = { ...configuration };
+
+  delete providerConfiguration[SLACK_CHANNEL_FILTER_ID];
+
+  return providerConfiguration;
+}
+
+export function composioEventMatchesConfiguration(
+  sourceSlug: string,
+  configuration: Record<string, IntegrationToolParameterValue>,
+  data: Record<string, IntegrationToolParameterValue>,
+): boolean {
+  if (!SLACK_CHANNEL_FILTER_SOURCES.has(sourceSlug)) {
+    return true;
+  }
+
+  const expectedChannel = configuration[SLACK_CHANNEL_FILTER_ID];
+
+  return typeof expectedChannel !== "string" || data.channel === expectedChannel;
 }
 
 export function createComposioEventCatalog(

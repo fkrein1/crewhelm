@@ -50,10 +50,11 @@ narrow timestamp window before signed owner routing; arbitrary unsigned owner ke
 owner Durable Objects. Secret reconciliation is TTL- and cooldown-bounded, and installation webhook
 secrets are encrypted at rest and never enter Agent prompts. Authenticated unmatched deliveries are
 acknowledged without starting work. Provider trigger creation and lifecycle retries are bounded; an
-unresolved operation cannot silently become active. Duplicate event identities cannot create a
-second occurrence, pending event count and bytes are bounded per Watch, and terminal occurrence
-records discard the provider payload after admission or skip. Event Runs durably retain exact Watch
-and provider-event provenance.
+unresolved operation cannot silently become active. Stable provider source identities deduplicate
+repeated deliveries, and a provider-supplied source timestamp cannot replay an event from before the
+Watch existed. Pending event count and bytes are bounded per Watch, and terminal occurrence records
+discard the provider payload after admission or skip. Event Runs durably retain exact Watch and
+provider-event provenance.
 
 Brief contents and Workflow deliverables are untrusted owner data, not authority. Owner-local
 SQLite stores only compact metadata, exact references, digests, and provenance; object content is

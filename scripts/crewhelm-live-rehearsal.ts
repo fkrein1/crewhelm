@@ -87,6 +87,7 @@ const CONNECTED_WATCH_REHEARSAL_TOOLS = [
   "crewhelm_agent_watches",
   "crewhelm_batch_disable_agents",
   "crewhelm_create_agent",
+  "crewhelm_inspect_run",
   "crewhelm_list_connections",
 ] as const;
 const CONVERSATION_REHEARSAL_TOOLS = [
@@ -1285,6 +1286,8 @@ async function watches(options: {
 async function connectedWatches(options: {
   credentialPath: string;
   installationPath: string;
+  runTimeoutMs: number;
+  slackChannelId?: string;
   timeoutMs: number;
 }): Promise<unknown> {
   const target = await resolveRehearsalTarget(options.installationPath);
@@ -1351,7 +1354,7 @@ async function connectedWatches(options: {
       const connections = await callTool<ListConnectionsResult>(
         session,
         "crewhelm_list_connections",
-        { authorizationOutcome: "returned", limit: 20, status: "active" },
+        { authorizationOutcome: "returned", limit: 20 },
         listConnectionsResultSchema,
       );
 
@@ -1368,8 +1371,21 @@ async function connectedWatches(options: {
             { kind: "connection_event" }
           >
         | undefined;
+      let fallbackSource: typeof source;
 
       for (const connection of connections.connections) {
+        const inspectedConnection = await callTool<ListConnectionsResult>(
+          session,
+          "crewhelm_list_connections",
+          { connectionId: connection.connectionId },
+          listConnectionsResultSchema,
+        );
+        const readyConnection = inspectedConnection.ok
+          ? inspectedConnection.connections[0]
+          : undefined;
+
+        if (readyConnection?.status !== "active") continue;
+
         const sources = await callToolOutcome<AgentWatchesResult>(
           session,
           "crewhelm_agent_watches",
@@ -1379,16 +1395,34 @@ async function connectedWatches(options: {
 
         if (!sources.ok || sources.action !== "sources") continue;
         for (const candidate of sources.sources) {
+          if (candidate.kind !== "connection_event") continue;
+
+          const requiredConfiguration = candidate.configuration.filter((field) => field.required);
+          const matchesRequestedSlackChannel =
+            options.slackChannelId !== undefined &&
+            candidate.sourceSlug === "SLACK_RECEIVE_MESSAGE" &&
+            requiredConfiguration.every((field) => field.id === "channelId");
+
           if (
-            candidate.kind === "connection_event" &&
-            candidate.configuration.every((field) => !field.required)
+            (options.slackChannelId === undefined || matchesRequestedSlackChannel) &&
+            (requiredConfiguration.length === 0 || matchesRequestedSlackChannel)
           ) {
-            source = candidate;
-            break;
+            if (
+              /(?:TASK|TODO).*(?:ADD|CREAT|NEW)|(?:ADD|CREAT|NEW).*(?:TASK|TODO)|^SLACK_RECEIVE_MESSAGE$|^GMAIL_(?:NEW_GMAIL_MESSAGE|NEW_MESSAGE|MESSAGE_RECEIVED)$|^GITHUB_ISSUE_CREATED$/u.test(
+                candidate.sourceSlug,
+              )
+            ) {
+              source = candidate;
+              break;
+            }
+
+            fallbackSource ??= candidate;
           }
         }
         if (source !== undefined) break;
       }
+
+      source ??= fallbackSource;
 
       if (source === undefined) {
         throw new TemporaryOwnerSessionError(
@@ -1439,7 +1473,14 @@ async function connectedWatches(options: {
           delivery: source.delivery,
           eventSlug: source.sourceSlug,
           eventVersion: source.sourceVersion,
-          filters: {},
+          filters:
+            options.slackChannelId === undefined
+              ? {}
+              : Object.fromEntries(
+                  source.configuration
+                    .filter((field) => field.id === "channelId")
+                    .map((field) => [field.id, options.slackChannelId]),
+                ),
           integrationSlug: source.integration.slug,
           instruction: "Summarize the matching event and recommend the next owner action.",
           name: `Connected ${source.name}`.slice(0, 80),
@@ -1526,6 +1567,104 @@ async function connectedWatches(options: {
           throw new TemporaryOwnerSessionError(
             "invalid_payload",
             "Unsigned connected-Watch ingress did not fail closed.",
+          );
+        }
+
+        const eventDeadline = Date.now() + options.runTimeoutMs;
+        const eventWindowStartedAt = new Date(Date.now() - 5_000).toISOString();
+
+        process.stderr.write(
+          `CONNECTED_WATCH_READY ${JSON.stringify({
+            agentId,
+            eventSlug: source.sourceSlug,
+            eventWindowStartedAt,
+            watchId,
+            watchRevision,
+          })}\n`,
+        );
+        let occurrence:
+          | Extract<AgentWatchesResult, { action: "history"; ok: true }>["occurrences"][number]
+          | undefined;
+        let historyReadRetries = 0;
+
+        while (Date.now() < eventDeadline && occurrence === undefined) {
+          let history: AgentWatchesResult;
+
+          try {
+            history = await callTool<AgentWatchesResult>(
+              session,
+              "crewhelm_agent_watches",
+              { action: "history", agentId, limit: 20, watchId },
+              agentWatchesResultSchema,
+            );
+          } catch (error) {
+            if (
+              !(error instanceof TemporaryOwnerSessionError) ||
+              error.code !== "invalid_payload" ||
+              error.message !== "crewhelm_agent_watches returned an invalid rehearsal payload." ||
+              historyReadRetries >= 60
+            ) {
+              throw error;
+            }
+
+            historyReadRetries += 1;
+            await new Promise((resolve) => setTimeout(resolve, 2_000));
+            continue;
+          }
+
+          if (history.ok && history.action === "history") {
+            occurrence = history.occurrences.find(
+              (candidate) =>
+                candidate.sourceKind === "connection_event" &&
+                candidate.watchRevision === watchRevision &&
+                candidate.outcome === "dispatched" &&
+                candidate.runId !== null,
+            );
+          }
+
+          if (occurrence === undefined) {
+            await new Promise((resolve) => setTimeout(resolve, 2_000));
+          }
+        }
+
+        if (occurrence === undefined || occurrence.runId === null) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "No authentic provider event reached the connected Watch before timeout.",
+          );
+        }
+
+        let inspectedRun: InspectRunResult | undefined;
+
+        while (Date.now() < eventDeadline) {
+          inspectedRun = await callTool<InspectRunResult>(
+            session,
+            "crewhelm_inspect_run",
+            { includeUsage: true, runId: occurrence.runId, timelineLimit: 20 },
+            inspectRunResultSchema,
+          );
+
+          if (
+            inspectedRun.ok &&
+            ["cancelled", "completed", "failed"].includes(inspectedRun.run.status)
+          ) {
+            break;
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 2_000));
+        }
+
+        if (
+          !inspectedRun?.ok ||
+          inspectedRun.run.status !== "completed" ||
+          inspectedRun.run.trigger !== "watch" ||
+          inspectedRun.run.watch?.id !== watchId ||
+          inspectedRun.run.watch.revision !== watchRevision ||
+          inspectedRun.run.watch.eventId !== occurrence.eventId
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Authentic connected-Watch Run did not complete with exact provenance.",
           );
         }
 
@@ -1641,7 +1780,10 @@ async function connectedWatches(options: {
           },
           missingSignatureIngressStatus: missingSignatureIngress.status,
           unsignedIngressStatus: deniedIngress.status,
-          authenticEventDelivery: "not_exercised",
+          authenticEventDelivery: "completed",
+          eventId: occurrence.eventId,
+          runId: occurrence.runId,
+          runStatus: inspectedRun.run.status,
           watchId,
         };
         watchId = undefined;
@@ -2573,6 +2715,7 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
       "run-timeout-ms": { default: "240000", type: "string" },
       "run-id": { type: "string" },
       "session-id": { type: "string" },
+      "slack-channel-id": { type: "string" },
       "timeout-ms": { default: "5000", type: "string" },
       "workflow-id": { type: "string" },
     },
@@ -2590,6 +2733,11 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
     10 * 60 * 1_000,
     "run-timeout-ms",
   );
+  const slackChannelId = parsed.values["slack-channel-id"];
+
+  if (slackChannelId !== undefined && !/^[A-Z0-9]{1,64}$/u.test(slackChannelId)) {
+    throw new Error("slack-channel-id must be a Slack channel ID.");
+  }
   const report =
     action === "authorize"
       ? await authorize({
@@ -2602,7 +2750,11 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
                 })(),
         })
       : action === "connected-watches"
-        ? await connectedWatches(common)
+        ? await connectedWatches({
+            ...common,
+            runTimeoutMs,
+            ...(slackChannelId === undefined ? {} : { slackChannelId }),
+          })
         : action === "conversation"
           ? await conversation({ ...common, runTimeoutMs })
           : action === "inspect-sandbox"

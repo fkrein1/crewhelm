@@ -1435,6 +1435,18 @@ export class OwnerControlPlane extends DurableObject {
       : deniedConnectionRead(authorization.code);
   }
 
+  activateVerifiedConnection(authorityInput: unknown, input: unknown): ListConnectionsResult {
+    const authorization = this.#authorize(authorityInput, CONNECTIONS_WRITE_SCOPE);
+
+    if (!authorization.ok) {
+      return deniedConnectionRead(authorization.code);
+    }
+
+    return authorization.authority.scopes.includes(CONNECTIONS_READ_SCOPE)
+      ? this.#connections.activateVerified(authorization.authority, input)
+      : deniedConnectionRead("insufficient_scope");
+  }
+
   async #dispatchScheduledRun(schedule: DueAgentSchedule, currentTime: number): Promise<void> {
     if (this.#objectName === undefined) {
       return;
