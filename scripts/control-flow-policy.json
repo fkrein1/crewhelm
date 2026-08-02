@@ -24,9 +24,9 @@
     "apps/worker/src/worker-test-entry.ts"
   ],
   "recordedProgress": {
-    "migratedFiles": 33,
+    "migratedFiles": 35,
     "migratedUnits": 12,
-    "totalFiles": 155,
+    "totalFiles": 159,
     "totalUnits": 30
   },
   "units": [
