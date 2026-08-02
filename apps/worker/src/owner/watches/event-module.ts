@@ -178,6 +178,7 @@ export class AgentEventWatches {
   readonly #database: Database;
   readonly #eventCatalog: ComposioEventCatalog;
   readonly #ownerKey: string | undefined;
+  readonly #recoveringProviderOperations = new Set<string>();
   readonly #storage: DurableObjectStorage;
   readonly #triggerInstances: ComposioTriggerInstances;
   readonly #webhookIngress: { ensure(): Promise<boolean> };
@@ -1193,6 +1194,23 @@ export class AgentEventWatches {
     watchId: string,
     requestedAction: "create" | "delete" | "pause" | "resume" | "update" | null,
   ): Promise<AgentWatchesResult> {
+    if (this.#recoveringProviderOperations.has(watchId)) {
+      return deniedAgentWatch("watch_operation_unknown");
+    }
+
+    this.#recoveringProviderOperations.add(watchId);
+
+    try {
+      return await this.#recoverOperationLeased(watchId, requestedAction);
+    } finally {
+      this.#recoveringProviderOperations.delete(watchId);
+    }
+  }
+
+  async #recoverOperationLeased(
+    watchId: string,
+    requestedAction: "create" | "delete" | "pause" | "resume" | "update" | null,
+  ): Promise<AgentWatchesResult> {
     const row = this.#database
       .select({
         agentId: agentEventWatches.agentId,
@@ -1259,7 +1277,7 @@ export class AgentEventWatches {
     }
 
     const providerAttempts = row.providerAttempts + 1;
-    this.#database
+    const claimed = this.#database
       .update(agentEventWatches)
       .set({
         providerAttempts,
@@ -1275,7 +1293,12 @@ export class AgentEventWatches {
           eq(agentEventWatches.providerAttempts, row.providerAttempts),
         ),
       )
-      .run();
+      .returning({ watchId: agentEventWatches.watchId })
+      .all()[0];
+
+    if (claimed === undefined) {
+      return deniedAgentWatch("watch_operation_unknown");
+    }
 
     if (row.operation === "creating") {
       if (
@@ -1318,6 +1341,7 @@ export class AgentEventWatches {
             eq(agentEventWatches.watchId, watchId),
             eq(agentEventWatches.currentRevision, row.revision),
             eq(agentEventWatches.providerOperation, "creating"),
+            eq(agentEventWatches.providerAttempts, providerAttempts),
           ),
         )
         .returning({ watchId: agentEventWatches.watchId })
@@ -1388,6 +1412,7 @@ export class AgentEventWatches {
               eq(agentEventWatches.watchId, watchId),
               eq(agentEventWatches.currentRevision, row.revision),
               eq(agentEventWatches.providerOperation, "deleting"),
+              eq(agentEventWatches.providerAttempts, providerAttempts),
             ),
           )
           .returning({ watchId: agentEventWatches.watchId })
@@ -1436,6 +1461,7 @@ export class AgentEventWatches {
             eq(agentEventWatches.watchId, watchId),
             eq(agentEventWatches.currentRevision, row.revision),
             eq(agentEventWatches.providerOperation, row.operation),
+            eq(agentEventWatches.providerAttempts, providerAttempts),
           ),
         )
         .returning({ watchId: agentEventWatches.watchId })
