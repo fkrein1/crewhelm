@@ -237,6 +237,9 @@ function scheduledRunFailureReason(code: StartRunFailureCode): AgentInboxDeferre
     case "invalid_authority":
     case "invalid_request":
     case "owner_mismatch":
+    case "branch_revision_conflict":
+    case "session_busy":
+    case "session_not_found":
       return "run_unavailable";
     default:
       return "run_unavailable";

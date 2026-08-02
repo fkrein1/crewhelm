@@ -43,6 +43,17 @@ function watchFailureFromSchedule(
     case "schedule_not_found":
     case "schedule_selection_required":
       return deniedAgentWatch("watch_not_found");
+    case "agent_not_found":
+    case "agent_unavailable":
+    case "idempotency_conflict":
+    case "incompatible_schema":
+    case "insufficient_scope":
+    case "invalid_authority":
+    case "invalid_request":
+    case "no_changes":
+    case "owner_mismatch":
+    case "revision_conflict":
+      return deniedAgentWatch(code);
     default:
       return deniedAgentWatch(code);
   }

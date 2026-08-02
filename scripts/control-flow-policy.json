@@ -1,0 +1,218 @@
+{
+  "schemaVersion": 1,
+  "definitionVersion": 1,
+  "definitionOfMigrated": [
+    "Expected domain, dependency, validation, and policy failures use discriminated unions instead of thrown control flow.",
+    "Throws are limited to defects, violated invariants, and required host-platform signals.",
+    "Unknown failures are narrowed at host and third-party boundaries.",
+    "HTTP, MCP, CLI, workflow, and Durable Object adapters translate failures once at their boundary.",
+    "Failure and state unions are handled exhaustively.",
+    "Tests cover success, each expected failure variant, and boundary translation."
+  ],
+  "sourceRoots": [
+    "apps/cli/src",
+    "apps/worker/control-plane-migrations",
+    "apps/worker/src",
+    "packages/composio/src",
+    "packages/contracts/src"
+  ],
+  "excludedFileSuffixes": [".d.ts", ".test-double.ts", ".test.ts"],
+  "excludedFiles": [
+    "apps/worker/src/agent/admitted-runs/test-agent.ts",
+    "apps/worker/src/oauth/testkit.ts",
+    "apps/worker/src/owner/testkit.ts",
+    "apps/worker/src/worker-test-entry.ts"
+  ],
+  "recordedProgress": {
+    "migratedFiles": 0,
+    "migratedUnits": 0,
+    "totalFiles": 155,
+    "totalUnits": 30
+  },
+  "units": [
+    {
+      "files": [
+        "apps/cli/src/authenticated-doctor.ts",
+        "apps/cli/src/bootstrap.ts",
+        "apps/cli/src/cli.ts",
+        "apps/cli/src/cloudflare-gateway-authorization.ts",
+        "apps/cli/src/codex-browser.ts",
+        "apps/cli/src/command.ts",
+        "apps/cli/src/doctor.ts",
+        "apps/cli/src/github-app.ts",
+        "apps/cli/src/index.ts",
+        "apps/cli/src/installation.ts",
+        "apps/cli/src/interactive.ts",
+        "apps/cli/src/local-page.ts",
+        "apps/cli/src/mcp-result-schemas.ts",
+        "apps/cli/src/presentation.ts",
+        "apps/cli/src/temporary-owner-session.ts",
+        "apps/cli/src/version.ts",
+        "apps/cli/src/wrangler.ts"
+      ],
+      "id": "cli-core",
+      "status": "legacy"
+    },
+    {
+      "id": "cli-rehearsal",
+      "status": "legacy",
+      "pathPrefixes": ["apps/cli/src/rehearsal/"]
+    },
+    {
+      "id": "composio",
+      "status": "legacy",
+      "pathPrefixes": ["packages/composio/src/"]
+    },
+    {
+      "id": "contracts",
+      "status": "legacy",
+      "pathPrefixes": ["packages/contracts/src/"]
+    },
+    {
+      "id": "worker-agent-capabilities",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/agent-capabilities/"]
+    },
+    {
+      "id": "worker-agent-workflows",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/agent-workflows/"]
+    },
+    {
+      "files": [
+        "apps/worker/src/agent/admitted-runs/index.ts",
+        "apps/worker/src/agent/admitted-runs/module.ts",
+        "apps/worker/src/agent/admitted-runs/output-validation.ts",
+        "apps/worker/src/agent/admitted-runs/protocol.ts",
+        "apps/worker/src/agent/admitted-runs/schema.ts"
+      ],
+      "id": "admitted-runs-core",
+      "status": "legacy"
+    },
+    {
+      "files": ["apps/worker/src/agent/admitted-runs/inference-fallback.ts"],
+      "id": "admitted-runs-inference",
+      "status": "legacy"
+    },
+    {
+      "files": ["apps/worker/src/agent/admitted-runs/sandbox-code-execution.ts"],
+      "id": "admitted-runs-sandbox",
+      "status": "legacy"
+    },
+    {
+      "files": ["apps/worker/src/agent/admitted-runs/web-research-execution.ts"],
+      "id": "admitted-runs-web-research",
+      "status": "legacy"
+    },
+    {
+      "files": [
+        "apps/worker/src/agent/durable-object.ts",
+        "apps/worker/src/agent/session-directory.ts"
+      ],
+      "id": "agent-directory",
+      "status": "legacy",
+      "pathPrefixes": []
+    },
+    {
+      "id": "worker-http",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/http/"]
+    },
+    {
+      "id": "worker-mcp",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/mcp/"]
+    },
+    {
+      "id": "worker-oauth",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/oauth/"]
+    },
+    {
+      "id": "worker-observability",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/observability/"]
+    },
+    {
+      "id": "owner-agent-blueprints",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/owner/agent-blueprints/"]
+    },
+    {
+      "id": "owner-agent-channel",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/owner/agent-channel/"]
+    },
+    {
+      "id": "owner-agents",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/owner/agents/"]
+    },
+    {
+      "id": "owner-briefs",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/owner/briefs/"]
+    },
+    {
+      "id": "owner-configuration",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/owner/configuration/"]
+    },
+    {
+      "id": "owner-connections",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/owner/connections/"]
+    },
+    {
+      "id": "owner-recovery",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/owner/recovery/"]
+    },
+    {
+      "id": "owner-runs",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/owner/runs/"]
+    },
+    {
+      "id": "owner-schedules",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/owner/schedules/"]
+    },
+    {
+      "id": "owner-skills",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/owner/skills/"]
+    },
+    {
+      "id": "owner-usage",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/owner/usage/"]
+    },
+    {
+      "id": "owner-watches",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/owner/watches/"]
+    },
+    {
+      "id": "owner-workflows",
+      "status": "legacy",
+      "pathPrefixes": ["apps/worker/src/owner/workflows/"]
+    },
+    {
+      "files": [
+        "apps/worker/control-plane-migrations/index.ts",
+        "apps/worker/src/owner/durable-object.ts",
+        "apps/worker/src/owner/identity.ts",
+        "apps/worker/src/owner/migrations.ts",
+        "apps/worker/src/owner/schema.ts"
+      ],
+      "id": "owner-control-plane",
+      "status": "legacy"
+    },
+    {
+      "files": ["apps/worker/src/env.ts", "apps/worker/src/index.ts", "apps/worker/src/sandbox.ts"],
+      "id": "worker-runtime",
+      "status": "legacy"
+    }
+  ]
+}
