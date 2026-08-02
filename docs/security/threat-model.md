@@ -32,7 +32,8 @@ Trust changes at:
 | Token theft, confused identity, or cross-owner access  | Audience-bound short-lived tokens, exact owner and scope checks at ingress and execution, owner-named objects, explicit revocation                                                         |
 | Malicious OAuth clients, replay, or storage exhaustion | S256 PKCE, HTTPS or exact-loopback redirects, protected state, bounded bodies and sessions, rate limits, expiring registrations, hashed rotating refresh tokens                            |
 | Prompt injection or hostile provider data              | Treat all model, recipe, MCP, retrieved, and provider content as inert input; trusted code classifies authority, effects, targets, and cost                                                |
-| Malicious Skill packages                               | Validate bounded UTF-8 files and safe paths, reject suspected credentials, store immutable content-addressed objects, and never execute scripts or derive authority                        |
+| Malicious Skill packages                               | Validate bounded UTF-8 files and safe paths, reject suspected credentials, store immutable content-addressed objects, never execute scripts, and never derive authority                    |
+| Registry substitution or dependency drift              | Pin Registry origin, publisher namespace, name, version, and canonical digest; re-fetch and verify authoritative bytes during installation; never accept the orchestrator's returned copy  |
 | Credential disclosure                                  | Keep provider credentials outside models and Crewhelm state; bound and normalize responses; exclude secrets from results, errors, telemetry, URLs, and backups                             |
 | SSRF or redirected egress                              | Use fixed HTTPS provider endpoints, manual redirect handling, bounded response size and time, and no model-selected network destination                                                    |
 | Stale, replayed, or amplified authority                | Bind permits and approvals to owner, client, Agent revision, action digest, budget, nonce, and short expiry; recheck current policy immediately before execution                           |
@@ -126,6 +127,18 @@ an interrupted dispatch is recorded failed and is not silently replayed.
 Skill contents are untrusted owner input. R2 stores immutable package versions; owner-local SQLite
 stores only compact metadata and digests. Exact reads verify both before returning files. Publishing
 or retiring a Skill grants no runtime capability, and `scripts/` remains inert.
+
+Public Registry content adds a separate hostile supply-chain boundary. Recipe and Skill blobs are
+immutable and content-addressed; compact D1 projections support discovery but do not replace exact
+package verification. Initial public Skill artifacts reject `scripts/`, floating or transitive
+dependencies, and missing license or provenance. The self-hosted owner instance fetches exact files,
+verifies their pinned digest, runs deterministic checks, and exposes bounded raw content to the MCP
+orchestrator as inert untrusted source. The orchestrator can explain findings but cannot grant
+authority or establish safety. Local preview reports how Skill instructions can influence each
+proposed grant, including whole-catalog remote MCP authority. Installation independently re-fetches
+and verifies packages, copies Skills into owner-local R2, and records local IDs and provenance.
+Installed Agents neither read the Registry at runtime nor update automatically. Restriction,
+retirement, outage, or later package versions cannot alter an installed copy.
 
 Run and tool authority is also bound to the exact fleet-configuration revision admitted. Any later
 configuration revision invalidates unconsumed admission, approval, and dispatch authority; the
