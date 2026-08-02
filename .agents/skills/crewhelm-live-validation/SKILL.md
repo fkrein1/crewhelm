@@ -63,6 +63,17 @@ pnpm exec tsx scripts/crewhelm-live-rehearsal.ts conversation \
   --credential .crewhelm-rehearsal-credential.json
 ```
 
+If a conversation rehearsal reports retained exact IDs, resume its cleanup before creating another
+fixture:
+
+```sh
+pnpm exec tsx scripts/crewhelm-live-rehearsal.ts recover-conversation \
+  --installation crewhelm.testing.installation.json \
+  --credential .crewhelm-rehearsal-credential.json \
+  --agent-id '<exact agentId>' \
+  --session-id '<exact sessionId>'
+```
+
 The journey polls no faster than the public MCP rate-limit budget allows. If a prior attempt exits
 with retained exact fixture IDs, resume cleanup rather than creating another fixture:
 
