@@ -24,6 +24,9 @@ used across the public site, browser handoffs, CLI, and future product surfaces.
 - **Outcomes outlive the chat.** A durable Workflow carries one known multi-step objective across
   ordered bounded Runs, so an owner can leave the MCP conversation and return to exact progress,
   recovery, or one clear final deliverable.
+- **Deliverables fit the consumer.** Markdown remains the effortless default. When downstream
+  software needs predictable data, an operation may freeze one bounded JSON schema; Crewhelm
+  validates the final object and never presents invalid model output as typed success.
 - **Context is explicit.** Briefs let an owner attach exact versioned reference material without
   pasting it into every prompt. Capabilities remain on the Agent; inputs remain on the work.
 - **Composio is the integration plane.** Crewhelm uses its catalog, authentication, and execution

@@ -10,12 +10,17 @@ import {
   configureAgentScheduleResultSchema,
   createAgentResultSchema,
   getAgentScheduleResultSchema,
+  inspectRunResultSchema,
   listAgentSchedulesResultSchema,
+  manageAgentWorkflowsResultSchema,
+  startRunResultSchema,
   type BatchDisableAgentsResult,
   type ConfigureAgentScheduleResult,
   type CreateAgentResult,
   type GetAgentScheduleResult,
   type ListAgentSchedulesResult,
+  type InspectRunResult,
+  type StartRunResult,
 } from "../packages/contracts/src/index.js";
 
 import { diagnoseDeployment } from "../apps/cli/src/doctor.js";
@@ -66,6 +71,29 @@ const SCHEDULE_REHEARSAL_TOOLS = [
   "crewhelm_get_agent_schedule",
   "crewhelm_list_agent_schedules",
 ] as const;
+const TYPED_OUTPUT_REHEARSAL_TOOLS = [
+  "crewhelm_agent_workflows",
+  "crewhelm_batch_disable_agents",
+  "crewhelm_create_agent",
+  "crewhelm_inspect_run",
+  "crewhelm_start_run",
+] as const;
+const TYPED_OUTPUT_CONTRACT = {
+  kind: "json",
+  schema: {
+    jsonSchema: {
+      additionalProperties: false,
+      properties: {
+        confidence: { maximum: 1, minimum: 0, type: "number" },
+        summary: { maxLength: 200, minLength: 1, type: "string" },
+      },
+      required: ["summary", "confidence"],
+      type: "object",
+    },
+    name: "CrewhelmAssessment",
+    version: "1",
+  },
+} as const;
 
 function boundedInteger(
   value: string | undefined,
@@ -660,6 +688,311 @@ async function schedules(options: {
   };
 }
 
+async function typedOutput(options: {
+  credentialPath: string;
+  installationPath: string;
+  runTimeoutMs: number;
+  timeoutMs: number;
+}): Promise<unknown> {
+  const target = await resolveRehearsalTarget(options.installationPath);
+  const publicReport = await diagnoseDeployment(
+    { origin: target.origin, timeoutMs: options.timeoutMs },
+    { expectedDeploymentFingerprint: target.expectedDeploymentFingerprint, fetch },
+  );
+  if (!publicReport.ok || publicReport.deployment.alignment !== "aligned") {
+    return { ok: false, public: publicReport, schemaVersion: 1 };
+  }
+
+  const credential = await readRehearsalCredential(options.credentialPath);
+  const suffix = crypto.randomUUID().slice(0, 8);
+  let agentId: string | undefined;
+  let workflowId: string | undefined;
+  const result = await runRefreshableOwnerSession(
+    {
+      credential,
+      origin: target.origin,
+      persistCredential: (rotated) => writeRehearsalCredential(options.credentialPath, rotated),
+      timeoutMs: options.timeoutMs,
+    },
+    { expectedDeploymentFingerprint: target.expectedDeploymentFingerprint, fetch },
+    async (session) => {
+      await session.call(
+        "initialize",
+        {
+          capabilities: {},
+          clientInfo: { name: "crewhelm-live-rehearsal", version: CREWHELM_CLI_VERSION },
+          protocolVersion: MCP_PROTOCOL_VERSION,
+        },
+        initializeResponseSchema,
+      );
+      const catalog = await session.call("tools/list", {}, toolListResponseSchema);
+      const names = new Set(catalog.result.tools.map((tool) => tool.name));
+      if (!TYPED_OUTPUT_REHEARSAL_TOOLS.every((name) => names.has(name))) {
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          "MCP catalog omitted a typed-output rehearsal tool.",
+        );
+      }
+
+      const created = await callTool<CreateAgentResult>(
+        session,
+        "crewhelm_create_agent",
+        {
+          capabilities: [
+            {
+              configuration: {
+                fallbackModels: [],
+                primaryModel: "@cf/zai-org/glm-4.7-flash",
+              },
+              id: WORKERS_AI_CAPABILITY_ID,
+              schemaVersion: WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
+            },
+          ],
+          executionLimits: {
+            maxDurationSeconds: 90,
+            maxModelTokens: 1_024,
+            maxToolCalls: 0,
+            maxTurns: 2,
+          },
+          idempotencyKey: `typed-output-agent-${suffix}`,
+          instructions:
+            "Follow the requested output contract exactly. Return concise factual content without tools.",
+          name: `Typed output rehearsal ${suffix}`,
+        },
+        createAgentResultSchema,
+      );
+      if (!created.ok) {
+        throw new TemporaryOwnerSessionError("invalid_payload", "Disposable Agent was denied.");
+      }
+      agentId = created.agent.id;
+      let operationFailure: unknown;
+      let evidence: unknown;
+
+      try {
+        const runInput = {
+          agentId,
+          expectedRevision: created.agent.revision,
+          idempotencyKey: `typed-output-run-${suffix}`,
+          outputContract: TYPED_OUTPUT_CONTRACT,
+          prompt:
+            "Assess whether a durable typed output is useful. Set confidence between zero and one.",
+        };
+        const started = await callTool<StartRunResult>(
+          session,
+          "crewhelm_start_run",
+          runInput,
+          startRunResultSchema,
+        );
+        const replayed = await callTool<StartRunResult>(
+          session,
+          "crewhelm_start_run",
+          runInput,
+          startRunResultSchema,
+        );
+        const changed = await callDeniedTool<StartRunResult>(
+          session,
+          "crewhelm_start_run",
+          {
+            ...runInput,
+            outputContract: {
+              ...TYPED_OUTPUT_CONTRACT,
+              schema: { ...TYPED_OUTPUT_CONTRACT.schema, version: "2" },
+            },
+          },
+          startRunResultSchema,
+        );
+        if (
+          !started.ok ||
+          !replayed.ok ||
+          started.run.runId !== replayed.run.runId ||
+          replayed.created ||
+          changed.ok ||
+          changed.error.code !== "idempotency_conflict"
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Typed Run replay did not preserve its exact frozen contract.",
+          );
+        }
+
+        const deadline = Date.now() + options.runTimeoutMs;
+        let compactRun: InspectRunResult | undefined;
+        while (Date.now() < deadline) {
+          compactRun = await callTool<InspectRunResult>(
+            session,
+            "crewhelm_inspect_run",
+            { runId: started.run.runId },
+            inspectRunResultSchema,
+          );
+          if (compactRun.ok && ["completed", "failed"].includes(compactRun.run.status)) break;
+          await new Promise((resolve) => setTimeout(resolve, 5_000));
+        }
+        const exactRun = await callTool<InspectRunResult>(
+          session,
+          "crewhelm_inspect_run",
+          { includeDeliverable: true, runId: started.run.runId },
+          inspectRunResultSchema,
+        );
+        if (
+          compactRun?.ok !== true ||
+          compactRun.run.status !== "completed" ||
+          compactRun.run.deliverable?.state !== "valid" ||
+          "deliverableContent" in compactRun ||
+          compactRun.retention.output.retainedCharacters <= 0 ||
+          !exactRun.ok ||
+          exactRun.run.status !== "completed" ||
+          exactRun.run.deliverable?.state !== "valid" ||
+          exactRun.deliverableContent?.summary === undefined ||
+          typeof exactRun.deliverableContent.confidence !== "number" ||
+          exactRun.retention.output.retainedCharacters !==
+            compactRun.retention.output.retainedCharacters
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Typed Run did not preserve compact discovery and exact validated content.",
+          );
+        }
+        const runDeliverable = exactRun.run.deliverable;
+
+        const workflowStarted = await callTool<
+          ReturnType<typeof manageAgentWorkflowsResultSchema.parse>
+        >(
+          session,
+          "crewhelm_agent_workflows",
+          {
+            action: "start",
+            agentId,
+            expectedRevision: created.agent.revision,
+            idempotencyKey: `typed-output-workflow-${suffix}`,
+            objective: "Produce one typed assessment after a short preparation stage.",
+            outputContract: TYPED_OUTPUT_CONTRACT,
+            stages: [
+              { name: "Prepare", prompt: "Prepare the assessment facts in ordinary prose." },
+              {
+                name: "Deliver",
+                prompt: "Return the final assessment under the exact requested contract.",
+              },
+            ],
+          },
+          manageAgentWorkflowsResultSchema,
+        );
+        if (!("workflow" in workflowStarted) || !workflowStarted.ok) {
+          throw new TemporaryOwnerSessionError("invalid_payload", "Typed Workflow was denied.");
+        }
+        workflowId = workflowStarted.workflow.workflowId;
+        let compactWorkflow: ReturnType<typeof manageAgentWorkflowsResultSchema.parse> | undefined;
+        while (Date.now() < deadline) {
+          compactWorkflow = await callTool(
+            session,
+            "crewhelm_agent_workflows",
+            {
+              action: "inspect",
+              workflowId,
+            },
+            manageAgentWorkflowsResultSchema,
+          );
+          if (
+            "workflow" in compactWorkflow &&
+            compactWorkflow.ok &&
+            ["cancelled", "completed", "failed"].includes(compactWorkflow.workflow.status)
+          ) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 5_000));
+        }
+        const exactWorkflow = await callTool(
+          session,
+          "crewhelm_agent_workflows",
+          {
+            action: "inspect",
+            includeDeliverable: true,
+            workflowId,
+          },
+          manageAgentWorkflowsResultSchema,
+        );
+        const exactWorkflowAggregate =
+          "workflow" in exactWorkflow && exactWorkflow.ok && "deliverable" in exactWorkflow.workflow
+            ? exactWorkflow.workflow
+            : undefined;
+        if (
+          compactWorkflow === undefined ||
+          !("workflow" in compactWorkflow) ||
+          !compactWorkflow.ok ||
+          compactWorkflow.workflow.status !== "completed" ||
+          "deliverableContent" in compactWorkflow.workflow ||
+          exactWorkflowAggregate?.status !== "completed" ||
+          exactWorkflowAggregate.deliverable?.kind !== "json" ||
+          exactWorkflowAggregate.deliverableContent === undefined
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Typed Workflow did not return one exact final JSON deliverable.",
+          );
+        }
+        const deleted = await callTool(
+          session,
+          "crewhelm_agent_workflows",
+          {
+            action: "delete",
+            expectedRevision: exactWorkflowAggregate.revision,
+            idempotencyKey: `typed-output-delete-${suffix}`,
+            workflowId,
+          },
+          manageAgentWorkflowsResultSchema,
+        );
+        if (!("deleted" in deleted) || !deleted.ok || !deleted.deleted) {
+          throw new TemporaryOwnerSessionError("invalid_payload", "Typed Workflow cleanup failed.");
+        }
+
+        evidence = {
+          agentId,
+          runId: started.run.runId,
+          runRepairAttempted: runDeliverable.repairAttempted,
+          runSchemaDigest: runDeliverable.schema.digest,
+          workflowId,
+          workflowSchemaDigest: exactWorkflowAggregate.deliverable.schema.digest,
+        };
+      } catch (error) {
+        operationFailure = error;
+      }
+
+      const disabled = await callTool<BatchDisableAgentsResult>(
+        session,
+        "crewhelm_batch_disable_agents",
+        { agents: [{ agentId, expectedRevision: created.agent.revision }] },
+        batchDisableAgentsResultSchema,
+      );
+      if (
+        !disabled.ok ||
+        disabled.receipts.length !== 1 ||
+        !["already_disabled", "disabled"].includes(disabled.receipts[0]?.outcome ?? "")
+      ) {
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          "Disposable typed-output Agent was not disabled.",
+        );
+      }
+      if (operationFailure !== undefined) throw operationFailure;
+      return evidence;
+    },
+  );
+
+  return {
+    agentId,
+    authorization: result.authorization,
+    evidence: result.operation.status === "completed" ? result.operation.value : undefined,
+    ok:
+      result.authorization.ok &&
+      result.operation.status === "completed" &&
+      result.revocation.status === "revoked",
+    operation: result.operation,
+    public: publicReport,
+    revocation: result.revocation,
+    schemaVersion: 1,
+    workflowId,
+  };
+}
+
 export async function runLiveRehearsal(arguments_: readonly string[]): Promise<number> {
   const [action, ...rest] = arguments_;
   if (
@@ -668,11 +1001,12 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
     action !== "recover" &&
     action !== "sandbox" &&
     action !== "schedules" &&
+    action !== "typed-output" &&
     action !== "web-research" &&
     action !== "workflow"
   ) {
     process.stderr.write(
-      "Usage: crewhelm-live-rehearsal.ts <authorize|inspect-sandbox|recover|sandbox|schedules|web-research|workflow> [options]\n",
+      "Usage: crewhelm-live-rehearsal.ts <authorize|inspect-sandbox|recover|sandbox|schedules|typed-output|web-research|workflow> [options]\n",
     );
     return 2;
   }
@@ -744,15 +1078,17 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
               })
             : action === "schedules"
               ? await schedules(common)
-              : action === "web-research"
-                ? await webResearch({
-                    ...common,
-                    runTimeoutMs,
-                  })
-                : await workflow({
-                    ...common,
-                    runTimeoutMs,
-                  });
+              : action === "typed-output"
+                ? await typedOutput({ ...common, runTimeoutMs })
+                : action === "web-research"
+                  ? await webResearch({
+                      ...common,
+                      runTimeoutMs,
+                    })
+                  : await workflow({
+                      ...common,
+                      runTimeoutMs,
+                    });
   process.stdout.write(`${JSON.stringify(report)}\n`);
   return typeof report === "object" && report !== null && Reflect.get(report, "ok") === true
     ? 0

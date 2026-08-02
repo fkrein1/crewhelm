@@ -47,6 +47,12 @@ import {
   admittedBriefContextSchema,
   briefReferencesSchema,
 } from "./briefs.js";
+import {
+  admittedOutputContractSchema,
+  jsonDeliverableSchema,
+  outputContractSchema,
+  publicJsonObjectSchema,
+} from "./output-contracts.js";
 
 export const RUN_ADMISSION_LIFETIME_MS = 30_000;
 export const RUN_ADMISSION_RETENTION_MS = DEFAULT_FLEET_RUN_RETENTION_SECONDS * 1_000;
@@ -108,6 +114,7 @@ export const createRunAdmissionInputSchema = z
     expectedFleetRevision: z.number().int().positive().safe().nullable().default(null),
     expectedRevision: agentRevisionNumberSchema,
     idempotencyKey: runAdmissionIdempotencyKeySchema,
+    outputContract: outputContractSchema.optional(),
     prompt: runPromptSchema.optional(),
     promptCharacters: z.number().int().min(1).max(MAXIMUM_RUN_PROMPT_CHARACTERS),
     promptDigest: sha256DigestSchema,
@@ -185,6 +192,7 @@ export const runAdmissionPermitSchema = z.strictObject({
   idempotencyKey: runAdmissionIdempotencyKeySchema,
   nonce: runAdmissionNonceSchema,
   ownerKey: ownerKeySchema,
+  outputContract: admittedOutputContractSchema.optional(),
   promptDigest: sha256DigestSchema,
   runId: runIdSchema,
   scheduleRevision: agentScheduleRevisionNumberSchema.nullable().default(null),
@@ -284,6 +292,7 @@ const runReceiverCapabilityBaseSchema = z.strictObject({
   idempotencyKey: runAdmissionIdempotencyKeySchema,
   nonce: runAdmissionNonceSchema,
   ownerKey: ownerKeySchema,
+  outputContract: admittedOutputContractSchema.optional(),
   promptDigest: sha256DigestSchema,
   runId: runIdSchema,
   scheduleRevision: agentScheduleRevisionNumberSchema.nullable().default(null),
@@ -396,10 +405,17 @@ export const startRunInputSchema = z.strictObject({
     .optional(),
   expectedRevision: agentRevisionNumberSchema,
   idempotencyKey: runAdmissionIdempotencyKeySchema,
+  outputContract: outputContractSchema
+    .describe("Optional final deliverable contract. Omit to preserve Markdown output.")
+    .optional(),
   prompt: runPromptSchema,
 });
 
 export const inspectRunInputSchema = z.strictObject({
+  includeDeliverable: z
+    .boolean()
+    .default(false)
+    .describe("Include validated JSON deliverable content. Omit for compact inspection."),
   includeUsage: z
     .boolean()
     .default(true)
@@ -415,6 +431,7 @@ export const cancelRunInputSchema = z.strictObject({
 
 export const inspectAdmittedRunInputSchema = z.strictObject({
   capability: inspectRunCapabilitySchema,
+  includeDeliverable: z.boolean().default(false),
 });
 
 export const cancelAdmittedRunInputSchema = z.strictObject({
@@ -429,6 +446,7 @@ export const verifyActiveRunAdmissionInputSchema = z.strictObject({
   clientId: ownerClientIdSchema,
   idempotencyKey: runAdmissionIdempotencyKeySchema,
   ownerKey: ownerKeySchema,
+  outputContract: admittedOutputContractSchema.optional(),
   promptDigest: sha256DigestSchema,
   runId: runIdSchema,
   scheduleRevision: agentScheduleRevisionNumberSchema.nullable().default(null),
@@ -454,6 +472,7 @@ export const runSchema = z.strictObject({
   agentRevision: agentRevisionNumberSchema,
   completedAt: z.iso.datetime().optional(),
   createdAt: z.iso.datetime(),
+  deliverable: jsonDeliverableSchema.optional(),
   output: runOutputSchema.optional(),
   outputTruncated: z.boolean().optional(),
   runId: runIdSchema,
@@ -540,6 +559,8 @@ const runStateTimelineEventSchema = z
       "run.cancelled",
       "run.completed",
       "run.failed",
+      "output.validation_repaired",
+      "output.validation_failed",
     ]),
     occurredAt: z.iso.datetime(),
     provider: toolProviderFailureSchema.optional(),
@@ -618,6 +639,7 @@ export const runFailureReasonSchema = z.enum([
   "authorization_blocked",
   "deadline_exceeded",
   "runtime_failed",
+  "output_validation_failed",
   "skill_unavailable",
   "tool_effect_applied",
   "tool_effect_not_applied",
@@ -630,7 +652,13 @@ export const runDiagnosticSchema = compactDiagnosticSchema.extend({
   certainty: diagnosticCertaintySchema,
   disposition: retryDispositionSchema,
   nextAction: diagnosticNextActionSchema,
-  phase: z.enum(["run.admission", "run.runtime", "tool.authorization", "tool.execution"]),
+  phase: z.enum([
+    "run.admission",
+    "run.output",
+    "run.runtime",
+    "tool.authorization",
+    "tool.execution",
+  ]),
   reason: runFailureReasonSchema,
   toolCallId: toolCallIdSchema.optional(),
 });
@@ -721,6 +749,7 @@ export const inspectRunResultSchema = z.discriminatedUnion("ok", [
     continuation: sessionContinuationSchema
       .describe("Pass this object unchanged to crewhelm_start_run.continuation for the next turn.")
       .optional(),
+    deliverableContent: publicJsonObjectSchema.optional(),
     diagnosis: runDiagnosticSchema.nullable(),
     ok: z.literal(true),
     request: z.strictObject({
@@ -791,6 +820,7 @@ export const cancelAdmittedRunResultSchema = z.discriminatedUnion("ok", [
 
 export const inspectAdmittedRunResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
+    deliverableContent: publicJsonObjectSchema.optional(),
     ok: z.literal(true),
     run: runSchema,
     trace: z.array(runTimelineEventSchema).max(MAXIMUM_RUN_TIMELINE_EVENTS).default([]),

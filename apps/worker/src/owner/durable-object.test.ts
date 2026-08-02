@@ -303,6 +303,11 @@ describe("OwnerControlPlane", () => {
           name: "0026_fresh_white_queen",
           version: 27,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0027_classy_switch",
+          version: 28,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });
@@ -1320,7 +1325,7 @@ describe("OwnerControlPlane", () => {
       AUTONOMY_WRITE_SCOPE,
     ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
-    const legacyMigrations = controlPlaneMigrations.slice(0, -1);
+    const legacyMigrations = controlPlaneMigrations.slice(0, -2);
     const migrations = await Promise.all(
       legacyMigrations.map(async (migration) => ({
         ...migration,
@@ -1692,6 +1697,7 @@ describe("OwnerControlPlane", () => {
         { version: 25 },
         { version: 26 },
         { version: 27 },
+        { version: 28 },
       ]);
     });
   });
@@ -2001,7 +2007,7 @@ describe("OwnerControlPlane", () => {
       admission: { run_id: admission.permit.runId, trigger: "manual" },
       foreignKeys: [],
       migration: {
-        name: "0026_fresh_white_queen",
+        name: "0027_classy_switch",
         version: CONTROL_PLANE_SCHEMA_VERSION,
       },
       workflow: {

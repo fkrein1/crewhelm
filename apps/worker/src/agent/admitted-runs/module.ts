@@ -101,7 +101,7 @@ import {
   type ToolCallContext,
   type ToolCallDecision,
 } from "@cloudflare/think";
-import type { ToolSet, UIMessage } from "ai";
+import { generateText, type ToolSet, type UIMessage } from "ai";
 import type { RetryOptions, Schedule } from "agents";
 import * as z from "zod";
 
@@ -133,20 +133,33 @@ import {
   pendingToolApprovalRecordSchema,
   scheduledInboxProjectionInputSchema,
   scheduledRunInputSchema,
+  validatedRunOutputRecordSchema,
   type AdmittedRunRecord,
   type AdmittedTurnMetadata,
   type AgentInboxProjectionOutbox,
 } from "./schema.js";
+import {
+  finalizeJsonCandidate,
+  outputContractInstruction,
+  outputRepairPrompt,
+} from "./output-validation.js";
+
+type StoredValidatedRunOutput = ReturnType<typeof validatedRunOutputRecordSchema.parse>;
+type CommittedValidatedRunOutput = Exclude<StoredValidatedRunOutput, { state: "repairing" }>;
 
 const RUNTIME_ADMISSION_UNAVAILABLE = "CrewAgent runtime admission is not available.";
 const INBOX_PROJECTION_PREFIX = "crewhelm:inbox-projection:";
 const RUN_RECORD_PREFIX = "crewhelm:run:";
 const SESSION_RUN_TERMINAL_PREFIX = "crewhelm:session-run-terminal:";
 const RUN_TRACE_PREFIX = "crewhelm:run-trace:";
+const RUN_OUTPUT_PREFIX = "crewhelm:run-output:";
+const RUN_OUTPUT_MESSAGE_PREFIX = "crewhelm:run-output-message:";
 const TOOL_APPROVAL_PREFIX = "crewhelm:tool-approval:";
 const INBOX_PROJECTION_MINIMUM_RETRY_MS = 60_000;
 const INBOX_PROJECTION_MAXIMUM_RETRY_MS = 60 * 60 * 1_000;
 const INBOX_PROJECTION_SAFETY_WAKEUP_MS = 1_000;
+const STRUCTURED_OUTPUT_RETRY_BASE_MS = 250;
+const STRUCTURED_OUTPUT_RETRY_LIMIT = 5;
 const MAXIMUM_RUN_OUTPUT_PARTS = 256;
 const EXECUTION_OUTCOME_PREFIX = "[execute tool]";
 const EXECUTION_OUTCOME_MARKER = " Outcome: ";
@@ -288,6 +301,14 @@ function runTraceKey(runId: string): string {
   return `${RUN_TRACE_PREFIX}${runId}`;
 }
 
+function runOutputKey(runId: string): string {
+  return `${RUN_OUTPUT_PREFIX}${runId}`;
+}
+
+function runOutputMessageKey(messageId: string): string {
+  return `${RUN_OUTPUT_MESSAGE_PREFIX}${encodeURIComponent(messageId)}`;
+}
+
 function sessionRunTerminalKey(runId: string): string {
   return `${SESSION_RUN_TERMINAL_PREFIX}${runId}`;
 }
@@ -295,6 +316,11 @@ function sessionRunTerminalKey(runId: string): string {
 function inboxProjectionKey(runId: string): string {
   return `${INBOX_PROJECTION_PREFIX}${runId}`;
 }
+
+const structuredOutputRetrySchema = z.strictObject({
+  attempt: z.number().int().min(0).max(STRUCTURED_OUTPUT_RETRY_LIMIT),
+  runId: runIdSchema,
+});
 
 function toolApprovalPrefix(runId: string): string {
   return `${TOOL_APPROVAL_PREFIX}${runId}:`;
@@ -392,6 +418,7 @@ function publicRunStatus(status: ThinkSubmissionInspection["status"]): Run["stat
 export class CrewSession extends Think {
   #activeModelCall: number | undefined;
   #approvalTurnMetadata: AdmittedTurnMetadata | undefined;
+  #outputRepairTurnMetadata: AdmittedTurnMetadata | undefined;
   #gatewayAiBinding: Ai | undefined;
   #permittedApprovalContinuationRunId: string | undefined;
   #permittedAbortRequestId: string | undefined;
@@ -419,6 +446,7 @@ export class CrewSession extends Think {
         }
 
         await this.#scheduleRunLifecycle(runId, record.data);
+        await this.#recoverStructuredRunOutput(runId, record.data);
       }
     }
 
@@ -515,6 +543,20 @@ export class CrewSession extends Think {
         callbackName === "expireAdmittedRun" ? record?.deadlineAt : record?.cleanupAt;
 
       if (expectedAt === undefined || when.getTime() !== expectedAt) {
+        throw runtimeAdmissionError();
+      }
+    } else if (callbackName === "retryStructuredRunOutput") {
+      const scheduled = structuredOutputRetrySchema.safeParse(payload);
+      const record = scheduled.success
+        ? await this.#readRunRecord(scheduled.data.runId)
+        : undefined;
+
+      if (
+        !scheduled.success ||
+        !(when instanceof Date) ||
+        record?.outputContract?.kind !== "json" ||
+        when.getTime() > record.deadlineAt
+      ) {
         throw runtimeAdmissionError();
       }
     } else if (callbackName === "deliverAgentWorkflowRunEvent") {
@@ -1076,6 +1118,7 @@ export class CrewSession extends Think {
           verified.data.configuration,
           prompt.length,
           briefContext?.characters ?? 0,
+          permit.outputContract,
         )
       ) {
         return INVALID_RUN_ADMISSION;
@@ -1092,6 +1135,7 @@ export class CrewSession extends Think {
         createdAt: acceptedAt,
         deadlineAt: acceptedAt + permit.budgetReservation.maxDurationSeconds * 1_000,
         idempotencyKey: permit.idempotencyKey,
+        ...(permit.outputContract === undefined ? {} : { outputContract: permit.outputContract }),
         promptCharacters: prompt.length,
         promptDigest: permit.promptDigest,
         scheduleRevision: permit.scheduleRevision,
@@ -1105,6 +1149,7 @@ export class CrewSession extends Think {
                 permit.budgetReservation,
                 prompt.length,
                 briefContext?.characters ?? 0,
+                permit.outputContract,
               ),
             }),
       });
@@ -1230,10 +1275,7 @@ export class CrewSession extends Think {
       return INVALID_RUN_ADMISSION;
     }
 
-    const [submission, trace] = await Promise.all([
-      super.inspectSubmission(capability.runId),
-      this.#readRunTrace(capability.runId),
-    ]);
+    const submission = await super.inspectSubmission(capability.runId);
     const committedSessionStatusResult =
       record.session === undefined
         ? undefined
@@ -1245,6 +1287,7 @@ export class CrewSession extends Think {
       : undefined;
 
     if (submission === null) {
+      const trace = await this.#readRunTrace(capability.runId);
       return inspectAdmittedRunResultSchema.parse({
         ok: true,
         run: {
@@ -1261,27 +1304,55 @@ export class CrewSession extends Think {
 
     const output =
       submission.status === "completed" ? this.#readRunOutput(capability.runId) : undefined;
-    const outputPending = output?.state === "pending";
-    const frameworkStatus = outputPending ? "running" : publicRunStatus(submission.status);
+    const structuredOutput =
+      record.outputContract?.kind === "json"
+        ? await this.#finalizeStructuredRunOutput(
+            record,
+            capability.runId,
+            submission.status === "completed",
+          )
+        : undefined;
+    const trace = await this.#readRunTrace(capability.runId);
+    const outputPending =
+      record.outputContract?.kind === "json"
+        ? structuredOutput === undefined
+        : output?.state === "pending";
+    const frameworkStatus =
+      structuredOutput?.state === "valid"
+        ? "completed"
+        : structuredOutput?.state === "invalid"
+          ? "failed"
+          : outputPending
+            ? "running"
+            : publicRunStatus(submission.status);
     const status =
       committedSessionStatus ??
+      (structuredOutput?.state === "invalid" ||
       (frameworkStatus === "completed" &&
-      trace.some((event) => event.event === "tool.authorization_blocked")
+        trace.some((event) => event.event === "tool.authorization_blocked"))
         ? "failed"
         : frameworkStatus);
 
     return inspectAdmittedRunResultSchema.parse({
+      ...(request.data.includeDeliverable && structuredOutput?.state === "valid"
+        ? { deliverableContent: JSON.parse(structuredOutput.canonical) }
+        : {}),
       ok: true,
       run: {
         agentId: record.configuration.agentId,
         agentRevision: record.configuration.revision,
         completedAt: outputPending ? undefined : isoTimestamp(submission.completedAt),
         createdAt: new Date(submission.createdAt).toISOString(),
-        ...(output?.state !== "available"
+        ...(record.outputContract?.kind === "json" || output?.state !== "available"
           ? {}
           : {
               output: output.text,
               outputTruncated: output.truncated,
+            }),
+        ...(structuredOutput === undefined
+          ? {}
+          : {
+              deliverable: structuredOutput.deliverable,
             }),
         runId: capability.runId,
         ...(record.session === undefined ? {} : { session: record.session }),
@@ -1407,14 +1478,7 @@ export class CrewSession extends Think {
       return INVALID_RUN_ADMISSION;
     }
 
-    this.#approvalTurnMetadata = {
-      budgetReservation: record.budgetReservation,
-      configuration: record.configuration,
-      deadlineAt: record.deadlineAt,
-      promptCharacters: record.promptCharacters,
-      promptDigest: record.promptDigest,
-      runId: capability.runId,
-    };
+    this.#approvalTurnMetadata = this.#turnMetadataForRecord(capability.runId, record);
     this.#permittedApprovalContinuationRunId = capability.runId;
     let decided = false;
 
@@ -1476,6 +1540,29 @@ export class CrewSession extends Think {
     }
 
     if (["aborted", "completed", "error", "skipped"].includes(submission.status)) {
+      if (record.outputContract?.kind === "json") {
+        const approvalRecords = await this.ctx.storage.list({
+          prefix: toolApprovalPrefix(request.data.runId),
+        });
+        const structuredOutput =
+          submission.status === "completed" && approvalRecords.size === 0
+            ? await this.#commitStructuredOutputDeadlineFailure(record, request.data.runId)
+            : undefined;
+        await Promise.all([...approvalRecords.keys()].map((key) => this.ctx.storage.delete(key)));
+        await this.#publishRunResponse({
+          approvalCount: 0,
+          frameworkStatus:
+            submission.status === "aborted" || approvalRecords.size > 0
+              ? "cancelled"
+              : submission.status === "completed"
+                ? "completed"
+                : "error",
+          record,
+          runId: request.data.runId,
+          ...(structuredOutput === undefined ? {} : { structuredOutput }),
+        });
+        return;
+      }
       if (record.session !== undefined) {
         const approvalRecords = await this.ctx.storage.list({
           prefix: toolApprovalPrefix(request.data.runId),
@@ -1549,6 +1636,8 @@ export class CrewSession extends Think {
       return;
     }
 
+    const validatedOutput = await this.#readValidatedRunOutput(request.data.runId);
+
     const submission = await super.inspectSubmission(request.data.runId);
 
     if (
@@ -1612,6 +1701,10 @@ export class CrewSession extends Think {
     await Promise.all([...approvalRecords.keys()].map((key) => this.ctx.storage.delete(key)));
     await this.ctx.storage.delete(inboxProjectionKey(request.data.runId));
     await this.ctx.storage.delete(runTraceKey(request.data.runId));
+    await this.ctx.storage.delete(runOutputKey(request.data.runId));
+    if (record.session === undefined && validatedOutput !== undefined) {
+      await this.ctx.storage.delete(runOutputMessageKey(validatedOutput.messageId));
+    }
     await this.ctx.storage.delete(sessionRunTerminalKey(request.data.runId));
     await this.ctx.storage.delete(runRecordKey(request.data.runId));
   }
@@ -1890,23 +1983,25 @@ export class CrewSession extends Think {
       this.#permittedApprovalContinuationRunId = undefined;
     }
 
-    const instructions =
-      metadata.briefContext === undefined
-        ? crewAgentSystemPrompt(configuration)
-        : [
-            crewAgentSystemPrompt(configuration),
-            renderAdmittedBriefContext(metadata.briefContext.blocks),
-          ].join("\n\n");
-
-    return {
-      activeTools: approvalContinuation
+    const instructions = [
+      crewAgentSystemPrompt(configuration),
+      ...(metadata.briefContext === undefined
         ? []
-        : [
-            ...this.#activeToolAdapters().map((adapter) => adapter.name),
-            ...(this.#activeSandboxCodeTool() === undefined ? [] : [SANDBOX_CODE_TOOL_NAME]),
-            ...(this.#activeWebSearchTool() === undefined ? [] : [WEB_SEARCH_TOOL_NAME]),
-            ...(this.#activeWebFetchTool() === undefined ? [] : [WEB_FETCH_TOOL_NAME]),
-          ],
+        : [renderAdmittedBriefContext(metadata.briefContext.blocks)]),
+      ...(metadata.outputContract?.kind === "json"
+        ? [outputContractInstruction(metadata.outputContract)]
+        : []),
+    ].join("\n\n");
+    const activeTools = approvalContinuation
+      ? []
+      : [
+          ...this.#activeToolAdapters().map((adapter) => adapter.name),
+          ...(this.#activeSandboxCodeTool() === undefined ? [] : [SANDBOX_CODE_TOOL_NAME]),
+          ...(this.#activeWebSearchTool() === undefined ? [] : [WEB_SEARCH_TOOL_NAME]),
+          ...(this.#activeWebFetchTool() === undefined ? [] : [WEB_FETCH_TOOL_NAME]),
+        ];
+    return {
+      activeTools,
       instructions,
       chatStreamStallTimeoutMs: Math.max(1, metadata.deadlineAt - Date.now()),
       maxOutputTokens: metadata.budgetReservation.maxOutputTokens,
@@ -2012,11 +2107,44 @@ export class CrewSession extends Think {
       prefix: toolApprovalPrefix(runId),
     });
     const approvalCount = approvalRecords.size;
+    const structuredOutput =
+      result.status === "completed" && approvalCount === 0 && record.outputContract?.kind === "json"
+        ? await this.#finalizeStructuredRunOutput(record, runId)
+        : undefined;
+    if (
+      result.status === "completed" &&
+      approvalCount === 0 &&
+      record.outputContract?.kind === "json" &&
+      structuredOutput === undefined
+    ) {
+      await this.#scheduleStructuredOutputRetry(record, runId, 0);
+      return;
+    }
+    await this.#publishRunResponse({
+      approvalCount,
+      frameworkStatus: result.status === "aborted" ? "cancelled" : result.status,
+      record,
+      resultMessage: result.message,
+      runId,
+      ...(structuredOutput === undefined ? {} : { structuredOutput }),
+    });
+  }
+
+  async #publishRunResponse(input: {
+    approvalCount: number;
+    frameworkStatus: "cancelled" | "completed" | "error";
+    record: AdmittedRunRecord;
+    resultMessage?: UIMessage;
+    runId: string;
+    structuredOutput?: CommittedValidatedRunOutput;
+  }): Promise<void> {
+    const { approvalCount, frameworkStatus, record, resultMessage, runId, structuredOutput } =
+      input;
     const trace = await this.#readRunTrace(runId);
-    const frameworkStatus = result.status === "aborted" ? "cancelled" : result.status;
     const status =
-      frameworkStatus === "completed" &&
-      trace.some((event) => event.event === "tool.authorization_blocked")
+      structuredOutput?.state === "invalid" ||
+      (frameworkStatus === "completed" &&
+        trace.some((event) => event.event === "tool.authorization_blocked"))
         ? "failed"
         : frameworkStatus;
     const kind =
@@ -2033,7 +2161,14 @@ export class CrewSession extends Think {
           approvalCount: kind === "action_required" ? approvalCount : 0,
           kind,
           occurredAt: new Date().toISOString(),
-          resultPreview: kind === "outcome" ? resultPreview(result.message) : null,
+          resultPreview:
+            kind !== "outcome"
+              ? null
+              : structuredOutput?.state === "valid"
+                ? structuredOutput.canonical.slice(0, MAXIMUM_AGENT_INBOX_PREVIEW_CHARACTERS)
+                : resultMessage === undefined
+                  ? null
+                  : resultPreview(resultMessage),
           runStatus:
             kind === "action_required"
               ? "running"
@@ -2074,6 +2209,343 @@ export class CrewSession extends Think {
       await this.ctx.storage.put(sessionRunTerminalKey(runId), terminalStatus);
       await this.#completeSessionRun(record, runId);
     }
+  }
+
+  async retryStructuredRunOutput(input: unknown): Promise<void> {
+    const request = structuredOutputRetrySchema.safeParse(input);
+    if (!request.success) return;
+    const record = await this.#readRunRecord(request.data.runId);
+    if (record?.outputContract?.kind !== "json") return;
+    const existing = await this.#readValidatedRunOutput(request.data.runId);
+    if (existing === undefined && Date.now() >= record.deadlineAt) return;
+    const submission = await super.inspectSubmission(request.data.runId);
+    if (submission?.status !== "completed") return;
+    const approvalRecords = await this.ctx.storage.list({
+      prefix: toolApprovalPrefix(request.data.runId),
+    });
+    if (approvalRecords.size > 0) return;
+    const structuredOutput = await this.#finalizeStructuredRunOutput(record, request.data.runId);
+    if (structuredOutput === undefined) {
+      await this.#scheduleStructuredOutputRetry(
+        record,
+        request.data.runId,
+        request.data.attempt + 1,
+      );
+      return;
+    }
+    await this.#publishRunResponse({
+      approvalCount: 0,
+      frameworkStatus: "completed",
+      record,
+      runId: request.data.runId,
+      structuredOutput,
+    });
+  }
+
+  async #finalizeStructuredRunOutput(
+    record: AdmittedRunRecord,
+    runId: string,
+    allowCreate = true,
+  ): Promise<CommittedValidatedRunOutput | undefined> {
+    if (record.outputContract?.kind !== "json") {
+      throw new Error("Structured output validation requires a JSON contract.");
+    }
+
+    const existing = await this.#readValidatedRunOutput(runId);
+    if (existing?.state === "repairing") {
+      if (this.#outputRepairTurnMetadata?.runId === runId) return undefined;
+      const interrupted = validatedRunOutputRecordSchema.options[1].parse({
+        deliverable: existing.deliverable,
+        messageId: existing.messageId,
+        state: "invalid",
+      });
+      await this.ctx.storage.put(runOutputKey(runId), interrupted);
+      await this.#ensureStructuredOutputTrace(runId, interrupted);
+      return interrupted;
+    }
+    if (existing !== undefined) {
+      if (existing.state === "valid") {
+        await this.ctx.storage.put(runOutputMessageKey(existing.messageId), existing.canonical);
+        await this.#reconcileStructuredOutputMessage(existing);
+      }
+      await this.#ensureStructuredOutputTrace(runId, existing);
+      return existing;
+    }
+    if (!allowCreate) return undefined;
+
+    const output = this.#readRunOutput(runId);
+    if (output?.state !== "available") return undefined;
+    const candidate = `${output.text}${output.truncated ? "\n[crewhelm output truncated]" : ""}`;
+    const initial = await finalizeJsonCandidate(record.outputContract, candidate, false);
+
+    if (initial.ok) {
+      const validated = validatedRunOutputRecordSchema.options[0].parse({
+        canonical: initial.canonical,
+        deliverable: initial.deliverable,
+        messageId: output.messageId,
+        state: "valid",
+        validation: "initial",
+      });
+      const committed = await this.#commitValidStructuredOutput(record, runId, validated, "absent");
+      if (committed.state === "valid") await this.#reconcileStructuredOutputMessage(committed);
+      await this.#ensureStructuredOutputTrace(runId, committed);
+      return committed;
+    }
+
+    const committedSessionStatus = z
+      .enum(["cancelled", "completed", "failed"])
+      .safeParse(await this.ctx.storage.get(sessionRunTerminalKey(runId)));
+    if (Date.now() >= record.deadlineAt || committedSessionStatus.success) {
+      const invalid = validatedRunOutputRecordSchema.options[1].parse({
+        deliverable: initial.deliverable,
+        messageId: output.messageId,
+        state: "invalid",
+      });
+      await this.ctx.storage.put(runOutputKey(runId), invalid);
+      await this.#ensureStructuredOutputTrace(runId, invalid);
+      return invalid;
+    }
+
+    const repairClaim = validatedRunOutputRecordSchema.options[2].parse({
+      claimedAt: Date.now(),
+      deliverable: { ...initial.deliverable, repairAttempted: true },
+      messageId: output.messageId,
+      state: "repairing",
+    });
+
+    let repaired: Awaited<ReturnType<typeof finalizeJsonCandidate>> | undefined;
+    let repairAttempted = false;
+    this.#outputRepairTurnMetadata = this.#turnMetadataForRecord(runId, record);
+
+    try {
+      await this.ctx.storage.put(runOutputKey(runId), repairClaim);
+      const emptyRepairPrompt = outputRepairPrompt({
+        candidate: "",
+        contract: record.outputContract,
+        issues: initial.deliverable.issues,
+      });
+      if (emptyRepairPrompt.length > record.budgetReservation.maxInputCharacters) {
+        throw new Error("The bounded output-repair prompt exceeds the admitted input budget.");
+      }
+      const boundedCandidate = candidate.slice(
+        0,
+        Math.max(0, record.budgetReservation.maxInputCharacters - emptyRepairPrompt.length),
+      );
+      this.#activeModelCall = await this.#claimModelCall();
+      repairAttempted = true;
+      const generated = await generateText({
+        abortSignal: AbortSignal.timeout(Math.max(1, record.deadlineAt - Date.now())),
+        maxOutputTokens: record.budgetReservation.maxOutputTokens,
+        maxRetries: 0,
+        model: this.resolveModel(),
+        prompt: outputRepairPrompt({
+          candidate: boundedCandidate,
+          contract: record.outputContract,
+          issues: initial.deliverable.issues,
+        }),
+      });
+      repaired = await finalizeJsonCandidate(record.outputContract, generated.text, true);
+    } catch {
+      repaired = undefined;
+    } finally {
+      this.#activeModelCall = undefined;
+      this.#outputRepairTurnMetadata = undefined;
+    }
+
+    if (repaired?.ok) {
+      if (Date.now() >= record.deadlineAt) {
+        return this.#commitStructuredOutputDeadlineFailure(record, runId);
+      }
+      const validated = validatedRunOutputRecordSchema.options[0].parse({
+        canonical: repaired.canonical,
+        deliverable: repaired.deliverable,
+        messageId: output.messageId,
+        state: "valid",
+        validation: "repair",
+      });
+      const committed = await this.#commitValidStructuredOutput(
+        record,
+        runId,
+        validated,
+        "repairing",
+      );
+      if (committed.state === "valid") await this.#reconcileStructuredOutputMessage(committed);
+      await this.#ensureStructuredOutputTrace(runId, committed);
+      return committed;
+    }
+
+    const invalid = validatedRunOutputRecordSchema.options[1].parse({
+      deliverable: repaired?.deliverable ?? {
+        ...initial.deliverable,
+        repairAttempted,
+      },
+      messageId: output.messageId,
+      state: "invalid",
+    });
+    await this.ctx.storage.put(runOutputKey(runId), invalid);
+    await this.#ensureStructuredOutputTrace(runId, invalid);
+    return invalid;
+  }
+
+  async #commitStructuredOutputDeadlineFailure(
+    record: AdmittedRunRecord,
+    runId: string,
+  ): Promise<CommittedValidatedRunOutput> {
+    if (record.outputContract?.kind !== "json") {
+      throw new Error("Structured output deadline failure requires a JSON contract.");
+    }
+    const output = this.#readRunOutput(runId);
+    let committed: CommittedValidatedRunOutput | undefined;
+    await this.ctx.storage.transaction(async (transaction) => {
+      const current = validatedRunOutputRecordSchema.safeParse(
+        await transaction.get(runOutputKey(runId)),
+      );
+      if (current.success && current.data.state !== "repairing") {
+        committed = current.data;
+        return;
+      }
+      const invalid = this.#structuredOutputDeadlineFailure(
+        record,
+        current.success ? current.data.messageId : (output?.messageId ?? runUserMessageId(runId)),
+        current.success && current.data.state === "repairing",
+      );
+      await transaction.put(runOutputKey(runId), invalid);
+      committed = invalid;
+    });
+    if (committed === undefined) throw new Error("Structured output deadline commit failed.");
+    await this.#ensureStructuredOutputTrace(runId, committed);
+    return committed;
+  }
+
+  #structuredOutputDeadlineFailure(
+    record: AdmittedRunRecord,
+    messageId: string,
+    repairAttempted: boolean,
+  ): Extract<CommittedValidatedRunOutput, { state: "invalid" }> {
+    if (record.outputContract?.kind !== "json") {
+      throw new Error("Structured output deadline failure requires a JSON contract.");
+    }
+    return validatedRunOutputRecordSchema.options[1].parse({
+      deliverable: {
+        issues: [{ code: "bound", path: "$" }],
+        kind: "json",
+        mediaType: "application/json",
+        repairAttempted,
+        schema: {
+          digest: record.outputContract.schema.digest,
+          name: record.outputContract.schema.name,
+          version: record.outputContract.schema.version,
+        },
+        state: "invalid",
+      },
+      messageId,
+      state: "invalid",
+    });
+  }
+
+  async #commitValidStructuredOutput(
+    record: AdmittedRunRecord,
+    runId: string,
+    validated: Extract<CommittedValidatedRunOutput, { state: "valid" }>,
+    expected: "absent" | "repairing",
+  ): Promise<CommittedValidatedRunOutput> {
+    let committed: CommittedValidatedRunOutput | undefined;
+    await this.ctx.storage.transaction(async (transaction) => {
+      const current = validatedRunOutputRecordSchema.safeParse(
+        await transaction.get(runOutputKey(runId)),
+      );
+      const terminal = z
+        .enum(["cancelled", "completed", "failed"])
+        .safeParse(await transaction.get(sessionRunTerminalKey(runId)));
+      const expectedState =
+        expected === "absent"
+          ? !current.success
+          : current.success && current.data.state === expected;
+      if (Date.now() < record.deadlineAt && !terminal.success && expectedState) {
+        await transaction.put(runOutputKey(runId), validated);
+        await transaction.put(runOutputMessageKey(validated.messageId), validated.canonical);
+        committed = validated;
+        return;
+      }
+      if (current.success && current.data.state !== "repairing") {
+        committed = current.data;
+        return;
+      }
+      const invalid = this.#structuredOutputDeadlineFailure(
+        record,
+        current.success ? current.data.messageId : validated.messageId,
+        expected === "repairing",
+      );
+      await transaction.put(runOutputKey(runId), invalid);
+      committed = invalid;
+    });
+    if (committed === undefined) throw new Error("Structured output commit fence failed.");
+    return committed;
+  }
+
+  async #reconcileStructuredOutputMessage(
+    output: Extract<CommittedValidatedRunOutput, { state: "valid" }>,
+  ): Promise<void> {
+    try {
+      const session = Session.create(this);
+      const message = await session.getMessage(output.messageId);
+
+      if (message === null) return;
+      const current = message.parts
+        .flatMap((part) => (part.type === "text" ? [part.text] : []))
+        .join("\n");
+
+      if (current === output.canonical) return;
+      await session.updateMessage({
+        ...message,
+        parts: [{ text: output.canonical, type: "text" }],
+      });
+    } catch {
+      // The durable overlay is authoritative for inspection and continuation. Think history is
+      // reconciled best-effort and retried by later exact inspection.
+    }
+  }
+
+  async #ensureStructuredOutputTrace(
+    runId: string,
+    output: CommittedValidatedRunOutput,
+  ): Promise<void> {
+    const event =
+      output.state === "invalid"
+        ? "output.validation_failed"
+        : output.validation === "repair"
+          ? "output.validation_repaired"
+          : undefined;
+    if (event === undefined) return;
+    await this.#recordRunTraceEvent(
+      runId,
+      runTimelineEventSchema.parse({ event, occurredAt: new Date().toISOString() }),
+    );
+  }
+
+  async #recoverStructuredRunOutput(runId: string, record: AdmittedRunRecord): Promise<void> {
+    if (record.outputContract?.kind !== "json") {
+      return;
+    }
+
+    const submission = await super.inspectSubmission(runId);
+    if (submission?.status !== "completed") return;
+
+    const approvals = await this.ctx.storage.list({ prefix: toolApprovalPrefix(runId) });
+    if (approvals.size > 0) return;
+
+    const structuredOutput = await this.#finalizeStructuredRunOutput(record, runId);
+    if (structuredOutput === undefined) {
+      await this.#scheduleStructuredOutputRetry(record, runId, 0);
+      return;
+    }
+    await this.#publishRunResponse({
+      approvalCount: 0,
+      frameworkStatus: "completed",
+      record,
+      runId,
+      structuredOutput,
+    });
   }
 
   async #completeSessionRun(record: AdmittedRunRecord, runId: string): Promise<void> {
@@ -2131,10 +2603,25 @@ export class CrewSession extends Think {
       prefix: toolApprovalPrefix(runId.data),
     });
     const output = submission.status === "completed" ? this.#readRunOutput(runId.data) : undefined;
+    const structuredOutput =
+      record.outputContract?.kind === "json"
+        ? await this.#finalizeStructuredRunOutput(
+            record,
+            runId.data,
+            submission.status === "completed",
+          )
+        : undefined;
 
-    return approvalRecords.size > 0 || output?.state === "pending"
-      ? "running"
-      : publicRunStatus(submission.status);
+    return structuredOutput?.state === "valid"
+      ? "completed"
+      : structuredOutput?.state === "invalid"
+        ? "failed"
+        : approvalRecords.size > 0 ||
+            (record.outputContract?.kind === "json"
+              ? structuredOutput === undefined
+              : output?.state === "pending")
+          ? "running"
+          : publicRunStatus(submission.status);
   }
 
   override authorizeAction(
@@ -2655,17 +3142,7 @@ export class CrewSession extends Think {
 
     try {
       const turnMetadata = admittedTurnMetadataSchema.parse({
-        crewhelmRun: {
-          budgetReservation: record.budgetReservation,
-          ...(record.briefContext === undefined ? {} : { briefContext: record.briefContext }),
-          configuration: record.configuration,
-          deadlineAt: record.deadlineAt,
-          promptCharacters: record.promptCharacters,
-          promptDigest: record.promptDigest,
-          runId,
-          ...(record.session === undefined ? {} : { session: record.session }),
-          ...(record.sessionContext === undefined ? {} : { sessionContext: record.sessionContext }),
-        },
+        crewhelmRun: this.#turnMetadataForRecord(runId, record),
       });
       const message: UIMessage = {
         id: runUserMessageId(runId),
@@ -2747,28 +3224,34 @@ export class CrewSession extends Think {
       MAXIMUM_SESSION_CONTEXT_CHARACTERS,
       1,
     );
-    const messages = history.messages
+    const candidates = history.messages
       .filter(
         (message): message is typeof message & { role: "assistant" | "user" } =>
           message.role === "assistant" || message.role === "user",
       )
-      .slice(-MAXIMUM_SESSION_INSPECTION_MESSAGES)
-      .map((message) => {
-        const text = message.parts
+      .slice(-MAXIMUM_SESSION_INSPECTION_MESSAGES);
+    const messages = [];
+    for (const message of candidates) {
+      const overlay =
+        message.role === "assistant"
+          ? await this.ctx.storage.get<string>(runOutputMessageKey(message.id))
+          : undefined;
+      const text =
+        overlay ??
+        message.parts
           .flatMap((part) =>
             part.type === "text" && typeof part.text === "string" ? [part.text] : [],
           )
           .join("\n");
-        const retained = text.slice(0, MAXIMUM_SESSION_INSPECTION_TEXT_CHARACTERS);
-
-        return {
-          createdAt: message.createdAt?.toISOString() ?? null,
-          messageId: message.id,
-          role: message.role,
-          text: retained,
-          truncated: retained.length < text.length,
-        };
+      const retained = text.slice(0, MAXIMUM_SESSION_INSPECTION_TEXT_CHARACTERS);
+      messages.push({
+        createdAt: message.createdAt?.toISOString() ?? null,
+        messageId: message.id,
+        role: message.role,
+        text: retained,
+        truncated: retained.length < text.length,
       });
+    }
 
     return {
       messages,
@@ -3692,6 +4175,7 @@ export class CrewSession extends Think {
       record.promptCharacters !== metadata.promptCharacters ||
       record.promptDigest !== metadata.promptDigest ||
       JSON.stringify(record.briefContext) !== JSON.stringify(metadata.briefContext) ||
+      JSON.stringify(record.outputContract) !== JSON.stringify(metadata.outputContract) ||
       JSON.stringify(record.budgetReservation) !== JSON.stringify(metadata.budgetReservation) ||
       JSON.stringify(record.configuration) !== JSON.stringify(metadata.configuration) ||
       !this.#objectMatches(record.configuration.ownerKey, record.configuration.agentId)
@@ -3709,6 +4193,7 @@ export class CrewSession extends Think {
       clientId: record.clientId,
       idempotencyKey: record.idempotencyKey,
       ownerKey: record.configuration.ownerKey,
+      ...(record.outputContract === undefined ? {} : { outputContract: record.outputContract }),
       promptDigest: record.promptDigest,
       runId: metadata.runId,
       scheduleRevision: record.scheduleRevision,
@@ -3848,6 +4333,28 @@ export class CrewSession extends Think {
     }
 
     return admittedRunRecordSchema.parse(stored);
+  }
+
+  async #readValidatedRunOutput(
+    runId: string,
+  ): Promise<ReturnType<typeof validatedRunOutputRecordSchema.parse> | undefined> {
+    const stored = await this.ctx.storage.get(runOutputKey(runId));
+    return stored === undefined ? undefined : validatedRunOutputRecordSchema.parse(stored);
+  }
+
+  #turnMetadataForRecord(runId: string, record: AdmittedRunRecord): AdmittedTurnMetadata {
+    return admittedTurnMetadataSchema.shape.crewhelmRun.parse({
+      budgetReservation: record.budgetReservation,
+      ...(record.briefContext === undefined ? {} : { briefContext: record.briefContext }),
+      configuration: record.configuration,
+      deadlineAt: record.deadlineAt,
+      ...(record.outputContract === undefined ? {} : { outputContract: record.outputContract }),
+      promptCharacters: record.promptCharacters,
+      promptDigest: record.promptDigest,
+      runId,
+      ...(record.session === undefined ? {} : { session: record.session }),
+      ...(record.sessionContext === undefined ? {} : { sessionContext: record.sessionContext }),
+    });
   }
 
   async #readRunTrace(runId: string): Promise<RunTimelineEvent[]> {
@@ -3999,9 +4506,30 @@ export class CrewSession extends Think {
     );
   }
 
+  async #scheduleStructuredOutputRetry(
+    record: AdmittedRunRecord,
+    runId: string,
+    attempt: number,
+  ): Promise<void> {
+    if (attempt > STRUCTURED_OUTPUT_RETRY_LIMIT || Date.now() >= record.deadlineAt) return;
+    const retryAt = Math.min(
+      record.deadlineAt,
+      Date.now() + STRUCTURED_OUTPUT_RETRY_BASE_MS * 2 ** attempt,
+    );
+    await super.schedule(
+      new Date(retryAt),
+      "retryStructuredRunOutput",
+      structuredOutputRetrySchema.parse({ attempt, runId }),
+      { idempotent: true },
+    );
+  }
+
   #readRunOutput(
     runId: string,
-  ): { state: "available"; text: string; truncated: boolean } | { state: "pending" } | undefined {
+  ):
+    | { messageId: string; state: "available"; text: string; truncated: boolean }
+    | { messageId: string; state: "pending" }
+    | undefined {
     const terminalMessage = super.sql<{
       id: string;
       pending: number;
@@ -4070,7 +4598,7 @@ export class CrewSession extends Think {
     }
 
     if (terminalMessage.pending === 1) {
-      return { state: "pending" };
+      return { messageId: terminalMessage.id, state: "pending" };
     }
 
     const text: string[] = [];
@@ -4123,6 +4651,7 @@ export class CrewSession extends Think {
           ? undefined
           : {
               state: "available",
+              messageId: terminalMessage.id,
               text: text.join(""),
               truncated,
             };
@@ -4144,7 +4673,12 @@ export class CrewSession extends Think {
       }
 
       if (remaining === 0) {
-        return { state: "available", text: text.join(""), truncated: true };
+        return {
+          messageId: terminalMessage.id,
+          state: "available",
+          text: text.join(""),
+          truncated: true,
+        };
       }
     }
 
@@ -4172,6 +4706,7 @@ export class CrewSession extends Think {
       ? undefined
       : {
           state: "available",
+          messageId: terminalMessage.id,
           text: text.join(""),
           truncated: truncated || additionalPart !== undefined,
         };
@@ -4188,6 +4723,10 @@ export class CrewSession extends Think {
   }
 
   #activeTurnMetadata(): AdmittedTurnMetadata {
+    if (this.#outputRepairTurnMetadata !== undefined) {
+      return this.#outputRepairTurnMetadata;
+    }
+
     if (this.#approvalTurnMetadata !== undefined) {
       return this.#approvalTurnMetadata;
     }
@@ -4227,6 +4766,7 @@ export class CrewSession extends Think {
     reservation: RunBudgetReservation,
     promptCharacters: number,
     briefContextCharacters: number,
+    outputContract: AdmittedRunRecord["outputContract"],
   ): Promise<NonNullable<AdmittedRunRecord["sessionContext"]>> {
     const characterLimit = Math.min(
       MAXIMUM_SESSION_CONTEXT_CHARACTERS,
@@ -4234,36 +4774,31 @@ export class CrewSession extends Think {
         0,
         reservation.maxInputCharacters -
           crewAgentSystemPrompt(configuration).length -
+          outputContractInstruction(outputContract).length -
           briefContextCharacters -
           promptCharacters,
       ),
     );
     const history = await Session.create(this).getRecentHistory(Math.max(1, characterLimit), 0);
-    const candidates: Array<{ content: string; role: "assistant" | "user" }> =
-      history.messages.flatMap((message) => {
-        const role = message.role;
+    const candidates: Array<{ content: string; role: "assistant" | "user" }> = [];
+    for (const message of history.messages) {
+      const role = message.role;
 
-        if (role !== "assistant" && role !== "user") {
-          return [];
-        }
+      if (role !== "assistant" && role !== "user") continue;
+      const canonical =
+        role === "assistant"
+          ? await this.ctx.storage.get<string>(runOutputMessageKey(message.id))
+          : undefined;
+      const content =
+        canonical ??
+        message.parts
+          .flatMap((part) =>
+            part.type === "text" && typeof part.text === "string" ? [part.text] : [],
+          )
+          .join("\n");
 
-        const parts = message.parts.flatMap((part) =>
-          part.type === "text" && typeof part.text === "string"
-            ? [{ text: part.text, type: "text" as const }]
-            : [],
-        );
-
-        const content = parts.map((part) => part.text).join("\n");
-
-        return parts.length === 0
-          ? []
-          : [
-              {
-                content,
-                role,
-              },
-            ];
-      });
+      if (content.length > 0) candidates.push({ content, role });
+    }
     const messages: typeof candidates = [];
     let characters = 0;
 
@@ -4298,11 +4833,13 @@ export class CrewSession extends Think {
       JSON.stringify(briefContextSummary(record.briefContext)) ===
         JSON.stringify(permit.briefContext) &&
       JSON.stringify(record.budgetReservation) === JSON.stringify(permit.budgetReservation) &&
+      JSON.stringify(record.outputContract) === JSON.stringify(permit.outputContract) &&
       this.#reservationMatchesPrompt(
         record.budgetReservation,
         record.configuration,
         record.promptCharacters,
         record.briefContext?.characters ?? 0,
+        record.outputContract,
       ) &&
       this.#configurationMatchesPermit(record.configuration, permit)
     );
@@ -4325,11 +4862,13 @@ export class CrewSession extends Think {
       JSON.stringify(briefContextSummary(record.briefContext)) ===
         JSON.stringify(capability.briefContext) &&
       JSON.stringify(record.budgetReservation) === JSON.stringify(capability.budgetReservation) &&
+      JSON.stringify(record.outputContract) === JSON.stringify(capability.outputContract) &&
       this.#reservationMatchesPrompt(
         record.budgetReservation,
         record.configuration,
         promptCharacters,
         record.briefContext?.characters ?? 0,
+        record.outputContract,
       )
     );
   }
@@ -4352,10 +4891,14 @@ export class CrewSession extends Think {
     configuration: CrewAgentRuntimeConfig,
     promptCharacters: number,
     briefContextCharacters: number,
+    outputContract: AdmittedRunRecord["outputContract"],
   ): boolean {
     return (
       this.#skillInstructionsMatchReferences(configuration) &&
-      crewAgentSystemPrompt(configuration).length + briefContextCharacters + promptCharacters <=
+      crewAgentSystemPrompt(configuration).length +
+        briefContextCharacters +
+        promptCharacters +
+        outputContractInstruction(outputContract).length <=
         reservation.maxInputCharacters
     );
   }

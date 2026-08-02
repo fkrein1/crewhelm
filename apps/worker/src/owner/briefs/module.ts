@@ -40,6 +40,7 @@ import {
   type ReadBriefResult,
   type ReviseBriefResult,
   type WorkflowDeliverable,
+  type JsonDeliverable,
 } from "@crewhelm/contracts";
 import { and, asc, count, eq, gt, isNotNull, sql, sum } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
@@ -80,6 +81,7 @@ export interface WorkflowDeliverableStorage {
   prepareWorkflowDeliverable(input: {
     content: string;
     createdAt: string;
+    jsonDeliverable?: Extract<JsonDeliverable, { state: "valid" }>;
     runId: string;
     stageIndex: number;
     truncated: boolean;
@@ -703,6 +705,7 @@ export class Briefs implements WorkflowDeliverableStorage {
   async prepareWorkflowDeliverable(input: {
     content: string;
     createdAt: string;
+    jsonDeliverable?: Extract<JsonDeliverable, { state: "valid" }>;
     runId: string;
     stageIndex: number;
     truncated: boolean;
@@ -717,6 +720,14 @@ export class Briefs implements WorkflowDeliverableStorage {
       return { code: "storage_corrupt", ok: false };
     }
     const digest = (await digests(bytes)).hex;
+    if (
+      input.jsonDeliverable !== undefined &&
+      (input.jsonDeliverable.contentDigest !== digest ||
+        input.jsonDeliverable.sizeCharacters !== input.content.length ||
+        input.jsonDeliverable.sizeBytes !== bytes.byteLength)
+    ) {
+      return { code: "storage_corrupt", ok: false };
+    }
     const artifactId = artifactIdSchema.parse(input.workflowId.replace("workflow_", "artifact_"));
     const objectKey = `deliverables/${this.#ownerKey}/${input.workflowId}`;
     return {
@@ -725,11 +736,22 @@ export class Briefs implements WorkflowDeliverableStorage {
         artifactId,
         createdAt: input.createdAt,
         digest,
-        mediaType: "text/markdown",
+        ...(input.jsonDeliverable === undefined
+          ? {
+              kind: "markdown",
+              mediaType: "text/markdown",
+              truncated: input.truncated,
+            }
+          : {
+              kind: "json",
+              mediaType: "application/json",
+              repairAttempted: input.jsonDeliverable.repairAttempted,
+              schema: input.jsonDeliverable.schema,
+              truncated: false,
+            }),
         runId: input.runId,
         sizeBytes: bytes.byteLength,
         stageIndex: input.stageIndex,
-        truncated: input.truncated,
       }),
       objectKey,
       ok: true,

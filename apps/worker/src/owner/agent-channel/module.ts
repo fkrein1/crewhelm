@@ -107,6 +107,8 @@ const TIMELINE_EVENT_ORDER = [
   "tool.execution_unknown",
   "tool.execution_reconciled_applied",
   "tool.execution_reconciled_not_applied",
+  "output.validation_repaired",
+  "output.validation_failed",
   "run.cancellation_requested",
   "run.cancelled",
   "run.completed",
@@ -461,6 +463,7 @@ export class AgentChannel {
     authority: OwnerAuthority,
     admission: StoredRunAdmission,
     agent: CrewAgentStub,
+    includeDeliverable = false,
   ) {
     try {
       const capability = this.#capabilities.issue(authority, admission, "inspect");
@@ -469,9 +472,8 @@ export class AgentChannel {
         return undefined;
       }
 
-      const result = inspectAdmittedRunResultSchema.safeParse(
-        await agent.inspectAdmittedRun({ capability }),
-      );
+      const inspected: unknown = await agent.inspectAdmittedRun({ capability, includeDeliverable });
+      const result = inspectAdmittedRunResultSchema.safeParse(inspected);
 
       return result.success &&
         result.data.ok &&
@@ -799,6 +801,16 @@ export class AgentChannel {
       };
     }
 
+    if (timeline.some((event) => event.event === "output.validation_failed")) {
+      return {
+        certainty: "confirmed",
+        disposition: "inspect_first",
+        nextAction: "inspect_run",
+        phase: "run.output",
+        reason: "output_validation_failed",
+      };
+    }
+
     if (admission.status === "expired") {
       if (admission.failureCode === "skill_unavailable") {
         return {
@@ -832,7 +844,13 @@ export class AgentChannel {
     admission: StoredRunAdmission,
     run: Run,
     timeline: RunTimelineEvent[],
-    input: { includeUsage: boolean; timelineCursor: number; timelineLimit: number },
+    input: {
+      includeDeliverable: boolean;
+      includeUsage: boolean;
+      timelineCursor: number;
+      timelineLimit: number;
+    },
+    deliverableContent?: unknown,
   ): Extract<InspectRunResult, { ok: true }> {
     const schedule = this.#runSchedule(admission);
     const presentedRun: Run = schedule === undefined ? run : { ...run, schedule };
@@ -853,7 +871,13 @@ export class AgentChannel {
           .all()
       : [];
     const pendingUsage = gatewayCalls.some((call) => call.status === "pending");
-    const output = presentedRun.output ?? "";
+    const output =
+      presentedRun.output ??
+      (presentedRun.deliverable?.state === "valid"
+        ? undefined
+        : deliverableContent === undefined
+          ? ""
+          : JSON.stringify(deliverableContent));
 
     return inspectRunResultSchema.options[0].parse({
       ...(run.session === undefined
@@ -861,13 +885,19 @@ export class AgentChannel {
         : { continuation: continuationFromRunSession(run.session) }),
       diagnosis: this.#diagnosis(admission, presentedRun, timeline),
       briefs: admission.briefContext?.references ?? [],
+      ...(input.includeDeliverable && deliverableContent !== undefined
+        ? { deliverableContent }
+        : {}),
       ok: true,
       request: { prompt: admission.prompt },
       retention: {
         availableUntil: new Date(admission.cleanupAt).toISOString(),
         output: {
           limitCharacters: MAXIMUM_RUN_OUTPUT_CHARACTERS,
-          retainedCharacters: output.length,
+          retainedCharacters:
+            presentedRun.deliverable?.state === "valid"
+              ? presentedRun.deliverable.sizeCharacters
+              : (output?.length ?? 0),
           truncated: run.outputTruncated ?? false,
         },
       },
@@ -974,10 +1004,11 @@ export class AgentChannel {
       return deniedStartRun("invalid_request");
     }
 
-    const replay = this.#admissions.replayBriefContext(authority, {
+    const replay = await this.#admissions.replayBriefContext(authority, {
       agentId: request.data.agentId,
       briefs: request.data.briefs,
       idempotencyKey: request.data.idempotencyKey,
+      outputContract: request.data.outputContract,
     });
     if (replay.outcome === "conflict") return deniedStartRun("idempotency_conflict");
     const materialized =
@@ -1009,6 +1040,9 @@ export class AgentChannel {
       expectedFleetRevision,
       expectedRevision: request.data.expectedRevision,
       idempotencyKey: request.data.idempotencyKey,
+      ...(request.data.outputContract === undefined
+        ? {}
+        : { outputContract: request.data.outputContract }),
       prompt: request.data.prompt,
       promptCharacters: request.data.prompt.length,
       promptDigest: await digestRunPrompt(request.data.prompt),
@@ -1202,7 +1236,12 @@ export class AgentChannel {
     }
 
     const agent = this.#agent(authority, admission);
-    const inspected = await this.#inspectAdmittedRun(authority, admission, agent);
+    const inspected = await this.#inspectAdmittedRun(
+      authority,
+      admission,
+      agent,
+      request.data.includeDeliverable,
+    );
 
     if (inspected === undefined) {
       return deniedInspectRun("run_unavailable");
@@ -1241,7 +1280,13 @@ export class AgentChannel {
       this.#inbox.repairFailedRun(alignedRun.runId);
     }
 
-    return this.#inspection(admission, alignedRun, timeline, request.data);
+    return this.#inspection(
+      admission,
+      alignedRun,
+      timeline,
+      request.data,
+      inspected.deliverableContent,
+    );
   }
 
   async listRuns(_authority: OwnerAuthority, input: unknown): Promise<ListAgentRunsResult> {

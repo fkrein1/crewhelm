@@ -6,13 +6,28 @@ import {
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   RUNS_WRITE_SCOPE,
+  type OutputContract,
 } from "@crewhelm/contracts";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 
 import { agentInput, authorityFor } from "../testkit.js";
-import { TestCrewAgent } from "../../agent/admitted-runs/test-agent.js";
+import { JSON_OUTPUT_TEST_PROMPT, TestCrewAgent } from "../../agent/admitted-runs/test-agent.js";
+
+const scheduledJsonOutputContract = {
+  kind: "json",
+  schema: {
+    jsonSchema: {
+      additionalProperties: false,
+      properties: { answer: { type: "string" } },
+      required: ["answer"],
+      type: "object",
+    },
+    name: "ScheduledAnswer",
+    version: "1",
+  },
+} as const satisfies OutputContract;
 
 describe("OwnerControlPlane Agent schedules", () => {
   it("enforces the current fleet minimum when configuring a recurring schedule", async () => {
@@ -365,8 +380,10 @@ describe("OwnerControlPlane Agent schedules", () => {
         expectedScheduleRevision: null,
         idempotencyKey: "configure-schedule-1",
         schedule: {
-          intervalSeconds: 60,
-          prompt: "Summarize the first scheduled responsibility.",
+          name: "Typed scheduled responsibility",
+          outputContract: scheduledJsonOutputContract,
+          prompt: JSON_OUTPUT_TEST_PROMPT,
+          trigger: { intervalSeconds: 60, type: "interval" },
         },
       }),
       controlPlane.configureAgentSchedule(authority, {
@@ -427,6 +444,8 @@ describe("OwnerControlPlane Agent schedules", () => {
       throw new Error("Expected dispatched Agent schedules.");
     }
 
+    const firstRunId = schedules[0].schedule.lastRunId;
+    if (firstRunId === null) throw new Error("Expected first scheduled Run ID.");
     expect(schedules[0].schedule.lastRunId).not.toBe(schedules[1].schedule.lastRunId);
     await expect(
       controlPlane.listAgentSessions(authority, { agentId: first.agent.id, limit: 10 }),
@@ -465,12 +484,24 @@ describe("OwnerControlPlane Agent schedules", () => {
         ],
       }),
     ]);
-    await expect(
-      controlPlane.inspectRun(authority, { runId: schedules[0].schedule.lastRunId }),
-    ).resolves.toMatchObject({
+    await expect(controlPlane.inspectRun(authority, { runId: firstRunId })).resolves.toMatchObject({
       ok: true,
       run: { schedule: { id: firstSchedule.schedule.id, revision: 1 } },
     });
+    await vi.waitFor(
+      async () => {
+        const inspected = await controlPlane.inspectRun(authority, {
+          includeDeliverable: true,
+          runId: firstRunId,
+        });
+        expect(inspected).toMatchObject({
+          deliverableContent: { answer: expect.any(String) },
+          ok: true,
+          run: { deliverable: { state: "valid" }, status: "completed" },
+        });
+      },
+      { interval: 25, timeout: 5_000 },
+    );
 
     const outcomes = await vi.waitFor(
       async () =>

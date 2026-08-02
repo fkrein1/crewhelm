@@ -8,6 +8,7 @@ import type {
   AgentScheduleConfiguration,
   AgentWorkflowAggregateBudget,
   AdmittedBriefContext,
+  AdmittedOutputContract,
   ComposioToolCapabilityGrant,
   ConnectionAuthorizationOutcome,
   FleetConfigurationData,
@@ -477,6 +478,9 @@ export const agentWorkflows = sqliteTable(
     briefContext: text("brief_context", { mode: "json" }).$type<AdmittedBriefContext | null>(),
     fleetRevision: integer("fleet_revision").notNull(),
     objective: text("objective").notNull(),
+    outputContract: text("output_contract", {
+      mode: "json",
+    }).$type<AdmittedOutputContract | null>(),
     budget: text("budget", { mode: "json" }).$type<AgentWorkflowAggregateBudget>().notNull(),
     status: text("status", {
       enum: ["queued", "running", "waiting", "cancelling", "completed", "failed", "cancelled"],
@@ -526,6 +530,10 @@ export const agentWorkflows = sqliteTable(
     check("agent_workflows_request_digest_length", sql`length(${table.requestDigest}) = 43`),
     check("agent_workflows_objective_length", sql`length(${table.objective}) BETWEEN 1 AND 4096`),
     check("agent_workflows_budget_json", sql`json_valid(${table.budget})`),
+    check(
+      "agent_workflows_output_contract_json",
+      sql`${table.outputContract} IS NULL OR json_valid(${table.outputContract})`,
+    ),
     check(
       "agent_workflows_brief_context_json",
       sql`${table.briefContext} IS NULL OR json_valid(${table.briefContext})`,
@@ -886,6 +894,9 @@ export const runAdmissions = sqliteTable(
     briefContext: text("brief_context", { mode: "json" }).$type<AdmittedBriefContext | null>(),
     prompt: text("prompt"),
     promptDigest: text("prompt_digest").notNull(),
+    outputContract: text("output_contract", {
+      mode: "json",
+    }).$type<AdmittedOutputContract | null>(),
     scheduleRevision: integer("schedule_revision"),
     trigger: text("trigger", { enum: ["manual", "schedule", "workflow"] })
       .notNull()
@@ -928,6 +939,10 @@ export const runAdmissions = sqliteTable(
       sql`${table.prompt} IS NULL OR length(${table.prompt}) BETWEEN 1 AND 16384`,
     ),
     check("run_admissions_prompt_digest_length", sql`length(${table.promptDigest}) = 64`),
+    check(
+      "run_admissions_output_contract_json",
+      sql`${table.outputContract} IS NULL OR json_valid(${table.outputContract})`,
+    ),
     check(
       "run_admissions_schedule_revision_positive",
       sql`${table.scheduleRevision} IS NULL OR ${table.scheduleRevision} > 0`,

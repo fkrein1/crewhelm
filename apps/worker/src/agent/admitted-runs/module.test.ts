@@ -18,6 +18,7 @@ import {
   type OwnerAuthority,
   type ComposioToolCapabilityGrant,
   type RunBudgetReservation,
+  type OutputContract,
 } from "@crewhelm/contracts";
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -45,12 +46,30 @@ import {
   SANDBOX_TEST_PROMPT,
   SLOW_TEST_PROMPT,
   TEST_REPLY,
+  JSON_FAILURE_TEST_PROMPT,
+  JSON_OUTPUT_TEST_PROMPT,
+  JSON_REPAIR_TEST_PROMPT,
+  JSON_TEST_REPLY,
   TOOL_RESULT_FALLBACK_TEST_PROMPT,
   TOOL_TEST_PROMPT,
   WEB_RESEARCH_TEST_PROMPT,
   TestCrewAgent,
   TestCrewSession,
 } from "./test-agent.js";
+
+const testJsonOutputContract = {
+  kind: "json",
+  schema: {
+    jsonSchema: {
+      additionalProperties: false,
+      properties: { answer: { minLength: 1, type: "string" } },
+      required: ["answer"],
+      type: "object",
+    },
+    name: "TestAnswer",
+    version: "1",
+  },
+} as const satisfies OutputContract;
 
 async function authorityFor(
   subject: string,
@@ -192,6 +211,24 @@ async function completedRun(
   );
 }
 
+async function terminalTypedRun(
+  controlPlane: ReturnType<Cloudflare.Env["OWNER_CONTROL_PLANE"]["getByName"]>,
+  authority: OwnerAuthority,
+  runId: string,
+  includeDeliverable = false,
+): Promise<Extract<InspectRunResult, { ok: true }>> {
+  return vi.waitFor(
+    async () => {
+      const result = await controlPlane.inspectRun(authority, { includeDeliverable, runId });
+      if (!result.ok || !["completed", "failed"].includes(result.run.status)) {
+        throw new Error(`Expected a terminal typed run: ${JSON.stringify(result)}`);
+      }
+      return result;
+    },
+    { interval: 25, timeout: 5_000 },
+  );
+}
+
 async function runWithTimeline(
   controlPlane: ReturnType<Cloudflare.Env["OWNER_CONTROL_PLANE"]["getByName"]>,
   authority: OwnerAuthority,
@@ -227,6 +264,7 @@ async function startWriteRun(
   authorization: ComposioToolCapabilityGrant["authorization"],
   prompt = TOOL_TEST_PROMPT,
   seedLegacyUnknown = false,
+  outputContract?: typeof testJsonOutputContract,
 ) {
   const authority = await authorityFor(subject);
   const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
@@ -356,6 +394,7 @@ async function startWriteRun(
     agentId: created.agent.id,
     expectedRevision: created.agent.revision,
     idempotencyKey,
+    ...(outputContract === undefined ? {} : { outputContract }),
     prompt,
   });
 
@@ -371,8 +410,20 @@ async function startWriteRun(
   };
 }
 
-async function pendingWriteRun(subject: string, idempotencyKey: string, prompt = TOOL_TEST_PROMPT) {
-  const fixture = await startWriteRun(subject, idempotencyKey, "approval_required", prompt);
+async function pendingWriteRun(
+  subject: string,
+  idempotencyKey: string,
+  prompt = TOOL_TEST_PROMPT,
+  outputContract?: typeof testJsonOutputContract,
+) {
+  const fixture = await startWriteRun(
+    subject,
+    idempotencyKey,
+    "approval_required",
+    prompt,
+    false,
+    outputContract,
+  );
   const listed = await vi.waitFor(
     async () => {
       const result = await fixture.controlPlane.listRunToolApprovals(fixture.authority, {
@@ -761,6 +812,349 @@ describe("CrewAgent admitted execution", () => {
     await expect(controlPlane.inspectRun(authority, { runId: started.run.runId })).resolves.toEqual(
       finished,
     );
+  });
+
+  it("returns canonical schema-validated JSON only through explicit inspection", async () => {
+    const authority = await authorityFor("crew-agent-json-601");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("crew-agent-json-create-601"),
+    );
+    if (!created.ok) throw new Error("Expected typed output fixture Agent.");
+
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-json-run-601",
+      outputContract: testJsonOutputContract,
+      prompt: JSON_OUTPUT_TEST_PROMPT,
+    });
+    if (!started.ok) throw new Error("Expected admitted typed Run.");
+    const stub = crewAgentNamespace().getByName(
+      crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
+    );
+
+    const compact = await terminalTypedRun(controlPlane, authority, started.run.runId);
+    await expect(
+      controlPlane.startRun(authority, {
+        agentId: created.agent.id,
+        expectedRevision: created.agent.revision,
+        idempotencyKey: "crew-agent-json-run-601",
+        outputContract: {
+          ...testJsonOutputContract,
+          schema: { ...testJsonOutputContract.schema, version: "2" },
+        },
+        prompt: JSON_OUTPUT_TEST_PROMPT,
+      }),
+    ).resolves.toMatchObject({ error: { code: "idempotency_conflict" }, ok: false });
+    expect(compact.run).toMatchObject({
+      deliverable: {
+        kind: "json",
+        mediaType: "application/json",
+        repairAttempted: false,
+        schema: { name: "TestAnswer", version: "1" },
+        state: "valid",
+      },
+      status: "completed",
+    });
+    expect(compact.run).not.toHaveProperty("output");
+    expect(compact).not.toHaveProperty("deliverableContent");
+    expect(compact.retention.output.retainedCharacters).toBe(JSON_TEST_REPLY.length);
+
+    const exact = await terminalTypedRun(controlPlane, authority, started.run.runId, true);
+    expect(exact.deliverableContent).toEqual(JSON.parse(JSON_TEST_REPLY));
+    expect(exact.retention.output.retainedCharacters).toBe(JSON_TEST_REPLY.length);
+
+    await runInDurableObject(stub, (agent) => {
+      expect(asTestCrewAgent(agent).modelCallsForTest()).toHaveLength(1);
+    });
+    await runInDurableObject(stub, async (_agent, state) => {
+      await state.storage.delete(`crewhelm:run-output:${started.run.runId}`);
+    });
+    await evictDurableObject(stub);
+    const recovered = await terminalTypedRun(controlPlane, authority, started.run.runId, true);
+    expect(recovered).toMatchObject({
+      deliverableContent: JSON.parse(JSON_TEST_REPLY),
+      run: { deliverable: { repairAttempted: false, state: "valid" }, status: "completed" },
+    });
+  });
+
+  it("repairs invalid JSON once without tools and records bounded evidence", async () => {
+    const authority = await authorityFor("crew-agent-json-repair-601");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("crew-agent-json-repair-create-601"),
+    );
+    if (!created.ok) throw new Error("Expected JSON repair fixture Agent.");
+
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-json-repair-run-601",
+      outputContract: testJsonOutputContract,
+      prompt: JSON_REPAIR_TEST_PROMPT,
+    });
+    if (!started.ok) throw new Error("Expected admitted JSON repair Run.");
+
+    const finished = await terminalTypedRun(controlPlane, authority, started.run.runId, true);
+    expect(finished.run.deliverable).toMatchObject({ repairAttempted: true, state: "valid" });
+    expect(finished.deliverableContent).toEqual(JSON.parse(JSON_TEST_REPLY));
+    expect(finished.timeline).toEqual(
+      expect.arrayContaining([expect.objectContaining({ event: "output.validation_repaired" })]),
+    );
+
+    const stub = crewAgentNamespace().getByName(
+      crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
+    );
+    await runInDurableObject(stub, (agent) => {
+      const calls = asTestCrewAgent(agent).modelCallsForTest();
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.toolCount).toBe(0);
+    });
+  });
+
+  it("fails an invalid deliverable after one repair without presenting invalid success", async () => {
+    const authority = await authorityFor("crew-agent-json-failure-601");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("crew-agent-json-failure-create-601"),
+    );
+    if (!created.ok) throw new Error("Expected JSON failure fixture Agent.");
+
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-json-failure-run-601",
+      outputContract: testJsonOutputContract,
+      prompt: JSON_FAILURE_TEST_PROMPT,
+    });
+    if (!started.ok) throw new Error("Expected admitted JSON failure Run.");
+
+    const finished = await terminalTypedRun(controlPlane, authority, started.run.runId, true);
+    expect(finished.run).toMatchObject({
+      deliverable: { repairAttempted: true, state: "invalid" },
+      status: "failed",
+    });
+    expect(finished).not.toHaveProperty("deliverableContent");
+    expect(finished.timeline).toEqual(
+      expect.arrayContaining([expect.objectContaining({ event: "output.validation_failed" })]),
+    );
+    expect(finished.diagnosis).toMatchObject({
+      phase: "run.output",
+      reason: "output_validation_failed",
+    });
+  });
+
+  it("recovers an interrupted repair as terminal failure without a second repair call", async () => {
+    const authority = await authorityFor("crew-agent-json-interrupted-repair");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("crew-agent-json-interrupted-repair"),
+    );
+    if (!created.ok) throw new Error("Expected interrupted repair fixture Agent.");
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-json-interrupted-repair",
+      outputContract: testJsonOutputContract,
+      prompt: JSON_REPAIR_TEST_PROMPT,
+    });
+    if (!started.ok) throw new Error("Expected interrupted repair Run.");
+    await terminalTypedRun(controlPlane, authority, started.run.runId, true);
+    const stub = crewAgentNamespace().getByName(
+      crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
+    );
+    await runInDurableObject(stub, async (agent, state) => {
+      const output = await state.storage.get<{
+        deliverable: { schema: unknown };
+        messageId: string;
+      }>(`crewhelm:run-output:${started.run.runId}`);
+      if (output === undefined) throw new Error("Expected committed repair output.");
+      const trace =
+        (await state.storage.get<Array<{ event: string }>>(
+          `crewhelm:run-trace:${started.run.runId}`,
+        )) ?? [];
+      await state.storage.put(
+        `crewhelm:run-trace:${started.run.runId}`,
+        trace.filter((event) => !event.event.startsWith("output.validation_")),
+      );
+      await state.storage.put(`crewhelm:run-output:${started.run.runId}`, {
+        claimedAt: Date.now(),
+        deliverable: {
+          issues: [{ code: "invalid_json", path: "$" }],
+          kind: "json",
+          mediaType: "application/json",
+          repairAttempted: true,
+          schema: output.deliverable.schema,
+          state: "invalid",
+        },
+        messageId: output.messageId,
+        state: "repairing",
+      });
+      const record = admittedRunRecordSchema.parse(
+        await state.storage.get(`crewhelm:run:${started.run.runId}`),
+      );
+      await state.storage.put(`crewhelm:run:${started.run.runId}`, { ...record, deadlineAt: 1 });
+      await agent.expireAdmittedRun({ runId: started.run.runId });
+      await expect(
+        state.storage.get(`crewhelm:run-output:${started.run.runId}`),
+      ).resolves.toMatchObject({ state: "invalid" });
+      expect(asTestCrewAgent(agent).modelCallsForTest()).toHaveLength(2);
+    });
+
+    await expect(
+      controlPlane.inspectRun(authority, { includeDeliverable: true, runId: started.run.runId }),
+    ).resolves.toMatchObject({
+      diagnosis: { reason: "output_validation_failed" },
+      run: { deliverable: { state: "invalid" }, status: "failed" },
+    });
+    await runInDurableObject(stub, (agent) => {
+      expect(asTestCrewAgent(agent).modelCallsForTest()).toHaveLength(2);
+    });
+  });
+
+  it("does not start JSON repair after the frozen Run deadline", async () => {
+    const authority = await authorityFor("crew-agent-json-expired-repair");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("crew-agent-json-expired-repair"),
+    );
+    if (!created.ok) throw new Error("Expected expired repair fixture Agent.");
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-json-expired-repair",
+      outputContract: testJsonOutputContract,
+      prompt: JSON_OUTPUT_TEST_PROMPT,
+    });
+    if (!started.ok) throw new Error("Expected expired repair Run.");
+    await terminalTypedRun(controlPlane, authority, started.run.runId, true);
+    const stub = crewAgentNamespace().getByName(
+      crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
+    );
+    await runInDurableObject(stub, async (agent, state) => {
+      const output = await state.storage.get<{ messageId: string }>(
+        `crewhelm:run-output:${started.run.runId}`,
+      );
+      const record = admittedRunRecordSchema.parse(
+        await state.storage.get(`crewhelm:run:${started.run.runId}`),
+      );
+      if (output === undefined) throw new Error("Expected validated output fixture.");
+      const row = state.storage.sql
+        .exec<{ content: string }>(
+          "SELECT content FROM assistant_messages WHERE id = ?",
+          output.messageId,
+        )
+        .one();
+      const message: unknown = JSON.parse(row.content);
+      if (typeof message !== "object" || message === null || Array.isArray(message)) {
+        throw new Error("Expected assistant message fixture.");
+      }
+      state.storage.sql.exec(
+        "UPDATE assistant_messages SET content = ? WHERE id = ?",
+        JSON.stringify({ ...message, parts: [{ text: "not json", type: "text" }] }),
+        output.messageId,
+      );
+      await state.storage.delete(`crewhelm:run-output:${started.run.runId}`);
+      await state.storage.delete(
+        `crewhelm:run-output-message:${encodeURIComponent(output.messageId)}`,
+      );
+      await state.storage.put(`crewhelm:run:${started.run.runId}`, { ...record, deadlineAt: 1 });
+      await agent.expireAdmittedRun({ runId: started.run.runId });
+      await expect(
+        state.storage.get(`crewhelm:run-output:${started.run.runId}`),
+      ).resolves.toMatchObject({ state: "invalid" });
+      expect(asTestCrewAgent(agent).modelCallsForTest()).toHaveLength(1);
+    });
+
+    await expect(
+      controlPlane.inspectRun(authority, { runId: started.run.runId }),
+    ).resolves.toMatchObject({
+      run: { deliverable: { repairAttempted: false }, status: "failed" },
+    });
+    await runInDurableObject(stub, (agent) => {
+      expect(asTestCrewAgent(agent).modelCallsForTest()).toHaveLength(1);
+    });
+    await expect(
+      controlPlane.agentInbox(authority, { action: "list", kinds: ["exception"], limit: 10 }),
+    ).resolves.toMatchObject({
+      items: [{ runId: started.run.runId, runStatus: "failed" }],
+      ok: true,
+    });
+  });
+
+  it("retries a briefly pending typed response and finalizes without owner polling", async () => {
+    const authority = await authorityFor("crew-agent-json-pending-retry");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("crew-agent-json-pending-retry"),
+    );
+    if (!created.ok) throw new Error("Expected pending typed fixture Agent.");
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "crew-agent-json-pending-retry",
+      outputContract: testJsonOutputContract,
+      prompt: JSON_OUTPUT_TEST_PROMPT,
+    });
+    if (!started.ok) throw new Error("Expected pending typed Run.");
+    await terminalTypedRun(controlPlane, authority, started.run.runId, true);
+    const stub = crewAgentNamespace().getByName(
+      crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
+    );
+
+    await runInDurableObject(stub, async (agent, state) => {
+      const output = await state.storage.get<{ messageId: string }>(
+        `crewhelm:run-output:${started.run.runId}`,
+      );
+      if (output === undefined) throw new Error("Expected pending retry output fixture.");
+      const row = state.storage.sql
+        .exec<{ content: string }>(
+          "SELECT content FROM assistant_messages WHERE id = ?",
+          output.messageId,
+        )
+        .one();
+      const message: unknown = JSON.parse(row.content);
+      if (typeof message !== "object" || message === null || Array.isArray(message)) {
+        throw new Error("Expected pending retry message fixture.");
+      }
+      await state.storage.delete(`crewhelm:run-output:${started.run.runId}`);
+      state.storage.sql.exec(
+        "UPDATE assistant_messages SET content = ? WHERE id = ?",
+        JSON.stringify({
+          ...message,
+          parts: [
+            {
+              approvalDescriptor: { kind: "durable-pause" },
+              text: JSON_TEST_REPLY,
+              type: "text",
+            },
+          ],
+        }),
+        output.messageId,
+      );
+      await agent.retryStructuredRunOutput({ attempt: 0, runId: started.run.runId });
+      await expect(
+        state.storage.get(`crewhelm:run-output:${started.run.runId}`),
+      ).resolves.toBeUndefined();
+
+      state.storage.sql.exec(
+        "UPDATE assistant_messages SET content = ? WHERE id = ?",
+        JSON.stringify({ ...message, parts: [{ text: JSON_TEST_REPLY, type: "text" }] }),
+        output.messageId,
+      );
+      await agent.retryStructuredRunOutput({ attempt: 1, runId: started.run.runId });
+      await expect(
+        state.storage.get(`crewhelm:run-output:${started.run.runId}`),
+      ).resolves.toMatchObject({ state: "valid" });
+      expect(asTestCrewAgent(agent).modelCallsForTest()).toHaveLength(1);
+    });
   });
 
   it("runs the exact admitted Sandbox tool through an isolated CrewSession", async () => {
@@ -2195,6 +2589,17 @@ describe("CrewAgent admitted execution", () => {
         toolCallId,
       );
     });
+    const agent = crewAgentNamespace().getByName(
+      crewAgentObjectName({ agentId: fixture.agentId, ownerKey: fixture.authority.ownerKey }),
+    );
+    await runInDurableObject(agent, async (_instance, state) => {
+      const key = `crewhelm:run-trace:${fixture.runId}`;
+      const trace = (await state.storage.get<unknown[]>(key)) ?? [];
+      await state.storage.put(key, [
+        ...trace,
+        { event: "output.validation_failed", occurredAt: new Date().toISOString() },
+      ]);
+    });
 
     const inspected = await fixture.controlPlane.inspectRun(fixture.authority, {
       runId: fixture.runId,
@@ -2210,6 +2615,7 @@ describe("CrewAgent admitted execution", () => {
       run: { runId: fixture.runId, status: "failed" },
       timeline: expect.arrayContaining([
         expect.objectContaining({ event: "tool.execution_unknown", toolCallId }),
+        expect.objectContaining({ event: "output.validation_failed" }),
         expect.objectContaining({ event: "run.failed" }),
       ]),
     });
@@ -2357,6 +2763,34 @@ describe("CrewAgent admitted execution", () => {
       output: '{"itemId":"item-701","status":"found"}',
       outputTruncated: false,
       status: "completed",
+    });
+  });
+
+  it("preserves the frozen JSON contract through an approved tool continuation", async () => {
+    const fixture = await pendingWriteRun(
+      "crew-agent-typed-approval",
+      "crew-agent-typed-approval",
+      TOOL_TEST_PROMPT,
+      testJsonOutputContract,
+    );
+
+    await expect(
+      fixture.controlPlane.decideRunToolApproval(fixture.authority, {
+        decision: "approve",
+        executionId: fixture.approval.executionId,
+        runId: fixture.runId,
+      }),
+    ).resolves.toMatchObject({ decided: true, ok: true });
+    const finished = await terminalTypedRun(
+      fixture.controlPlane,
+      fixture.authority,
+      fixture.runId,
+      true,
+    );
+
+    expect(finished).toMatchObject({
+      deliverableContent: JSON.parse(JSON_TEST_REPLY),
+      run: { deliverable: { state: "valid" }, status: "completed" },
     });
   });
 
@@ -3036,14 +3470,15 @@ describe("CrewAgent admitted execution", () => {
       agentId: created.agent.id,
       expectedRevision: created.agent.revision,
       idempotencyKey: "crew-agent-run-606",
-      prompt: "Complete and retain this run only for the test window.",
+      outputContract: testJsonOutputContract,
+      prompt: JSON_OUTPUT_TEST_PROMPT,
     });
 
     if (!started.ok) {
       throw new Error("Expected retention fixture run.");
     }
 
-    await completedRun(controlPlane, authority, started.run.runId);
+    await terminalTypedRun(controlPlane, authority, started.run.runId, true);
 
     const stub = crewAgentNamespace().getByName(
       crewAgentObjectName({
@@ -3074,10 +3509,13 @@ describe("CrewAgent admitted execution", () => {
         state.storage.sql
           .exec(
             "SELECT COUNT(*) AS count FROM assistant_fts WHERE content LIKE ?",
-            `%${TEST_REPLY}%`,
+            "%Crewhelm concluiu%",
           )
           .one(),
       ).toEqual({ count: 1 });
+      await expect(
+        state.storage.get(`crewhelm:run-output:${started.run.runId}`),
+      ).resolves.toBeDefined();
       expect(
         state.storage.sql
           .exec(
@@ -3094,6 +3532,9 @@ describe("CrewAgent admitted execution", () => {
       const messageId = `crewhelm:${started.run.runId}:user`;
 
       await expect(state.storage.get(`crewhelm:run:${started.run.runId}`)).resolves.toBeUndefined();
+      await expect(
+        state.storage.get(`crewhelm:run-output:${started.run.runId}`),
+      ).resolves.toBeUndefined();
       expect(
         state.storage.sql
           .exec(
@@ -3107,7 +3548,7 @@ describe("CrewAgent admitted execution", () => {
         state.storage.sql
           .exec(
             "SELECT COUNT(*) AS count FROM assistant_fts WHERE content LIKE ?",
-            `%${TEST_REPLY}%`,
+            "%Crewhelm concluiu%",
           )
           .one(),
       ).toEqual({ count: 0 });

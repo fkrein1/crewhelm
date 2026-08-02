@@ -4,3 +4,4 @@ export {
   type CrewAgentToolAdapter,
 } from "./module.js";
 export { digestRunPrompt } from "./protocol.js";
+export { bindOutputContract, outputContractInstruction } from "./output-validation.js";

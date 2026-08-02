@@ -5,6 +5,9 @@ import {
   ownerClientIdSchema,
   pendingToolApprovalSchema,
   recordAgentInboxRunInputSchema,
+  admittedOutputContractSchema,
+  jsonDeliverableSchema,
+  MAXIMUM_RUN_OUTPUT_CHARACTERS,
   runAdmissionIdempotencyKeySchema,
   runBudgetReservationSchema,
   runIdSchema,
@@ -209,6 +212,7 @@ export const admittedRunRecordSchema = z.strictObject({
   createdAt: z.number().int().positive(),
   deadlineAt: z.number().int().positive(),
   idempotencyKey: runAdmissionIdempotencyKeySchema,
+  outputContract: admittedOutputContractSchema.optional(),
   promptCharacters: z.number().int().positive(),
   promptDigest: z.string().regex(/^[0-9a-f]{64}$/),
   scheduleRevision: z.number().int().positive().nullable().default(null),
@@ -237,6 +241,7 @@ export const admittedTurnMetadataSchema = z.strictObject({
     deadlineAt: z.number().int().positive().default(1),
     promptCharacters: z.number().int().positive(),
     promptDigest: z.string().regex(/^[0-9a-f]{64}$/),
+    outputContract: admittedOutputContractSchema.optional(),
     runId: runIdSchema,
     session: runSessionSchema.optional(),
     sessionContext: admittedRunRecordSchema.shape.sessionContext,
@@ -246,6 +251,27 @@ export const admittedTurnMetadataSchema = z.strictObject({
 export const scheduledRunInputSchema = z.strictObject({
   runId: runIdSchema,
 });
+
+export const validatedRunOutputRecordSchema = z.discriminatedUnion("state", [
+  z.strictObject({
+    canonical: z.string().max(MAXIMUM_RUN_OUTPUT_CHARACTERS),
+    deliverable: jsonDeliverableSchema.options[0],
+    messageId: z.string().min(1).max(256),
+    validation: z.enum(["initial", "repair"]),
+    state: z.literal("valid"),
+  }),
+  z.strictObject({
+    deliverable: jsonDeliverableSchema.options[1],
+    messageId: z.string().min(1).max(256),
+    state: z.literal("invalid"),
+  }),
+  z.strictObject({
+    claimedAt: z.number().int().positive(),
+    deliverable: jsonDeliverableSchema.options[1],
+    messageId: z.string().min(1).max(256),
+    state: z.literal("repairing"),
+  }),
+]);
 
 export const pendingToolApprovalRecordSchema = pendingToolApprovalSchema
   .omit({ executionId: true })

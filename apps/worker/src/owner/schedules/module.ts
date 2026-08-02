@@ -17,6 +17,7 @@ import {
   type GetAgentScheduleResult,
   type ListAgentSchedulesResult,
   type OwnerAuthority,
+  type OutputContract,
 } from "@crewhelm/contracts";
 import { and, asc, desc, eq, lte, max, min } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
@@ -62,6 +63,7 @@ export type DueAgentSchedule = {
   agentRevision: number;
   lastRunId: string | null;
   name: string;
+  outputContract: OutputContract | undefined;
   prompt: string;
   retryAt: number;
   scheduleId: string;
@@ -96,7 +98,11 @@ function activeDefinition(
 ): { configuration: AgentScheduleConfiguration; name: string | null } {
   return "name" in input
     ? {
-        configuration: { prompt: input.prompt, trigger: input.trigger },
+        configuration: {
+          ...(input.outputContract === undefined ? {} : { outputContract: input.outputContract }),
+          prompt: input.prompt,
+          trigger: input.trigger,
+        },
         name: input.name,
       }
     : { configuration: input, name: null };
@@ -532,6 +538,10 @@ export class AgentSchedules {
             agentRevision: row.agentRevision,
             lastRunId: row.lastRunId,
             name: row.name,
+            outputContract:
+              "outputContract" in configuration.data
+                ? configuration.data.outputContract
+                : undefined,
             prompt: configuration.data.prompt,
             retryAt: nextRunAt,
             scheduleId: row.scheduleId,
