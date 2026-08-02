@@ -35,7 +35,11 @@
   "overrides": [
     {
       "files": ["apps/*/src/**/*.ts", "packages/*/src/**/*.ts"],
-      "excludeFiles": ["**/*.test.ts", "**/test-*.ts", "**/testkit.ts"],
+      "excludeFiles": [
+        "**/*.test.ts",
+        "apps/worker/src/agent/admitted-runs/test-agent.ts",
+        "apps/worker/src/owner/testkit.ts"
+      ],
       "rules": {
         "typescript/explicit-module-boundary-types": "error",
         "typescript/no-non-null-assertion": "error",
