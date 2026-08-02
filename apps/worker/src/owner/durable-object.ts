@@ -1,5 +1,6 @@
 import {
   agentInboxInputSchema,
+  agentWatchesInputSchema,
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
   AUTONOMY_WRITE_SCOPE,
@@ -23,6 +24,7 @@ import {
   type ControlPlaneStatusResult,
   type AgentInboxDeferredReason,
   type AgentInboxResult,
+  type AgentWatchesResult,
   type CancelRunResult,
   type BatchDisableAgentsResult,
   type CreateAgentResult,
@@ -148,6 +150,7 @@ import {
 } from "./runs/index.js";
 import { recordScheduleEvent } from "../observability/schedules.js";
 import { AgentSchedules, deniedAgentSchedule, type DueAgentSchedule } from "./schedules/index.js";
+import { AgentWatches, deniedAgentWatch } from "./watches/index.js";
 import { AiGatewayUsage } from "./usage/index.js";
 import { R2SkillPackageObjectStore, Skills, deniedSkill } from "./skills/index.js";
 import { AgentWorkflows } from "./workflows/index.js";
@@ -210,6 +213,7 @@ export class OwnerControlPlane extends DurableObject {
   readonly #agentChannel: AgentChannel;
   readonly #authorityControls: AuthorityControls;
   readonly #agentSchedules: AgentSchedules;
+  readonly #agentWatches: AgentWatches;
   readonly #fleetConfigurations: FleetConfigurations;
   readonly #aiGatewayUsage: AiGatewayUsage;
   readonly #skills: Skills;
@@ -283,6 +287,7 @@ export class OwnerControlPlane extends DurableObject {
     this.#agentSchedules = new AgentSchedules(this.#database, this.#storage, () =>
       this.#fleetConfigurations.currentData(),
     );
+    this.#agentWatches = new AgentWatches(this.#agentSchedules);
     this.#agentChannel = new AgentChannel(
       this.#objectName,
       this.#database,
@@ -1001,6 +1006,27 @@ export class OwnerControlPlane extends DurableObject {
       : deniedAgentSchedule(authorization.code);
   }
 
+  async agentWatches(authorityInput: unknown, input: unknown): Promise<AgentWatchesResult> {
+    const request = agentWatchesInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return deniedAgentWatch("invalid_request");
+    }
+
+    const requiredScope = ["create", "update", "pause", "resume", "delete"].includes(
+      request.data.action,
+    )
+      ? AUTONOMY_WRITE_SCOPE
+      : request.data.action === "sources"
+        ? OWNER_READ_SCOPE
+        : AGENTS_READ_SCOPE;
+    const authorization = this.#authorize(authorityInput, requiredScope);
+
+    return authorization.ok
+      ? this.#agentWatches.execute(authorization.authority, request.data)
+      : deniedAgentWatch(authorization.code);
+  }
+
   async listRunToolApprovals(
     authorityInput: unknown,
     input: unknown,
@@ -1103,8 +1129,12 @@ export class OwnerControlPlane extends DurableObject {
       const schedule = dueSchedules[index];
 
       if (dispatch.status === "rejected" && schedule !== undefined) {
-        this.#agentSchedules.recordSkipped(schedule.scheduleId, currentTime, "unavailable");
-        this.#recordScheduledDeferral(schedule, currentTime, "dispatch_exception");
+        this.#agentSchedules.recordPendingRetry(schedule, currentTime, "dispatch_exception");
+        this.#recordScheduledDeferral(
+          { ...schedule, retryAt: currentTime + 60_000 },
+          currentTime,
+          "dispatch_exception",
+        );
         recordScheduleEvent({
           agentId: schedule.agentId,
           outcome: "failed",
@@ -1274,7 +1304,7 @@ export class OwnerControlPlane extends DurableObject {
         if (previous.error.code === "run_not_found") {
           // Completed run admissions eventually age out of the control plane.
         } else {
-          this.#agentSchedules.recordSkipped(schedule.scheduleId, currentTime, "unavailable");
+          this.#agentSchedules.recordSkipped(schedule, currentTime, "run_unavailable");
           this.#recordScheduledDeferral(schedule, currentTime, "run_unavailable");
           recordScheduleEvent({
             agentId: schedule.agentId,
@@ -1283,7 +1313,7 @@ export class OwnerControlPlane extends DurableObject {
           return;
         }
       } else if (!["cancelled", "completed", "failed"].includes(previous.run.status)) {
-        this.#agentSchedules.recordSkipped(schedule.scheduleId, currentTime, "active_run");
+        this.#agentSchedules.recordSkipped(schedule, currentTime, "active_run");
         this.#recordScheduledDeferral(schedule, currentTime, "active_run");
         recordScheduleEvent({
           agentId: schedule.agentId,
@@ -1309,7 +1339,7 @@ export class OwnerControlPlane extends DurableObject {
     );
 
     if (!started.ok) {
-      this.#agentSchedules.recordSkipped(schedule.scheduleId, currentTime, "unavailable");
+      this.#agentSchedules.recordSkipped(schedule, currentTime, "agent_unavailable");
       this.#recordScheduledDeferral(
         schedule,
         currentTime,
@@ -1328,10 +1358,12 @@ export class OwnerControlPlane extends DurableObject {
       runId: started.run.runId,
       scheduleId: schedule.scheduleId,
       scheduleRevision: schedule.scheduleRevision,
+      scheduledAt: schedule.scheduledAt,
     });
 
     if (!recorded) {
       await this.#agentChannel.cancel(authority, { runId: started.run.runId });
+      this.#agentSchedules.recordSkipped(schedule, currentTime, "record_dispatch_conflict");
       this.#recordScheduledDeferral(schedule, currentTime, "record_dispatch_conflict");
       recordScheduleEvent({
         agentId: schedule.agentId,

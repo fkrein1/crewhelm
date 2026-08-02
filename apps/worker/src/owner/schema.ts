@@ -404,7 +404,7 @@ export const agentSchedules = sqliteTable(
     scheduleId: text("schedule_id").primaryKey(),
     agentId: text("agent_id").notNull(),
     currentRevision: integer("current_revision").notNull(),
-    status: text("status", { enum: ["active", "paused"] }).notNull(),
+    status: text("status", { enum: ["active", "paused", "deleted"] }).notNull(),
     nextRunAt: integer("next_run_at"),
     lastRunId: text("last_run_id"),
     lastDispatchedAt: integer("last_dispatched_at"),
@@ -428,7 +428,7 @@ export const agentSchedules = sqliteTable(
       .on(table.nextRunAt)
       .where(sql`${table.status} = 'active'`),
     check("agent_schedules_current_revision_positive", sql`${table.currentRevision} > 0`),
-    check("agent_schedules_status", sql`${table.status} IN ('active', 'paused')`),
+    check("agent_schedules_status", sql`${table.status} IN ('active', 'paused', 'deleted')`),
     check("agent_schedules_created_at_positive", sql`${table.createdAt} > 0`),
     check(
       "agent_schedules_dispatch_state",
@@ -440,7 +440,7 @@ export const agentSchedules = sqliteTable(
     check(
       "agent_schedules_state",
       sql`((${table.status} = 'active' AND ${table.nextRunAt} IS NOT NULL)
-        OR (${table.status} = 'paused' AND ${table.nextRunAt} IS NULL))`,
+        OR (${table.status} IN ('paused', 'deleted') AND ${table.nextRunAt} IS NULL))`,
     ),
   ],
 );
@@ -463,6 +463,73 @@ export const agentScheduleUpdates = sqliteTable(
     }).onDelete("restrict"),
     check("agent_schedule_updates_request_digest_length", sql`length(${table.requestDigest}) = 43`),
     check("agent_schedule_updates_revision_positive", sql`${table.revision} > 0`),
+  ],
+);
+
+export const agentScheduleOccurrences = sqliteTable(
+  "agent_schedule_occurrences",
+  {
+    scheduleId: text("schedule_id").notNull(),
+    agentId: text("agent_id").notNull(),
+    scheduleRevision: integer("schedule_revision").notNull(),
+    scheduledAt: integer("scheduled_at").notNull(),
+    occurredAt: integer("occurred_at").notNull(),
+    nextAttemptAt: integer("next_attempt_at"),
+    attempts: integer("attempts").notNull(),
+    status: text("status", { enum: ["pending", "dispatched", "skipped"] }).notNull(),
+    runId: text("run_id"),
+    reason: text("reason", {
+      enum: [
+        "active_run",
+        "agent_changed",
+        "agent_unavailable",
+        "dispatch_exception",
+        "record_dispatch_conflict",
+        "run_unavailable",
+        "watch_deleted",
+        "watch_paused",
+      ],
+    }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.scheduleId, table.scheduleRevision, table.scheduledAt] }),
+    foreignKey({
+      columns: [table.scheduleId, table.agentId, table.scheduleRevision],
+      foreignColumns: [
+        agentScheduleRevisions.scheduleId,
+        agentScheduleRevisions.agentId,
+        agentScheduleRevisions.revision,
+      ],
+    }).onDelete("restrict"),
+    index("agent_schedule_occurrences_pending")
+      .on(table.nextAttemptAt)
+      .where(sql`${table.status} = 'pending'`),
+    index("agent_schedule_occurrences_history").on(table.scheduleId, table.occurredAt),
+    check("agent_schedule_occurrences_revision_positive", sql`${table.scheduleRevision} > 0`),
+    check("agent_schedule_occurrences_scheduled_at_positive", sql`${table.scheduledAt} > 0`),
+    check("agent_schedule_occurrences_occurred_at_positive", sql`${table.occurredAt} > 0`),
+    check("agent_schedule_occurrences_attempts_positive", sql`${table.attempts} > 0`),
+    check(
+      "agent_schedule_occurrences_status",
+      sql`${table.status} IN ('pending', 'dispatched', 'skipped')`,
+    ),
+    check(
+      "agent_schedule_occurrences_state",
+      sql`(
+        (${table.status} = 'pending'
+          AND ${table.nextAttemptAt} IS NOT NULL
+          AND ${table.runId} IS NULL
+          AND ${table.reason} IS NULL)
+        OR (${table.status} = 'dispatched'
+          AND ${table.nextAttemptAt} IS NULL
+          AND ${table.runId} IS NOT NULL
+          AND ${table.reason} IS NULL)
+        OR (${table.status} = 'skipped'
+          AND ${table.nextAttemptAt} IS NULL
+          AND ${table.runId} IS NULL
+          AND ${table.reason} IS NOT NULL)
+      )`,
+    ),
   ],
 );
 
@@ -1641,6 +1708,7 @@ export const controlPlaneSchema = {
   agentInboxItems,
   agentRevisions,
   agentScheduleRevisions,
+  agentScheduleOccurrences,
   agentSchedules,
   agentScheduleUpdates,
   agentWorkflowDeletions,

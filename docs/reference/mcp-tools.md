@@ -53,6 +53,16 @@ also removes its Workflow-owned Session, retained execution data, and deliverabl
 A Workflow output contract applies only to its final stage; intermediate stages stay
 conversational. Schedules freeze the same optional contract in the schedule revision.
 
+### Watch for something
+
+Use crewhelm_agent_watches with action "sources" to see what Crewhelm can notice. A
+scheduled check is the fallback that works without external setup: ask the owner how often the
+Agent should check, what it should look for, and what useful outcome to return. Pass that interval
+as everyMinutes; Crewhelm owns its alarm, exact occurrence identity, bounded Run admission, and
+recovery. A check may find nothing. Retain the Watch id and revision for exact inspection,
+history, pause, resume, update, or deletion. Never ask the owner to configure a webhook URL,
+bearer token, API call, or workflow graph.
+
 ### Add context and capabilities
 
 Native capability modules, Skills, and integration grants configure how an Agent works. Use
@@ -238,6 +248,203 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
     "agentId"
   ],
   "additionalProperties": false
+}
+```
+
+</details>
+
+## `crewhelm_agent_watches`
+
+**Manage Crewhelm Agent Watches**
+
+Tell an Agent when to check something, then inspect, pause, resume, update, or delete that Watch. Start with sources to see what Crewhelm can notice. Scheduled checks may find nothing and require no webhook, bearer token, API workflow, or external setup.
+
+Attributes: write, destructive, idempotent, closed-world.
+
+<details>
+<summary>Input schema</summary>
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "sources",
+        "create",
+        "update",
+        "pause",
+        "resume",
+        "delete",
+        "inspect",
+        "list",
+        "history"
+      ],
+      "description": "Choose one action and send only its fields: sources(); create(agentId, expectedAgentRevision, idempotencyKey, watch); update(agentId, expectedAgentRevision, expectedWatchRevision, idempotencyKey, watchId, watch); pause(agentId, expectedAgentRevision, expectedWatchRevision, idempotencyKey, watchId); resume(agentId, expectedAgentRevision, expectedWatchRevision, idempotencyKey, watchId); delete(agentId, expectedAgentRevision, expectedWatchRevision, idempotencyKey, watchId); inspect(agentId, watchId); list(agentId); history(agentId, watchId, limit?)."
+    },
+    "agentId": {
+      "type": "string",
+      "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "expectedAgentRevision": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "expectedWatchRevision": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20
+    },
+    "watch": {
+      "type": "object",
+      "properties": {
+        "everyMinutes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10080,
+          "description": "How often Crewhelm should ask the Agent to check. A check may find nothing."
+        },
+        "instruction": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384,
+          "description": "What the Agent should check and what useful outcome it should return."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Short owner-facing name for this scheduled responsibility."
+        },
+        "outputContract": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "markdown"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "json"
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jsonSchema": {
+                      "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "$ref": "#/definitions/__schema0"
+                      }
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+                    },
+                    "version": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 32,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "kind",
+                "schema"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Optional deliverable contract frozen for every Watch occurrence."
+        }
+      },
+      "required": [
+        "everyMinutes",
+        "instruction",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "watchId": {
+      "type": "string",
+      "pattern": "^schedule_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "Opaque Watch identity. Scheduled-check Watches retain their compatible schedule identity."
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "__schema0": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/__schema0"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/definitions/__schema0"
+          }
+        }
+      ]
+    }
+  }
 }
 ```
 
