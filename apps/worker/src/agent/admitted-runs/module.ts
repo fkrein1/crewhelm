@@ -150,6 +150,7 @@ type CommittedValidatedRunOutput = Exclude<StoredValidatedRunOutput, { state: "r
 const RUNTIME_ADMISSION_UNAVAILABLE = "CrewAgent runtime admission is not available.";
 const INBOX_PROJECTION_PREFIX = "crewhelm:inbox-projection:";
 const RUN_RECORD_PREFIX = "crewhelm:run:";
+const SESSION_RUN_DRAINED_PREFIX = "crewhelm:session-run-drained:";
 const SESSION_RUN_TERMINAL_PREFIX = "crewhelm:session-run-terminal:";
 const RUN_TRACE_PREFIX = "crewhelm:run-trace:";
 const RUN_OUTPUT_PREFIX = "crewhelm:run-output:";
@@ -313,6 +314,10 @@ function sessionRunTerminalKey(runId: string): string {
   return `${SESSION_RUN_TERMINAL_PREFIX}${runId}`;
 }
 
+function sessionRunDrainedKey(runId: string): string {
+  return `${SESSION_RUN_DRAINED_PREFIX}${runId}`;
+}
+
 function inboxProjectionKey(runId: string): string {
   return `${INBOX_PROJECTION_PREFIX}${runId}`;
 }
@@ -447,6 +452,16 @@ export class CrewSession extends Think {
 
         await this.#scheduleRunLifecycle(runId, record.data);
         await this.#recoverStructuredRunOutput(runId, record.data);
+        const submission = await super.inspectSubmission(runId);
+        if (
+          record.data.session !== undefined &&
+          submission !== null &&
+          ["aborted", "completed", "error", "skipped"].includes(submission.status)
+        ) {
+          // A terminal submission found during startup has no surviving turn in
+          // this isolate, so it is safe to backfill the quiescence acknowledgement.
+          await this.ctx.storage.put(sessionRunDrainedKey(runId), true);
+        }
       }
     }
 
@@ -1766,6 +1781,7 @@ export class CrewSession extends Think {
     if (record.session === undefined && validatedOutput !== undefined) {
       await this.ctx.storage.delete(runOutputMessageKey(validatedOutput.messageId));
     }
+    await this.ctx.storage.delete(sessionRunDrainedKey(request.data.runId));
     await this.ctx.storage.delete(sessionRunTerminalKey(request.data.runId));
     await this.ctx.storage.delete(runRecordKey(request.data.runId));
   }
@@ -2164,38 +2180,46 @@ export class CrewSession extends Think {
       return;
     }
 
-    const approvalRecords = await this.ctx.storage.list({
-      prefix: toolApprovalPrefix(runId),
-    });
-    const approvalCount = approvalRecords.size;
-    const committedSessionStatus = z
-      .enum(["cancelled", "completed", "failed"])
-      .safeParse(await this.ctx.storage.get(sessionRunTerminalKey(runId)));
-    const structuredOutput =
-      result.status === "completed" &&
-      approvalCount === 0 &&
-      record.outputContract?.kind === "json" &&
-      (!committedSessionStatus.success || committedSessionStatus.data !== "cancelled")
-        ? await this.#finalizeStructuredRunOutput(record, runId)
-        : undefined;
-    if (
-      result.status === "completed" &&
-      approvalCount === 0 &&
-      record.outputContract?.kind === "json" &&
-      structuredOutput === undefined &&
-      (!committedSessionStatus.success || committedSessionStatus.data !== "cancelled")
-    ) {
-      await this.#scheduleStructuredOutputRetry(record, runId, 0);
-      return;
+    try {
+      const approvalRecords = await this.ctx.storage.list({
+        prefix: toolApprovalPrefix(runId),
+      });
+      const approvalCount = approvalRecords.size;
+      const committedSessionStatus = z
+        .enum(["cancelled", "completed", "failed"])
+        .safeParse(await this.ctx.storage.get(sessionRunTerminalKey(runId)));
+      const structuredOutput =
+        result.status === "completed" &&
+        approvalCount === 0 &&
+        record.outputContract?.kind === "json" &&
+        (!committedSessionStatus.success || committedSessionStatus.data !== "cancelled")
+          ? await this.#finalizeStructuredRunOutput(record, runId)
+          : undefined;
+      if (
+        result.status === "completed" &&
+        approvalCount === 0 &&
+        record.outputContract?.kind === "json" &&
+        structuredOutput === undefined &&
+        (!committedSessionStatus.success || committedSessionStatus.data !== "cancelled")
+      ) {
+        await this.#scheduleStructuredOutputRetry(record, runId, 0);
+        return;
+      }
+      await this.#publishRunResponse({
+        approvalCount,
+        frameworkStatus: result.status === "aborted" ? "cancelled" : result.status,
+        record,
+        resultMessage: result.message,
+        runId,
+        ...(structuredOutput === undefined ? {} : { structuredOutput }),
+      });
+    } finally {
+      if (record.session !== undefined) {
+        // Think terminal status can precede callback completion. This marker is
+        // written last so deletion can prove all Crewhelm turn work has drained.
+        await this.ctx.storage.put(sessionRunDrainedKey(runId), true);
+      }
     }
-    await this.#publishRunResponse({
-      approvalCount,
-      frameworkStatus: result.status === "aborted" ? "cancelled" : result.status,
-      record,
-      resultMessage: result.message,
-      runId,
-      ...(structuredOutput === undefined ? {} : { structuredOutput }),
-    });
   }
 
   async #publishRunResponse(input: {
@@ -2732,6 +2756,62 @@ export class CrewSession extends Think {
               : output?.state === "pending")
           ? "running"
           : publicRunStatus(submission.status);
+  }
+
+  async settleExpiredSessionRunForDeletion(input: unknown): Promise<boolean> {
+    const request = z
+      .strictObject({
+        objectName: z.string().min(1),
+        runId: runIdSchema,
+        session: runSessionSchema,
+      })
+      .safeParse(input);
+    if (!request.success) return false;
+
+    const record = await this.#readRunRecord(request.data.runId);
+    if (
+      request.data.objectName !== this.ctx.id.name ||
+      record?.session === undefined ||
+      JSON.stringify(record.session) !== JSON.stringify(request.data.session) ||
+      Date.now() < record.deadlineAt
+    ) {
+      return false;
+    }
+
+    const terminalStatus = await this.#commitSessionTerminalStatus(request.data.runId, "cancelled");
+    let submission = await super.inspectSubmission(request.data.runId);
+    const isDrained = () =>
+      submission !== null &&
+      ["aborted", "completed", "error", "skipped"].includes(submission.status);
+
+    if (!isDrained()) {
+      try {
+        await this.cancelAdmittedSubmission(
+          request.data.runId,
+          "Expired Session Run was cancelled for Session deletion.",
+        );
+      } catch {
+        // The durable terminal fence remains, but storage cannot be deleted
+        // until the framework submission is demonstrably drained.
+      }
+      submission = await super.inspectSubmission(request.data.runId);
+    }
+
+    if (
+      !isDrained() ||
+      (await this.ctx.storage.get(sessionRunDrainedKey(request.data.runId))) !== true
+    ) {
+      return false;
+    }
+
+    if (terminalStatus === "cancelled") {
+      const approvals = await this.ctx.storage.list({
+        prefix: toolApprovalPrefix(request.data.runId),
+      });
+      await Promise.all([...approvals.keys()].map((key) => this.ctx.storage.delete(key)));
+      await this.#discardCancelledSessionBranch(request.data.runId);
+    }
+    return true;
   }
 
   override authorizeAction(

@@ -512,15 +512,9 @@ export class CrewAgent extends CrewSession {
       return false;
     }
 
-    let record = await this.#readAvailableSession(request.data.sessionId);
+    const record = await this.#readAvailableSession(request.data.sessionId);
     if (record === undefined) return true;
     if (record.workflowId !== request.data.workflowId) return false;
-    if (await this.#reconcileActiveRun(record)) return false;
-
-    record = await this.#readAvailableSession(request.data.sessionId);
-    if (record === undefined) return true;
-    if (record.workflowId !== request.data.workflowId || record.activeRunId !== null) return false;
-
     const deleted = await this.deleteAgentSession({
       agentId: record.agentId,
       expectedBranchRevision: record.branchRevision,
@@ -530,6 +524,35 @@ export class CrewAgent extends CrewSession {
       workflowId: request.data.workflowId,
     });
     return deleted.ok || deleted.error.code === "session_not_found";
+  }
+
+  async #releaseSessionRunForDeletion(record: SessionDirectoryRecord): Promise<boolean> {
+    if (record.activeRunId === null) return true;
+    const mapping = await this.#readRunSession(record.activeRunId);
+    if (mapping === undefined || Date.now() < mapping.deadlineAt) {
+      return !(await this.#reconcileActiveRun(record));
+    }
+
+    const session: RunSession = {
+      branchId: record.branchId,
+      branchRevision: record.branchRevision,
+      sessionId: record.sessionId,
+    };
+
+    try {
+      const settled = await this.#session(session).settleExpiredSessionRunForDeletion({
+        objectName: crewSessionObjectName({
+          agentId: record.agentId,
+          ownerKey: record.ownerKey,
+          sessionId: record.sessionId,
+        }),
+        runId: record.activeRunId,
+        session,
+      });
+      return settled && (await this.#clearReconciledRun(record));
+    } catch {
+      return false;
+    }
   }
 
   override async _workflow_handleCallback(...args: unknown[]): Promise<void> {
@@ -852,7 +875,7 @@ export class CrewAgent extends CrewSession {
           };
     }
 
-    const record = await this.#readAvailableSession(request.data.sessionId);
+    let record = await this.#readAvailableSession(request.data.sessionId);
 
     if (
       record === undefined ||
@@ -872,7 +895,20 @@ export class CrewAgent extends CrewSession {
       };
     }
 
-    if (await this.#reconcileActiveRun(record)) {
+    if (!(await this.#releaseSessionRunForDeletion(record))) {
+      return {
+        error: { code: "session_busy", message: "Session deletion denied." },
+        ok: false,
+      };
+    }
+
+    record = await this.#readAvailableSession(request.data.sessionId);
+    if (
+      record === undefined ||
+      record.workflowId !== request.data.workflowId ||
+      record.branchRevision !== request.data.expectedBranchRevision ||
+      record.activeRunId !== null
+    ) {
       return {
         error: { code: "session_busy", message: "Session deletion denied." },
         ok: false,

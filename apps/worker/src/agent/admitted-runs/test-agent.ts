@@ -395,6 +395,7 @@ export class TestCrewSession extends CrewSession {
   #delayDeletion = false;
   #deletionWaiting = false;
   #failDeletionResponse = false;
+  #ignoreNextCancellation = false;
   #rejectNextCancellation = false;
   #releaseDeletion: (() => void) | undefined;
   readonly #modelCalls: TestModelCall[] = [];
@@ -632,6 +633,10 @@ export class TestCrewSession extends CrewSession {
     this.#rejectNextCancellation = true;
   }
 
+  ignoreNextCancellationForTest(): void {
+    this.#ignoreNextCancellation = true;
+  }
+
   async appendCancellationDescendantsForTest(runId: string): Promise<void> {
     const childId = `${runId}:cancel-child`;
     const session = Session.create(this);
@@ -656,11 +661,16 @@ export class TestCrewSession extends CrewSession {
   override async cancelAdmittedRun(input: unknown) {
     const request = cancelAdmittedRunInputSchema.safeParse(input);
 
-    if (!this.#completeBeforeNextCancellation || !request.success) {
+    if (
+      (!this.#completeBeforeNextCancellation && !this.#ignoreNextCancellation) ||
+      !request.success
+    ) {
       return super.cancelAdmittedRun(input);
     }
 
+    const completeBeforeCancellation = this.#completeBeforeNextCancellation;
     this.#completeBeforeNextCancellation = false;
+    this.#ignoreNextCancellation = false;
     const redeemed = await this.env.OWNER_CONTROL_PLANE.getByName(
       request.data.capability.ownerKey,
     ).redeemRunReceiverCapability(request.data.capability);
@@ -669,7 +679,12 @@ export class TestCrewSession extends CrewSession {
       return cancelAdmittedRunResultSchema.parse(redeemed);
     }
 
-    this.#completedBeforeCancellation.set(request.data.capability.runId, new Date().toISOString());
+    if (completeBeforeCancellation) {
+      this.#completedBeforeCancellation.set(
+        request.data.capability.runId,
+        new Date().toISOString(),
+      );
+    }
     return cancelAdmittedRunResultSchema.parse({ cancelled: false, ok: true });
   }
 

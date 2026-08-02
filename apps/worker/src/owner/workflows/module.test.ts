@@ -1146,4 +1146,120 @@ describe("Agent workflows", () => {
       ).resolves.toMatchObject({ terminalStatus: "completed" });
     });
   });
+
+  it.each([
+    ["succeeds", false],
+    ["fails", true],
+  ])(
+    "deletes a terminal Workflow after its Session cancellation %s and fully drains",
+    async (cancellationOutcome, failCancellation) => {
+      const authority = await authorityFor(
+        `agent-workflow-expired-session-delete-${cancellationOutcome}`,
+      );
+      const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+      const created = await controlPlane.createAgent(
+        authority,
+        agentInput(`workflow-agent-expired-session-delete-${cancellationOutcome}`),
+      );
+      if (!created.ok) throw new Error("Expected expired Session deletion Agent.");
+      await enableSessions(authority.ownerKey, created.agent.id);
+
+      const started = await controlPlane.startAgentWorkflow(authority, {
+        agentId: created.agent.id,
+        expectedRevision: created.agent.revision,
+        idempotencyKey: `workflow-expired-session-delete-${cancellationOutcome}`,
+        objective: "Delete an expired Workflow Session after owner cancellation recovery.",
+        stages: [
+          { name: "One", prompt: SLOW_TEST_PROMPT },
+          { name: "Two", prompt: "Must never start." },
+        ],
+      });
+      if (!started.ok) throw new Error("Expected expired Session deletion Workflow.");
+      const dispatched = await controlPlane.dispatchAgentWorkflowStage({
+        agentId: created.agent.id,
+        stageIndex: 0,
+        workflowId: started.workflow.workflowId,
+      });
+      if (!dispatched.ok) throw new Error("Expected expired Session deletion Run.");
+
+      const session = env.CREW_SESSION.getByName(
+        crewSessionObjectName({
+          agentId: created.agent.id,
+          ownerKey: authority.ownerKey,
+          sessionId: dispatched.session.sessionId,
+        }),
+      );
+      await runInDurableObject(session, async (instance, state) => {
+        if (!(instance instanceof TestCrewSession)) throw new Error("Expected test CrewSession.");
+        instance.ignoreNextCancellationForTest();
+        const key = `crewhelm:run:${dispatched.runId}`;
+        const record = admittedRunRecordSchema.parse(await state.storage.get(key));
+        await state.storage.put(key, { ...record, deadlineAt: 1 });
+      });
+      await runInDurableObject(controlPlane, (_instance, state) => {
+        state.storage.sql.exec(
+          "UPDATE run_admissions SET redeemed_at = 1 WHERE run_id = ?",
+          dispatched.runId,
+        );
+      });
+      const running = await controlPlane.inspectAgentWorkflow(authority, {
+        workflowId: started.workflow.workflowId,
+      });
+      if (!running.ok) throw new Error("Expected running Workflow inspection.");
+
+      const cancelled = await controlPlane.cancelAgentWorkflow(authority, {
+        expectedRevision: running.workflow.revision,
+        workflowId: running.workflow.workflowId,
+      });
+      if (!cancelled.ok || cancelled.workflow.status !== "cancelled") {
+        throw new Error("Expected owner deadline recovery to cancel the Workflow.");
+      }
+      if (failCancellation) {
+        await runInDurableObject(session, (instance) => {
+          if (!(instance instanceof TestCrewSession)) throw new Error("Expected test CrewSession.");
+          instance.failNextCancellationForTest();
+        });
+      }
+      const deletion = {
+        expectedRevision: cancelled.workflow.revision,
+        idempotencyKey: `workflow-expired-session-delete-cleanup-${cancellationOutcome}`,
+        workflowId: cancelled.workflow.workflowId,
+      };
+      await expect(controlPlane.deleteAgentWorkflow(authority, deletion)).resolves.toMatchObject({
+        error: { code: "workflow_unavailable" },
+        ok: false,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 3_250));
+      await expect(
+        controlPlane.inspectAgentWorkflow(authority, { workflowId: cancelled.workflow.workflowId }),
+      ).resolves.toMatchObject({ ok: true, workflow: { status: "cancelled" } });
+      await expect(controlPlane.deleteAgentWorkflow(authority, deletion)).resolves.toEqual({
+        deleted: true,
+        ok: true,
+        workflowId: cancelled.workflow.workflowId,
+      });
+
+      await expect(
+        controlPlane.inspectAgentWorkflow(authority, { workflowId: cancelled.workflow.workflowId }),
+      ).resolves.toMatchObject({ error: { code: "workflow_not_found" }, ok: false });
+      await runInDurableObject(session, async (_instance, state) => {
+        await expect(
+          state.storage.get(`crewhelm:run:${dispatched.runId}`),
+        ).resolves.toBeUndefined();
+        const tables = new Set(
+          [...state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master")].map(
+            (row) => row.name,
+          ),
+        );
+        for (const table of ["assistant_messages", "cf_think_submissions"]) {
+          if (!tables.has(table)) continue;
+          const rows = [
+            ...state.storage.sql.exec<{ count: number }>(`SELECT COUNT(*) AS count FROM ${table}`),
+          ];
+          expect(rows[0]?.count ?? 0).toBe(0);
+        }
+      });
+    },
+  );
 });
