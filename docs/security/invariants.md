@@ -125,4 +125,16 @@ always require approval, and dispatch uncertainty remains an unresolved external
 Remote input schemas are compiled before persistence and admit only a bounded non-regex subset;
 unsupported keywords, references, conditionals, and excessive composition fail closed.
 
+Public Recipe and Skill packages are immutable hostile supply-chain input, never authority. A
+Recipe pins exact Registry origin, publisher namespace, name, version, and digest for every Skill;
+the owner instance fetches and verifies authoritative bytes from a canonical public HTTPS origin
+rather than accepting model-returned content. Registry fetches reject local or private targets and
+revalidate resolved addresses and redirects. Raw Skill files are exposed only through bounded exact
+reads and rendered as inert source without active HTML, remote images, or automatic fetches. A Skill
+may influence how an Agent uses existing grants, so local preview combines content findings with the
+exact proposed authority, but neither automated review nor a model may mark it safe. Installation
+imports a digest-pinned local copy, creates no authority implicitly, never starts work, and never
+follows Registry updates at runtime. Registry restriction or loss cannot mutate an installed
+owner-local version.
+
 No prompt-level instruction is an acceptable substitute for one of these controls.

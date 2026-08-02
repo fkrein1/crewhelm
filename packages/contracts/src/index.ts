@@ -22,6 +22,7 @@ export * from "./inference.js";
 export * from "./output-contracts.js";
 export * from "./recovery.js";
 export * from "./remote-mcp.js";
+export * from "./recipes.js";
 export * from "./run-admission.js";
 export * from "./runtime-tool-execution.js";
 export * from "./schedule-revision.js";
