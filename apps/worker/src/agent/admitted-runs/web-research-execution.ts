@@ -47,6 +47,8 @@ export type ControlledWebFetchResult = {
   truncated: boolean;
 };
 
+type PublicHttpsUrlResult = { code: "invalid_source"; ok: false } | { ok: true; url: string };
+
 export class WebResearchExecutionError extends Error {
   readonly code:
     | "content_too_large"
@@ -95,12 +97,12 @@ function isDeniedIpv4(hostname: string): boolean {
   );
 }
 
-export function normalizePublicHttpsUrl(value: string): string {
+function parsePublicHttpsUrl(value: string, base?: string): PublicHttpsUrlResult {
   let url: URL;
   try {
-    url = new URL(value);
+    url = new URL(value, base);
   } catch {
-    throw new WebResearchExecutionError("invalid_source");
+    return { code: "invalid_source", ok: false };
   }
 
   const encodedHostname = url.hostname.toLowerCase();
@@ -121,13 +123,19 @@ export function normalizePublicHttpsUrl(value: string): string {
     isDeniedIpv4(hostname) ||
     encodedHostname.startsWith("[")
   ) {
-    throw new WebResearchExecutionError("invalid_source");
+    return { code: "invalid_source", ok: false };
   }
 
   url.hash = "";
   url.hostname = hostname;
   if (url.port === "443") url.port = "";
-  return url.toString();
+  return { ok: true, url: url.toString() };
+}
+
+export function normalizePublicHttpsUrl(value: string): string {
+  const result = parsePublicHttpsUrl(value);
+  if (!result.ok) throw new WebResearchExecutionError(result.code);
+  return result.url;
 }
 
 function tokenPayload(runId: string, normalizedUrl: string): Uint8Array {
@@ -239,6 +247,16 @@ function normalizeText(value: string): string {
   return value.replaceAll(/\s+/g, " ").trim();
 }
 
+function decodeCodePoint(value: string, radix: number, fallback: string): string {
+  const codePoint = Number.parseInt(value, radix);
+  return Number.isInteger(codePoint) &&
+    codePoint >= 0 &&
+    codePoint <= 0x10_ff_ff &&
+    !(codePoint >= 0xd8_00 && codePoint <= 0xdf_ff)
+    ? String.fromCodePoint(codePoint)
+    : fallback;
+}
+
 function decodeHtmlEntities(value: string): string {
   const entities: Record<string, string> = {
     amp: "&",
@@ -251,10 +269,10 @@ function decodeHtmlEntities(value: string): string {
   return value.replaceAll(/&(#x[\da-f]+|#\d+|amp|apos|gt|lt|nbsp|quot);/gi, (match, entity) => {
     const normalized = String(entity).toLowerCase();
     if (normalized.startsWith("#x")) {
-      return String.fromCodePoint(Number.parseInt(normalized.slice(2), 16));
+      return decodeCodePoint(normalized.slice(2), 16, match);
     }
     if (normalized.startsWith("#")) {
-      return String.fromCodePoint(Number.parseInt(normalized.slice(1), 10));
+      return decodeCodePoint(normalized.slice(1), 10, match);
     }
     return entities[normalized] ?? match;
   });
@@ -361,12 +379,9 @@ export async function runBraveWebSearch(input: {
     const seen = new Set<string>();
     for (const candidate of parsed.data.web?.results ?? []) {
       if (results.length >= input.tool.limits.maxResults) break;
-      let url: string;
-      try {
-        url = normalizePublicHttpsUrl(candidate.url);
-      } catch {
-        continue;
-      }
+      const source = parsePublicHttpsUrl(candidate.url);
+      if (!source.ok) continue;
+      const url = source.url;
       if (seen.has(url)) continue;
       seen.add(url);
       results.push({
@@ -388,6 +403,7 @@ export async function runBraveWebSearch(input: {
     return { query, results };
   } catch (error) {
     if (error instanceof WebResearchExecutionError) throw error;
+    if (input.signal.aborted) throw input.signal.reason;
     throw new WebResearchExecutionError(bounded.timedOut() ? "timed_out" : "provider_failed");
   } finally {
     bounded.cleanup();
@@ -416,12 +432,9 @@ export async function runControlledWebFetch(input: {
         }
         const location = response.headers.get("location");
         if (location === null) throw new WebResearchExecutionError("redirect_denied");
-        let nextUrl: string;
-        try {
-          nextUrl = normalizePublicHttpsUrl(new URL(location, currentUrl).toString());
-        } catch {
-          throw new WebResearchExecutionError("redirect_denied");
-        }
+        const next = parsePublicHttpsUrl(location, currentUrl);
+        if (!next.ok) throw new WebResearchExecutionError("redirect_denied");
+        const nextUrl = next.url;
         if (visited.has(nextUrl)) throw new WebResearchExecutionError("redirect_denied");
         visited.add(nextUrl);
         currentUrl = nextUrl;
@@ -456,6 +469,7 @@ export async function runControlledWebFetch(input: {
     }
   } catch (error) {
     if (error instanceof WebResearchExecutionError) throw error;
+    if (input.signal.aborted) throw input.signal.reason;
     throw new WebResearchExecutionError(bounded.timedOut() ? "timed_out" : "provider_failed");
   } finally {
     bounded.cleanup();

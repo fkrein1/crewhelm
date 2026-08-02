@@ -183,6 +183,55 @@ describe("Brave web search", () => {
       status: 401,
     });
   });
+
+  it("classifies malformed provider content and bounded timeouts", async () => {
+    await expect(
+      runBraveWebSearch({
+        apiKey: "secret-api-key",
+        fetchImplementation: vi
+          .fn<typeof fetch>()
+          .mockResolvedValue(
+            new Response("{", { headers: { "content-type": "application/json" } }),
+          ),
+        query: "query",
+        signal: new AbortController().signal,
+        tool: searchTool,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_provider_response", status: null });
+
+    const timedOut = vi.fn<typeof fetch>().mockImplementation((_url, options) => {
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = options?.signal;
+        if (signal?.aborted) reject(signal.reason);
+        else signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    });
+    await expect(
+      runBraveWebSearch({
+        apiKey: "secret-api-key",
+        fetchImplementation: timedOut,
+        query: "query",
+        signal: new AbortController().signal,
+        tool: { ...searchTool, limits: { ...searchTool.limits, maxDurationMs: 1 } },
+      }),
+    ).rejects.toMatchObject({ code: "timed_out", status: null });
+  });
+
+  it("preserves the caller abort reason", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Search cancelled by caller.");
+    controller.abort(reason);
+
+    await expect(
+      runBraveWebSearch({
+        apiKey: "secret-api-key",
+        fetchImplementation: vi.fn<typeof fetch>().mockRejectedValue(reason),
+        query: "query",
+        signal: controller.signal,
+        tool: searchTool,
+      }),
+    ).rejects.toBe(reason);
+  });
 });
 
 describe("controlled web fetch", () => {
@@ -252,5 +301,35 @@ describe("controlled web fetch", () => {
         url: "https://example.com/large",
       }),
     ).rejects.toMatchObject({ code: "content_too_large" });
+  });
+
+  it("preserves malformed numeric entities as untrusted text", async () => {
+    await expect(
+      runControlledWebFetch({
+        fetchImplementation: vi.fn<typeof fetch>().mockResolvedValue(
+          new Response("<p>Evidence &#999999999; remains visible.</p>", {
+            headers: { "content-type": "text/html" },
+          }),
+        ),
+        signal: new AbortController().signal,
+        tool: fetchTool,
+        url: "https://example.com/entities",
+      }),
+    ).resolves.toMatchObject({ text: "Evidence &#999999999; remains visible." });
+  });
+
+  it("preserves the caller abort reason", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Fetch cancelled by caller.");
+    controller.abort(reason);
+
+    await expect(
+      runControlledWebFetch({
+        fetchImplementation: vi.fn<typeof fetch>().mockRejectedValue(reason),
+        signal: controller.signal,
+        tool: fetchTool,
+        url: "https://example.com/cancelled",
+      }),
+    ).rejects.toBe(reason);
   });
 });

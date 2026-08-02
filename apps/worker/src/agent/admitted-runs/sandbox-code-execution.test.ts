@@ -141,6 +141,53 @@ describe("bounded Sandbox code streaming", () => {
     ).rejects.toThrow("Run cancelled.");
   });
 
+  it("removes interruption state when stream acquisition throws synchronously", async () => {
+    vi.useFakeTimers();
+
+    try {
+      await expect(
+        runBoundedSandboxCode({
+          cleanupAfterLateOpen: async () => undefined,
+          code: "print('never opened')",
+          maximumStreamBytes: 1_024,
+          openStream: () => {
+            throw new Error("Sandbox stream unavailable.");
+          },
+          signal: new AbortController().signal,
+          timeoutMs: 1_000,
+          trackLateCleanup: () => undefined,
+        }),
+      ).rejects.toThrow("Sandbox stream unavailable.");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("removes interruption state when the acquired stream is already locked", async () => {
+    vi.useFakeTimers();
+    const output = new ReadableStream<Uint8Array>();
+    const existingReader = output.getReader();
+
+    try {
+      await expect(
+        runBoundedSandboxCode({
+          cleanupAfterLateOpen: async () => undefined,
+          code: "print('locked stream')",
+          maximumStreamBytes: 1_024,
+          openStream: () => Promise.resolve(output),
+          signal: new AbortController().signal,
+          timeoutMs: 1_000,
+          trackLateCleanup: () => undefined,
+        }),
+      ).rejects.toThrow(/locked/u);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      existingReader.releaseLock();
+      vi.useRealTimers();
+    }
+  });
+
   it("cancels a stream that opens after timeout and re-runs final cleanup", async () => {
     let resolveOpening: ((stream: ReadableStream<Uint8Array>) => void) | undefined;
     const opening = new Promise<ReadableStream<Uint8Array>>((resolve) => {

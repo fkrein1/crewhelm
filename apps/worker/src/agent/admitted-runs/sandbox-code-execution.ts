@@ -162,7 +162,7 @@ export async function runBoundedSandboxCode(input: {
   trackLateCleanup(cleanup: Promise<void>): void;
 }): Promise<ExecutionResult> {
   const interrupted = interruption(input.signal, input.timeoutMs);
-  const opening = input.openStream();
+  const opening = Promise.resolve().then(() => input.openStream());
   let stream: ReadableStream<Uint8Array>;
 
   try {
@@ -200,7 +200,15 @@ export async function runBoundedSandboxCode(input: {
     throw error;
   }
 
-  const reader = stream.getReader();
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+
+  try {
+    reader = stream.getReader();
+  } catch (error) {
+    interrupted.cleanup();
+    throw error;
+  }
+
   const decoder = new TextDecoder();
   const result: ExecutionResult = {
     code: input.code,

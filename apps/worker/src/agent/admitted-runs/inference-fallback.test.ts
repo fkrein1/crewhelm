@@ -63,6 +63,77 @@ function fixture(primary: MockLanguageModelV4, fallback: MockLanguageModelV4) {
 }
 
 describe("inference fallback", () => {
+  it("generates with the next model after a retryable rate limit", async () => {
+    const primary = new MockLanguageModelV4({
+      doGenerate: async () => {
+        throw providerFailure(429);
+      },
+    });
+    const fallback = new MockLanguageModelV4({
+      doGenerate: {
+        content: [{ text: "fallback", type: "text" }],
+        finishReason: { raw: "stop", unified: "stop" },
+        usage: {
+          inputTokens: { cacheRead: 0, cacheWrite: 0, noCache: 1, total: 1 },
+          outputTokens: { reasoning: 0, text: 1, total: 1 },
+        },
+        warnings: [],
+      },
+    });
+    const test = fixture(primary, fallback);
+
+    await expect(test.model.doGenerate(callOptions)).resolves.toEqual(
+      expect.objectContaining({ content: expect.any(Array) }),
+    );
+    expect(primary.doGenerateCalls).toHaveLength(1);
+    expect(fallback.doGenerateCalls).toHaveLength(1);
+    expect(test.events).toEqual([
+      {
+        event: "inference.attempt_failed",
+        model: "primary",
+        modelCall: 1,
+        reason: "rate_limited",
+      },
+      {
+        event: "inference.model_selected",
+        model: "fallback",
+        modelCall: 2,
+      },
+    ]);
+  });
+
+  it("preserves the final provider error after ordered fallback exhaustion", async () => {
+    const primaryFailure = providerFailure(408);
+    const fallbackFailure = providerFailure(503);
+    const primary = new MockLanguageModelV4({
+      doGenerate: async () => {
+        throw primaryFailure;
+      },
+    });
+    const fallback = new MockLanguageModelV4({
+      doGenerate: async () => {
+        throw fallbackFailure;
+      },
+    });
+    const test = fixture(primary, fallback);
+
+    await expect(test.model.doGenerate(callOptions)).rejects.toBe(fallbackFailure);
+    expect(test.events).toEqual([
+      {
+        event: "inference.attempt_failed",
+        model: "primary",
+        modelCall: 1,
+        reason: "timeout",
+      },
+      {
+        event: "inference.attempt_failed",
+        model: "fallback",
+        modelCall: 2,
+        reason: "provider_unavailable",
+      },
+    ]);
+  });
+
   it("falls back when a retryable provider failure arrives before semantic output", async () => {
     const primary = new MockLanguageModelV4({
       doStream: async () =>
@@ -132,6 +203,21 @@ describe("inference fallback", () => {
 
     await expect(test.model.doStream(callOptions)).rejects.toBe(failure);
     expect(test.beforeAttempt).toHaveBeenCalledTimes(1);
+    expect(test.events).toEqual([]);
+  });
+
+  it("preserves abort errors without selecting a fallback", async () => {
+    const aborted = new DOMException("inference cancelled", "AbortError");
+    const primary = new MockLanguageModelV4({
+      doStream: async () => {
+        throw aborted;
+      },
+    });
+    const fallback = new MockLanguageModelV4();
+    const test = fixture(primary, fallback);
+
+    await expect(test.model.doStream(callOptions)).rejects.toBe(aborted);
+    expect(fallback.doStreamCalls).toHaveLength(0);
     expect(test.events).toEqual([]);
   });
 
