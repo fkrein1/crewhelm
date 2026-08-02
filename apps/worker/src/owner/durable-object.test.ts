@@ -2,6 +2,9 @@ import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
   AUTONOMY_WRITE_SCOPE,
+  CONNECTIONS_READ_SCOPE,
+  CONNECTIONS_WRITE_SCOPE,
+  createRemoteMcpConnectionResultSchema,
   DEFAULT_FLEET_INBOX_RETENTION_SECONDS,
   DEFAULT_FLEET_MAX_AGENTS,
   DEFAULT_FLEET_MAX_CONCURRENT_RUNS,
@@ -128,6 +131,7 @@ function rewindControlPlaneMigrations(
   firstRemovedVersion: number,
 ): void {
   storage.sql.exec("PRAGMA foreign_keys=OFF");
+  storage.sql.exec("DROP TABLE IF EXISTS remote_mcp_oauth_requests");
   storage.sql.exec("DROP TABLE IF EXISTS remote_mcp_connection_mutations");
   storage.sql.exec("DROP TABLE IF EXISTS remote_mcp_connections");
   storage.sql.exec("PRAGMA foreign_keys=ON");
@@ -416,6 +420,11 @@ describe("OwnerControlPlane", () => {
           name: "0031_freezing_master_chief",
           version: 32,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0032_panoramic_speed_demon",
+          version: 33,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });
@@ -439,6 +448,87 @@ describe("OwnerControlPlane", () => {
         ).toThrow("CHECK constraint failed");
       }
     });
+  });
+
+  it("preserves populated public remote MCP Connections through the OAuth migration", async () => {
+    const authority = await authorityFor("remote-mcp-oauth-migration", [
+      CONNECTIONS_READ_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const catalog = [{ inputSchema: { type: "object" as const }, name: "records.read" }];
+    const serializedCatalog = JSON.stringify(catalog);
+    const created = createRemoteMcpConnectionResultSchema.parse(
+      await stub.createRemoteMcpConnection(authority, {
+        authKind: "public",
+        catalog,
+        catalogBytes: new TextEncoder().encode(serializedCatalog).byteLength,
+        endpoint: "https://mcp.example.com/rpc",
+        idempotencyKey: "remote-mcp-oauth-migration-create",
+        name: "Migrated remote MCP",
+        server: { name: "migration-fixture", version: "1.0.0" },
+        snapshotDigest: await migrationChecksum(serializedCatalog),
+      }),
+    );
+    if (!created.ok) throw new Error("Expected remote MCP migration fixture.");
+    const connectionId = created.connection.connectionId;
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec("PRAGMA foreign_keys=OFF");
+      state.storage.sql.exec(
+        `CREATE TABLE legacy_remote_mcp_connections (
+           connection_id text PRIMARY KEY NOT NULL,
+           endpoint text NOT NULL,
+           auth_kind text NOT NULL,
+           catalog text NOT NULL,
+           catalog_bytes integer NOT NULL,
+           snapshot_digest text NOT NULL,
+           server_name text NOT NULL,
+           server_version text NOT NULL,
+           credential_ciphertext text,
+           credential_nonce text,
+           FOREIGN KEY (connection_id) REFERENCES connections(connection_id) ON DELETE restrict
+         )`,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO legacy_remote_mcp_connections
+           (connection_id, endpoint, auth_kind, catalog, catalog_bytes, snapshot_digest,
+            server_name, server_version, credential_ciphertext, credential_nonce)
+         SELECT connection_id, endpoint, auth_kind, catalog, catalog_bytes, snapshot_digest,
+           server_name, server_version, credential_ciphertext, credential_nonce
+         FROM remote_mcp_connections`,
+      );
+      state.storage.sql.exec("DROP TABLE remote_mcp_connections");
+      state.storage.sql.exec(
+        "ALTER TABLE legacy_remote_mcp_connections RENAME TO remote_mcp_connections",
+      );
+      state.storage.sql.exec("DROP TABLE remote_mcp_oauth_requests");
+      state.storage.sql.exec(
+        "DELETE FROM control_plane_migrations WHERE version = ?",
+        CONTROL_PLANE_SCHEMA_VERSION,
+      );
+      await state.storage.sync();
+      state.storage.sql.exec("PRAGMA foreign_keys=ON");
+    });
+    await evictDurableObject(stub);
+
+    await expect(
+      stub.inspectRemoteMcpConnection(authority, {
+        connectionId,
+      }),
+    ).resolves.toMatchObject({
+      connection: {
+        connectionId,
+        oauthScopes: [],
+        status: "active",
+      },
+      ok: true,
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql.exec("PRAGMA foreign_key_check").toArray(),
+      ),
+    ).resolves.toEqual([]);
   });
 
   it("migrates persisted model selections and issued admissions into capability plans", async () => {
@@ -1437,7 +1527,7 @@ describe("OwnerControlPlane", () => {
       AUTONOMY_WRITE_SCOPE,
     ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
-    const legacyMigrations = controlPlaneMigrations.slice(0, -6);
+    const legacyMigrations = controlPlaneMigrations.slice(0, 26);
     const migrations = await Promise.all(
       legacyMigrations.map(async (migration) => ({
         ...migration,
@@ -1816,6 +1906,7 @@ describe("OwnerControlPlane", () => {
         { version: 30 },
         { version: 31 },
         { version: 32 },
+        { version: 33 },
       ]);
     });
   });
@@ -2129,7 +2220,7 @@ describe("OwnerControlPlane", () => {
       admission: { run_id: admission.permit.runId, trigger: "manual" },
       foreignKeys: [],
       migration: {
-        name: "0031_freezing_master_chief",
+        name: "0032_panoramic_speed_demon",
         version: CONTROL_PLANE_SCHEMA_VERSION,
       },
       workflow: {

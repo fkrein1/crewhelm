@@ -473,6 +473,7 @@ describe("OwnerControlPlane remote MCP Connections", () => {
         permit: reserved.permit,
       }),
     ).resolves.toEqual({
+      dispatched: false,
       error: { code: "invalid_execution", message: "Tool execution denied." },
       ok: false,
     });

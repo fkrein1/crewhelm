@@ -434,6 +434,10 @@ function isTerminalSubmissionStatus(status: ThinkSubmissionInspection["status"])
   return runStatus !== "queued" && runStatus !== "running";
 }
 
+class ToolExecutionNotDispatchedError extends Error {
+  override readonly name = "ToolExecutionNotDispatchedError";
+}
+
 export class CrewSession extends Think {
   #activeModelCall: number | undefined;
   #approvalTurnMetadata: AdmittedTurnMetadata | undefined;
@@ -4153,9 +4157,10 @@ export class CrewSession extends Think {
             ).executeRemoteMcpTool({ arguments: input, permit: context.permit }),
           );
 
-          if (!executed.success || !executed.data.ok) {
+          if (!executed.success) {
             throw new Error("Remote MCP tool execution denied.");
           }
+          if (!executed.data.ok) throw new ToolExecutionNotDispatchedError();
           return JSON.parse(executed.data.outputJson) as unknown;
         },
       };
@@ -4430,7 +4435,8 @@ export class CrewSession extends Think {
       }
 
       status = "completed";
-    } catch {
+    } catch (error) {
+      if (error instanceof ToolExecutionNotDispatchedError) status = "failed";
       output = undefined;
     }
 

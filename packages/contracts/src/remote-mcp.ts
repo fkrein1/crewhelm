@@ -7,13 +7,26 @@ export const MAXIMUM_REMOTE_MCP_DESCRIPTION_CHARACTERS = 16 * 1_024;
 export const MAXIMUM_REMOTE_MCP_ENDPOINT_CHARACTERS = 2_048;
 export const MAXIMUM_REMOTE_MCP_SCHEMA_BYTES = 64 * 1_024;
 export const MAXIMUM_REMOTE_MCP_TOOLS = 100;
+export const MAXIMUM_REMOTE_MCP_OAUTH_SCOPES = 32;
 
 const encoder = new TextEncoder();
 const remoteMcpSha256DigestSchema = z
   .string()
   .regex(/^[0-9a-f]{64}$/, "Expected a lowercase SHA-256 digest.");
 
-export const remoteMcpAuthKindSchema = z.enum(["public", "bearer"]);
+export const remoteMcpAuthKindSchema = z.enum(["public", "bearer", "oauth"]);
+export const remoteMcpOAuthScopeSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[\x21\x23-\x5b\x5d-\x7e]+$/, "Expected one OAuth scope token.");
+export const remoteMcpOAuthScopesSchema = z
+  .array(remoteMcpOAuthScopeSchema)
+  .max(MAXIMUM_REMOTE_MCP_OAUTH_SCOPES)
+  .refine(
+    (scopes) => scopes.every((scope, index) => index === 0 || (scopes[index - 1] ?? "") < scope),
+    "Expected unique OAuth scopes in canonical order.",
+  );
 export const remoteMcpConnectionNameSchema = z
   .string()
   .trim()
@@ -78,6 +91,7 @@ export const remoteMcpConnectionSchema = z.strictObject({
   createdAt: z.iso.datetime(),
   endpoint: remoteMcpEndpointSchema,
   name: remoteMcpConnectionNameSchema,
+  oauthScopes: remoteMcpOAuthScopesSchema,
   server: z.strictObject({
     name: z.string().trim().min(1).max(160),
     version: z.string().trim().min(1).max(160),
@@ -87,7 +101,7 @@ export const remoteMcpConnectionSchema = z.strictObject({
 });
 export const createRemoteMcpConnectionInputSchema = z
   .strictObject({
-    authKind: remoteMcpAuthKindSchema,
+    authKind: z.enum(["public", "bearer"]),
     bearerToken: z
       .string()
       .min(1)
@@ -115,7 +129,7 @@ export const createRemoteMcpConnectionInputSchema = z
       });
     }
   });
-const remoteMcpConnectionRequestErrorSchema = z.strictObject({
+export const remoteMcpConnectionRequestErrorSchema = z.strictObject({
   code: z.enum([
     "connection_limit_exceeded",
     "connection_not_found",
@@ -130,6 +144,40 @@ const remoteMcpConnectionRequestErrorSchema = z.strictObject({
   ]),
   message: z.literal("Remote MCP Connection request denied."),
 });
+export const remoteMcpOAuthRequestIdSchema = z
+  .string()
+  .regex(/^remote_mcp_oauth_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+export const beginRemoteMcpOAuthInputSchema = z.strictObject({
+  requestId: remoteMcpOAuthRequestIdSchema,
+});
+export const beginRemoteMcpOAuthResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    authorizationUrl: z.url().max(8 * 1_024),
+    ok: z.literal(true),
+  }),
+  z.strictObject({ error: remoteMcpConnectionRequestErrorSchema, ok: z.literal(false) }),
+]);
+export const completeRemoteMcpOAuthInputSchema = beginRemoteMcpOAuthInputSchema.extend({
+  authorizationCode: z
+    .string()
+    .min(1)
+    .max(4_096)
+    .regex(/^[\x21-\x7e]+$/),
+  authorizationServerIssuer: z.url().max(MAXIMUM_REMOTE_MCP_ENDPOINT_CHARACTERS).optional(),
+});
+export const completeRemoteMcpOAuthResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    connection: remoteMcpConnectionSchema,
+    ok: z.literal(true),
+    operation: z.enum(["created", "reauthenticated"]),
+  }),
+  z.strictObject({ error: remoteMcpConnectionRequestErrorSchema, ok: z.literal(false) }),
+]);
+export const failRemoteMcpOAuthInputSchema = beginRemoteMcpOAuthInputSchema;
+export const failRemoteMcpOAuthResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({ failed: z.boolean(), ok: z.literal(true) }),
+  z.strictObject({ error: remoteMcpConnectionRequestErrorSchema, ok: z.literal(false) }),
+]);
 export const createRemoteMcpConnectionResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     connection: remoteMcpConnectionSchema,
@@ -159,25 +207,44 @@ export const deleteRemoteMcpConnectionResultSchema = z.discriminatedUnion("ok", 
   z.strictObject({ error: remoteMcpConnectionRequestErrorSchema, ok: z.literal(false) }),
 ]);
 
-export const remoteMcpConnectionOperationInputSchema = z.discriminatedUnion("action", [
-  z.strictObject({
-    action: z.literal("connect"),
-    authKind: remoteMcpAuthKindSchema,
-    endpoint: remoteMcpEndpointSchema,
-    idempotencyKey: createRemoteMcpConnectionInputSchema.shape.idempotencyKey,
-    name: remoteMcpConnectionNameSchema,
-  }),
+export const remoteMcpConnectionOperationInputSchema = z.union([
+  z.discriminatedUnion("authKind", [
+    z.strictObject({
+      action: z.literal("connect"),
+      authKind: z.literal("public"),
+      endpoint: remoteMcpEndpointSchema,
+      idempotencyKey: createRemoteMcpConnectionInputSchema.shape.idempotencyKey,
+      name: remoteMcpConnectionNameSchema,
+    }),
+    z.strictObject({
+      action: z.literal("connect"),
+      authKind: z.literal("bearer"),
+      endpoint: remoteMcpEndpointSchema,
+      idempotencyKey: createRemoteMcpConnectionInputSchema.shape.idempotencyKey,
+      name: remoteMcpConnectionNameSchema,
+    }),
+    z.strictObject({
+      action: z.literal("connect"),
+      authKind: z.literal("oauth"),
+      endpoint: remoteMcpEndpointSchema,
+      idempotencyKey: createRemoteMcpConnectionInputSchema.shape.idempotencyKey,
+      name: remoteMcpConnectionNameSchema,
+      oauthScopes: remoteMcpOAuthScopesSchema.default([]),
+    }),
+  ]),
   inspectRemoteMcpConnectionInputSchema.extend({ action: z.literal("inspect") }),
   deleteRemoteMcpConnectionInputSchema.extend({ action: z.literal("delete") }),
+  deleteRemoteMcpConnectionInputSchema.extend({ action: z.literal("reauthenticate") }),
 ]);
 export const remoteMcpConnectionToolInputSchema = z
   .strictObject({
-    action: z.enum(["connect", "delete", "inspect"]),
+    action: z.enum(["connect", "delete", "inspect", "reauthenticate"]),
     authKind: remoteMcpAuthKindSchema.optional(),
     connectionId: connectionIdSchema.optional(),
     endpoint: remoteMcpEndpointSchema.optional(),
     idempotencyKey: createRemoteMcpConnectionInputSchema.shape.idempotencyKey.optional(),
     name: remoteMcpConnectionNameSchema.optional(),
+    oauthScopes: remoteMcpOAuthScopesSchema.optional(),
     snapshotDigest: remoteMcpSha256DigestSchema.optional(),
   })
   .superRefine((input, context) => {
@@ -193,6 +260,7 @@ export const lookupRemoteMcpConnectionCreationInputSchema = z.strictObject({
   endpoint: remoteMcpEndpointSchema,
   idempotencyKey: createRemoteMcpConnectionInputSchema.shape.idempotencyKey,
   name: remoteMcpConnectionNameSchema,
+  oauthScopes: remoteMcpOAuthScopesSchema.default([]),
 });
 export const lookupRemoteMcpConnectionCreationResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({ connection: remoteMcpConnectionSchema.nullable(), ok: z.literal(true) }),
@@ -247,3 +315,6 @@ export type RemoteMcpConnectionOperationInput = z.infer<
 export type RemoteMcpConnectionOperationResult = z.infer<
   typeof remoteMcpConnectionOperationResultSchema
 >;
+export type BeginRemoteMcpOAuthResult = z.infer<typeof beginRemoteMcpOAuthResultSchema>;
+export type CompleteRemoteMcpOAuthResult = z.infer<typeof completeRemoteMcpOAuthResultSchema>;
+export type FailRemoteMcpOAuthResult = z.infer<typeof failRemoteMcpOAuthResultSchema>;

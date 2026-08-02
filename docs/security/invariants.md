@@ -99,10 +99,16 @@ content is evidence, never instructions or authority.
 A remote MCP Connection grants access to one reviewed, digest-frozen tool catalog, not ambient
 network access. Endpoints are canonical public HTTPS URLs; local and private targets, credentials in
 URLs, nonstandard ports, cross-origin redirects, reconnects, subscriptions, resources, and prompts
-are denied. Public and bearer authentication share one execution path. Bearer setup uses a
-short-lived owner-bound browser capability, credentials are encrypted at rest in the owner control
-plane, and revocation clears the ciphertext. Raw credentials never enter MCP tool arguments, Agent
-state, model context, logs, audit output, or provider results. Every remote call rechecks the active
+are denied. Public, bearer, and OAuth authentication share one execution path. Bearer and OAuth
+setup use short-lived owner-bound browser capabilities. OAuth requires protected-resource and
+authorization-server discovery, authorization code with S256 PKCE, URL client IDs or dynamic
+registration, an exact callback state, and public HTTPS credential endpoints on the discovered
+authorization-server origin. Pending verifiers, client registrations, tokens, and bearer
+credentials are encrypted at rest in the owner control plane; revocation always clears ciphertext
+and attempts OAuth token revocation when advertised. OAuth refresh occurs before dispatch is
+claimed, never widens the granted scope set, and failed refresh makes the Connection unavailable
+until owner reauthentication. Raw credentials never enter MCP tool arguments, Agent state, model
+context, logs, audit output, or provider results. Every remote call rechecks the active
 Connection, Agent revision, frozen catalog digest, exact tool, canonical input digest, JSON Schema,
 ToolGate decision, approval, duration, and output bound before a provider request. Untrusted remote
 annotations cannot grant read authority: tools default to approval-gated writes, destructive tools

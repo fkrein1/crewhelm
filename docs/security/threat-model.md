@@ -201,11 +201,18 @@ global fetch routing, handles redirects manually without crossing origins, and c
 bounded client for discovery or one tool call. It does not expose arbitrary headers, resources,
 prompts, subscriptions, or persistent remote sessions.
 
-Public and bearer Connections use the same frozen-catalog and execution path. Bearer setup occurs
-through an expiring signed browser handoff bound to the authenticated owner and exact endpoint;
-credentials are encrypted with installation-derived owner storage keys and decrypted only for an
-owner-side dispatch. Creation, inspection, attachment, execution, and revocation never return the
-credential. Revocation clears encrypted bearer material.
+Public, bearer, and OAuth Connections use the same frozen-catalog and execution path. Bearer setup
+occurs through an expiring signed browser handoff bound to the authenticated owner and exact
+endpoint. OAuth adds a distinct signed setup capability and request-bound callback state, S256 PKCE,
+standards discovery, URL client IDs or dynamic registration, bounded responses, and exact public
+HTTPS authorization-server endpoints. Requested scopes are explicit; refresh and reauthentication
+cannot widen the frozen granted set. Pending OAuth state, client registration, tokens, and bearer
+credentials are encrypted with installation-derived owner storage keys and decrypted only by the
+owner-side adapter. Refresh completes before ToolGate records dispatch; failure marks the
+Connection unavailable so the owner can reauthenticate the same Connection without replacing its
+attachments or grants. Creation, inspection, attachment, execution, reauthentication, and
+revocation never return credentials. Revocation clears local ciphertext before attempting any
+advertised provider revocation endpoint.
 
 Attaching a Connection creates grants for its entire reviewed catalog at one exact snapshot digest.
 Remote hints cannot reduce authority: unknown and nominally read-only operations are classified as
