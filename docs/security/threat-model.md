@@ -241,6 +241,11 @@ duration, model-token limits, tool-loop controls, and the Gateway rule limit the
 request and response payload logging is disabled, while model, token, cost, latency, status, and
 opaque Crewhelm correlation metadata remain available for diagnosis.
 
+Without a dedicated Gateway, the direct Cloudflare AI path retains the same admitted token, turn,
+duration, and concurrency bounds but has no installation-wide hard dollar ceiling or Gateway cost
+reconciliation. The capability boundary remains explicit so owners can add the stronger budget and
+observability controls without changing the default model.
+
 The bootstrap CLI holds operator deployment authority. It uses pinned Wrangler without a shell,
 an allowlisted environment, explicit account, database, and R2 identity, validated release
 artifacts, and bounded output. Ambiguous remote mutations stop with resources preserved for

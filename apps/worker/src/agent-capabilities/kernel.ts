@@ -60,7 +60,7 @@ type CapabilityModuleDescriptor = Omit<AgentCapabilityDescriptor, "availability"
 export type AgentCapabilityModule<Configuration> = {
   configurationSchema: z.ZodType<Configuration>;
   defaultConfiguration?(
-    fleetConfiguration: FleetConfigurationData,
+    context: CapabilityCompilationContext,
   ): AgentCapabilityConfiguration | undefined;
   descriptor: CapabilityModuleDescriptor;
   migrate?(configuration: AgentCapabilityConfiguration): AgentCapabilityConfiguration | undefined;
@@ -149,7 +149,7 @@ export class AgentCapabilityRegistry {
       input ??
       [...this.#modules.values()]
         .flatMap((module) => {
-          const configuration = module.defaultConfiguration?.(context.fleetConfiguration);
+          const configuration = module.defaultConfiguration?.(context);
 
           return configuration === undefined ? [] : [configuration];
         })
