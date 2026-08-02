@@ -538,17 +538,15 @@ export class AgentInbox {
         fleetRevision: item.fleetRevision,
         scheduleId: item.scheduleId,
         scheduleRevision: item.scheduleRevision,
-        watch:
-          item.watchId === null ||
-          item.watchRevision === null ||
-          item.watchEventId === null ||
-          item.watchSourceKind === null
+        eventTrigger:
+          item.eventTriggerId === null ||
+          item.eventTriggerRevision === null ||
+          item.eventTriggerEventId === null
             ? null
             : {
-                eventId: item.watchEventId,
-                id: item.watchId,
-                revision: item.watchRevision,
-                sourceKind: item.watchSourceKind,
+                eventId: item.eventTriggerEventId,
+                id: item.eventTriggerId,
+                revision: item.eventTriggerRevision,
               },
       },
       itemId: item.itemId,
@@ -586,18 +584,16 @@ export class AgentInbox {
       .from(runAdmissions)
       .where(eq(runAdmissions.runId, request.data.reference.runId))
       .get();
-    const admissionWatch =
+    const admissionEventTrigger =
       admission === undefined ||
-      admission.watchId === null ||
-      admission.watchRevision === null ||
-      admission.watchEventId === null ||
-      admission.watchSourceKind === null
+      admission.eventTriggerId === null ||
+      admission.eventTriggerRevision === null ||
+      admission.eventTriggerEventId === null
         ? undefined
         : {
-            eventId: admission.watchEventId,
-            id: admission.watchId,
-            revision: admission.watchRevision,
-            sourceKind: admission.watchSourceKind,
+            eventId: admission.eventTriggerEventId,
+            id: admission.eventTriggerId,
+            revision: admission.eventTriggerRevision,
           };
 
     if (
@@ -607,7 +603,8 @@ export class AgentInbox {
       admission.idempotencyKey !== request.data.reference.idempotencyKey ||
       admission.promptDigest !== request.data.reference.promptDigest ||
       admission.scheduleRevision !== request.data.reference.scheduleRevision ||
-      JSON.stringify(admissionWatch) !== JSON.stringify(request.data.reference.watch) ||
+      JSON.stringify(admissionEventTrigger) !==
+        JSON.stringify(request.data.reference.eventTrigger) ||
       (admission.status !== "redeemed" &&
         !(request.data.event.runStatus === "cancelled" && admission.cancelledAt !== null))
     ) {
@@ -699,10 +696,10 @@ export class AgentInbox {
       scheduledAt: null,
       trigger: admission.trigger,
       version: event.occurredAt,
-      watchEventId: admission.watchEventId,
-      watchId: admission.watchId,
-      watchRevision: admission.watchRevision,
-      watchSourceKind: admission.watchSourceKind,
+      eventTriggerEventId: admission.eventTriggerEventId,
+      eventTriggerId: admission.eventTriggerId,
+      eventTriggerRevision: admission.eventTriggerRevision,
+      eventTriggerSourceKind: admission.eventTriggerSourceKind,
     } as const;
 
     if (existing === undefined) {
@@ -804,10 +801,10 @@ export class AgentInbox {
       scheduledAt: input.scheduledAt,
       trigger: null,
       version: new Date(input.occurredAt).toISOString(),
-      watchEventId: null,
-      watchId: null,
-      watchRevision: null,
-      watchSourceKind: null,
+      eventTriggerEventId: null,
+      eventTriggerId: null,
+      eventTriggerRevision: null,
+      eventTriggerSourceKind: null,
     } as const;
 
     this.#database.transaction((transaction) => {

@@ -339,18 +339,18 @@
         }
       }
     },
-    "agent_event_watch_occurrences": {
-      "name": "agent_event_watch_occurrences",
+    "agent_event_trigger_occurrences": {
+      "name": "agent_event_trigger_occurrences",
       "columns": {
-        "watch_id": {
-          "name": "watch_id",
+        "event_trigger_id": {
+          "name": "event_trigger_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "watch_revision": {
-          "name": "watch_revision",
+        "event_trigger_revision": {
+          "name": "event_trigger_revision",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
@@ -428,72 +428,72 @@
         }
       },
       "indexes": {
-        "agent_event_watch_occurrences_pending": {
-          "name": "agent_event_watch_occurrences_pending",
+        "agent_event_trigger_occurrences_pending": {
+          "name": "agent_event_trigger_occurrences_pending",
           "columns": ["next_attempt_at"],
           "isUnique": false,
-          "where": "\"agent_event_watch_occurrences\".\"status\" = 'pending'"
+          "where": "\"agent_event_trigger_occurrences\".\"status\" = 'pending'"
         },
-        "agent_event_watch_occurrences_history": {
-          "name": "agent_event_watch_occurrences_history",
-          "columns": ["watch_id", "occurred_at"],
+        "agent_event_trigger_occurrences_history": {
+          "name": "agent_event_trigger_occurrences_history",
+          "columns": ["event_trigger_id", "occurred_at"],
           "isUnique": false
         }
       },
       "foreignKeys": {
-        "agent_event_watch_occurrences_watch_id_watch_revision_agent_event_watch_revisions_watch_id_revision_fk": {
-          "name": "agent_event_watch_occurrences_watch_id_watch_revision_agent_event_watch_revisions_watch_id_revision_fk",
-          "tableFrom": "agent_event_watch_occurrences",
-          "tableTo": "agent_event_watch_revisions",
-          "columnsFrom": ["watch_id", "watch_revision"],
-          "columnsTo": ["watch_id", "revision"],
+        "agent_event_trigger_occurrences_event_trigger_id_event_trigger_revision_agent_event_trigger_revisions_event_trigger_id_revision_fk": {
+          "name": "agent_event_trigger_occurrences_event_trigger_id_event_trigger_revision_agent_event_trigger_revisions_event_trigger_id_revision_fk",
+          "tableFrom": "agent_event_trigger_occurrences",
+          "tableTo": "agent_event_trigger_revisions",
+          "columnsFrom": ["event_trigger_id", "event_trigger_revision"],
+          "columnsTo": ["event_trigger_id", "revision"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
-        "agent_event_watch_occurrences_watch_id_event_id_pk": {
-          "columns": ["watch_id", "event_id"],
-          "name": "agent_event_watch_occurrences_watch_id_event_id_pk"
+        "agent_event_trigger_occurrences_event_trigger_id_event_id_pk": {
+          "columns": ["event_trigger_id", "event_id"],
+          "name": "agent_event_trigger_occurrences_event_trigger_id_event_id_pk"
         }
       },
       "uniqueConstraints": {},
       "checkConstraints": {
-        "agent_event_watch_occurrences_revision_positive": {
-          "name": "agent_event_watch_occurrences_revision_positive",
-          "value": "\"agent_event_watch_occurrences\".\"watch_revision\" > 0"
+        "agent_event_trigger_occurrences_revision_positive": {
+          "name": "agent_event_trigger_occurrences_revision_positive",
+          "value": "\"agent_event_trigger_occurrences\".\"event_trigger_revision\" > 0"
         },
-        "agent_event_watch_occurrences_scheduled_at_positive": {
-          "name": "agent_event_watch_occurrences_scheduled_at_positive",
-          "value": "\"agent_event_watch_occurrences\".\"scheduled_at\" > 0"
+        "agent_event_trigger_occurrences_scheduled_at_positive": {
+          "name": "agent_event_trigger_occurrences_scheduled_at_positive",
+          "value": "\"agent_event_trigger_occurrences\".\"scheduled_at\" > 0"
         },
-        "agent_event_watch_occurrences_occurred_at_positive": {
-          "name": "agent_event_watch_occurrences_occurred_at_positive",
-          "value": "\"agent_event_watch_occurrences\".\"occurred_at\" > 0"
+        "agent_event_trigger_occurrences_occurred_at_positive": {
+          "name": "agent_event_trigger_occurrences_occurred_at_positive",
+          "value": "\"agent_event_trigger_occurrences\".\"occurred_at\" > 0"
         },
-        "agent_event_watch_occurrences_attempts_positive": {
-          "name": "agent_event_watch_occurrences_attempts_positive",
-          "value": "\"agent_event_watch_occurrences\".\"attempts\" > 0"
+        "agent_event_trigger_occurrences_attempts_positive": {
+          "name": "agent_event_trigger_occurrences_attempts_positive",
+          "value": "\"agent_event_trigger_occurrences\".\"attempts\" > 0"
         },
-        "agent_event_watch_occurrences_event_data_json": {
-          "name": "agent_event_watch_occurrences_event_data_json",
-          "value": "json_valid(\"agent_event_watch_occurrences\".\"event_data\")"
+        "agent_event_trigger_occurrences_event_data_json": {
+          "name": "agent_event_trigger_occurrences_event_data_json",
+          "value": "json_valid(\"agent_event_trigger_occurrences\".\"event_data\")"
         },
-        "agent_event_watch_occurrences_status": {
-          "name": "agent_event_watch_occurrences_status",
-          "value": "\"agent_event_watch_occurrences\".\"status\" IN ('pending', 'dispatched', 'skipped')"
+        "agent_event_trigger_occurrences_status": {
+          "name": "agent_event_trigger_occurrences_status",
+          "value": "\"agent_event_trigger_occurrences\".\"status\" IN ('pending', 'dispatched', 'skipped')"
         },
-        "agent_event_watch_occurrences_state": {
-          "name": "agent_event_watch_occurrences_state",
-          "value": "(\n        (\"agent_event_watch_occurrences\".\"status\" = 'pending'\n          AND \"agent_event_watch_occurrences\".\"next_attempt_at\" IS NOT NULL\n          AND \"agent_event_watch_occurrences\".\"run_id\" IS NULL\n          AND \"agent_event_watch_occurrences\".\"reason\" IS NULL)\n        OR (\"agent_event_watch_occurrences\".\"status\" = 'dispatched'\n          AND \"agent_event_watch_occurrences\".\"next_attempt_at\" IS NULL\n          AND \"agent_event_watch_occurrences\".\"run_id\" IS NOT NULL\n          AND \"agent_event_watch_occurrences\".\"reason\" IS NULL)\n        OR (\"agent_event_watch_occurrences\".\"status\" = 'skipped'\n          AND \"agent_event_watch_occurrences\".\"next_attempt_at\" IS NULL\n          AND \"agent_event_watch_occurrences\".\"run_id\" IS NULL\n          AND \"agent_event_watch_occurrences\".\"reason\" IS NOT NULL)\n      )"
+        "agent_event_trigger_occurrences_state": {
+          "name": "agent_event_trigger_occurrences_state",
+          "value": "(\n        (\"agent_event_trigger_occurrences\".\"status\" = 'pending'\n          AND \"agent_event_trigger_occurrences\".\"next_attempt_at\" IS NOT NULL\n          AND \"agent_event_trigger_occurrences\".\"run_id\" IS NULL\n          AND \"agent_event_trigger_occurrences\".\"reason\" IS NULL)\n        OR (\"agent_event_trigger_occurrences\".\"status\" = 'dispatched'\n          AND \"agent_event_trigger_occurrences\".\"next_attempt_at\" IS NULL\n          AND \"agent_event_trigger_occurrences\".\"run_id\" IS NOT NULL\n          AND \"agent_event_trigger_occurrences\".\"reason\" IS NULL)\n        OR (\"agent_event_trigger_occurrences\".\"status\" = 'skipped'\n          AND \"agent_event_trigger_occurrences\".\"next_attempt_at\" IS NULL\n          AND \"agent_event_trigger_occurrences\".\"run_id\" IS NULL\n          AND \"agent_event_trigger_occurrences\".\"reason\" IS NOT NULL)\n      )"
         }
       }
     },
-    "agent_event_watch_revisions": {
-      "name": "agent_event_watch_revisions",
+    "agent_event_trigger_revisions": {
+      "name": "agent_event_trigger_revisions",
       "columns": {
-        "watch_id": {
-          "name": "watch_id",
+        "event_trigger_id": {
+          "name": "event_trigger_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -537,9 +537,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "agent_event_watch_revisions_agent_id_agent_revision_agent_revisions_agent_id_revision_fk": {
-          "name": "agent_event_watch_revisions_agent_id_agent_revision_agent_revisions_agent_id_revision_fk",
-          "tableFrom": "agent_event_watch_revisions",
+        "agent_event_trigger_revisions_agent_id_agent_revision_agent_revisions_agent_id_revision_fk": {
+          "name": "agent_event_trigger_revisions_agent_id_agent_revision_agent_revisions_agent_id_revision_fk",
+          "tableFrom": "agent_event_trigger_revisions",
           "tableTo": "agent_revisions",
           "columnsFrom": ["agent_id", "agent_revision"],
           "columnsTo": ["agent_id", "revision"],
@@ -548,33 +548,33 @@
         }
       },
       "compositePrimaryKeys": {
-        "agent_event_watch_revisions_watch_id_revision_pk": {
-          "columns": ["watch_id", "revision"],
-          "name": "agent_event_watch_revisions_watch_id_revision_pk"
+        "agent_event_trigger_revisions_event_trigger_id_revision_pk": {
+          "columns": ["event_trigger_id", "revision"],
+          "name": "agent_event_trigger_revisions_event_trigger_id_revision_pk"
         }
       },
       "uniqueConstraints": {},
       "checkConstraints": {
-        "agent_event_watch_revisions_revision_positive": {
-          "name": "agent_event_watch_revisions_revision_positive",
-          "value": "\"agent_event_watch_revisions\".\"revision\" > 0"
+        "agent_event_trigger_revisions_revision_positive": {
+          "name": "agent_event_trigger_revisions_revision_positive",
+          "value": "\"agent_event_trigger_revisions\".\"revision\" > 0"
         },
-        "agent_event_watch_revisions_agent_revision_positive": {
-          "name": "agent_event_watch_revisions_agent_revision_positive",
-          "value": "\"agent_event_watch_revisions\".\"agent_revision\" > 0"
+        "agent_event_trigger_revisions_agent_revision_positive": {
+          "name": "agent_event_trigger_revisions_agent_revision_positive",
+          "value": "\"agent_event_trigger_revisions\".\"agent_revision\" > 0"
         },
-        "agent_event_watch_revisions_definition_json": {
-          "name": "agent_event_watch_revisions_definition_json",
-          "value": "\"agent_event_watch_revisions\".\"definition\" IS NULL OR json_valid(\"agent_event_watch_revisions\".\"definition\")"
+        "agent_event_trigger_revisions_definition_json": {
+          "name": "agent_event_trigger_revisions_definition_json",
+          "value": "\"agent_event_trigger_revisions\".\"definition\" IS NULL OR json_valid(\"agent_event_trigger_revisions\".\"definition\")"
         },
-        "agent_event_watch_revisions_created_at_positive": {
-          "name": "agent_event_watch_revisions_created_at_positive",
-          "value": "\"agent_event_watch_revisions\".\"created_at\" > 0"
+        "agent_event_trigger_revisions_created_at_positive": {
+          "name": "agent_event_trigger_revisions_created_at_positive",
+          "value": "\"agent_event_trigger_revisions\".\"created_at\" > 0"
         }
       }
     },
-    "agent_event_watch_updates": {
-      "name": "agent_event_watch_updates",
+    "agent_event_trigger_updates": {
+      "name": "agent_event_trigger_updates",
       "columns": {
         "client_id": {
           "name": "client_id",
@@ -604,8 +604,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "watch_id": {
-          "name": "watch_id",
+        "event_trigger_id": {
+          "name": "event_trigger_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -621,43 +621,43 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "agent_event_watch_updates_watch_id_revision_agent_event_watch_revisions_watch_id_revision_fk": {
-          "name": "agent_event_watch_updates_watch_id_revision_agent_event_watch_revisions_watch_id_revision_fk",
-          "tableFrom": "agent_event_watch_updates",
-          "tableTo": "agent_event_watch_revisions",
-          "columnsFrom": ["watch_id", "revision"],
-          "columnsTo": ["watch_id", "revision"],
+        "agent_event_trigger_updates_event_trigger_id_revision_agent_event_trigger_revisions_event_trigger_id_revision_fk": {
+          "name": "agent_event_trigger_updates_event_trigger_id_revision_agent_event_trigger_revisions_event_trigger_id_revision_fk",
+          "tableFrom": "agent_event_trigger_updates",
+          "tableTo": "agent_event_trigger_revisions",
+          "columnsFrom": ["event_trigger_id", "revision"],
+          "columnsTo": ["event_trigger_id", "revision"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
-        "agent_event_watch_updates_client_id_idempotency_key_pk": {
+        "agent_event_trigger_updates_client_id_idempotency_key_pk": {
           "columns": ["client_id", "idempotency_key"],
-          "name": "agent_event_watch_updates_client_id_idempotency_key_pk"
+          "name": "agent_event_trigger_updates_client_id_idempotency_key_pk"
         }
       },
       "uniqueConstraints": {},
       "checkConstraints": {
-        "agent_event_watch_updates_request_digest_length": {
-          "name": "agent_event_watch_updates_request_digest_length",
-          "value": "length(\"agent_event_watch_updates\".\"request_digest\") = 43"
+        "agent_event_trigger_updates_request_digest_length": {
+          "name": "agent_event_trigger_updates_request_digest_length",
+          "value": "length(\"agent_event_trigger_updates\".\"request_digest\") = 43"
         },
-        "agent_event_watch_updates_action": {
-          "name": "agent_event_watch_updates_action",
-          "value": "\"agent_event_watch_updates\".\"action\" IN ('create', 'update', 'pause', 'resume', 'delete')"
+        "agent_event_trigger_updates_action": {
+          "name": "agent_event_trigger_updates_action",
+          "value": "\"agent_event_trigger_updates\".\"action\" IN ('create', 'update', 'pause', 'resume', 'delete')"
         },
-        "agent_event_watch_updates_revision_positive": {
-          "name": "agent_event_watch_updates_revision_positive",
-          "value": "\"agent_event_watch_updates\".\"revision\" > 0"
+        "agent_event_trigger_updates_revision_positive": {
+          "name": "agent_event_trigger_updates_revision_positive",
+          "value": "\"agent_event_trigger_updates\".\"revision\" > 0"
         }
       }
     },
-    "agent_event_watches": {
-      "name": "agent_event_watches",
+    "agent_event_triggers": {
+      "name": "agent_event_triggers",
       "columns": {
-        "watch_id": {
-          "name": "watch_id",
+        "event_trigger_id": {
+          "name": "event_trigger_id",
           "type": "text",
           "primaryKey": true,
           "notNull": true,
@@ -750,54 +750,54 @@
         }
       },
       "indexes": {
-        "agent_event_watches_provider_trigger_id_unique": {
-          "name": "agent_event_watches_provider_trigger_id_unique",
+        "agent_event_triggers_provider_trigger_id_unique": {
+          "name": "agent_event_triggers_provider_trigger_id_unique",
           "columns": ["provider_trigger_id"],
           "isUnique": true
         },
-        "agent_event_watches_agent": {
-          "name": "agent_event_watches_agent",
+        "agent_event_triggers_agent": {
+          "name": "agent_event_triggers_agent",
           "columns": ["agent_id"],
           "isUnique": false
         },
-        "agent_event_watches_active_source": {
-          "name": "agent_event_watches_active_source",
+        "agent_event_triggers_active_source": {
+          "name": "agent_event_triggers_active_source",
           "columns": ["connection_id", "source_slug"],
           "isUnique": true,
-          "where": "\"agent_event_watches\".\"status\" != 'deleted'"
+          "where": "\"agent_event_triggers\".\"status\" != 'deleted'"
         },
-        "agent_event_watches_operation": {
-          "name": "agent_event_watches_operation",
+        "agent_event_triggers_operation": {
+          "name": "agent_event_triggers_operation",
           "columns": ["provider_operation"],
           "isUnique": false,
-          "where": "\"agent_event_watches\".\"provider_operation\" != 'stable'"
+          "where": "\"agent_event_triggers\".\"provider_operation\" != 'stable'"
         }
       },
       "foreignKeys": {
-        "agent_event_watches_agent_id_agents_agent_id_fk": {
-          "name": "agent_event_watches_agent_id_agents_agent_id_fk",
-          "tableFrom": "agent_event_watches",
+        "agent_event_triggers_agent_id_agents_agent_id_fk": {
+          "name": "agent_event_triggers_agent_id_agents_agent_id_fk",
+          "tableFrom": "agent_event_triggers",
           "tableTo": "agents",
           "columnsFrom": ["agent_id"],
           "columnsTo": ["agent_id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
-        "agent_event_watches_connection_id_connections_connection_id_fk": {
-          "name": "agent_event_watches_connection_id_connections_connection_id_fk",
-          "tableFrom": "agent_event_watches",
+        "agent_event_triggers_connection_id_connections_connection_id_fk": {
+          "name": "agent_event_triggers_connection_id_connections_connection_id_fk",
+          "tableFrom": "agent_event_triggers",
           "tableTo": "connections",
           "columnsFrom": ["connection_id"],
           "columnsTo": ["connection_id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
-        "agent_event_watches_watch_id_current_revision_agent_event_watch_revisions_watch_id_revision_fk": {
-          "name": "agent_event_watches_watch_id_current_revision_agent_event_watch_revisions_watch_id_revision_fk",
-          "tableFrom": "agent_event_watches",
-          "tableTo": "agent_event_watch_revisions",
-          "columnsFrom": ["watch_id", "current_revision"],
-          "columnsTo": ["watch_id", "revision"],
+        "agent_event_triggers_event_trigger_id_current_revision_agent_event_trigger_revisions_event_trigger_id_revision_fk": {
+          "name": "agent_event_triggers_event_trigger_id_current_revision_agent_event_trigger_revisions_event_trigger_id_revision_fk",
+          "tableFrom": "agent_event_triggers",
+          "tableTo": "agent_event_trigger_revisions",
+          "columnsFrom": ["event_trigger_id", "current_revision"],
+          "columnsTo": ["event_trigger_id", "revision"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -805,37 +805,37 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {
-        "agent_event_watches_current_revision_positive": {
-          "name": "agent_event_watches_current_revision_positive",
-          "value": "\"agent_event_watches\".\"current_revision\" > 0"
+        "agent_event_triggers_current_revision_positive": {
+          "name": "agent_event_triggers_current_revision_positive",
+          "value": "\"agent_event_triggers\".\"current_revision\" > 0"
         },
-        "agent_event_watches_provider_attempts": {
-          "name": "agent_event_watches_provider_attempts",
-          "value": "\"agent_event_watches\".\"provider_attempts\" BETWEEN 0 AND 2147483647"
+        "agent_event_triggers_provider_attempts": {
+          "name": "agent_event_triggers_provider_attempts",
+          "value": "\"agent_event_triggers\".\"provider_attempts\" BETWEEN 0 AND 2147483647"
         },
-        "agent_event_watches_status": {
-          "name": "agent_event_watches_status",
-          "value": "\"agent_event_watches\".\"status\" IN ('active', 'paused', 'deleted')"
+        "agent_event_triggers_status": {
+          "name": "agent_event_triggers_status",
+          "value": "\"agent_event_triggers\".\"status\" IN ('active', 'paused', 'deleted')"
         },
-        "agent_event_watches_provider_operation": {
-          "name": "agent_event_watches_provider_operation",
-          "value": "\"agent_event_watches\".\"provider_operation\" IN ('stable', 'creating', 'pausing', 'resuming', 'deleting')"
+        "agent_event_triggers_provider_operation": {
+          "name": "agent_event_triggers_provider_operation",
+          "value": "\"agent_event_triggers\".\"provider_operation\" IN ('stable', 'creating', 'pausing', 'resuming', 'deleting')"
         },
-        "agent_event_watches_created_at_positive": {
-          "name": "agent_event_watches_created_at_positive",
-          "value": "\"agent_event_watches\".\"created_at\" > 0"
+        "agent_event_triggers_created_at_positive": {
+          "name": "agent_event_triggers_created_at_positive",
+          "value": "\"agent_event_triggers\".\"created_at\" > 0"
         },
-        "agent_event_watches_dispatch_state": {
-          "name": "agent_event_watches_dispatch_state",
-          "value": "((\"agent_event_watches\".\"last_run_id\" IS NULL AND \"agent_event_watches\".\"last_dispatched_at\" IS NULL)\n        OR (\"agent_event_watches\".\"last_run_id\" IS NOT NULL\n          AND \"agent_event_watches\".\"last_dispatched_at\" IS NOT NULL\n          AND \"agent_event_watches\".\"last_dispatched_at\" >= \"agent_event_watches\".\"created_at\"))"
+        "agent_event_triggers_dispatch_state": {
+          "name": "agent_event_triggers_dispatch_state",
+          "value": "((\"agent_event_triggers\".\"last_run_id\" IS NULL AND \"agent_event_triggers\".\"last_dispatched_at\" IS NULL)\n        OR (\"agent_event_triggers\".\"last_run_id\" IS NOT NULL\n          AND \"agent_event_triggers\".\"last_dispatched_at\" IS NOT NULL\n          AND \"agent_event_triggers\".\"last_dispatched_at\" >= \"agent_event_triggers\".\"created_at\"))"
         },
-        "agent_event_watches_provider_state": {
-          "name": "agent_event_watches_provider_state",
-          "value": "(\n        (\"agent_event_watches\".\"provider_operation\" = 'creating' AND \"agent_event_watches\".\"provider_trigger_id\" IS NULL)\n        OR (\"agent_event_watches\".\"provider_operation\" IN ('stable', 'pausing', 'resuming', 'deleting')\n          AND (\"agent_event_watches\".\"status\" = 'deleted' OR \"agent_event_watches\".\"provider_trigger_id\" IS NOT NULL))\n      )"
+        "agent_event_triggers_provider_state": {
+          "name": "agent_event_triggers_provider_state",
+          "value": "(\n        (\"agent_event_triggers\".\"provider_operation\" = 'creating' AND \"agent_event_triggers\".\"provider_trigger_id\" IS NULL)\n        OR (\"agent_event_triggers\".\"provider_operation\" IN ('stable', 'pausing', 'resuming', 'deleting')\n          AND (\"agent_event_triggers\".\"status\" = 'deleted' OR \"agent_event_triggers\".\"provider_trigger_id\" IS NOT NULL))\n      )"
         },
-        "agent_event_watches_provider_retry_state": {
-          "name": "agent_event_watches_provider_retry_state",
-          "value": "(\n        (\"agent_event_watches\".\"provider_operation\" = 'stable'\n          AND \"agent_event_watches\".\"provider_attempts\" = 0\n          AND \"agent_event_watches\".\"provider_retry_at\" IS NULL)\n        OR (\"agent_event_watches\".\"provider_operation\" != 'stable'\n          AND \"agent_event_watches\".\"provider_attempts\" BETWEEN 0 AND 4\n          AND \"agent_event_watches\".\"provider_retry_at\" IS NOT NULL)\n        OR (\"agent_event_watches\".\"provider_operation\" != 'stable'\n          AND \"agent_event_watches\".\"provider_attempts\" >= 5\n          AND \"agent_event_watches\".\"provider_retry_at\" IS NULL)\n      )"
+        "agent_event_triggers_provider_retry_state": {
+          "name": "agent_event_triggers_provider_retry_state",
+          "value": "(\n        (\"agent_event_triggers\".\"provider_operation\" = 'stable'\n          AND \"agent_event_triggers\".\"provider_attempts\" = 0\n          AND \"agent_event_triggers\".\"provider_retry_at\" IS NULL)\n        OR (\"agent_event_triggers\".\"provider_operation\" != 'stable'\n          AND \"agent_event_triggers\".\"provider_attempts\" BETWEEN 0 AND 4\n          AND \"agent_event_triggers\".\"provider_retry_at\" IS NOT NULL)\n        OR (\"agent_event_triggers\".\"provider_operation\" != 'stable'\n          AND \"agent_event_triggers\".\"provider_attempts\" >= 5\n          AND \"agent_event_triggers\".\"provider_retry_at\" IS NULL)\n      )"
         }
       }
     },
@@ -963,29 +963,29 @@
           "notNull": false,
           "autoincrement": false
         },
-        "watch_event_id": {
-          "name": "watch_event_id",
+        "event_trigger_event_id": {
+          "name": "event_trigger_event_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "watch_id": {
-          "name": "watch_id",
+        "event_trigger_id": {
+          "name": "event_trigger_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "watch_revision": {
-          "name": "watch_revision",
+        "event_trigger_revision": {
+          "name": "event_trigger_revision",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "watch_source_kind": {
-          "name": "watch_source_kind",
+        "event_trigger_source_kind": {
+          "name": "event_trigger_source_kind",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -1132,9 +1132,9 @@
           "name": "agent_inbox_items_schedule_identity",
           "value": "(\"agent_inbox_items\".\"schedule_id\" IS NULL) = (\"agent_inbox_items\".\"schedule_revision\" IS NULL)"
         },
-        "agent_inbox_items_watch_identity": {
-          "name": "agent_inbox_items_watch_identity",
-          "value": "(\n        (\"agent_inbox_items\".\"watch_id\" IS NULL\n          AND \"agent_inbox_items\".\"watch_revision\" IS NULL\n          AND \"agent_inbox_items\".\"watch_event_id\" IS NULL\n          AND \"agent_inbox_items\".\"watch_source_kind\" IS NULL\n          AND (\"agent_inbox_items\".\"trigger\" IS NULL OR \"agent_inbox_items\".\"trigger\" <> 'watch'))\n        OR (\"agent_inbox_items\".\"watch_id\" IS NOT NULL\n          AND \"agent_inbox_items\".\"watch_revision\" IS NOT NULL\n          AND \"agent_inbox_items\".\"watch_event_id\" IS NOT NULL\n          AND \"agent_inbox_items\".\"watch_source_kind\" = 'connection_event'\n          AND \"agent_inbox_items\".\"trigger\" = 'watch')\n      )"
+        "agent_inbox_items_event_trigger_identity": {
+          "name": "agent_inbox_items_event_trigger_identity",
+          "value": "(\n        (\"agent_inbox_items\".\"event_trigger_id\" IS NULL\n          AND \"agent_inbox_items\".\"event_trigger_revision\" IS NULL\n          AND \"agent_inbox_items\".\"event_trigger_event_id\" IS NULL\n          AND \"agent_inbox_items\".\"event_trigger_source_kind\" IS NULL\n          AND (\"agent_inbox_items\".\"trigger\" IS NULL OR \"agent_inbox_items\".\"trigger\" <> 'event_trigger'))\n        OR (\"agent_inbox_items\".\"event_trigger_id\" IS NOT NULL\n          AND \"agent_inbox_items\".\"event_trigger_revision\" IS NOT NULL\n          AND \"agent_inbox_items\".\"event_trigger_event_id\" IS NOT NULL\n          AND \"agent_inbox_items\".\"event_trigger_source_kind\" = 'connection_event'\n          AND \"agent_inbox_items\".\"trigger\" = 'event_trigger')\n      )"
         },
         "agent_inbox_items_kind": {
           "name": "agent_inbox_items_kind",
@@ -3039,8 +3039,8 @@
         }
       }
     },
-    "composio_watch_webhook": {
-      "name": "composio_watch_webhook",
+    "composio_event_trigger_webhook": {
+      "name": "composio_event_trigger_webhook",
       "columns": {
         "singleton": {
           "name": "singleton",
@@ -3090,13 +3090,13 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {
-        "composio_watch_webhook_singleton": {
-          "name": "composio_watch_webhook_singleton",
-          "value": "\"composio_watch_webhook\".\"singleton\" = 1"
+        "composio_event_trigger_webhook_singleton": {
+          "name": "composio_event_trigger_webhook_singleton",
+          "value": "\"composio_event_trigger_webhook\".\"singleton\" = 1"
         },
-        "composio_watch_webhook_updated_at_positive": {
-          "name": "composio_watch_webhook_updated_at_positive",
-          "value": "\"composio_watch_webhook\".\"updated_at\" > 0"
+        "composio_event_trigger_webhook_updated_at_positive": {
+          "name": "composio_event_trigger_webhook_updated_at_positive",
+          "value": "\"composio_event_trigger_webhook\".\"updated_at\" > 0"
         }
       }
     },
@@ -3952,29 +3952,29 @@
           "autoincrement": false,
           "default": "'manual'"
         },
-        "watch_event_id": {
-          "name": "watch_event_id",
+        "event_trigger_event_id": {
+          "name": "event_trigger_event_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "watch_id": {
-          "name": "watch_id",
+        "event_trigger_id": {
+          "name": "event_trigger_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "watch_revision": {
-          "name": "watch_revision",
+        "event_trigger_revision": {
+          "name": "event_trigger_revision",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "watch_source_kind": {
-          "name": "watch_source_kind",
+        "event_trigger_source_kind": {
+          "name": "event_trigger_source_kind",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -4102,12 +4102,12 @@
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
-        "run_admissions_watch_id_watch_revision_agent_event_watch_revisions_watch_id_revision_fk": {
-          "name": "run_admissions_watch_id_watch_revision_agent_event_watch_revisions_watch_id_revision_fk",
+        "run_admissions_event_trigger_id_event_trigger_revision_agent_event_trigger_revisions_event_trigger_id_revision_fk": {
+          "name": "run_admissions_event_trigger_id_event_trigger_revision_agent_event_trigger_revisions_event_trigger_id_revision_fk",
           "tableFrom": "run_admissions",
-          "tableTo": "agent_event_watch_revisions",
-          "columnsFrom": ["watch_id", "watch_revision"],
-          "columnsTo": ["watch_id", "revision"],
+          "tableTo": "agent_event_trigger_revisions",
+          "columnsFrom": ["event_trigger_id", "event_trigger_revision"],
+          "columnsTo": ["event_trigger_id", "revision"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -4150,15 +4150,15 @@
         },
         "run_admissions_trigger": {
           "name": "run_admissions_trigger",
-          "value": "\"run_admissions\".\"trigger\" IN ('manual', 'schedule', 'watch', 'workflow')"
+          "value": "\"run_admissions\".\"trigger\" IN ('manual', 'schedule', 'event_trigger', 'workflow')"
         },
-        "run_admissions_watch_identity": {
-          "name": "run_admissions_watch_identity",
-          "value": "(\n        (\"run_admissions\".\"watch_id\" IS NULL\n          AND \"run_admissions\".\"watch_revision\" IS NULL\n          AND \"run_admissions\".\"watch_event_id\" IS NULL\n          AND \"run_admissions\".\"watch_source_kind\" IS NULL\n          AND \"run_admissions\".\"trigger\" <> 'watch')\n        OR (\"run_admissions\".\"watch_id\" IS NOT NULL\n          AND \"run_admissions\".\"watch_revision\" IS NOT NULL\n          AND \"run_admissions\".\"watch_event_id\" IS NOT NULL\n          AND \"run_admissions\".\"watch_source_kind\" = 'connection_event'\n          AND \"run_admissions\".\"trigger\" = 'watch')\n      )"
+        "run_admissions_event_trigger_identity": {
+          "name": "run_admissions_event_trigger_identity",
+          "value": "(\n        (\"run_admissions\".\"event_trigger_id\" IS NULL\n          AND \"run_admissions\".\"event_trigger_revision\" IS NULL\n          AND \"run_admissions\".\"event_trigger_event_id\" IS NULL\n          AND \"run_admissions\".\"event_trigger_source_kind\" IS NULL\n          AND \"run_admissions\".\"trigger\" <> 'event_trigger')\n        OR (\"run_admissions\".\"event_trigger_id\" IS NOT NULL\n          AND \"run_admissions\".\"event_trigger_revision\" IS NOT NULL\n          AND \"run_admissions\".\"event_trigger_event_id\" IS NOT NULL\n          AND \"run_admissions\".\"event_trigger_source_kind\" = 'connection_event'\n          AND \"run_admissions\".\"trigger\" = 'event_trigger')\n      )"
         },
-        "run_admissions_watch_revision_positive": {
-          "name": "run_admissions_watch_revision_positive",
-          "value": "\"run_admissions\".\"watch_revision\" IS NULL OR \"run_admissions\".\"watch_revision\" > 0"
+        "run_admissions_event_trigger_revision_positive": {
+          "name": "run_admissions_event_trigger_revision_positive",
+          "value": "\"run_admissions\".\"event_trigger_revision\" IS NULL OR \"run_admissions\".\"event_trigger_revision\" > 0"
         },
         "run_admissions_nonce_digest_length": {
           "name": "run_admissions_nonce_digest_length",

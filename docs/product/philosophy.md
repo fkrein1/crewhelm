@@ -24,9 +24,10 @@ used across the public site, browser handoffs, CLI, and future product surfaces.
 - **Outcomes outlive the chat.** A durable Workflow carries one known multi-step objective across
   ordered bounded Runs, so an owner can leave the MCP conversation and return to exact progress,
   recovery, or one clear final deliverable.
-- **Watches notice; Agents decide.** An owner says when an Agent should check something and what
-  useful outcome to return. Crewhelm owns schedules, event delivery, deduplication, and recovery;
-  the owner never has to program webhook or bearer-token plumbing.
+- **Schedules keep time; Event Triggers react.** A Schedule starts recurring work at an interval or
+  wall-clock time. An Event Trigger starts work when something happens in a connected app. Both
+  start bounded Runs; Agents decide how to produce the requested outcome. Crewhelm owns alarm,
+  event-delivery, deduplication, and recovery plumbing.
 - **Deliverables fit the consumer.** Markdown remains the effortless default. When downstream
   software needs predictable data, an operation may freeze one bounded JSON schema; Crewhelm
   validates the final object and never presents invalid model output as typed success.

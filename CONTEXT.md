@@ -49,6 +49,16 @@ executable code.
 
 One bounded attempt by an agent to complete a task under a fixed policy and budget snapshot.
 
+## Schedule
+
+A named recurring instruction that starts a fresh Run for one exact Agent revision at an elapsed
+interval or wall-clock time.
+
+## Event Trigger
+
+A named connected-app event rule that starts a fresh Run for one exact Agent revision when a
+matching event occurs. It is an occurrence source, not authority.
+
 ## Tool gate
 
 The deterministic execution-time policy boundary that decides whether a requested tool action is

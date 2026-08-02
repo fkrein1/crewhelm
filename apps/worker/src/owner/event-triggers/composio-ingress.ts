@@ -6,7 +6,7 @@ import { verifyComposioTriggerEvent } from "@crewhelm/composio";
 import { eq } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
-import { composioWatchWebhook, type ControlPlaneDatabaseSchema } from "../schema.js";
+import { composioEventTriggerWebhook, type ControlPlaneDatabaseSchema } from "../schema.js";
 
 type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type StoredWebhookSecret = {
@@ -231,7 +231,7 @@ export class ComposioWebhookIngress {
       subscription.subscription.secret,
     );
     this.#database
-      .insert(composioWatchWebhook)
+      .insert(composioEventTriggerWebhook)
       .values({
         secretCiphertext: encrypted.ciphertext,
         secretNonce: encrypted.nonce,
@@ -248,7 +248,7 @@ export class ComposioWebhookIngress {
           updatedAt: currentTime,
           url: subscription.subscription.url,
         },
-        target: composioWatchWebhook.singleton,
+        target: composioEventTriggerWebhook.singleton,
       })
       .run();
 
@@ -258,13 +258,13 @@ export class ComposioWebhookIngress {
   #stored() {
     return this.#database
       .select({
-        secretCiphertext: composioWatchWebhook.secretCiphertext,
-        secretNonce: composioWatchWebhook.secretNonce,
-        subscriptionId: composioWatchWebhook.subscriptionId,
-        updatedAt: composioWatchWebhook.updatedAt,
+        secretCiphertext: composioEventTriggerWebhook.secretCiphertext,
+        secretNonce: composioEventTriggerWebhook.secretNonce,
+        subscriptionId: composioEventTriggerWebhook.subscriptionId,
+        updatedAt: composioEventTriggerWebhook.updatedAt,
       })
-      .from(composioWatchWebhook)
-      .where(eq(composioWatchWebhook.singleton, 1))
+      .from(composioEventTriggerWebhook)
+      .where(eq(composioEventTriggerWebhook.singleton, 1))
       .get();
   }
 

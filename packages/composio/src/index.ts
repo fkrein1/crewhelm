@@ -423,9 +423,9 @@ export {
   type ComposioEventCatalog,
   type ComposioEventCatalogOptions,
   type ComposioProviderTriggerConfigurationResult,
-  type ComposioWatchableEvent,
-  type ComposioWatchableEventCatalogResult,
-  type ComposioWatchableEventConfigurationField,
+  type ComposioTriggerableEvent,
+  type ComposioTriggerableEventCatalogResult,
+  type ComposioTriggerableEventConfigurationField,
 } from "./triggers.js";
 export {
   createComposioTriggerInstances,

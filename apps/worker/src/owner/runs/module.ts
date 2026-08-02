@@ -37,7 +37,7 @@ import {
   type RunBudgetReservation,
   type RunSummary,
   type RunTrigger,
-  type RunWatchReference,
+  type RunEventTriggerReference,
   type ExternalToolCapabilityGrant,
   type VerifyActiveRunAdmissionResult,
   type VerifyRunAdmissionResult,
@@ -99,23 +99,23 @@ type ControlPlaneDatabase = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type ControlPlaneTransaction = Parameters<Parameters<ControlPlaneDatabase["transaction"]>[0]>[0];
 type RunAdmissionDatabase = ControlPlaneDatabase | ControlPlaneTransaction;
 type StoredRunAdmission = typeof runAdmissions.$inferSelect;
-type WatchReferenceRow = Pick<
+type EventTriggerReferenceRow = Pick<
   StoredRunAdmission,
-  "watchEventId" | "watchId" | "watchRevision" | "watchSourceKind"
+  "eventTriggerEventId" | "eventTriggerId" | "eventTriggerRevision"
 >;
 
-function watchReference(row: WatchReferenceRow): { watch?: RunWatchReference } {
-  return row.watchId === null ||
-    row.watchRevision === null ||
-    row.watchEventId === null ||
-    row.watchSourceKind === null
+function eventTriggerReference(row: EventTriggerReferenceRow): {
+  eventTrigger?: RunEventTriggerReference;
+} {
+  return row.eventTriggerId === null ||
+    row.eventTriggerRevision === null ||
+    row.eventTriggerEventId === null
     ? {}
     : {
-        watch: {
-          eventId: row.watchEventId,
-          id: row.watchId,
-          revision: row.watchRevision,
-          sourceKind: row.watchSourceKind,
+        eventTrigger: {
+          eventId: row.eventTriggerEventId,
+          id: row.eventTriggerId,
+          revision: row.eventTriggerRevision,
         },
       };
 }
@@ -304,7 +304,7 @@ function canonicalRequest(input: {
   promptDigest: string;
   scheduleRevision: number | null;
   trigger: RunTrigger;
-  watch?: RunWatchReference | undefined;
+  eventTrigger?: RunEventTriggerReference | undefined;
 }): string {
   return JSON.stringify({
     agentId: input.agentId,
@@ -319,7 +319,7 @@ function canonicalRequest(input: {
     promptDigest: input.promptDigest,
     ...(input.scheduleRevision === null ? {} : { scheduleRevision: input.scheduleRevision }),
     trigger: input.trigger,
-    ...(input.watch === undefined ? {} : { watch: input.watch }),
+    ...(input.eventTrigger === undefined ? {} : { eventTrigger: input.eventTrigger }),
   });
 }
 
@@ -448,7 +448,7 @@ export class RunAdmissions {
             runId: existing.runId,
             scheduleRevision: existing.scheduleRevision,
             trigger: existing.trigger,
-            ...watchReference(existing),
+            ...eventTriggerReference(existing),
           }),
           state: "issued",
         });
@@ -586,10 +586,11 @@ export class RunAdmissions {
           scheduleRevision: request.data.scheduleRevision,
           status: "issued",
           trigger: request.data.trigger,
-          watchEventId: request.data.watch?.eventId ?? null,
-          watchId: request.data.watch?.id ?? null,
-          watchRevision: request.data.watch?.revision ?? null,
-          watchSourceKind: request.data.watch?.sourceKind ?? null,
+          eventTriggerEventId: request.data.eventTrigger?.eventId ?? null,
+          eventTriggerId: request.data.eventTrigger?.id ?? null,
+          eventTriggerRevision: request.data.eventTrigger?.revision ?? null,
+          eventTriggerSourceKind:
+            request.data.eventTrigger === undefined ? null : "connection_event",
         })
         .run();
       transaction
@@ -622,7 +623,9 @@ export class RunAdmissions {
           runId,
           scheduleRevision: request.data.scheduleRevision,
           trigger: request.data.trigger,
-          ...(request.data.watch === undefined ? {} : { watch: request.data.watch }),
+          ...(request.data.eventTrigger === undefined
+            ? {}
+            : { eventTrigger: request.data.eventTrigger }),
         }),
         state: "issued",
       });
@@ -1037,7 +1040,8 @@ export class RunAdmissions {
           JSON.stringify(request.data.outputContract ?? null) ||
         row.promptDigest !== request.data.promptDigest ||
         row.scheduleRevision !== request.data.scheduleRevision ||
-        JSON.stringify(watchReference(row).watch) !== JSON.stringify(request.data.watch) ||
+        JSON.stringify(eventTriggerReference(row).eventTrigger) !==
+          JSON.stringify(request.data.eventTrigger) ||
         !sameBudgetReservation(row.budgetReservation, request.data.budgetReservation) ||
         !this.#admissionConfigurationIsActive(transaction, row)
       ) {
@@ -1099,7 +1103,8 @@ export class RunAdmissions {
         JSON.stringify(capability.data.outputContract ?? null) ||
       row.promptDigest !== capability.data.promptDigest ||
       row.scheduleRevision !== capability.data.scheduleRevision ||
-      JSON.stringify(watchReference(row).watch) !== JSON.stringify(capability.data.watch) ||
+      JSON.stringify(eventTriggerReference(row).eventTrigger) !==
+        JSON.stringify(capability.data.eventTrigger) ||
       !sameBudgetReservation(row.budgetReservation, capability.data.budgetReservation) ||
       (capability.data.action === "resume" &&
         (row.clientId !== capability.data.clientId ||
@@ -1186,10 +1191,10 @@ export class RunAdmissions {
         startedAt: runAdmissions.redeemedAt,
         status: projectedStatus,
         trigger: runAdmissions.trigger,
-        watchEventId: runAdmissions.watchEventId,
-        watchId: runAdmissions.watchId,
-        watchRevision: runAdmissions.watchRevision,
-        watchSourceKind: runAdmissions.watchSourceKind,
+        eventTriggerEventId: runAdmissions.eventTriggerEventId,
+        eventTriggerId: runAdmissions.eventTriggerId,
+        eventTriggerRevision: runAdmissions.eventTriggerRevision,
+        eventTriggerSourceKind: runAdmissions.eventTriggerSourceKind,
       })
       .from(runAdmissions)
       .leftJoin(agentInboxItems, eq(agentInboxItems.runId, runAdmissions.runId))
@@ -1233,7 +1238,7 @@ export class RunAdmissions {
         ...(row.startedAt === null ? {} : { startedAt: new Date(row.startedAt).toISOString() }),
         status: row.status,
         trigger: row.trigger,
-        ...watchReference(row),
+        ...eventTriggerReference(row),
       }),
     );
 
@@ -1502,7 +1507,8 @@ export class RunAdmissions {
       row.promptDigest === permit.promptDigest &&
       row.scheduleRevision === permit.scheduleRevision &&
       row.trigger === permit.trigger &&
-      JSON.stringify(watchReference(row).watch) === JSON.stringify(permit.watch) &&
+      JSON.stringify(eventTriggerReference(row).eventTrigger) ===
+        JSON.stringify(permit.eventTrigger) &&
       sameBudgetReservation(row.budgetReservation, permit.budgetReservation) &&
       row.expiresAt === Date.parse(permit.expiresAt)
     );
@@ -1539,7 +1545,7 @@ export class RunAdmissions {
     runId: string;
     scheduleRevision: number | null;
     trigger: RunAdmissionPermit["trigger"];
-    watch?: RunAdmissionPermit["watch"];
+    eventTrigger?: RunAdmissionPermit["eventTrigger"];
   }): RunAdmissionPermit {
     return runAdmissionPermitSchema.parse({
       agentId: input.agentId,
@@ -1559,7 +1565,7 @@ export class RunAdmissions {
       runId: input.runId,
       scheduleRevision: input.scheduleRevision,
       trigger: input.trigger,
-      ...(input.watch === undefined ? {} : { watch: input.watch }),
+      ...(input.eventTrigger === undefined ? {} : { eventTrigger: input.eventTrigger }),
     });
   }
 

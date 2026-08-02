@@ -53,15 +53,15 @@ also removes its Workflow-owned Session, retained execution data, and deliverabl
 A Workflow output contract applies only to its final stage; intermediate stages stay
 conversational. Schedules freeze the same optional contract in the schedule revision.
 
-### Watch for something
+### React to connected-app events
 
-Use crewhelm_agent_watches with action "sources" to see what Crewhelm can notice. A
-scheduled check is the fallback that works without external setup: ask the owner how often the
-Agent should check, what it should look for, and what useful outcome to return. Pass that interval
-as everyMinutes; Crewhelm owns its alarm, exact occurrence identity, bounded Run admission, and
-recovery. A check may find nothing. Retain the Watch id and revision for exact inspection,
-history, pause, resume, update, or deletion. Never ask the owner to configure a webhook URL,
-bearer token, API call, or workflow graph.
+Use `crewhelm_agent_event_triggers` with `action: "sources"` and an exact active
+`connectionId` to see which events Crewhelm can receive. Ask which event should start the Agent,
+which filters apply, and what useful outcome it should return. Retain the Event Trigger ID and
+revision for exact inspection, history, pause, resume, update, or deletion. Crewhelm owns provider
+delivery, deduplication, bounded Run admission, and recovery; never ask the owner to configure a
+webhook URL, bearer token, API call, or workflow graph. Use the Schedule tools instead when time
+should start the work.
 
 ### Add context and capabilities
 
@@ -91,6 +91,257 @@ On an Agent revision conflict, reread that Agent. On a branch conflict or busy s
 exact session. Never retry an unresolved external effect until the owner verifies the outcome in
 the provider's authoritative UI or API. If it cannot be proven, do not reconcile; contact an
 operator.
+
+## `crewhelm_agent_event_triggers`
+
+**Manage Crewhelm Agent Event Triggers**
+
+Create and manage Event Triggers that start a fresh Agent Run when a matching connected-app event occurs. Call sources with an exact Connection first; Crewhelm owns delivery and recovery.
+
+Attributes: write, destructive, idempotent, closed-world.
+
+<details>
+<summary>Input schema</summary>
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "sources",
+        "create",
+        "update",
+        "pause",
+        "resume",
+        "delete",
+        "inspect",
+        "list",
+        "history"
+      ],
+      "description": "Send only fields for the action: sources(connectionId); create(agentId,expectedAgentRevision,idempotencyKey,eventTrigger); update(create fields plus eventTriggerId,expectedEventTriggerRevision); pause|resume|delete(agentId,expectedAgentRevision,expectedEventTriggerRevision,idempotencyKey,eventTriggerId); inspect(agentId,eventTriggerId); list(agentId); history(agentId,eventTriggerId,limit?)."
+    },
+    "agentId": {
+      "type": "string",
+      "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "connectionId": {
+      "type": "string",
+      "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "expectedAgentRevision": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "expectedEventTriggerRevision": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20
+    },
+    "eventTrigger": {
+      "type": "object",
+      "properties": {
+        "connectionId": {
+          "type": "string",
+          "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "description": "Connected account returned by sources."
+        },
+        "delivery": {
+          "type": "string",
+          "enum": [
+            "provider_polling",
+            "realtime"
+          ],
+          "description": "Delivery returned by sources."
+        },
+        "eventSlug": {
+          "type": "string",
+          "pattern": "^[A-Z0-9][A-Z0-9_]{0,255}$",
+          "description": "Event slug returned by sources."
+        },
+        "eventVersion": {
+          "type": "string",
+          "pattern": "^[0-9]{8}_[0-9]{2}$",
+          "description": "Event version returned by sources."
+        },
+        "filters": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "maxLength": 2048
+              }
+            ]
+          },
+          "description": "Event filters described by the source."
+        },
+        "integrationSlug": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$",
+          "description": "Integration returned by sources."
+        },
+        "instruction": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384,
+          "description": "The Agent's responsibility for each matching event."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Short owner-facing name for this Event Trigger."
+        },
+        "outputContract": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "markdown"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "json"
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jsonSchema": {
+                      "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "$ref": "#/definitions/__schema0"
+                      }
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+                    },
+                    "version": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 32,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "kind",
+                "schema"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Optional output contract for each event Run."
+        }
+      },
+      "required": [
+        "connectionId",
+        "delivery",
+        "eventSlug",
+        "eventVersion",
+        "filters",
+        "integrationSlug",
+        "instruction",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "eventTriggerId": {
+      "type": "string",
+      "pattern": "^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "Opaque Event Trigger identity for exact lifecycle operations."
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "__schema0": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/__schema0"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/definitions/__schema0"
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+</details>
 
 ## `crewhelm_agent_inbox`
 
@@ -248,362 +499,6 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
     "agentId"
   ],
   "additionalProperties": false
-}
-```
-
-</details>
-
-## `crewhelm_agent_watches`
-
-**Manage Crewhelm Agent Watches**
-
-Create and manage Watches that start a fresh Agent Run on a schedule or connected-app event. Call sources first; Crewhelm owns delivery and recovery.
-
-Attributes: write, destructive, idempotent, closed-world.
-
-<details>
-<summary>Input schema</summary>
-
-```json
-{
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "type": "object",
-  "properties": {
-    "action": {
-      "type": "string",
-      "enum": [
-        "sources",
-        "create",
-        "update",
-        "pause",
-        "resume",
-        "delete",
-        "inspect",
-        "list",
-        "history"
-      ],
-      "description": "Send only fields for the action: sources(connectionId?); create(agentId,expectedAgentRevision,idempotencyKey,watch); update(create fields plus watchId,expectedWatchRevision); pause|resume|delete(agentId,expectedAgentRevision,expectedWatchRevision,idempotencyKey,watchId); inspect(agentId,watchId); list(agentId); history(agentId,watchId,limit?)."
-    },
-    "agentId": {
-      "type": "string",
-      "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-    },
-    "connectionId": {
-      "type": "string",
-      "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-    },
-    "expectedAgentRevision": {
-      "type": "integer",
-      "exclusiveMinimum": 0,
-      "maximum": 9007199254740991
-    },
-    "expectedWatchRevision": {
-      "type": "integer",
-      "exclusiveMinimum": 0,
-      "maximum": 9007199254740991
-    },
-    "idempotencyKey": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 128,
-      "pattern": "^[A-Za-z0-9._~-]+$"
-    },
-    "limit": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 20
-    },
-    "watch": {
-      "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "everyMinutes": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 10080,
-              "description": "How often Crewhelm should ask the Agent to check. A check may find nothing."
-            },
-            "instruction": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 16384,
-              "description": "What the Agent should check and what useful outcome it should return."
-            },
-            "name": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 80,
-              "description": "Short owner-facing name for this scheduled responsibility."
-            },
-            "outputContract": {
-              "oneOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "const": "markdown"
-                    }
-                  },
-                  "required": [
-                    "kind"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "const": "json"
-                    },
-                    "schema": {
-                      "type": "object",
-                      "properties": {
-                        "jsonSchema": {
-                          "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {
-                            "$ref": "#/definitions/__schema0"
-                          }
-                        },
-                        "name": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 64,
-                          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-                        },
-                        "version": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 32,
-                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-                        }
-                      },
-                      "required": [
-                        "name",
-                        "version"
-                      ],
-                      "additionalProperties": false
-                    }
-                  },
-                  "required": [
-                    "kind",
-                    "schema"
-                  ],
-                  "additionalProperties": false
-                }
-              ],
-              "description": "Optional deliverable contract frozen for every Watch occurrence."
-            }
-          },
-          "required": [
-            "everyMinutes",
-            "instruction",
-            "name"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "connectionId": {
-              "type": "string",
-              "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-              "description": "Connected account returned by sources."
-            },
-            "delivery": {
-              "type": "string",
-              "enum": [
-                "provider_polling",
-                "realtime"
-              ],
-              "description": "Delivery returned by sources."
-            },
-            "eventSlug": {
-              "type": "string",
-              "pattern": "^[A-Z0-9][A-Z0-9_]{0,255}$",
-              "description": "Event slug returned by sources."
-            },
-            "eventVersion": {
-              "type": "string",
-              "pattern": "^[0-9]{8}_[0-9]{2}$",
-              "description": "Event version returned by sources."
-            },
-            "filters": {
-              "type": "object",
-              "propertyNames": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 128
-              },
-              "additionalProperties": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "string",
-                    "maxLength": 2048
-                  }
-                ]
-              },
-              "description": "Event filters described by the source."
-            },
-            "integrationSlug": {
-              "type": "string",
-              "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$",
-              "description": "Integration returned by sources."
-            },
-            "instruction": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 16384,
-              "description": "The Agent's responsibility for each matching event."
-            },
-            "name": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 80,
-              "description": "Short owner-facing name for this scheduled responsibility."
-            },
-            "outputContract": {
-              "oneOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "const": "markdown"
-                    }
-                  },
-                  "required": [
-                    "kind"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "const": "json"
-                    },
-                    "schema": {
-                      "type": "object",
-                      "properties": {
-                        "jsonSchema": {
-                          "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {
-                            "$ref": "#/definitions/__schema0"
-                          }
-                        },
-                        "name": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 64,
-                          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-                        },
-                        "version": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 32,
-                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-                        }
-                      },
-                      "required": [
-                        "name",
-                        "version"
-                      ],
-                      "additionalProperties": false
-                    }
-                  },
-                  "required": [
-                    "kind",
-                    "schema"
-                  ],
-                  "additionalProperties": false
-                }
-              ],
-              "description": "Optional output contract for each event Run."
-            }
-          },
-          "required": [
-            "connectionId",
-            "delivery",
-            "eventSlug",
-            "eventVersion",
-            "filters",
-            "integrationSlug",
-            "instruction",
-            "name"
-          ],
-          "additionalProperties": false
-        }
-      ]
-    },
-    "watchId": {
-      "anyOf": [
-        {
-          "type": "string",
-          "pattern": "^schedule_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-        },
-        {
-          "type": "string",
-          "pattern": "^watch_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-        }
-      ],
-      "description": "Opaque Watch identity. Scheduled-check Watches retain their compatible schedule identity."
-    }
-  },
-  "required": [
-    "action"
-  ],
-  "additionalProperties": false,
-  "definitions": {
-    "__schema0": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "number"
-        },
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "null"
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/__schema0"
-          }
-        },
-        {
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {
-            "$ref": "#/definitions/__schema0"
-          }
-        }
-      ]
-    }
-  }
 }
 ```
 
@@ -3585,12 +3480,12 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
       ]
     },
     "trigger": {
-      "description": "Return manual, scheduled, connected-Watch, or workflow runs.",
+      "description": "Return manual, scheduled, event-triggered, or workflow runs.",
       "type": "string",
       "enum": [
         "manual",
         "schedule",
-        "watch",
+        "event_trigger",
         "workflow"
       ]
     }

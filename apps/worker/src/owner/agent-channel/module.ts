@@ -884,12 +884,12 @@ export class AgentChannel {
     deliverableContent?: unknown,
   ): Extract<InspectRunResult, { ok: true }> {
     const schedule = this.#runSchedule(admission);
-    const watch = this.#runWatch(admission);
+    const eventTrigger = this.#runEventTrigger(admission);
     const presentedRun: Run = {
       ...run,
       ...(schedule === undefined ? {} : { schedule }),
       trigger: admission.trigger,
-      ...(watch === undefined ? {} : { watch }),
+      ...(eventTrigger === undefined ? {} : { eventTrigger }),
     };
     const start = Math.min(input.timelineCursor, timeline.length);
     const page = timeline.slice(start, start + input.timelineLimit);
@@ -1001,17 +1001,15 @@ export class AgentChannel {
       : { id: revision.id, revision: admission.scheduleRevision };
   }
 
-  #runWatch(admission: StoredRunAdmission): Run["watch"] {
-    return admission.watchId === null ||
-      admission.watchRevision === null ||
-      admission.watchEventId === null ||
-      admission.watchSourceKind === null
+  #runEventTrigger(admission: StoredRunAdmission): Run["eventTrigger"] {
+    return admission.eventTriggerId === null ||
+      admission.eventTriggerRevision === null ||
+      admission.eventTriggerEventId === null
       ? undefined
       : {
-          eventId: admission.watchEventId,
-          id: admission.watchId,
-          revision: admission.watchRevision,
-          sourceKind: admission.watchSourceKind,
+          eventId: admission.eventTriggerEventId,
+          id: admission.eventTriggerId,
+          revision: admission.eventTriggerRevision,
         };
   }
 
@@ -1051,7 +1049,7 @@ export class AgentChannel {
     trigger: Run["trigger"] = "manual",
     scheduleRevision: number | null = null,
     expectedFleetRevision: number | null = null,
-    watchReference?: Run["watch"],
+    eventTriggerReference?: Run["eventTrigger"],
   ): Promise<StartRunResult> {
     const request = startRunInputSchema.safeParse(input);
 
@@ -1126,7 +1124,7 @@ export class AgentChannel {
       promptDigest: await digestRunPrompt(request.data.prompt),
       scheduleRevision,
       trigger,
-      ...(watchReference === undefined ? {} : { watch: watchReference }),
+      ...(eventTriggerReference === undefined ? {} : { eventTrigger: eventTriggerReference }),
     });
 
     if (!admission.ok) {
@@ -1143,7 +1141,7 @@ export class AgentChannel {
     const { agentId, agentRevision } = storedAdmission;
     const agent = this.#agent(authority, storedAdmission);
     const schedule = this.#runSchedule(storedAdmission);
-    const watch = this.#runWatch(storedAdmission);
+    const eventTrigger = this.#runEventTrigger(storedAdmission);
 
     if (storedAdmission.cancellationRequestedAt !== null) {
       return startRunResultSchema.parse({
@@ -1158,7 +1156,7 @@ export class AgentChannel {
             : { completedAt: new Date(storedAdmission.cancelledAt).toISOString() }),
           runId,
           ...(schedule === undefined ? {} : { schedule }),
-          ...(watch === undefined ? {} : { watch }),
+          ...(eventTrigger === undefined ? {} : { eventTrigger }),
           status: storedAdmission.cancelledAt === null ? "cancelling" : "cancelled",
           trigger: storedAdmission.trigger,
         },
@@ -1175,7 +1173,7 @@ export class AgentChannel {
           createdAt: new Date(storedAdmission.createdAt).toISOString(),
           runId,
           ...(schedule === undefined ? {} : { schedule }),
-          ...(watch === undefined ? {} : { watch }),
+          ...(eventTrigger === undefined ? {} : { eventTrigger }),
           status: "failed",
           trigger: storedAdmission.trigger,
         },
@@ -1240,7 +1238,7 @@ export class AgentChannel {
       createdAt: new Date(storedAdmission.createdAt).toISOString(),
       ...(schedule === undefined ? {} : { schedule }),
       trigger: storedAdmission.trigger,
-      ...(watch === undefined ? {} : { watch }),
+      ...(eventTrigger === undefined ? {} : { eventTrigger }),
     };
 
     this.#toolExecutions.reconcileExpired(Date.now());
