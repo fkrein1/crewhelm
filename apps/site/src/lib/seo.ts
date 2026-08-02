@@ -1,11 +1,26 @@
 import { CREWHELM_BRAND_NAME, CREWHELM_BRAND_POSITIONING } from "@crewhelm/design";
 
+export interface SocialImage {
+  alt: string;
+  height: number;
+  mimeType: string;
+  url: string | URL;
+  width: number;
+}
+
 export const CREWHELM_SITE = {
   description: CREWHELM_BRAND_POSITIONING,
   githubUrl: "https://github.com/fkrein1/crewhelm",
   language: "en",
   locale: "en_US",
   name: CREWHELM_BRAND_NAME,
+  socialImage: {
+    alt: "Crewhelm wordmark with the message Give Agents a mandate. Not a master key.",
+    height: 640,
+    mimeType: "image/png",
+    url: "/crewhelm-social-preview.png",
+    width: 1280,
+  } satisfies SocialImage,
   title: "Crewhelm — Open-source control plane for AI Agents",
   url: "https://crewhelm.app",
 } as const;
