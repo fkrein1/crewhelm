@@ -87,6 +87,15 @@ object storage and the final Workflow transition. Session Run cleanup removes ra
 retained turn metadata; the owner keeps its Brief reference until the Session acknowledges that
 redaction has completed.
 
+A direct Run or final Workflow stage may freeze a bounded object-root JSON output contract. The
+contract and schema digest cross the same admission capability as the prompt, context, Agent,
+fleet, and budget revisions. `CrewSession` independently validates terminal model output and may
+spend at most one admitted tool-free repair attempt, using only the frozen inference route and its
+bounded fallbacks, to repair formatting. Valid content is stored
+canonically with content and schema digests; invalid content makes the Run fail while preserving
+tool-effect evidence. Ordinary inspection exposes metadata only, and exact JSON content is an
+explicit read. Intermediate Workflow stages remain Markdown.
+
 Runs and tool calls are bound to the admitted Agent and fleet-configuration revisions.
 Each Agent may also own a bounded collection of independently named recurring schedules. A
 schedule has an opaque identity and immutable, Agent-global revision history; each revision freezes

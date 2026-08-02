@@ -29,6 +29,12 @@ owner data and frozen plans in `OwnerControlPlane`, exact runtime routing in `Cr
 execution in `CrewSession`. Each Workflow stage must be observable as an ordinary admitted Run so
 existing revision, budget, approval, ToolGate, inbox, and recovery behavior stays controlling.
 
+Keep typed output enforcement at the Session completion boundary. The owner freezes the schema and
+reserves one optional tool-free repair attempt across the frozen inference route; the Session
+validates canonical JSON and stores only bounded
+validation evidence. Do not mix schema validation into tool execution, infer success from model
+claims, or rerun a Run to repair its final formatting.
+
 ## Simplification
 
 After behavior works, review changed code and immediate callers. Remove accidental concepts,

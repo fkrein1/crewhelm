@@ -10,6 +10,7 @@ import {
   crewSessionObjectName,
   DEFAULT_AGENT_SESSION_RETENTION_SECONDS,
   deleteAgentSessionResultSchema,
+  inspectAdmittedRunResultSchema,
   inspectAgentSessionResultSchema,
   listAgentSessionsResultSchema,
   MAXIMUM_ACTIVE_AGENT_WORKFLOWS_PER_OWNER,
@@ -22,6 +23,7 @@ import {
   type AcceptRunAdmissionResult,
   type DeleteAgentSessionResult,
   type InspectAgentSessionResult,
+  type InspectAdmittedRunResult,
   type ListAgentSessionsResult,
   type RunSession,
   type SessionContinuation,
@@ -704,11 +706,12 @@ export class CrewAgent extends CrewSession {
     }
   }
 
-  override async inspectAdmittedRun(input: unknown) {
+  override async inspectAdmittedRun(input: unknown): Promise<InspectAdmittedRunResult> {
     const session = await this.#sessionForRunInput(input);
-    return session === undefined
-      ? super.inspectAdmittedRun(input)
-      : session.inspectAdmittedRun(input);
+    if (session === undefined) return super.inspectAdmittedRun(input);
+
+    const inspected: unknown = await session.inspectAdmittedRun(input);
+    return inspectAdmittedRunResultSchema.parse(inspected);
   }
 
   override async cancelAdmittedRun(input: unknown) {

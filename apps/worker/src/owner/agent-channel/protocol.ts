@@ -83,6 +83,7 @@ export class RunReceiverCapabilities {
       expiresAt: new Date(expiresAt).toISOString(),
       idempotencyKey: admission.idempotencyKey,
       nonce: createNonce(),
+      ...(admission.outputContract === null ? {} : { outputContract: admission.outputContract }),
       ownerKey: this.#objectName,
       promptDigest: admission.promptDigest,
       runId: admission.runId,

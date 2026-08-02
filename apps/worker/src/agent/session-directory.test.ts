@@ -19,12 +19,28 @@ import { workersAiCapabilityConfiguration } from "../agent-capabilities/workers-
 import { deriveOwnerKey } from "../owner/identity.js";
 import {
   REJECTED_SESSION_PROMPT,
+  JSON_REPAIR_TEST_PROMPT,
+  JSON_TEST_REPLY,
   SLOW_TEST_PROMPT,
   TestCrewAgent,
   TestCrewSession,
 } from "./admitted-runs/test-agent.js";
 import { admittedRunRecordSchema } from "./admitted-runs/schema.js";
 import { digestRunPrompt } from "./admitted-runs/protocol.js";
+
+const testJsonOutputContract = {
+  kind: "json" as const,
+  schema: {
+    jsonSchema: {
+      additionalProperties: false,
+      properties: { answer: { type: "string" } },
+      required: ["answer"],
+      type: "object",
+    },
+    name: "TestAnswer",
+    version: "1",
+  },
+};
 
 async function authorityFor(subject: string): Promise<OwnerAuthority> {
   return ownerAuthoritySchema.parse({
@@ -80,6 +96,77 @@ async function completedRun(
 }
 
 describe("CrewAgent durable session directory", () => {
+  it("continues from canonical repaired JSON even when retained Think text is malformed", async () => {
+    const authority = await authorityFor("crew-session-json-repair");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(authority, agentInput("session-json-repair"));
+    if (!created.ok) throw new Error("Expected typed Session fixture Agent.");
+    await enableSessions(authority.ownerKey, created.agent.id);
+
+    const first = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "session-json-repair-first",
+      outputContract: testJsonOutputContract,
+      prompt: JSON_REPAIR_TEST_PROMPT,
+    });
+    if (!first.ok || first.continuation === undefined || first.run.session === undefined) {
+      throw new Error("Expected typed Session Run.");
+    }
+    await completedRun(controlPlane, authority, first.run.runId);
+    const child = env.CREW_SESSION.getByName(
+      crewSessionObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+        sessionId: first.run.session.sessionId,
+      }),
+    );
+    await runInDurableObject(child, async (_instance, state) => {
+      const output = await state.storage.get<{ messageId: string }>(
+        `crewhelm:run-output:${first.run.runId}`,
+      );
+      if (output === undefined) throw new Error("Expected validated Session output.");
+      const row = state.storage.sql
+        .exec<{ content: string }>(
+          "SELECT content FROM assistant_messages WHERE id = ?",
+          output.messageId,
+        )
+        .one();
+      const message: unknown = JSON.parse(row.content);
+      if (typeof message !== "object" || message === null || Array.isArray(message)) {
+        throw new Error("Expected retained assistant message.");
+      }
+      state.storage.sql.exec(
+        "UPDATE assistant_messages SET content = ? WHERE id = ?",
+        JSON.stringify({ ...message, parts: [{ text: "not json", type: "text" }] }),
+        output.messageId,
+      );
+    });
+    const inspected = await controlPlane.inspectAgentSession(authority, {
+      agentId: created.agent.id,
+      sessionId: first.run.session.sessionId,
+    });
+    if (!inspected.ok) throw new Error("Expected typed Session inspection.");
+    expect(inspected.messages.map((message) => message.text)).toContain(JSON_TEST_REPLY);
+    expect(inspected.messages.map((message) => message.text)).not.toContain("not json");
+
+    const continued = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      continuation: first.continuation,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "session-json-repair-second",
+      prompt: "Summarize the prior validated answer.",
+    });
+    if (!continued.ok) throw new Error("Expected canonical continuation.");
+    await completedRun(controlPlane, authority, continued.run.runId);
+    await runInDurableObject(child, (instance) => {
+      if (!(instance instanceof TestCrewSession)) throw new Error("Expected test CrewSession.");
+      const continuationPrompt = JSON.stringify(instance.modelCallsForTest().at(-1)?.prompt);
+      expect(continuationPrompt).toContain(JSON.parse(JSON_TEST_REPLY).answer);
+      expect(continuationPrompt).not.toContain("not json");
+    });
+  });
+
   it("creates, exactly continues, inspects, and deletes an isolated conversation", async () => {
     const authority = await authorityFor("crew-session-801");
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);

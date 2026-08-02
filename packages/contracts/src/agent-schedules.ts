@@ -9,6 +9,7 @@ import { runIdSchema } from "./capabilities.js";
 import { agentInboxDeferredReasonSchema } from "./diagnostics.js";
 import { runPromptSchema } from "./run-admission.js";
 import { agentScheduleIdSchema, agentScheduleRevisionNumberSchema } from "./schedule-revision.js";
+import { outputContractSchema } from "./output-contracts.js";
 
 export const MINIMUM_AGENT_SCHEDULE_INTERVAL_SECONDS = 60;
 export const MAXIMUM_AGENT_SCHEDULE_INTERVAL_SECONDS = 7 * 24 * 60 * 60;
@@ -117,6 +118,7 @@ const legacyAgentScheduleConfigurationSchema = z
 
 export const agentScheduleConfigurationSchema = z.union([
   z.strictObject({
+    outputContract: outputContractSchema.optional(),
     prompt: runPromptSchema.describe("Bounded Run instruction used for every occurrence."),
     trigger: agentScheduleTriggerSchema,
   }),
@@ -125,6 +127,9 @@ export const agentScheduleConfigurationSchema = z.union([
 
 export const agentScheduleDefinitionSchema = z.strictObject({
   name: agentScheduleNameSchema,
+  outputContract: outputContractSchema
+    .describe("Optional deliverable contract frozen for every scheduled Run.")
+    .optional(),
   prompt: runPromptSchema.describe("Bounded Run instruction used for every occurrence."),
   trigger: agentScheduleTriggerSchema,
 });

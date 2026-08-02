@@ -15,6 +15,12 @@ import {
 import { MAXIMUM_FLEET_LIST_ITEMS } from "./fleet-capacity.js";
 import { runSessionSchema } from "./agent-sessions.js";
 import { admittedBriefReferenceSchema, artifactIdSchema, briefReferencesSchema } from "./briefs.js";
+import {
+  admittedOutputContractSchema,
+  outputContractSchema,
+  outputContractSummarySchema,
+  publicJsonObjectSchema,
+} from "./output-contracts.js";
 
 export const MAXIMUM_AGENT_WORKFLOW_STAGES = 8;
 export const MAXIMUM_AGENT_WORKFLOW_OBJECTIVE_CHARACTERS = 4 * 1_024;
@@ -120,6 +126,7 @@ export const agentWorkflowSummarySchema = z.strictObject({
   currentRunId: runIdSchema.nullable(),
   currentStage: agentWorkflowStageSummarySchema.omit({ prompt: true }).nullable(),
   failure: agentWorkflowFailureSchema.nullable(),
+  outputContract: outputContractSummarySchema,
   revision: z.number().int().positive().safe(),
   stageCount: z.number().int().min(2).max(MAXIMUM_AGENT_WORKFLOW_STAGES),
   status: agentWorkflowStatusSchema,
@@ -127,25 +134,43 @@ export const agentWorkflowSummarySchema = z.strictObject({
   workflowId: agentWorkflowIdSchema,
 });
 
-export const workflowDeliverableSchema = z.strictObject({
+const workflowDeliverableBaseShape = {
   artifactId: artifactIdSchema,
   createdAt: z.iso.datetime(),
   digest: sha256DigestSchema,
-  mediaType: z.literal("text/markdown"),
   runId: runIdSchema,
-  truncated: z.boolean(),
   sizeBytes: z.number().int().nonnegative().max(MAXIMUM_WORKFLOW_DELIVERABLE_BYTES),
   stageIndex: z
     .number()
     .int()
     .min(0)
     .max(MAXIMUM_AGENT_WORKFLOW_STAGES - 1),
-});
+};
+
+export const workflowDeliverableSchema = z.discriminatedUnion("mediaType", [
+  z.strictObject({
+    ...workflowDeliverableBaseShape,
+    kind: z.literal("markdown").default("markdown"),
+    mediaType: z.literal("text/markdown"),
+    truncated: z.boolean(),
+  }),
+  z.strictObject({
+    ...workflowDeliverableBaseShape,
+    kind: z.literal("json"),
+    mediaType: z.literal("application/json"),
+    repairAttempted: z.boolean(),
+    schema: outputContractSummarySchema.options[1].shape.schema,
+    truncated: z.literal(false),
+  }),
+]);
 
 export const agentWorkflowSchema = agentWorkflowSummarySchema.extend({
   deliverable: workflowDeliverableSchema.nullable(),
-  deliverableContent: z.string().max(MAXIMUM_RUN_OUTPUT_CHARACTERS).optional(),
+  deliverableContent: z
+    .union([z.string().max(MAXIMUM_RUN_OUTPUT_CHARACTERS), publicJsonObjectSchema])
+    .optional(),
   objective: z.string().min(1).max(MAXIMUM_AGENT_WORKFLOW_OBJECTIVE_CHARACTERS),
+  outputContractDetail: admittedOutputContractSchema.optional(),
   session: runSessionSchema.nullable(),
   stages: z.array(agentWorkflowStageSummarySchema).min(2).max(MAXIMUM_AGENT_WORKFLOW_STAGES),
 });
@@ -168,6 +193,11 @@ export const startAgentWorkflowInputSchema = z
       .min(1)
       .max(MAXIMUM_AGENT_WORKFLOW_OBJECTIVE_CHARACTERS)
       .describe("The durable outcome shared by all ordered stages."),
+    outputContract: outputContractSchema
+      .describe(
+        "Optional final Workflow deliverable contract. Intermediate stages remain Markdown.",
+      )
+      .optional(),
     stages: z
       .array(agentWorkflowStagePlanSchema)
       .min(2)
@@ -240,7 +270,7 @@ export const manageAgentWorkflowsInputSchema = z
     action: z
       .enum(["cancel", "delete", "inspect", "list", "start"])
       .describe(
-        "Choose one action and send only its fields: cancel(workflowId, expectedRevision); delete(workflowId, expectedRevision, idempotencyKey); inspect(workflowId, includePrompts?, includeDeliverable?); list(agentId?, cursor?, limit?, status?); start(agentId, expectedRevision, idempotencyKey, objective, stages, briefs?).",
+        "Choose one action and send only its fields: cancel(workflowId, expectedRevision); delete(workflowId, expectedRevision, idempotencyKey); inspect(workflowId, includePrompts?, includeDeliverable?); list(agentId?, cursor?, limit?, status?); start(agentId, expectedRevision, idempotencyKey, objective, stages, briefs?, outputContract?).",
       ),
     agentId: agentIdSchema
       .optional()
@@ -281,6 +311,9 @@ export const manageAgentWorkflowsInputSchema = z
       .max(MAXIMUM_AGENT_WORKFLOW_OBJECTIVE_CHARACTERS)
       .optional()
       .describe("Required for start: the durable outcome shared by every stage."),
+    outputContract: outputContractSchema
+      .optional()
+      .describe("For start, optional final deliverable contract. Omit for Markdown."),
     stages: z
       .array(agentWorkflowStagePlanSchema)
       .min(2)

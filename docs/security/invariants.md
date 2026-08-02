@@ -39,6 +39,13 @@ the full block only while its admitted Run is retained; Run cleanup rewrites dur
 remove the block, and the owner reference cannot expire until the Session acknowledges that
 redaction.
 
+Typed deliverable schemas and model-produced JSON are untrusted data, never authority. The owner
+control plane canonicalizes and digests a bounded schema before admission; the Session must match
+that exact contract, validate independently, and must not report invalid or truncated JSON as a
+successful typed deliverable. A formatting repair has no tools, consumes the frozen Run budget,
+and cannot rerun or erase an external effect. Exact content remains owner-scoped and follows the
+Run or Workflow retention and deletion lifecycle.
+
 Native runtime tools are opt-in Agent capabilities, not ambient framework APIs. Admission freezes
 their exact implementation identity, supported inputs, effects, and limits. Each call revalidates
 the active owner, Agent and fleet revisions, consumes the Run's shared tool-call budget, and

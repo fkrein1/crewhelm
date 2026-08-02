@@ -26,6 +26,7 @@ import {
   startAgentWorkflowInputSchema,
   startAgentWorkflowResultSchema,
   workflowDeliverableSchema,
+  canonicalJson,
   type AgentWorkflowStatus,
   type AgentWorkflowSummary,
   type CancelAgentWorkflowResult,
@@ -39,12 +40,15 @@ import {
   type StartAgentWorkflowInput,
   type StartAgentWorkflowResult,
   type AdmittedBriefContext,
+  type AdmittedOutputContract,
+  type OutputContract,
+  type JsonValue,
 } from "@crewhelm/contracts";
 import { and, asc, count, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import * as z from "zod";
 
-import { digestRunPrompt } from "../../agent/admitted-runs/index.js";
+import { bindOutputContract, digestRunPrompt } from "../../agent/admitted-runs/index.js";
 import type { CrewAgent } from "../../agent/session-directory.js";
 import type { AgentChannel } from "../agent-channel/index.js";
 import type { Briefs } from "../briefs/index.js";
@@ -143,6 +147,41 @@ function admittedStagePrompt(
   );
 }
 
+function publicOutputContract(contract: AdmittedOutputContract): OutputContract {
+  return contract.kind === "markdown"
+    ? contract
+    : {
+        kind: "json",
+        schema: {
+          jsonSchema: contract.schema.jsonSchema,
+          name: contract.schema.name,
+          version: contract.schema.version,
+        },
+      };
+}
+
+function parseJsonText(content: string): JsonValue | undefined {
+  try {
+    const parsed = z.json().safeParse(JSON.parse(content));
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function outputContractSummary(contract: AdmittedOutputContract | null) {
+  return contract?.kind === "json"
+    ? {
+        kind: "json" as const,
+        schema: {
+          digest: contract.schema.digest,
+          name: contract.schema.name,
+          version: contract.schema.version,
+        },
+      }
+    : { kind: "markdown" as const };
+}
+
 function failureNextAction(code: StoredFailureCode) {
   if (code === "run_failed") return "inspect_run" as const;
   if (code === "agent_unavailable" || code === "revision_conflict") {
@@ -203,6 +242,8 @@ export class AgentWorkflows {
       return denied("invalid_request");
     }
 
+    const outputContract =
+      (await bindOutputContract(request.data.outputContract)) ?? ({ kind: "markdown" } as const);
     const digest = await requestDigest(request.data);
     const replay = this.#startReplay(authority, request.data.idempotencyKey, digest);
     if (replay !== null) {
@@ -368,6 +409,7 @@ export class AgentWorkflows {
           fleetRevision: fleet.revision,
           idempotencyKey: request.data.idempotencyKey,
           objective: request.data.objective,
+          outputContract,
           requestDigest: digest,
           stageCount,
           status: "queued",
@@ -499,7 +541,7 @@ export class AgentWorkflows {
 
     const stages = this.#stages(row.workflowId);
 
-    let deliverableContent: string | undefined;
+    let deliverableContent: JsonValue | string | undefined;
 
     if (
       request.data.includeDeliverable &&
@@ -518,7 +560,18 @@ export class AgentWorkflows {
         };
       }
 
-      deliverableContent = content;
+      if (row.deliverable.mediaType === "application/json") {
+        const parsed = parseJsonText(content);
+        if (parsed === undefined) {
+          return {
+            error: { code: "workflow_unavailable", message: "Agent workflow request denied." },
+            ok: false,
+          };
+        }
+        deliverableContent = parsed;
+      } else {
+        deliverableContent = content;
+      }
     }
 
     return inspectAgentWorkflowResultSchema.parse({
@@ -528,6 +581,9 @@ export class AgentWorkflows {
         deliverable: row.deliverable,
         ...(deliverableContent === undefined ? {} : { deliverableContent }),
         objective: row.objective,
+        ...(request.data.includeDeliverable
+          ? { outputContractDetail: row.outputContract ?? { kind: "markdown" as const } }
+          : {}),
         session: row.session,
         stages: stages.map((stage) => stageProjection(stage, request.data.includePrompts)),
       }),
@@ -686,6 +742,9 @@ export class AgentWorkflows {
         ...(row.session === null ? {} : { continuation: continuationFromRunSession(row.session) }),
         expectedRevision: row.agentRevision,
         idempotencyKey: `workflow.${row.workflowId}.${stage.stageIndex}`,
+        ...(stage.stageIndex === row.stageCount - 1 && row.outputContract !== null
+          ? { outputContract: publicOutputContract(row.outputContract) }
+          : {}),
         prompt: admittedStagePrompt(row.objective, row.stageCount, stage),
       },
       "workflow",
@@ -870,6 +929,7 @@ export class AgentWorkflows {
     }
 
     const inspected = await this.#agentChannel.inspect(this.#runtimeAuthority(row), {
+      includeDeliverable: stage.stageIndex === row.stageCount - 1,
       includeUsage: false,
       runId: request.data.runId,
       timelineLimit: 1,
@@ -891,12 +951,28 @@ export class AgentWorkflows {
     const runStatus = inspected.run.status;
     const isFinalCompletedStage =
       runStatus === "completed" && stage.stageIndex === row.stageCount - 1;
-    const finalOutputMissing = isFinalCompletedStage && inspected.run.output === undefined;
+    const jsonDeliverable =
+      inspected.run.deliverable?.state === "valid" ? inspected.run.deliverable : undefined;
+    const finalJson = z.json().safeParse(inspected.deliverableContent);
+    const finalContent = !isFinalCompletedStage
+      ? undefined
+      : row.outputContract?.kind === "json"
+        ? inspected.deliverableContent === undefined
+          ? undefined
+          : finalJson.success
+            ? canonicalJson(finalJson.data)
+            : undefined
+        : inspected.run.output;
+    const finalOutputMissing =
+      isFinalCompletedStage &&
+      (finalContent === undefined ||
+        (row.outputContract?.kind === "json" && jsonDeliverable === undefined));
     const deliverablePrepared =
-      isFinalCompletedStage && inspected.run.output !== undefined
+      isFinalCompletedStage && !finalOutputMissing && finalContent !== undefined
         ? await this.#briefs.prepareWorkflowDeliverable({
-            content: inspected.run.output,
+            content: finalContent,
             createdAt: inspected.run.completedAt ?? new Date().toISOString(),
+            ...(jsonDeliverable === undefined ? {} : { jsonDeliverable }),
             runId: request.data.runId,
             stageIndex: stage.stageIndex,
             truncated: inspected.run.outputTruncated ?? false,
@@ -1953,6 +2029,7 @@ export class AgentWorkflows {
               runId: failureStage?.runId ?? null,
               stageIndex: row.failureStageIndex,
             },
+      outputContract: outputContractSummary(row.outputContract),
       revision: row.workflowRevision,
       stageCount: row.stageCount,
       status: row.status,

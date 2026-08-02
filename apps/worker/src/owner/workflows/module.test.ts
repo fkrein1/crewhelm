@@ -9,6 +9,7 @@ import {
   ownerAuthoritySchema,
   type CreateAgentInput,
   type OwnerAuthority,
+  type OutputContract,
   type Run,
 } from "@crewhelm/contracts";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
@@ -17,12 +18,28 @@ import { describe, expect, it, vi } from "vitest";
 
 import { workersAiCapabilityConfiguration } from "../../agent-capabilities/workers-ai.js";
 import {
+  JSON_OUTPUT_TEST_PROMPT,
+  JSON_TEST_REPLY,
   SLOW_TEST_PROMPT,
   TestCrewAgent,
   TestCrewSession,
 } from "../../agent/admitted-runs/test-agent.js";
 import { admittedRunRecordSchema } from "../../agent/admitted-runs/schema.js";
 import { deriveOwnerKey } from "../identity.js";
+
+const workflowJsonOutputContract = {
+  kind: "json",
+  schema: {
+    jsonSchema: {
+      additionalProperties: false,
+      properties: { answer: { minLength: 1, type: "string" } },
+      required: ["answer"],
+      type: "object",
+    },
+    name: "WorkflowAnswer",
+    version: "1",
+  },
+} as const satisfies OutputContract;
 
 async function authorityFor(subject: string): Promise<OwnerAuthority> {
   return ownerAuthoritySchema.parse({
@@ -298,6 +315,96 @@ describe("Agent workflows", () => {
     ).resolves.toMatchObject({
       ok: true,
       runs: [{ trigger: "workflow" }, { trigger: "workflow" }],
+    });
+  });
+
+  it("applies a frozen JSON contract only to the final Workflow deliverable", async () => {
+    const authority = await authorityFor("agent-workflow-json");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(authority, agentInput("workflow-json-agent"));
+    if (!created.ok) throw new Error("Expected typed Workflow Agent.");
+    await enableSessions(authority.ownerKey, created.agent.id);
+
+    const started = await controlPlane.startAgentWorkflow(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "workflow-json-start",
+      objective: "Prepare one typed final recommendation.",
+      outputContract: workflowJsonOutputContract,
+      stages: [
+        { name: "Prepare", prompt: "Prepare the facts in ordinary prose." },
+        { name: "Deliver", prompt: JSON_OUTPUT_TEST_PROMPT },
+      ],
+    });
+    if (!started.ok) throw new Error("Expected typed Workflow.");
+
+    const first = await controlPlane.dispatchAgentWorkflowStage({
+      agentId: created.agent.id,
+      stageIndex: 0,
+      workflowId: started.workflow.workflowId,
+    });
+    if (!first.ok) throw new Error("Expected first typed Workflow stage.");
+    const firstRun = await terminalRun(controlPlane, authority, first.runId);
+    expect(firstRun).toHaveProperty("output");
+    await controlPlane.completeAgentWorkflowStage({
+      agentId: created.agent.id,
+      runId: first.runId,
+      stageIndex: 0,
+      workflowId: started.workflow.workflowId,
+    });
+
+    const second = await controlPlane.dispatchAgentWorkflowStage({
+      agentId: created.agent.id,
+      stageIndex: 1,
+      workflowId: started.workflow.workflowId,
+    });
+    if (!second.ok) throw new Error("Expected final typed Workflow stage.");
+    const secondRun = await terminalRun(controlPlane, authority, second.runId);
+    expect(secondRun).toMatchObject({
+      deliverable: { kind: "json", state: "valid" },
+      status: "completed",
+    });
+    expect(secondRun).not.toHaveProperty("output");
+    await controlPlane.completeAgentWorkflowStage({
+      agentId: created.agent.id,
+      runId: second.runId,
+      stageIndex: 1,
+      workflowId: started.workflow.workflowId,
+    });
+
+    const compact = await controlPlane.inspectAgentWorkflow(authority, {
+      workflowId: started.workflow.workflowId,
+    });
+    expect(compact).toMatchObject({
+      ok: true,
+      workflow: {
+        deliverable: {
+          kind: "json",
+          mediaType: "application/json",
+          schema: { name: "WorkflowAnswer", version: "1" },
+        },
+        outputContract: {
+          kind: "json",
+          schema: { name: "WorkflowAnswer", version: "1" },
+        },
+        status: "completed",
+      },
+    });
+    if (!compact.ok) throw new Error("Expected compact typed Workflow inspection.");
+    expect(compact.workflow).not.toHaveProperty("deliverableContent");
+    expect(compact.workflow).not.toHaveProperty("outputContractDetail");
+
+    await expect(
+      controlPlane.inspectAgentWorkflow(authority, {
+        includeDeliverable: true,
+        workflowId: started.workflow.workflowId,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      workflow: {
+        deliverableContent: JSON.parse(JSON_TEST_REPLY),
+        outputContractDetail: { kind: "json", schema: { jsonSchema: expect.any(Object) } },
+      },
     });
   });
 

@@ -149,6 +149,7 @@ function workflowSummary(
           status: workflowState === "queued" ? "pending" : workflowState,
         },
     failure: null,
+    outputContract: { kind: "markdown" },
     revision,
     stageCount: 2,
     status: workflowState,

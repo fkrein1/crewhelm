@@ -14,7 +14,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import * as z from "zod";
 
-import type { WorkerEnv } from "../env.js";
 import { availableAgentCapabilityPrerequisites } from "../agent-capabilities/registry.js";
 import { readBoundedPostRequest } from "../http/request-body.js";
 import { recordIntegrationProviderResponse } from "../observability/integrations.js";
@@ -294,10 +293,10 @@ export async function handleAuthenticatedMcpRequest(
   }
 }
 
-export const mcpApiHandler = {
-  fetch(request, env, context) {
+export const mcpApiHandler: ExportedHandler<McpEnvironment> = {
+  fetch(request, env, context): Promise<Response> {
     const props = (context as ExecutionContext & { props?: unknown }).props;
 
     return handleAuthenticatedMcpRequest(request, env, props);
   },
-} satisfies ExportedHandler<WorkerEnv>;
+};

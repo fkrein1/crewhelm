@@ -379,7 +379,7 @@ describe("authenticated MCP handler", () => {
     });
     expect(workflowsTool?.inputSchema).not.toHaveProperty("oneOf");
     expect(JSON.stringify(workflowsTool?.inputSchema)).toContain(
-      "start(agentId, expectedRevision, idempotencyKey, objective, stages, briefs?)",
+      "start(agentId, expectedRevision, idempotencyKey, objective, stages, briefs?, outputContract?)",
     );
     expect(briefsTool).toMatchObject({
       annotations: {

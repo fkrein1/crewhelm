@@ -25,6 +25,7 @@ import {
   verifyRunAdmissionResultSchema,
   type ConfirmRunAdmissionResult,
   type AdmittedBriefContext,
+  type AdmittedOutputContract,
   type BriefReference,
   type CreateRunAdmissionResult,
   type CrewAgentRuntimeConfig,
@@ -59,6 +60,7 @@ import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { AI_GATEWAY_CAPABILITY_ID } from "../../agent-capabilities/ai-gateway.js";
 import { agentCapabilityRegistry } from "../../agent-capabilities/registry.js";
 import { WORKERS_AI_CAPABILITY_ID } from "../../agent-capabilities/workers-ai.js";
+import { bindOutputContract, outputContractInstruction } from "../../agent/admitted-runs/index.js";
 import { recordExecutionEvent } from "../../observability/execution.js";
 import type { Briefs } from "../briefs/index.js";
 import type { Skills } from "../skills/index.js";
@@ -173,6 +175,7 @@ function createBudgetReservation(input: {
   briefContextCharacters: number;
   configuration: FleetConfiguration;
   executionLimits: CrewAgentRuntimeConfig["executionLimits"];
+  outputContract: AdmittedOutputContract | undefined;
   promptCharacters: number;
   runtimePlan: CrewAgentRuntimeConfig["runtimePlan"];
   systemPromptCharacters: number;
@@ -213,7 +216,8 @@ function createBudgetReservation(input: {
   const baseModelCalls = Math.min(effectiveExecutionLimits.maxTurns, maxTurns + maxToolCalls);
   const maxModelCalls = Math.min(
     100,
-    baseModelCalls * (1 + input.runtimePlan.inference.fallbackModels.length),
+    (baseModelCalls + (input.outputContract?.kind === "json" ? 1 : 0)) *
+      (1 + input.runtimePlan.inference.fallbackModels.length),
   );
 
   return runBudgetReservationSchema.parse({
@@ -251,6 +255,7 @@ function canonicalRequest(input: {
     | undefined;
   expectedRevision: number;
   expectedFleetRevision: number | null;
+  outputContract?: unknown;
   promptCharacters: number;
   promptDigest: string;
   scheduleRevision: number | null;
@@ -264,6 +269,7 @@ function canonicalRequest(input: {
     ...(input.expectedFleetRevision === null
       ? {}
       : { expectedFleetRevision: input.expectedFleetRevision }),
+    ...(input.outputContract === undefined ? {} : { outputContract: input.outputContract }),
     promptCharacters: input.promptCharacters,
     promptDigest: input.promptDigest,
     ...(input.scheduleRevision === null ? {} : { scheduleRevision: input.scheduleRevision }),
@@ -305,6 +311,7 @@ export class RunAdmissions {
       return this.#deniedRequest("invalid_request");
     }
 
+    const outputContract = await bindOutputContract(request.data.outputContract);
     const requestDigest = await digestBase64Url(canonicalRequest(request.data));
     const currentTime = Date.now();
     const nonce = createNonce();
@@ -388,6 +395,9 @@ export class RunAdmissions {
             idempotencyKey: existing.idempotencyKey,
             nonce: nonce,
             ownerKey: authority.ownerKey,
+            ...(existing.outputContract === null
+              ? {}
+              : { outputContract: existing.outputContract }),
             promptDigest: existing.promptDigest,
             runId: existing.runId,
             scheduleRevision: existing.scheduleRevision,
@@ -478,7 +488,8 @@ export class RunAdmissions {
         }).length +
         (compiledCapabilities.runtimePlan.skillReferences.length === 0
           ? 0
-          : MAXIMUM_AGENT_SKILL_CONTEXT_CHARACTERS);
+          : MAXIMUM_AGENT_SKILL_CONTEXT_CHARACTERS) +
+        outputContractInstruction(outputContract).length;
 
       if (
         systemPromptCharacters +
@@ -503,6 +514,7 @@ export class RunAdmissions {
         briefContextCharacters: request.data.briefContext?.characters ?? 0,
         configuration: fleetConfiguration,
         executionLimits: agent.executionLimits,
+        outputContract,
         promptCharacters: request.data.promptCharacters,
         runtimePlan: compiledCapabilities.runtimePlan,
         systemPromptCharacters,
@@ -523,6 +535,7 @@ export class RunAdmissions {
           expiresAt,
           idempotencyKey: request.data.idempotencyKey,
           nonceDigest,
+          outputContract: outputContract ?? null,
           prompt: request.data.prompt ?? null,
           promptDigest: request.data.promptDigest,
           requestDigest,
@@ -557,6 +570,7 @@ export class RunAdmissions {
           idempotencyKey: request.data.idempotencyKey,
           nonce,
           ownerKey: authority.ownerKey,
+          ...(outputContract === undefined ? {} : { outputContract }),
           promptDigest: request.data.promptDigest,
           runId,
           scheduleRevision: request.data.scheduleRevision,
@@ -578,12 +592,18 @@ export class RunAdmissions {
     return result;
   }
 
-  replayBriefContext(
+  async replayBriefContext(
     authority: OwnerAuthority,
-    input: { agentId: string; briefs: BriefReference[] | undefined; idempotencyKey: string },
-  ):
+    input: {
+      agentId: string;
+      briefs: BriefReference[] | undefined;
+      idempotencyKey: string;
+      outputContract: Parameters<typeof bindOutputContract>[0];
+    },
+  ): Promise<
     | { context: AdmittedBriefContext | undefined; outcome: "replay" }
-    | { outcome: "conflict" | "materialize" } {
+    | { outcome: "conflict" | "materialize" }
+  > {
     const row = this.#database
       .select()
       .from(runAdmissions)
@@ -598,7 +618,12 @@ export class RunAdmissions {
     const supplied = input.briefs ?? [];
     const retained =
       row.briefContext?.references.map(({ id, revision }) => ({ id, revision })) ?? [];
-    if (row.agentId !== input.agentId || JSON.stringify(supplied) !== JSON.stringify(retained)) {
+    const outputContract = await bindOutputContract(input.outputContract);
+    if (
+      row.agentId !== input.agentId ||
+      JSON.stringify(supplied) !== JSON.stringify(retained) ||
+      JSON.stringify(row.outputContract) !== JSON.stringify(outputContract ?? null)
+    ) {
       return { outcome: "conflict" };
     }
     return row.status === "issued"
@@ -960,6 +985,8 @@ export class RunAdmissions {
         JSON.stringify(row.briefContext) !== JSON.stringify(request.data.briefContext ?? null) ||
         row.clientId !== request.data.clientId ||
         row.idempotencyKey !== request.data.idempotencyKey ||
+        JSON.stringify(row.outputContract) !==
+          JSON.stringify(request.data.outputContract ?? null) ||
         row.promptDigest !== request.data.promptDigest ||
         row.scheduleRevision !== request.data.scheduleRevision ||
         !sameBudgetReservation(row.budgetReservation, request.data.budgetReservation) ||
@@ -1019,6 +1046,8 @@ export class RunAdmissions {
       row.agentRevision !== capability.data.agentRevision ||
       JSON.stringify(row.briefContext) !== JSON.stringify(capability.data.briefContext ?? null) ||
       row.idempotencyKey !== capability.data.idempotencyKey ||
+      JSON.stringify(row.outputContract) !==
+        JSON.stringify(capability.data.outputContract ?? null) ||
       row.promptDigest !== capability.data.promptDigest ||
       row.scheduleRevision !== capability.data.scheduleRevision ||
       !sameBudgetReservation(row.budgetReservation, capability.data.budgetReservation) ||
@@ -1400,6 +1429,7 @@ export class RunAdmissions {
       row.agentId === permit.agentId &&
       row.agentRevision === permit.agentRevision &&
       JSON.stringify(row.briefContext) === JSON.stringify(permit.briefContext ?? null) &&
+      JSON.stringify(row.outputContract) === JSON.stringify(permit.outputContract ?? null) &&
       row.promptDigest === permit.promptDigest &&
       row.scheduleRevision === permit.scheduleRevision &&
       row.trigger === permit.trigger &&
@@ -1434,6 +1464,7 @@ export class RunAdmissions {
     idempotencyKey: string;
     nonce: string;
     ownerKey: string;
+    outputContract?: RunAdmissionPermit["outputContract"];
     promptDigest: string;
     runId: string;
     scheduleRevision: number | null;
@@ -1452,6 +1483,7 @@ export class RunAdmissions {
       idempotencyKey: input.idempotencyKey,
       nonce: input.nonce,
       ownerKey: input.ownerKey,
+      ...(input.outputContract === undefined ? {} : { outputContract: input.outputContract }),
       promptDigest: input.promptDigest,
       runId: input.runId,
       scheduleRevision: input.scheduleRevision,

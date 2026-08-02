@@ -30,6 +30,23 @@ const TEST_TOOL_NAME = "projectToolkitReadItem";
 const SANDBOX_TEST_PROMPT = "Use the bounded Sandbox to calculate six times seven.";
 const SANDBOX_LIMIT_TEST_PROMPT = "Use the bounded Sandbox and exercise its execution limit.";
 const WEB_RESEARCH_TEST_PROMPT = "Search for and read the exact public Crewhelm test source.";
+const JSON_OUTPUT_TEST_PROMPT = "Return the admitted JSON test deliverable.";
+const JSON_REPAIR_TEST_PROMPT = "Return malformed JSON once for repair testing.";
+const JSON_FAILURE_TEST_PROMPT = "Return malformed JSON through repair failure testing.";
+const JSON_TEST_REPLY = '{"answer":"Crewhelm concluiu a execução admitida."}';
+
+function testOutput(serializedPrompt: string): string {
+  const isOutputRepair = serializedPrompt.includes(
+    "Repair one candidate into exactly one JSON object",
+  );
+  return serializedPrompt.includes(JSON_FAILURE_TEST_PROMPT)
+    ? JSON_FAILURE_TEST_PROMPT
+    : isOutputRepair || serializedPrompt.includes(JSON_OUTPUT_TEST_PROMPT)
+      ? JSON_TEST_REPLY
+      : serializedPrompt.includes(JSON_REPAIR_TEST_PROMPT)
+        ? "not json"
+        : TEST_REPLY;
+}
 
 function findWebSource(value: unknown): { token: string; url: string } | undefined {
   if (typeof value === "string") {
@@ -77,6 +94,22 @@ export class TestCrewAgent extends CrewAgent {
   #delayNextAdmissionMs = 0;
   #rejectNextCancellation = false;
   readonly #model = new MockLanguageModelV4({
+    doGenerate: async (options) => {
+      this.#modelCalls.push({
+        maxOutputTokens: options.maxOutputTokens,
+        prompt: structuredClone(options.prompt),
+        toolCount: options.tools?.length ?? 0,
+      });
+      return {
+        content: [{ text: testOutput(JSON.stringify(options.prompt)), type: "text" }],
+        finishReason: { raw: "stop", unified: "stop" },
+        usage: {
+          inputTokens: { cacheRead: 0, cacheWrite: 0, noCache: 8, total: 8 },
+          outputTokens: { reasoning: 0, text: 8, total: 8 },
+        },
+        warnings: [],
+      };
+    },
     doStream: async (options) => {
       this.#modelCalls.push({
         maxOutputTokens: options.maxOutputTokens,
@@ -145,7 +178,7 @@ export class TestCrewAgent extends CrewAgent {
             {
               delta: JSON.stringify(options.prompt).includes(LARGE_TEST_PROMPT)
                 ? "x".repeat(70_000)
-                : TEST_REPLY,
+                : testOutput(serializedPrompt),
               id: "test-text",
               type: "text-delta",
             },
@@ -353,15 +386,22 @@ export class TestCrewSession extends CrewSession {
   readonly #webFetchExecutions: string[] = [];
   readonly #webSearchExecutions: string[] = [];
   readonly #model = new MockLanguageModelV4({
-    doGenerate: async () => ({
-      content: [{ text: TEST_REPLY, type: "text" }],
-      finishReason: { raw: "stop", unified: "stop" },
-      usage: {
-        inputTokens: { cacheRead: 0, cacheWrite: 0, noCache: 8, total: 8 },
-        outputTokens: { reasoning: 0, text: 8, total: 8 },
-      },
-      warnings: [],
-    }),
+    doGenerate: async (options) => {
+      this.#modelCalls.push({
+        maxOutputTokens: options.maxOutputTokens,
+        prompt: structuredClone(options.prompt),
+        toolCount: options.tools?.length ?? 0,
+      });
+      return {
+        content: [{ text: testOutput(JSON.stringify(options.prompt)), type: "text" }],
+        finishReason: { raw: "stop", unified: "stop" },
+        usage: {
+          inputTokens: { cacheRead: 0, cacheWrite: 0, noCache: 8, total: 8 },
+          outputTokens: { reasoning: 0, text: 8, total: 8 },
+        },
+        warnings: [],
+      };
+    },
     doStream: async (options) => {
       this.#modelCalls.push({
         maxOutputTokens: options.maxOutputTokens,
@@ -465,7 +505,7 @@ export class TestCrewSession extends CrewSession {
           chunks: [
             { type: "stream-start", warnings: [] },
             { id: "session-text", type: "text-start" },
-            { delta: TEST_REPLY, id: "session-text", type: "text-delta" },
+            { delta: testOutput(serializedPrompt), id: "session-text", type: "text-delta" },
             { id: "session-text", type: "text-end" },
             {
               finishReason: { raw: "stop", unified: "stop" },
@@ -662,6 +702,10 @@ export {
   WEB_RESEARCH_TEST_PROMPT,
   SLOW_TEST_PROMPT,
   TEST_REPLY,
+  JSON_FAILURE_TEST_PROMPT,
+  JSON_OUTPUT_TEST_PROMPT,
+  JSON_REPAIR_TEST_PROMPT,
+  JSON_TEST_REPLY,
   TOOL_RESULT_FALLBACK_TEST_PROMPT,
   TOOL_TEST_PROMPT,
 };

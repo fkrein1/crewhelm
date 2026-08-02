@@ -1294,6 +1294,9 @@ export class OwnerControlPlane extends DurableObject {
         agentId: schedule.agentId,
         expectedRevision: schedule.agentRevision,
         idempotencyKey: `schedule.${schedule.scheduleId}.${schedule.scheduleRevision}.${schedule.scheduledAt}`,
+        ...(schedule.outputContract === undefined
+          ? {}
+          : { outputContract: schedule.outputContract }),
         prompt: schedule.prompt,
       },
       "schedule",
