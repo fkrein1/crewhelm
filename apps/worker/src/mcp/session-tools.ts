@@ -7,7 +7,7 @@ import {
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { McpToolContext } from "./context.js";
-import { controlPlaneToolResult } from "./tool-result.js";
+import { optionalControlPlaneToolResult } from "./tool-result.js";
 
 export const MCP_AGENT_SESSIONS_TOOL_NAME = "crewhelm_agent_sessions";
 export const MCP_DELETE_AGENT_SESSION_TOOL_NAME = "crewhelm_delete_agent_session";
@@ -29,25 +29,31 @@ export function registerSessionTools(server: McpServer, context: McpToolContext)
       inputSchema: browseAgentSessionsInputSchema,
       title: "Browse Crewhelm Agent conversations",
     },
-    async (input) =>
-      controlPlaneToolResult(() => {
-        const { action: _action, ...request } = input;
+    async (input) => {
+      const { action: _action, ...request } = input;
 
-        switch (input.action) {
-          case "list":
-            return (
-              controlPlane.listAgentSessions?.(authority, request) ??
-              Promise.reject(new Error("Session control plane unavailable."))
-            );
-          case "inspect":
-            return (
-              controlPlane.inspectAgentSession?.(authority, request) ??
-              Promise.reject(new Error("Session control plane unavailable."))
-            );
+      switch (input.action) {
+        case "list": {
+          return optionalControlPlaneToolResult(
+            controlPlane.listAgentSessions === undefined
+              ? undefined
+              : () => controlPlane.listAgentSessions!(authority, request),
+            browseAgentSessionsResultSchema,
+          );
         }
+        case "inspect": {
+          return optionalControlPlaneToolResult(
+            controlPlane.inspectAgentSession === undefined
+              ? undefined
+              : () => controlPlane.inspectAgentSession!(authority, request),
+            browseAgentSessionsResultSchema,
+          );
+        }
+      }
 
-        return Promise.reject(new Error("Session action unavailable."));
-      }, browseAgentSessionsResultSchema),
+      input.action satisfies never;
+      throw new Error("Invariant violated: unsupported session action.");
+    },
   );
 
   server.registerTool(
@@ -64,12 +70,13 @@ export function registerSessionTools(server: McpServer, context: McpToolContext)
       inputSchema: deleteAgentSessionInputSchema,
       title: "Delete Crewhelm Agent session",
     },
-    async (input) =>
-      controlPlaneToolResult(
-        () =>
-          controlPlane.deleteAgentSession?.(authority, input) ??
-          Promise.reject(new Error("Session control plane unavailable.")),
+    async (input) => {
+      return optionalControlPlaneToolResult(
+        controlPlane.deleteAgentSession === undefined
+          ? undefined
+          : () => controlPlane.deleteAgentSession!(authority, input),
         deleteAgentSessionResultSchema,
-      ),
+      );
+    },
   );
 }

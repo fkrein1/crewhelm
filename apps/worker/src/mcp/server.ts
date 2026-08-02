@@ -244,11 +244,16 @@ function createMcpServer(
     },
     async (input) =>
       controlPlaneToolResult(async () => {
-        const result = controlPlaneStatusResultSchema.parse(
-          await controlPlane.status(authority, input),
-        );
+        const response = await controlPlane.status(authority, input);
+        const result = controlPlaneStatusResultSchema.safeParse(response);
 
-        return result.ok ? { ...result, guidance: statusGuidance(result.status) } : result;
+        if (!result.success) {
+          return response;
+        }
+
+        return result.data.ok
+          ? { ...result.data, guidance: statusGuidance(result.data.status) }
+          : result.data;
       }, mcpControlPlaneStatusResultSchema),
   );
 

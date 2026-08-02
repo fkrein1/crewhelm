@@ -1,9 +1,10 @@
 {
   "schemaVersion": 1,
-  "definitionVersion": 1,
+  "definitionVersion": 2,
   "definitionOfMigrated": [
-    "Expected domain, dependency, validation, and policy failures use discriminated unions instead of thrown control flow.",
-    "Throws are limited to defects, violated invariants, and required host-platform signals.",
+    "Within reusable services, expected domain, dependency, validation, and policy failures use discriminated unions instead of thrown control flow.",
+    "Top-level CLI adapters may use bounded typed exceptions to short-circuit command orchestration when translated once into stable output and exit codes.",
+    "Other throws are limited to defects, violated invariants, and required host-platform signals.",
     "Unknown failures are narrowed at host and third-party boundaries.",
     "HTTP, MCP, CLI, workflow, and Durable Object adapters translate failures once at their boundary.",
     "Failure and state unions are handled exhaustively.",
@@ -24,13 +25,29 @@
     "apps/worker/src/worker-test-entry.ts"
   ],
   "recordedProgress": {
-    "migratedFiles": 97,
-    "migratedUnits": 27,
+    "migratedFiles": 159,
+    "migratedUnits": 30,
     "totalFiles": 159,
     "totalUnits": 30
   },
   "units": [
     {
+      "evidence": {
+        "definitionVersion": 2,
+        "testFiles": [
+          "apps/cli/test/authenticated-doctor.test.ts",
+          "apps/cli/test/bootstrap.test.ts",
+          "apps/cli/test/cli.test.ts",
+          "apps/cli/test/cloudflare-gateway-authorization.test.ts",
+          "apps/cli/test/codex-browser.test.ts",
+          "apps/cli/test/doctor.test.ts",
+          "apps/cli/test/github-app.test.ts",
+          "apps/cli/test/installation.test.ts",
+          "apps/cli/test/presentation.test.ts",
+          "apps/cli/test/refreshable-owner-session.test.ts",
+          "apps/cli/test/wrangler.test.ts"
+        ]
+      },
       "files": [
         "apps/cli/src/authenticated-doctor.ts",
         "apps/cli/src/bootstrap.ts",
@@ -51,11 +68,11 @@
         "apps/cli/src/wrangler.ts"
       ],
       "id": "cli-core",
-      "status": "legacy"
+      "status": "migrated"
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": [
           "apps/cli/test/rehearsal/journeys/sandbox.test.ts",
           "apps/cli/test/rehearsal/journeys/web-research.test.ts",
@@ -70,7 +87,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": [
           "packages/composio/src/auth-configs.test.ts",
           "packages/composio/src/bounded-json.test.ts",
@@ -85,13 +102,28 @@
       "pathPrefixes": ["packages/composio/src/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 2,
+        "testFiles": [
+          "packages/contracts/src/agent-blueprints.test.ts",
+          "packages/contracts/src/agent-capabilities.test.ts",
+          "packages/contracts/src/agent-sessions.test.ts",
+          "packages/contracts/src/agent-watches.test.ts",
+          "packages/contracts/src/agent-workflows.test.ts",
+          "packages/contracts/src/briefs.test.ts",
+          "packages/contracts/src/fleet-reads.test.ts",
+          "packages/contracts/src/output-contracts.test.ts",
+          "packages/contracts/src/run-admission.test.ts",
+          "packages/contracts/src/skills.test.ts"
+        ]
+      },
       "id": "contracts",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["packages/contracts/src/"]
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/agent-capabilities/kernel.test.ts"]
       },
       "id": "worker-agent-capabilities",
@@ -100,7 +132,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/agent-workflows/agent-task.test.ts"]
       },
       "id": "worker-agent-workflows",
@@ -109,7 +141,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": [
           "apps/worker/src/agent/admitted-runs/module.test.ts",
           "apps/worker/src/agent/admitted-runs/protocol.test.ts"
@@ -128,7 +160,7 @@
     {
       "files": ["apps/worker/src/agent/admitted-runs/inference-fallback.ts"],
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/agent/admitted-runs/inference-fallback.test.ts"]
       },
       "id": "admitted-runs-inference",
@@ -137,7 +169,7 @@
     {
       "files": ["apps/worker/src/agent/admitted-runs/sandbox-code-execution.ts"],
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/agent/admitted-runs/sandbox-code-execution.test.ts"]
       },
       "id": "admitted-runs-sandbox",
@@ -146,7 +178,7 @@
     {
       "files": ["apps/worker/src/agent/admitted-runs/web-research-execution.ts"],
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/agent/admitted-runs/web-research-execution.test.ts"]
       },
       "id": "admitted-runs-web-research",
@@ -158,7 +190,7 @@
         "apps/worker/src/agent/session-directory.ts"
       ],
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/agent/session-directory.test.ts"]
       },
       "id": "agent-directory",
@@ -167,7 +199,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": [
           "apps/worker/src/http/request-body.test.ts",
           "apps/worker/src/http/server.test.ts"
@@ -178,13 +210,22 @@
       "pathPrefixes": ["apps/worker/src/http/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 2,
+        "testFiles": [
+          "apps/worker/src/mcp/documentation.test.ts",
+          "apps/worker/src/mcp/guidance.test.ts",
+          "apps/worker/src/mcp/server.test.ts",
+          "apps/worker/src/mcp/tool-result.test.ts"
+        ]
+      },
       "id": "worker-mcp",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/mcp/"]
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": [
           "apps/worker/src/oauth/mcp.integration.test.ts",
           "apps/worker/src/oauth/server.test.ts",
@@ -197,7 +238,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": [
           "apps/worker/src/observability/execution.test.ts",
           "apps/worker/src/observability/integrations.test.ts",
@@ -211,7 +252,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/owner/agent-blueprints/module.test.ts"]
       },
       "id": "owner-agent-blueprints",
@@ -220,7 +261,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": [
           "apps/worker/src/agent/admitted-runs/module.test.ts",
           "apps/worker/src/owner/durable-object.test.ts"
@@ -232,7 +273,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/owner/agents/module.test.ts"]
       },
       "id": "owner-agents",
@@ -241,7 +282,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/owner/briefs/module.test.ts"]
       },
       "id": "owner-briefs",
@@ -250,7 +291,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/owner/configuration/module.test.ts"]
       },
       "id": "owner-configuration",
@@ -259,7 +300,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": [
           "apps/worker/src/owner/connections/authorization-return.test.ts",
           "apps/worker/src/owner/connections/module.test.ts"
@@ -271,7 +312,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/owner/recovery/module.test.ts"]
       },
       "id": "owner-recovery",
@@ -280,7 +321,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": [
           "apps/worker/src/owner/runs/module.test.ts",
           "apps/worker/src/owner/runs/policy.test.ts",
@@ -294,7 +335,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": [
           "apps/worker/src/owner/schedules/module.test.ts",
           "apps/worker/src/owner/schedules/recurrence.test.ts"
@@ -306,7 +347,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/owner/skills/module.test.ts"]
       },
       "id": "owner-skills",
@@ -315,7 +356,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/owner/usage/module.test.ts"]
       },
       "id": "owner-usage",
@@ -324,7 +365,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/owner/watches/module.test.ts"]
       },
       "id": "owner-watches",
@@ -333,7 +374,7 @@
     },
     {
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/owner/workflows/module.test.ts"]
       },
       "id": "owner-workflows",
@@ -349,7 +390,7 @@
         "apps/worker/src/owner/schema.ts"
       ],
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/owner/durable-object.test.ts"]
       },
       "id": "owner-control-plane",
@@ -358,7 +399,7 @@
     {
       "files": ["apps/worker/src/env.ts", "apps/worker/src/index.ts", "apps/worker/src/sandbox.ts"],
       "evidence": {
-        "definitionVersion": 1,
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/sandbox/purge.test.ts"]
       },
       "id": "worker-runtime",

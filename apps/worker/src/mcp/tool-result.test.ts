@@ -1,5 +1,6 @@
 import { unavailableMcpToolResultSchema } from "@crewhelm/contracts";
 import { describe, expect, it, vi } from "vitest";
+import * as z from "zod";
 
 import { controlPlaneToolResult, unavailableToolResult } from "./tool-result.js";
 
@@ -52,6 +53,45 @@ describe("MCP diagnostic results", () => {
       },
     });
     expect(JSON.stringify(result)).not.toContain("must-not-reflect");
+    warning.mockRestore();
+  });
+
+  it("contains hostile values that fail during validation or serialization", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const hostileSchema = z.looseObject({
+      ok: z.boolean(),
+      value: z.unknown(),
+    });
+    const accessorResult = await controlPlaneToolResult(
+      async () =>
+        Object.defineProperty({}, "ok", {
+          enumerable: true,
+          get: () => {
+            throw new Error("must-not-reflect-accessor");
+          },
+        }),
+      hostileSchema,
+    );
+    const serializationResult = await controlPlaneToolResult(
+      async () => ({ ok: true, value: 1n }),
+      hostileSchema,
+    );
+
+    for (const result of [accessorResult, serializationResult]) {
+      expect(parsedResult(result)).toMatchObject({
+        error: {
+          code: "invalid_control_plane_response",
+          diagnostic: {
+            disposition: "contact_operator",
+            phase: "control_plane.response",
+            reason: "invalid_response",
+          },
+        },
+        ok: false,
+      });
+      expect(JSON.stringify(result)).not.toContain("must-not-reflect");
+    }
+
     warning.mockRestore();
   });
 });

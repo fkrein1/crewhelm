@@ -42,7 +42,8 @@ export function registerBriefTools(server: McpServer, context: McpToolContext): 
             return controlPlane.deleteBrief(authority, request);
         }
 
-        throw new Error("Brief action unavailable.");
+        input.action satisfies never;
+        throw new Error("Invariant violated: unsupported Brief action.");
       }, manageBriefsResultSchema),
   );
 }

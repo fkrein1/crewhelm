@@ -250,11 +250,21 @@ describe("deployment diagnosis", () => {
       {
         fetch: deploymentFetch((path) =>
           path === "/.well-known/oauth-protected-resource"
-            ? new Response("x".repeat(4_097), {
-                headers: {
-                  "content-type": "application/json",
+            ? new Response(
+                new ReadableStream({
+                  cancel() {
+                    throw new Error("secret cancellation failure");
+                  },
+                  start(controller) {
+                    controller.enqueue(new Uint8Array(4_097));
+                  },
+                }),
+                {
+                  headers: {
+                    "content-type": "application/json",
+                  },
                 },
-              })
+              )
             : path === "/health"
               ? healthyResponse()
               : authorizationServerResponse(),
@@ -268,6 +278,29 @@ describe("deployment diagnosis", () => {
       "response_too_large",
       "valid",
     ]);
+    expect(JSON.stringify(report)).not.toContain("secret cancellation failure");
+  });
+
+  it("keeps invalid UTF-8 bounded as a request failure", async () => {
+    const report = await diagnoseDeployment(
+      {
+        origin: parseDeploymentOrigin(origin),
+        timeoutMs: 1_000,
+      },
+      {
+        fetch: deploymentFetch((path) =>
+          path === "/.well-known/oauth-protected-resource"
+            ? new Response(new Uint8Array([0xc3, 0x28]), {
+                headers: { "content-type": "application/json" },
+              })
+            : path === "/health"
+              ? healthyResponse()
+              : authorizationServerResponse(),
+        ),
+      },
+    );
+
+    expect(report.checks.map((check) => check.code)).toEqual(["valid", "request_failed", "valid"]);
   });
 
   it("rejects malformed or widened health payloads without hiding valid discovery", async () => {

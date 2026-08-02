@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import * as z from "zod";
 
-import { createWranglerRunner } from "../src/wrangler.js";
+import { createWranglerRunner, WranglerExecutionError } from "../src/wrangler.js";
 
 const childReportSchema = z.strictObject({
   apiBase: z.null(),
@@ -16,6 +16,17 @@ const childReportSchema = z.strictObject({
 });
 
 describe("Wrangler subprocess boundary", () => {
+  it("normalizes a synchronous subprocess start rejection", async () => {
+    const runWrangler = createWranglerRunner({});
+
+    await expect(runWrangler(["invalid\0argument"], { cwd: process.cwd() })).rejects.toEqual(
+      expect.objectContaining({
+        message: "Cloudflare command could not be started.",
+        name: WranglerExecutionError.name,
+      }),
+    );
+  });
+
   it("uses the explicit private cwd and an allowlisted environment", async () => {
     const root = await mkdtemp(resolve(tmpdir(), "crewhelm-runner-test-"));
     const trusted = resolve(root, "trusted");
