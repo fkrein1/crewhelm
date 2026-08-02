@@ -2766,15 +2766,31 @@ export class CrewSession extends Think {
         session: runSessionSchema,
       })
       .safeParse(input);
-    if (!request.success) return false;
+    if (!request.success) {
+      console.warn({
+        event: "crewhelm.session.deletion_deferred",
+        reason: "invalid_request",
+      });
+      return false;
+    }
 
     const record = await this.#readRunRecord(request.data.runId);
-    if (
-      request.data.objectName !== this.ctx.id.name ||
-      record?.session === undefined ||
-      JSON.stringify(record.session) !== JSON.stringify(request.data.session) ||
-      Date.now() < record.deadlineAt
-    ) {
+    const reason =
+      request.data.objectName !== this.ctx.id.name
+        ? "object_mismatch"
+        : record?.session === undefined
+          ? "run_missing"
+          : JSON.stringify(record.session) !== JSON.stringify(request.data.session)
+            ? "session_mismatch"
+            : Date.now() < record.deadlineAt
+              ? "deadline_active"
+              : undefined;
+    if (reason !== undefined) {
+      console.warn({
+        event: "crewhelm.session.deletion_deferred",
+        reason,
+        runId: request.data.runId,
+      });
       return false;
     }
 
@@ -2797,7 +2813,14 @@ export class CrewSession extends Think {
       submission = await super.inspectSubmission(request.data.runId);
     }
 
-    if (!isDrained()) return false;
+    if (!isDrained()) {
+      console.warn({
+        event: "crewhelm.session.deletion_deferred",
+        reason: submission === null ? "submission_missing" : `submission_${submission.status}`,
+        runId: request.data.runId,
+      });
+      return false;
+    }
     if ((await this.ctx.storage.get(sessionRunDrainedKey(request.data.runId))) !== true) {
       // Think can expose a terminal row before an in-memory turn unwinds, and
       // pre-marker deployments may have no callback left to acknowledge it.
