@@ -23,6 +23,8 @@ import {
 import { registerOAuthUiRoutes } from "../oauth/ui.js";
 import { readByteStreamChunk } from "./byte-stream.js";
 import { registerConnectionAuthorizationReturnRoutes } from "./connection-authorization-return.js";
+import { registerRemoteMcpBearerSetupRoutes } from "./remote-mcp-bearer-setup.js";
+import { REMOTE_MCP_BEARER_SETUP_PATH_PREFIX } from "../remote-mcp/handoff.js";
 
 const METHOD_NOT_ALLOWED_BODY = `${JSON.stringify({
   error: {
@@ -345,6 +347,7 @@ export function createWorker(): Hono<{ Bindings: WorkerEnv }> {
   registerOAuthUiRoutes(worker, createAuth);
   registerAuthServerRoutes(worker, createAuth);
   registerConnectionAuthorizationReturnRoutes(worker);
+  registerRemoteMcpBearerSetupRoutes(worker);
   worker.post("/webhooks/composio", (context) =>
     handleComposioWebhook(context.req.raw, context.env),
   );
@@ -374,6 +377,7 @@ function isRateLimitedPath(path: string): "auth" | "composio" | "mcp" | null {
   if (
     path.startsWith("/api/auth/") ||
     path.startsWith(CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX) ||
+    path.startsWith(REMOTE_MCP_BEARER_SETUP_PATH_PREFIX) ||
     path === "/oauth/login" ||
     path === "/oauth/login/continue" ||
     path === "/oauth/consent" ||
@@ -410,7 +414,9 @@ export async function handleWorkerRequest(
     const clientAddress = request.headers.get("cf-connecting-ip") ?? "unknown";
     const rateLimitKeyPath = path.startsWith(CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX)
       ? CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX
-      : path;
+      : path.startsWith(REMOTE_MCP_BEARER_SETUP_PATH_PREFIX)
+        ? REMOTE_MCP_BEARER_SETUP_PATH_PREFIX
+        : path;
     let rateLimit: RateLimitOutcome;
 
     try {

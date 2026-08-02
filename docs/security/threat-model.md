@@ -193,6 +193,28 @@ destructive actions. Credential-shaped tools and outputs are denied. Composio re
 for provider consent, deletion, and credential refresh; Crewhelm revocation immediately stops
 local use but does not revoke provider-side credentials.
 
+### Remote MCP
+
+Remote MCP server metadata, JSON Schemas, annotations, and results are hostile provider data.
+Crewhelm accepts only canonical public HTTPS Streamable HTTP endpoints, relies on strict-public
+global fetch routing, handles redirects manually without crossing origins, and creates a fresh
+bounded client for discovery or one tool call. It does not expose arbitrary headers, resources,
+prompts, subscriptions, or persistent remote sessions.
+
+Public and bearer Connections use the same frozen-catalog and execution path. Bearer setup occurs
+through an expiring signed browser handoff bound to the authenticated owner and exact endpoint;
+credentials are encrypted with installation-derived owner storage keys and decrypted only for an
+owner-side dispatch. Creation, inspection, attachment, execution, and revocation never return the
+credential. Revocation clears encrypted bearer material.
+
+Attaching a Connection creates grants for its entire reviewed catalog at one exact snapshot digest.
+Remote hints cannot reduce authority: unknown and nominally read-only operations are classified as
+writes, while destructive names or hints remain destructive. ToolGate freezes authorization and
+limits, binds a short-lived provider-specific permit to canonical arguments, and records dispatch
+before network I/O. The owner revalidates the exact catalog tool and its JSON Schema. Timeouts,
+oversized outputs, token reflection, transport failures, and interrupted responses fail closed;
+post-dispatch failures remain unknown until owner reconciliation.
+
 ### Observability and deployment
 
 Cloudflare automatic traces and invocation logs remain disabled because request URLs may contain

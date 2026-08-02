@@ -13,8 +13,10 @@ import {
   integrationToolRuntimeDefinitionSchema,
   integrationToolSlugSchema,
 } from "./integrations.js";
+import { remoteMcpToolSchema } from "./remote-mcp.js";
 
 export const COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID = "composio.tool.execute";
+export const REMOTE_MCP_TOOL_EXECUTE_CAPABILITY_ID = "remote_mcp.tool.execute";
 
 const MAXIMUM_COST_MICROUSD = 1_000_000_000_000;
 const MAXIMUM_TOOL_DURATION_MS = 5 * 60 * 1_000;
@@ -180,6 +182,41 @@ export function classifyComposioToolEffect(
   return "write";
 }
 
+export function classifyRemoteMcpToolEffect(input: {
+  annotations?: { destructiveHint?: boolean | undefined } | undefined;
+  name: string;
+}): CapabilityEffect {
+  const actions = new Set(
+    input.name
+      .replaceAll(/([a-z0-9])([A-Z])/g, "$1_$2")
+      .toLowerCase()
+      .split(/[^a-z]+/)
+      .filter(Boolean),
+  );
+
+  return input.annotations?.destructiveHint === true ||
+    [
+      "cancel",
+      "clear",
+      "deactivate",
+      "delete",
+      "disable",
+      "destroy",
+      "drop",
+      "erase",
+      "purge",
+      "remove",
+      "reset",
+      "revoke",
+      "shutdown",
+      "terminate",
+      "truncate",
+      "wipe",
+    ].some((action) => actions.has(action))
+    ? "destructive"
+    : "write";
+}
+
 const canonicalTargetDigestsSchema = z
   .array(sha256DigestSchema)
   .min(1)
@@ -241,17 +278,53 @@ export const composioToolCapabilityGrantSchema = composioToolBindingSchema.exten
   limits: composioToolLimitsSchema,
   tool: integrationToolRuntimeDefinitionSchema,
 });
+const remoteMcpToolBindingSchema = z.strictObject({
+  agentId: agentIdSchema,
+  agentRevision: agentRevisionNumberSchema,
+  capabilityId: z.literal(REMOTE_MCP_TOOL_EXECUTE_CAPABILITY_ID),
+  connectionId: connectionIdSchema,
+  effect: capabilityEffectSchema,
+  grantId: capabilityGrantIdSchema,
+  ownerKey: ownerKeySchema,
+  snapshotDigest: sha256DigestSchema,
+  targetDigests: canonicalTargetDigestsSchema,
+  toolName: remoteMcpToolSchema.shape.name,
+});
+export const remoteMcpToolCapabilityGrantSchema = remoteMcpToolBindingSchema.extend({
+  authorization: toolAuthorizationModeSchema,
+  description: remoteMcpToolSchema.shape.description,
+  expiresAt: z.iso.datetime().nullable(),
+  inputSchemaJson: z.string().min(2).max(MAXIMUM_TOOL_OUTPUT_BYTES),
+  limits: composioToolLimitsSchema,
+});
+export const externalToolCapabilityGrantSchema = z.union([
+  composioToolCapabilityGrantSchema,
+  remoteMcpToolCapabilityGrantSchema,
+]);
 export const classifiedComposioToolActionSchema = composioToolBindingSchema.extend({
   estimatedCostMicrousd: z.number().int().min(0).max(MAXIMUM_COST_MICROUSD).safe().nullable(),
   inputDigest: sha256DigestSchema,
   runId: runIdSchema,
   toolCallId: toolCallIdSchema,
 });
+export const classifiedRemoteMcpToolActionSchema = remoteMcpToolBindingSchema.extend({
+  estimatedCostMicrousd: z.literal(0),
+  inputDigest: sha256DigestSchema,
+  runId: runIdSchema,
+  toolCallId: toolCallIdSchema,
+});
+export const classifiedExternalToolActionSchema = z.union([
+  classifiedComposioToolActionSchema,
+  classifiedRemoteMcpToolActionSchema,
+]);
 export const toolGatePolicySnapshotSchema = z.strictObject({
   activeGrantCalls: z.number().int().min(0).max(100),
   agentId: agentIdSchema,
   agentStatus: z.enum(["active", "disabled", "revoked"]),
-  capabilityId: z.literal(COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID),
+  capabilityId: z.enum([
+    COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
+    REMOTE_MCP_TOOL_EXECUTE_CAPABILITY_ID,
+  ]),
   connectionId: connectionIdSchema,
   connectionStatus: z.enum(["active", "revoked", "unavailable"]),
   currentAgentRevision: agentRevisionNumberSchema,
@@ -290,6 +363,11 @@ export const composioToolGateInputSchema = z.strictObject({
   grant: composioToolCapabilityGrantSchema,
   policy: toolGatePolicySnapshotSchema,
 });
+export const externalToolGateInputSchema = z.strictObject({
+  action: classifiedExternalToolActionSchema,
+  grant: externalToolCapabilityGrantSchema,
+  policy: toolGatePolicySnapshotSchema,
+});
 
 export const toolGateDenialReasonSchema = z.enum([
   "budget_exhausted",
@@ -316,7 +394,7 @@ export const toolExecutionEvaluationFailureReasonSchema = z.enum([
 ]);
 export const toolGateDecisionSchema = z.discriminatedUnion("decision", [
   z.strictObject({
-    action: classifiedComposioToolActionSchema,
+    action: classifiedExternalToolActionSchema,
     actionDigest: sha256DigestSchema,
     constraints: z.strictObject({
       decisionExpiresAt: z.iso.datetime(),
@@ -340,8 +418,13 @@ export const toolGateDecisionSchema = z.discriminatedUnion("decision", [
 
 export type CapabilityEffect = z.infer<typeof capabilityEffectSchema>;
 export type ClassifiedComposioToolAction = z.infer<typeof classifiedComposioToolActionSchema>;
+export type ClassifiedExternalToolAction = z.infer<typeof classifiedExternalToolActionSchema>;
+export type ClassifiedRemoteMcpToolAction = z.infer<typeof classifiedRemoteMcpToolActionSchema>;
 export type ComposioToolCapabilityGrant = z.infer<typeof composioToolCapabilityGrantSchema>;
 export type ComposioToolGateInput = z.infer<typeof composioToolGateInputSchema>;
+export type ExternalToolCapabilityGrant = z.infer<typeof externalToolCapabilityGrantSchema>;
+export type ExternalToolGateInput = z.infer<typeof externalToolGateInputSchema>;
+export type RemoteMcpToolCapabilityGrant = z.infer<typeof remoteMcpToolCapabilityGrantSchema>;
 export type ToolAuthorizationMode = z.infer<typeof toolAuthorizationModeSchema>;
 export type ToolExecutionEvaluationFailureReason = z.infer<
   typeof toolExecutionEvaluationFailureReasonSchema

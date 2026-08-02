@@ -24,9 +24,10 @@ import {
   runTimelineEventSchema,
   completeToolExecutionResultSchema,
   evaluateToolExecutionResultSchema,
+  executeRemoteMcpToolResultSchema,
   reserveToolExecutionResultSchema,
   resolveToolExecutionConnectionResultSchema,
-  classifiedComposioToolActionSchema,
+  classifiedExternalToolActionSchema,
   decideAdmittedRunToolApprovalInputSchema,
   decideAdmittedRunToolApprovalResultSchema,
   listAdmittedRunToolApprovalsInputSchema,
@@ -46,8 +47,8 @@ import {
   type RunBudgetReservation,
   type RunReceiverCapability,
   type RunTimelineEvent,
-  type ClassifiedComposioToolAction,
-  type ComposioToolCapabilityGrant,
+  type ClassifiedExternalToolAction,
+  type ExternalToolCapabilityGrant,
   type ToolExecutionPermit,
   type PendingToolApproval,
   type RecordAgentInboxRunInput,
@@ -109,6 +110,7 @@ import {
   recordExecutionEvent,
   recordExecutionProviderResponse,
 } from "../../observability/execution.js";
+import { createRemoteMcpInputSchema } from "../../remote-mcp/schema.js";
 import { createInferenceFallbackModel, type InferenceAttemptEvent } from "./inference-fallback.js";
 import { digestRunPrompt, digestToolInput } from "./protocol.js";
 import {
@@ -259,20 +261,20 @@ export const BLOCKED_CREW_AGENT_AUTHORITY_METHODS = [
 export interface CrewAgentToolAdapter {
   readonly approvalSummary: string;
   readonly description: string;
-  readonly grant: ComposioToolCapabilityGrant;
+  readonly grant: ExternalToolCapabilityGrant;
   readonly inputSchema: z.ZodType<Record<string, unknown>>;
   readonly name: string;
   classify(
     input: Record<string, unknown>,
     context: { runId: string; toolCallId: string },
-  ): Promise<ClassifiedComposioToolAction> | ClassifiedComposioToolAction;
+  ): Promise<ClassifiedExternalToolAction> | ClassifiedExternalToolAction;
   execute(
     input: Record<string, unknown>,
     context: { permit: ToolExecutionPermit; signal: AbortSignal },
   ): Promise<unknown>;
 }
 
-function requiresToolApproval(grant: ComposioToolCapabilityGrant): boolean {
+function requiresToolApproval(grant: ExternalToolCapabilityGrant): boolean {
   return (
     grant.effect === "destructive" ||
     (grant.effect === "write" && grant.authorization !== "standing")
@@ -4108,10 +4110,55 @@ export class CrewSession extends Think {
   }
 
   protected createToolAdapter(
-    grant: ComposioToolCapabilityGrant,
+    grant: ExternalToolCapabilityGrant,
   ): CrewAgentToolAdapter | undefined {
-    if (grant.capabilityId !== "composio.tool.execute") {
-      return undefined;
+    if (grant.capabilityId === "remote_mcp.tool.execute") {
+      let inputSchema: z.ZodType<Record<string, unknown>>;
+
+      try {
+        inputSchema = createRemoteMcpInputSchema(JSON.parse(grant.inputSchemaJson));
+      } catch {
+        return undefined;
+      }
+
+      const suffix = grant.grantId.slice(-8);
+      const normalizedName = grant.toolName.toLowerCase().replaceAll(/[^a-z0-9_]/g, "_");
+
+      return {
+        approvalSummary: `Use remote MCP tool ${grant.toolName}`,
+        description: grant.description ?? grant.toolName,
+        grant,
+        inputSchema,
+        name: `remote_mcp_${normalizedName.slice(0, 43)}_${suffix}`,
+        classify: async (input, context) => ({
+          agentId: grant.agentId,
+          agentRevision: grant.agentRevision,
+          capabilityId: grant.capabilityId,
+          connectionId: grant.connectionId,
+          effect: grant.effect,
+          estimatedCostMicrousd: 0,
+          grantId: grant.grantId,
+          inputDigest: await digestToolInput(input),
+          ownerKey: grant.ownerKey,
+          runId: context.runId,
+          snapshotDigest: grant.snapshotDigest,
+          targetDigests: grant.targetDigests,
+          toolCallId: context.toolCallId,
+          toolName: grant.toolName,
+        }),
+        execute: async (input, context) => {
+          const executed = executeRemoteMcpToolResultSchema.safeParse(
+            await this.env.OWNER_CONTROL_PLANE.getByName(
+              context.permit.action.ownerKey,
+            ).executeRemoteMcpTool({ arguments: input, permit: context.permit }),
+          );
+
+          if (!executed.success || !executed.data.ok) {
+            throw new Error("Remote MCP tool execution denied.");
+          }
+          return JSON.parse(executed.data.outputJson) as unknown;
+        },
+      };
     }
 
     const schemaRuntime = createComposioRuntime({ apiKey: this.env.COMPOSIO_API_KEY });
@@ -4280,7 +4327,7 @@ export class CrewSession extends Think {
     adapter: CrewAgentToolAdapter,
     frameworkToolCallId: string,
     input: unknown,
-  ): Promise<ClassifiedComposioToolAction | undefined> {
+  ): Promise<ClassifiedExternalToolAction | undefined> {
     const validatedInput = adapter.inputSchema.safeParse(input);
 
     if (!validatedInput.success) {
@@ -4288,7 +4335,7 @@ export class CrewSession extends Think {
     }
 
     const metadata = this.#activeTurnMetadata();
-    const parsed = classifiedComposioToolActionSchema.safeParse(
+    const parsed = classifiedExternalToolActionSchema.safeParse(
       await adapter.classify(validatedInput.data, {
         runId: metadata.runId,
         toolCallId: await canonicalToolCallId(metadata.runId, frameworkToolCallId),
@@ -4305,9 +4352,14 @@ export class CrewSession extends Think {
       parsed.data.capabilityId !== adapter.grant.capabilityId ||
       parsed.data.connectionId !== adapter.grant.connectionId ||
       parsed.data.effect !== adapter.grant.effect ||
-      parsed.data.integrationSlug !== adapter.grant.integrationSlug ||
-      parsed.data.toolSlug !== adapter.grant.toolSlug ||
-      parsed.data.toolkitVersion !== adapter.grant.toolkitVersion
+      (parsed.data.capabilityId === "composio.tool.execute"
+        ? adapter.grant.capabilityId !== "composio.tool.execute" ||
+          parsed.data.integrationSlug !== adapter.grant.integrationSlug ||
+          parsed.data.toolSlug !== adapter.grant.toolSlug ||
+          parsed.data.toolkitVersion !== adapter.grant.toolkitVersion
+        : adapter.grant.capabilityId !== "remote_mcp.tool.execute" ||
+          parsed.data.snapshotDigest !== adapter.grant.snapshotDigest ||
+          parsed.data.toolName !== adapter.grant.toolName)
     ) {
       return undefined;
     }
@@ -4705,8 +4757,12 @@ export class CrewSession extends Think {
             connectionId: input.adapter.grant.connectionId,
             effect: input.adapter.grant.effect,
             grantId: input.adapter.grant.grantId,
-            integrationSlug: input.adapter.grant.integrationSlug,
-            toolSlug: input.adapter.grant.toolSlug,
+            ...(input.adapter.grant.capabilityId === "composio.tool.execute"
+              ? {
+                  integrationSlug: input.adapter.grant.integrationSlug,
+                  toolSlug: input.adapter.grant.toolSlug,
+                }
+              : {}),
           }),
       checkpoint: input.checkpoint,
       durationMs: Math.max(0, Math.round(performance.now() - input.startedAt)),

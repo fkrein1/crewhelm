@@ -5,12 +5,16 @@ import {
   AGENTS_WRITE_SCOPE,
   AUTONOMY_WRITE_SCOPE,
   batchDisableAgentsInputSchema,
+  canonicalJson,
   CONNECTION_CONFIGS_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   changeAuthorityInputSchema,
   completeAgentConnectionConfigurationInputSchema,
   configureAgentScheduleInputSchema,
+  configureAgentRemoteMcpConnectionInputSchema,
+  executeRemoteMcpToolInputSchema,
+  executeRemoteMcpToolResultSchema,
   controlPlaneStatusInputSchema,
   controlPlaneStatusResultSchema,
   listAuditEventsInputSchema,
@@ -33,6 +37,8 @@ import {
   type EnableIntegrationResult,
   type ConfirmRunAdmissionResult,
   type CreateRunAdmissionResult,
+  type CreateRemoteMcpConnectionResult,
+  type DeleteRemoteMcpConnectionResult,
   type GetAgentRevisionResult,
   type GetAgentResult,
   type ListAgentRevisionsResult,
@@ -95,6 +101,9 @@ import {
   type ReviseBriefResult,
   type ListBriefsResult,
   type InspectBriefResult,
+  type InspectRemoteMcpConnectionResult,
+  type LookupRemoteMcpConnectionCreationResult,
+  type ExecuteRemoteMcpToolResult,
   type ReadBriefResult,
   type DeleteBriefResult,
 } from "@crewhelm/contracts";
@@ -132,6 +141,7 @@ import {
   deniedIntegrationEnablement,
 } from "./connections/index.js";
 import { FleetConfigurations, deniedFleetConfiguration } from "./configuration/index.js";
+import { RemoteMcpConnections } from "./remote-mcp-connections/index.js";
 import { CONTROL_PLANE_SCHEMA_VERSION, migrateControlPlane } from "./migrations.js";
 import {
   auditEvents,
@@ -285,6 +295,7 @@ export class OwnerControlPlane extends DurableObject {
   readonly #agents: AgentRegistry;
   readonly #agentBlueprints: AgentBlueprints;
   readonly #connections: Connections;
+  readonly #remoteMcpConnections: RemoteMcpConnections;
   readonly #agentChannel: AgentChannel;
   readonly #authorityControls: AuthorityControls;
   readonly #agentSchedules: AgentSchedules;
@@ -358,6 +369,11 @@ export class OwnerControlPlane extends DurableObject {
     this.#agentBlueprints = new AgentBlueprints(this.#database, this.#agents);
     this.#connections = new Connections(this.#database, this.#storage, () =>
       this.#fleetConfigurations.currentData(),
+    );
+    this.#remoteMcpConnections = new RemoteMcpConnections(
+      this.#database,
+      () => this.#fleetConfigurations.currentData(),
+      environment.BETTER_AUTH_SECRET,
     );
     this.#authorityControls = new AuthorityControls(this.#database);
     this.#agentSchedules = new AgentSchedules(this.#database, this.#storage, () =>
@@ -746,6 +762,39 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     return this.#toolExecutions.resolveConnection(input);
+  }
+
+  async executeRemoteMcpTool(input: unknown): Promise<ExecuteRemoteMcpToolResult> {
+    const request = executeRemoteMcpToolInputSchema.safeParse(input);
+    if (!this.#migrationReady || !request.success) {
+      return { error: { code: "invalid_execution", message: "Tool execution denied." }, ok: false };
+    }
+
+    const argumentDigest = Array.from(
+      new Uint8Array(
+        await crypto.subtle.digest(
+          "SHA-256",
+          new TextEncoder().encode(canonicalJson(request.data.arguments)),
+        ),
+      ),
+      (byte) => byte.toString(16).padStart(2, "0"),
+    ).join("");
+    if (argumentDigest !== request.data.permit.action.inputDigest) {
+      return { error: { code: "invalid_execution", message: "Tool execution denied." }, ok: false };
+    }
+
+    const dispatch = await this.#toolExecutions.claimRemoteMcp(request.data.permit);
+    if (dispatch === undefined) {
+      return { error: { code: "invalid_execution", message: "Tool execution denied." }, ok: false };
+    }
+
+    const output = await this.#remoteMcpConnections.execute({
+      arguments: request.data.arguments,
+      ...dispatch,
+    });
+    const outputJson = JSON.stringify(output);
+    if (outputJson === undefined) throw new Error("Remote MCP returned an unserializable result.");
+    return executeRemoteMcpToolResultSchema.parse({ ok: true, outputJson });
   }
 
   changeAuthority(authorityInput: unknown, input: unknown): ChangeAuthorityResult {
@@ -1421,6 +1470,28 @@ export class OwnerControlPlane extends DurableObject {
     return this.#agents.configureConnection(authorization.authority, request.data);
   }
 
+  async configureAgentRemoteMcpConnection(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<ConfigureAgentConnectionResult> {
+    const authorization = this.#authorize(authorityInput, AGENTS_WRITE_SCOPE);
+    if (!authorization.ok) return deniedConnectionAttachment(authorization.code);
+    if (!authorization.authority.scopes.includes(CONNECTIONS_READ_SCOPE)) {
+      return deniedConnectionAttachment("insufficient_scope");
+    }
+
+    const request = configureAgentRemoteMcpConnectionInputSchema.safeParse(input);
+    if (!request.success) return deniedConnectionAttachment("invalid_request");
+    if (
+      request.data.authorization === "standing" &&
+      !authorization.authority.scopes.includes(AUTONOMY_WRITE_SCOPE)
+    ) {
+      return deniedConnectionAttachment("insufficient_scope");
+    }
+
+    return this.#agents.configureRemoteMcpConnection(authorization.authority, request.data);
+  }
+
   listAgents(authorityInput: unknown, input: unknown): ListAgentsResult {
     const authorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
 
@@ -1433,6 +1504,74 @@ export class OwnerControlPlane extends DurableObject {
     return authorization.ok
       ? this.#connections.list(input)
       : deniedConnectionRead(authorization.code);
+  }
+
+  createRemoteMcpConnection(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<CreateRemoteMcpConnectionResult> | CreateRemoteMcpConnectionResult {
+    const authorization = this.#authorize(authorityInput, CONNECTIONS_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#remoteMcpConnections.create(authorization.authority, input)
+      : {
+          error: {
+            code: authorization.code,
+            message: "Remote MCP Connection request denied.",
+          },
+          ok: false,
+        };
+  }
+
+  lookupRemoteMcpConnectionCreation(
+    authorityInput: unknown,
+    input: unknown,
+  ): LookupRemoteMcpConnectionCreationResult {
+    const authorization = this.#authorize(authorityInput, CONNECTIONS_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#remoteMcpConnections.lookupCreation(authorization.authority, input)
+      : {
+          error: {
+            code: authorization.code,
+            message: "Remote MCP Connection request denied.",
+          },
+          ok: false,
+        };
+  }
+
+  inspectRemoteMcpConnection(
+    authorityInput: unknown,
+    input: unknown,
+  ): InspectRemoteMcpConnectionResult {
+    const authorization = this.#authorize(authorityInput, CONNECTIONS_READ_SCOPE);
+
+    return authorization.ok
+      ? this.#remoteMcpConnections.inspect(input)
+      : {
+          error: {
+            code: authorization.code,
+            message: "Remote MCP Connection request denied.",
+          },
+          ok: false,
+        };
+  }
+
+  deleteRemoteMcpConnection(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<DeleteRemoteMcpConnectionResult> | DeleteRemoteMcpConnectionResult {
+    const authorization = this.#authorize(authorityInput, CONNECTIONS_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#remoteMcpConnections.delete(authorization.authority, input)
+      : {
+          error: {
+            code: authorization.code,
+            message: "Remote MCP Connection request denied.",
+          },
+          ok: false,
+        };
   }
 
   activateVerifiedConnection(authorityInput: unknown, input: unknown): ListConnectionsResult {

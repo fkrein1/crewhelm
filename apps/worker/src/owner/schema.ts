@@ -10,13 +10,14 @@ import type {
   AgentWorkflowAggregateBudget,
   AdmittedBriefContext,
   AdmittedOutputContract,
-  ComposioToolCapabilityGrant,
+  ExternalToolCapabilityGrant,
   ConnectionAuthorizationOutcome,
   FleetConfigurationData,
   IntegrationToolParameterValue,
   RunBudgetReservation,
   RunSession,
   RunWatchReference,
+  RemoteMcpCatalog,
   SkillProvenance,
   SkillWarning,
   WorkflowDeliverable,
@@ -250,9 +251,9 @@ export const connections = sqliteTable(
   "connections",
   {
     connectionId: text("connection_id").primaryKey(),
-    provider: text("provider", { enum: ["composio"] }).notNull(),
-    providerConnectionId: text("provider_connection_id").notNull().unique(),
-    authConfigId: text("auth_config_id").notNull(),
+    provider: text("provider", { enum: ["composio", "remote_mcp"] }).notNull(),
+    providerConnectionId: text("provider_connection_id").unique(),
+    authConfigId: text("auth_config_id"),
     accountLabel: text("account_label"),
     status: text("status", {
       enum: ["initiated", "active", "revoked", "unavailable"],
@@ -261,7 +262,17 @@ export const connections = sqliteTable(
     revokedAt: integer("revoked_at"),
   },
   (table) => [
-    check("connections_provider_composio", sql`${table.provider} = 'composio'`),
+    check(
+      "connections_provider_details",
+      sql`(
+        (${table.provider} = 'composio'
+          AND ${table.providerConnectionId} IS NOT NULL
+          AND ${table.authConfigId} IS NOT NULL)
+        OR (${table.provider} = 'remote_mcp'
+          AND ${table.providerConnectionId} IS NULL
+          AND ${table.authConfigId} IS NULL)
+      )`,
+    ),
     check(
       "connections_status",
       sql`${table.status} IN ('initiated', 'active', 'revoked', 'unavailable')`,
@@ -285,6 +296,84 @@ export const connections = sqliteTable(
   ],
 );
 
+export const remoteMcpConnections = sqliteTable(
+  "remote_mcp_connections",
+  {
+    connectionId: text("connection_id").primaryKey(),
+    endpoint: text("endpoint").notNull(),
+    authKind: text("auth_kind", { enum: ["public", "bearer"] }).notNull(),
+    catalog: text("catalog", { mode: "json" }).$type<RemoteMcpCatalog>().notNull(),
+    catalogBytes: integer("catalog_bytes").notNull(),
+    snapshotDigest: text("snapshot_digest").notNull(),
+    serverName: text("server_name").notNull(),
+    serverVersion: text("server_version").notNull(),
+    credentialCiphertext: text("credential_ciphertext"),
+    credentialNonce: text("credential_nonce"),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.connectionId],
+      foreignColumns: [connections.connectionId],
+    }).onDelete("restrict"),
+    check("remote_mcp_connections_endpoint", sql`length(${table.endpoint}) BETWEEN 1 AND 2048`),
+    check(
+      "remote_mcp_connections_auth",
+      sql`(
+        (${table.authKind} = 'public'
+          AND ${table.credentialCiphertext} IS NULL
+          AND ${table.credentialNonce} IS NULL)
+        OR (${table.authKind} = 'bearer'
+          AND ((${table.credentialCiphertext} IS NOT NULL
+              AND ${table.credentialNonce} IS NOT NULL)
+            OR (${table.credentialCiphertext} IS NULL
+              AND ${table.credentialNonce} IS NULL)))
+      )`,
+    ),
+    check("remote_mcp_connections_catalog_json", sql`json_valid(${table.catalog})`),
+    check("remote_mcp_connections_catalog_bytes", sql`${table.catalogBytes} BETWEEN 2 AND 524288`),
+    check(
+      "remote_mcp_connections_snapshot_digest",
+      sql`length(${table.snapshotDigest}) = 64
+        AND ${table.snapshotDigest} NOT GLOB '*[^0-9a-f]*'`,
+    ),
+    check("remote_mcp_connections_server_name", sql`length(${table.serverName}) BETWEEN 1 AND 160`),
+    check(
+      "remote_mcp_connections_server_version",
+      sql`length(${table.serverVersion}) BETWEEN 1 AND 160`,
+    ),
+  ],
+);
+
+export const remoteMcpConnectionMutations = sqliteTable(
+  "remote_mcp_connection_mutations",
+  {
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    connectionId: text("connection_id").notNull(),
+    operation: text("operation", { enum: ["create", "delete"] }).notNull(),
+    requestDigest: text("request_digest").notNull(),
+    occurredAt: integer("occurred_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.clientId, table.idempotencyKey] }),
+    foreignKey({
+      columns: [table.connectionId],
+      foreignColumns: [connections.connectionId],
+    }).onDelete("restrict"),
+    index("remote_mcp_connection_mutations_connection").on(table.connectionId),
+    check(
+      "remote_mcp_connection_mutations_operation",
+      sql`${table.operation} IN ('create', 'delete')`,
+    ),
+    check(
+      "remote_mcp_connection_mutations_request_digest",
+      sql`length(${table.requestDigest}) = 64
+        AND ${table.requestDigest} NOT GLOB '*[^0-9a-f]*'`,
+    ),
+    check("remote_mcp_connection_mutations_occurred_at", sql`${table.occurredAt} > 0`),
+  ],
+);
+
 export const capabilityGrants = sqliteTable(
   "capability_grants",
   {
@@ -292,7 +381,7 @@ export const capabilityGrants = sqliteTable(
     agentId: text("agent_id").notNull(),
     agentRevision: integer("agent_revision").notNull(),
     connectionId: text("connection_id").notNull(),
-    grant: text("grant", { mode: "json" }).$type<ComposioToolCapabilityGrant>().notNull(),
+    grant: text("grant", { mode: "json" }).$type<ExternalToolCapabilityGrant>().notNull(),
     status: text("status", { enum: ["active", "revoked"] }).notNull(),
     createdAt: integer("created_at").notNull(),
     revokedAt: integer("revoked_at"),
@@ -2011,6 +2100,8 @@ export const controlPlaneSchema = {
   connectionAuthorizationReturns,
   connectionLinkRequests,
   connections,
+  remoteMcpConnections,
+  remoteMcpConnectionMutations,
   composioWatchWebhook,
   controlPlane,
   controlPlaneMigrations,

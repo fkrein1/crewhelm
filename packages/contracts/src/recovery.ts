@@ -10,6 +10,7 @@ import { MAXIMUM_FLEET_LIST_ITEMS } from "./fleet-capacity.js";
 import {
   capabilityEffectSchema,
   composioToolCapabilityGrantSchema,
+  remoteMcpToolCapabilityGrantSchema,
   runIdSchema,
   toolCallIdSchema,
 } from "./capabilities.js";
@@ -154,21 +155,30 @@ export const listUnresolvedToolEffectsInputSchema = z.strictObject({
   limit: z.number().int().min(1).max(MAXIMUM_FLEET_LIST_ITEMS).default(10),
 });
 
-export const unresolvedToolEffectSummarySchema = z.strictObject({
+const unresolvedToolEffectSummaryBaseSchema = z.strictObject({
   agentId: agentIdSchema,
   agentRevision: agentRevisionNumberSchema,
   connectionId: connectionIdSchema,
   effect: capabilityEffectSchema,
   authorization: composioToolCapabilityGrantSchema.shape.authorization,
   dispatchedAt: z.iso.datetime().nullable(),
-  integrationSlug: composioToolCapabilityGrantSchema.shape.integrationSlug,
   legacyWildcard: z.boolean(),
   recordedAt: z.iso.datetime(),
   runId: runIdSchema,
   toolCallId: toolCallIdSchema,
-  toolkitVersion: composioToolCapabilityGrantSchema.shape.toolkitVersion,
-  toolSlug: composioToolCapabilityGrantSchema.shape.toolSlug,
 });
+export const unresolvedToolEffectSummarySchema = z.union([
+  unresolvedToolEffectSummaryBaseSchema.extend({
+    integrationSlug: composioToolCapabilityGrantSchema.shape.integrationSlug,
+    toolkitVersion: composioToolCapabilityGrantSchema.shape.toolkitVersion,
+    toolSlug: composioToolCapabilityGrantSchema.shape.toolSlug,
+  }),
+  unresolvedToolEffectSummaryBaseSchema.extend({
+    provider: z.literal("remote_mcp"),
+    snapshotDigest: remoteMcpToolCapabilityGrantSchema.shape.snapshotDigest,
+    toolName: remoteMcpToolCapabilityGrantSchema.shape.toolName,
+  }),
+]);
 
 export const listUnresolvedToolEffectsResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({

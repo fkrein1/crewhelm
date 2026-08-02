@@ -22,6 +22,10 @@ import { MCP_BRIEFS_TOOL_NAME, registerBriefTools } from "./brief-tools.js";
 import { registerConnectionTools } from "./connection-tools.js";
 import { registerConnectionAttachmentTools } from "./connection-attachment-tools.js";
 import {
+  MCP_REMOTE_MCP_CONNECTION_TOOL_NAME,
+  registerRemoteMcpConnectionTools,
+} from "./remote-mcp-connection-tools.js";
+import {
   MCP_CONFIGURE_TOOL_NAME,
   MCP_GET_CONFIGURATION_TOOL_NAME,
   registerConfigurationTools,
@@ -45,7 +49,11 @@ import { controlPlaneToolResult } from "./tool-result.js";
 import { MCP_AGENT_WORKFLOWS_TOOL_NAME, registerWorkflowTools } from "./workflow-tools.js";
 import { MCP_AGENT_WATCHES_TOOL_NAME, registerWatchTools } from "./watch-tools.js";
 
-export { MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME } from "./connection-attachment-tools.js";
+export {
+  MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME,
+  MCP_CONFIGURE_AGENT_REMOTE_MCP_TOOL_NAME,
+} from "./connection-attachment-tools.js";
+export { MCP_REMOTE_MCP_CONNECTION_TOOL_NAME };
 export { MCP_BRIEFS_TOOL_NAME };
 export { MCP_CONFIGURE_TOOL_NAME, MCP_GET_CONFIGURATION_TOOL_NAME };
 export {
@@ -92,9 +100,9 @@ export {
 } from "./recovery-tools.js";
 
 const MAX_MCP_BODY_BYTES = 512 * 1024;
-export const MCP_MODEL_VISIBLE_CATALOG_SIZE_BUDGET_BYTES = 76 * 1_024;
+export const MCP_MODEL_VISIBLE_CATALOG_SIZE_BUDGET_BYTES = 82 * 1_024;
 export const MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES = 64 * 1_024;
-export const MCP_TOOL_COUNT_BUDGET = 36;
+export const MCP_TOOL_COUNT_BUDGET = 38;
 const MCP_SERVER_INFO = {
   name: "crewhelm",
   version: "0.1.0",
@@ -203,6 +211,11 @@ function createMcpServer(
     runtime: createComposioRuntime({
       apiKey: env.COMPOSIO_API_KEY,
     }),
+    signingSecret: env.BETTER_AUTH_SECRET,
+    signal,
+  });
+  registerRemoteMcpConnectionTools(server, context, {
+    publicOrigin: env.PUBLIC_ORIGIN,
     signingSecret: env.BETTER_AUTH_SECRET,
     signal,
   });

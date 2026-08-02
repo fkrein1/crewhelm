@@ -3,6 +3,7 @@ import {
   INTEGRATIONS_READ_SCOPE,
   configureAgentConnectionInputSchema,
   configureAgentConnectionResultSchema,
+  configureAgentRemoteMcpConnectionInputSchema,
   isCredentialBearingComposioTool,
   lookupAgentConnectionConfigurationResultSchema,
   resolvedConnectionForAttachmentSchema,
@@ -14,6 +15,8 @@ import type { McpToolContext } from "./context.js";
 import { controlPlaneToolResult } from "./tool-result.js";
 
 export const MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME = "crewhelm_configure_agent_connection";
+export const MCP_CONFIGURE_AGENT_REMOTE_MCP_TOOL_NAME =
+  "crewhelm_configure_agent_remote_mcp_connection";
 
 function denied(code: "connection_unavailable" | "insufficient_scope" | "invalid_request") {
   return {
@@ -132,6 +135,35 @@ export function registerConnectionAttachmentTools(
           verifiedAccountLabel: verified.accountLabel,
           verifiedToolkitSlug: verified.toolkitSlug,
         });
+      }, configureAgentConnectionResultSchema),
+  );
+
+  server.registerTool(
+    MCP_CONFIGURE_AGENT_REMOTE_MCP_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+        readOnlyHint: false,
+      },
+      description:
+        "Attach the entire inspected, frozen tool catalog from one active remote MCP Connection to an Agent. One authorization mode and one bounded limit set apply to every tool; no per-tool selection is required.",
+      inputSchema: configureAgentRemoteMcpConnectionInputSchema,
+      title: "Attach remote MCP Connection to Agent",
+    },
+    async (input) =>
+      controlPlaneToolResult(async () => {
+        if (controlPlane.configureAgentRemoteMcpConnection === undefined) {
+          return denied("connection_unavailable");
+        }
+        if (
+          input.authorization === "standing" &&
+          !authority.scopes.includes(AUTONOMY_WRITE_SCOPE)
+        ) {
+          return denied("insufficient_scope");
+        }
+        return controlPlane.configureAgentRemoteMcpConnection(authority, input);
       }, configureAgentConnectionResultSchema),
   );
 }

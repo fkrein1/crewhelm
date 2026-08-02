@@ -5,7 +5,7 @@ import {
   MAXIMUM_SESSION_CONTEXT_CHARACTERS,
   MAXIMUM_AGENT_SKILL_CONTEXT_CHARACTERS,
   MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
-  composioToolCapabilityGrantSchema,
+  externalToolCapabilityGrantSchema,
   RUN_ADMISSION_LIFETIME_MS,
   confirmRunAdmissionResultSchema,
   createRunAdmissionInputSchema,
@@ -38,7 +38,7 @@ import {
   type RunSummary,
   type RunTrigger,
   type RunWatchReference,
-  type ComposioToolCapabilityGrant,
+  type ExternalToolCapabilityGrant,
   type VerifyActiveRunAdmissionResult,
   type VerifyRunAdmissionResult,
 } from "@crewhelm/contracts";
@@ -223,7 +223,7 @@ function createBudgetReservation(input: {
   promptCharacters: number;
   runtimePlan: CrewAgentRuntimeConfig["runtimePlan"];
   systemPromptCharacters: number;
-  toolGrants: ComposioToolCapabilityGrant[];
+  toolGrants: ExternalToolCapabilityGrant[];
 }): RunBudgetReservation {
   const effectiveExecutionLimits = {
     maxDurationSeconds: Math.min(
@@ -1440,7 +1440,7 @@ export class RunAdmissions {
     agentId: string,
     agentRevision: number,
     grantIds: readonly string[],
-  ): ComposioToolCapabilityGrant[] | undefined {
+  ): ExternalToolCapabilityGrant[] | undefined {
     if (grantIds.length === 0) {
       return [];
     }
@@ -1460,11 +1460,11 @@ export class RunAdmissions {
       .where(inArray(storedCapabilityGrants.grantId, [...grantIds]))
       .all();
     const byGrantId = new Map(rows.map((row) => [row.grantId, row]));
-    const grants: ComposioToolCapabilityGrant[] = [];
+    const grants: ExternalToolCapabilityGrant[] = [];
 
     for (const grantId of grantIds) {
       const row = byGrantId.get(grantId);
-      const parsed = composioToolCapabilityGrantSchema.safeParse(row?.grant);
+      const parsed = externalToolCapabilityGrantSchema.safeParse(row?.grant);
 
       if (
         !parsed.success ||
@@ -1480,9 +1480,11 @@ export class RunAdmissions {
         return undefined;
       }
 
-      if (row.grantStatus === "active" && row.connectionStatus === "active") {
-        grants.push(parsed.data);
+      if (row.connectionStatus !== "active") {
+        return undefined;
       }
+
+      if (row.grantStatus === "active") grants.push(parsed.data);
     }
 
     return grants;
@@ -1564,7 +1566,7 @@ export class RunAdmissions {
   #reservationMatchesConfiguration(
     reservation: RunBudgetReservation,
     configuration: CrewAgentRuntimeConfig,
-    activeToolGrants: readonly ComposioToolCapabilityGrant[],
+    activeToolGrants: readonly ExternalToolCapabilityGrant[],
   ): boolean {
     return (
       reservation.maxDurationSeconds <= configuration.executionLimits.maxDurationSeconds &&

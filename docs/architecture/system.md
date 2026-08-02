@@ -2,7 +2,7 @@
 
 Status: current ownership and dependency map
 
-Crewhelm is an authority layer over Cloudflare execution and Composio integrations. Detailed
+Crewhelm is an authority layer over Cloudflare execution and external integrations. Detailed
 controls live in the [security invariants](../security/invariants.md) and
 [threat model](../security/threat-model.md).
 
@@ -25,6 +25,7 @@ flowchart LR
     Worker --> Catalog["Composio catalog and Connect Links"]
     Session --> Gate["ToolGate and execution reservation"]
     Gate --> Composio["Trusted adapter / Composio"]
+    Gate --> RemoteMCP["Owner-side remote MCP adapter"]
 ```
 
 The Worker authenticates requests, derives owner and client authority, and creates a fresh MCP
@@ -47,6 +48,7 @@ through the Agent object during migration.
 | Search/fetch adapter | Bounded public evidence reads; provider credentials stay in the Worker and exact source handles expire with their Run                                                          |
 | AI Gateway           | Optional installation-wide hard spend ceiling and model-call cost metadata                                                                                                     |
 | Composio             | Connected-account credentials and refresh                                                                                                                                      |
+| Remote MCP server    | Untrusted tool catalog and tool results; Crewhelm retains any bearer credential                                                                                                |
 
 The control plane owns admission and administration; the Agent directory owns conversation
 lifecycle; each session owns execution. Cross-object calls
@@ -205,7 +207,7 @@ branding, stylesheet assets, and terminal color roles.
    bounded transcript snapshot, and only then submits inference.
    Discovery, session coordinates, and configuration grant no execution authority.
 4. `ToolGate` rechecks the grant, policy, connection, effect, approval, and budget before Composio
-   dispatch. A native runtime tool instead redeems a narrow owner-issued permit for its exact
+   or remote MCP dispatch. A native runtime tool instead redeems a narrow owner-issued permit for its exact
    admitted descriptor, input digest, and shared call budget before its Crewhelm adapter runs.
    Ambiguous dispatches remain blocked or recorded unknown until recovery.
 5. Schedules and Workflow stages use the same admission path. A Workflow stage is admitted only

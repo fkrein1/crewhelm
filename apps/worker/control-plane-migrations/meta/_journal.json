@@ -218,6 +218,13 @@
       "when": 1785670994517,
       "tag": "0030_mixed_corsair",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1785687917917,
+      "tag": "0031_freezing_master_chief",
+      "breakpoints": true
     }
   ]
 }

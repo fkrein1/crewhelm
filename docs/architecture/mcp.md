@@ -6,7 +6,7 @@ retain authority.
 ## Rules
 
 - Keep common jobs first-class; discover uncommon capabilities progressively.
-- Scope Composio tools to an Agent revision. Never expose one MCP tool per provider action.
+- Scope external tools to an Agent revision. Never expose one Crewhelm MCP tool per provider action.
 - Read growing collections through **overview**, bounded **list**, and exact **inspect** operations.
   Use opaque cursors and owner-local projections; never fan out across Agents while listing.
 - Projections support discovery, not authority. Validate Agent updates against admitted runs.
@@ -34,7 +34,7 @@ Schema composition support from every MCP-to-model adapter.
 
 Progressive discovery is primarily a host concern: an MCP host can fetch `tools/list`, retain the
 catalog outside model context, and inject only relevant definitions. Crewhelm therefore optimizes
-for this path without making it mandatory. The 36-tool, 64 KiB input-schema, and 76 KiB complete
+for this path without making it mandatory. The 38-tool, 64 KiB input-schema, and 82 KiB complete
 catalog ceilings remain explicit, and increases require evidence that the extra surface improves
 selection or execution accuracy. One consolidated Watch lifecycle lets owners describe scheduled
 checks or connected-app events without programming scheduler, webhook, or bearer-token plumbing;
@@ -52,6 +52,19 @@ runtime. This follows the useful part of Cloudflare's
 without exposing arbitrary code execution for the Crewhelm control plane.
 Native web search and fetch follow the same catalog discipline: MCP discovers them as bounded Agent
 capability modules, and only an admitted Run receives their exact runtime tools.
+
+Remote MCP uses two product operations rather than mirroring a remote catalog into Crewhelm's
+control-plane catalog. One Connection lifecycle operation discovers and freezes all tools from one
+public HTTPS Streamable HTTP server; one attachment operation adds that whole reviewed snapshot to
+an Agent revision. Multiple Connections may be attached. Catalog and fleet bounds protect storage,
+transport, and execution safety rather than attempting to optimize the owner's Agent design.
+Public and bearer servers are supported through the same owner-side adapter; bearer material enters
+through a signed browser setup handoff and never through model-visible MCP arguments. OAuth,
+resources, prompts, subscriptions, persistent sessions, custom headers, and catalog refresh are
+separate future slices.
+Tool input schemas must fit Crewhelm's bounded, runtime-compatible JSON Schema subset. Defaults,
+regex, references, conditionals, unevaluated-property rules, and schemas beyond the depth, node,
+property, or byte ceilings are rejected when the Connection is created.
 
 Recovery detail is opt-in and bounded: run inspection pages its timeline and can include usage;
 exact connection reads include lifecycle events; status can include recent audit events. Ambiguous

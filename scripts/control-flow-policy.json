@@ -272,6 +272,21 @@
     {
       "evidence": {
         "definitionVersion": 2,
+        "testFiles": [
+          "apps/worker/src/http/server.test.ts",
+          "apps/worker/src/mcp/server.test.ts",
+          "apps/worker/src/owner/durable-object.test.ts"
+        ]
+      },
+      "id": "remote-mcp",
+      "pathPrefixes": [
+        "apps/worker/src/owner/remote-mcp-connections/",
+        "apps/worker/src/remote-mcp/"
+      ]
+    },
+    {
+      "evidence": {
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/owner/recovery/module.test.ts"]
       },
       "id": "owner-recovery",

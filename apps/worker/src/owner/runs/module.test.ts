@@ -2,6 +2,8 @@ import {
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
   AUTONOMY_WRITE_SCOPE,
+  CONNECTIONS_READ_SCOPE,
+  CONNECTIONS_WRITE_SCOPE,
   MAXIMUM_RUN_ADMISSIONS_PER_OWNER,
   MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
   MAXIMUM_SESSION_CONTEXT_CHARACTERS,
@@ -11,6 +13,7 @@ import {
   RUN_ADMISSION_LIFETIME_MS,
   RUNS_WRITE_SCOPE,
   crewAgentSystemPrompt,
+  createRemoteMcpConnectionResultSchema,
   publishSkillResultSchema,
   DEFAULT_FLEET_RUN_RETENTION_SECONDS,
 } from "@crewhelm/contracts";
@@ -78,6 +81,94 @@ describe("Run admission control flow", () => {
 });
 
 describe("OwnerControlPlane runs", () => {
+  it("denies admission after an attached remote MCP Connection is revoked", async () => {
+    const authority = await authorityFor("run-revoked-remote-mcp", [
+      OWNER_WRITE_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+      CONNECTIONS_READ_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const createdAgent = await stub.createAgent(
+      authority,
+      agentInput("create-revoked-remote-mcp-agent"),
+    );
+    const catalog = [
+      {
+        description: "Read public documentation.",
+        inputSchema: {
+          properties: { query: { type: "string" } },
+          required: ["query"],
+          type: "object" as const,
+        },
+        name: "read_docs",
+      },
+    ];
+    const serializedCatalog = JSON.stringify(catalog);
+    const snapshotDigest = Array.from(
+      new Uint8Array(
+        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(serializedCatalog)),
+      ),
+      (byte) => byte.toString(16).padStart(2, "0"),
+    ).join("");
+    const createdConnection = createRemoteMcpConnectionResultSchema.parse(
+      await stub.createRemoteMcpConnection(authority, {
+        authKind: "public",
+        catalog,
+        catalogBytes: new TextEncoder().encode(serializedCatalog).byteLength,
+        endpoint: "https://docs.example/mcp",
+        idempotencyKey: "create-revoked-remote-mcp-connection",
+        name: "Revoked docs",
+        server: { name: "docs", version: "1" },
+        snapshotDigest,
+      }),
+    );
+
+    if (!createdAgent.ok) throw new Error("Expected remote MCP Agent fixture.");
+    if (!createdConnection.ok) throw new Error("Expected remote MCP Connection fixture.");
+
+    const configured = await stub.configureAgentRemoteMcpConnection(authority, {
+      agentId: createdAgent.agent.id,
+      authorization: "standing",
+      connectionId: createdConnection.connection.connectionId,
+      expectedRevision: createdAgent.agent.revision,
+      expiresAt: null,
+      idempotencyKey: "attach-revoked-remote-mcp-connection",
+      limits: {
+        maxCallsPerRun: 1,
+        maxConcurrency: 1,
+        maxCostMicrousdPerCall: 0,
+        maxDurationMs: 5_000,
+        maxOutputBytes: 16_384,
+      },
+      snapshotDigest,
+    });
+    if (!configured.ok) {
+      throw new Error("Expected remote MCP attachment fixture.");
+    }
+
+    await expect(
+      stub.deleteRemoteMcpConnection(authority, {
+        connectionId: createdConnection.connection.connectionId,
+        idempotencyKey: "delete-revoked-remote-mcp-connection",
+        snapshotDigest,
+      }),
+    ).resolves.toEqual({ deleted: true, ok: true });
+
+    const prompt = "Read the attached public documentation.";
+    await expect(
+      stub.createRunAdmission(authority, {
+        agentId: createdAgent.agent.id,
+        expectedRevision: configured.agent.revision,
+        idempotencyKey: "deny-revoked-remote-mcp-run",
+        promptCharacters: prompt.length,
+        promptDigest: await digestRunPrompt(prompt),
+      }),
+    ).resolves.toEqual(fixedRunAdmissionFailure("capability_unavailable"));
+  });
+
   it("hydrates only exact SKILL.md instructions and snapshots compact provenance", async () => {
     const authority = await authorityFor("run-skill-runtime", [
       OWNER_READ_SCOPE,

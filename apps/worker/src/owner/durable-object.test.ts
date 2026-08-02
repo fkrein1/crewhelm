@@ -123,6 +123,17 @@ function removeWatchSchema(storage: DurableObjectStorage): void {
   storage.sql.exec("DROP TABLE IF EXISTS agent_schedule_occurrences");
 }
 
+function rewindControlPlaneMigrations(
+  storage: DurableObjectStorage,
+  firstRemovedVersion: number,
+): void {
+  storage.sql.exec("PRAGMA foreign_keys=OFF");
+  storage.sql.exec("DROP TABLE IF EXISTS remote_mcp_connection_mutations");
+  storage.sql.exec("DROP TABLE IF EXISTS remote_mcp_connections");
+  storage.sql.exec("PRAGMA foreign_keys=ON");
+  storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= ?", firstRemovedVersion);
+}
+
 async function migrationChecksum(source: string): Promise<string> {
   const bytes = new Uint8Array(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source)),
@@ -400,6 +411,11 @@ describe("OwnerControlPlane", () => {
           name: "0030_mixed_corsair",
           version: 31,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0031_freezing_master_chief",
+          version: 32,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });
@@ -493,7 +509,7 @@ describe("OwnerControlPlane", () => {
       removeAgentWorkflowSchema(state.storage);
       removeRuntimeToolSchema(state.storage);
       removeWatchSchema(state.storage);
-      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 18");
+      rewindControlPlaneMigrations(state.storage, 18);
       await state.storage.sync();
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
     });
@@ -1094,7 +1110,7 @@ describe("OwnerControlPlane", () => {
       removeAgentWorkflowSchema(state.storage);
       removeRuntimeToolSchema(state.storage);
       removeWatchSchema(state.storage);
-      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 12");
+      rewindControlPlaneMigrations(state.storage, 12);
     });
     await evictDurableObject(stub);
 
@@ -1158,7 +1174,7 @@ describe("OwnerControlPlane", () => {
       removeAgentWorkflowSchema(state.storage);
       removeRuntimeToolSchema(state.storage);
       removeWatchSchema(state.storage);
-      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 14");
+      rewindControlPlaneMigrations(state.storage, 14);
     });
     await evictDurableObject(stub);
 
@@ -1275,7 +1291,7 @@ describe("OwnerControlPlane", () => {
       removeAgentWorkflowSchema(state.storage);
       removeRuntimeToolSchema(state.storage);
       removeWatchSchema(state.storage);
-      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 11");
+      rewindControlPlaneMigrations(state.storage, 11);
     });
     await evictDurableObject(stub);
 
@@ -1421,7 +1437,7 @@ describe("OwnerControlPlane", () => {
       AUTONOMY_WRITE_SCOPE,
     ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
-    const legacyMigrations = controlPlaneMigrations.slice(0, -5);
+    const legacyMigrations = controlPlaneMigrations.slice(0, -6);
     const migrations = await Promise.all(
       legacyMigrations.map(async (migration) => ({
         ...migration,
@@ -1681,7 +1697,7 @@ describe("OwnerControlPlane", () => {
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
       removeWatchSchema(state.storage);
-      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 3");
+      rewindControlPlaneMigrations(state.storage, 3);
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
 
       await expect(
@@ -1799,6 +1815,7 @@ describe("OwnerControlPlane", () => {
         { version: 29 },
         { version: 30 },
         { version: 31 },
+        { version: 32 },
       ]);
     });
   });
@@ -1932,7 +1949,7 @@ describe("OwnerControlPlane", () => {
       removeBriefSchema(state.storage);
       removeAgentWorkflowSchema(state.storage);
       removeWatchSchema(state.storage);
-      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 5");
+      rewindControlPlaneMigrations(state.storage, 5);
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
     });
 
@@ -2065,7 +2082,7 @@ describe("OwnerControlPlane", () => {
         "workflow_00000000-0000-4000-8000-000000000923",
         "e".repeat(64),
       );
-      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 24");
+      rewindControlPlaneMigrations(state.storage, 24);
       removeRuntimeToolSchema(state.storage);
       removeWatchSchema(state.storage);
     });
@@ -2112,7 +2129,7 @@ describe("OwnerControlPlane", () => {
       admission: { run_id: admission.permit.runId, trigger: "manual" },
       foreignKeys: [],
       migration: {
-        name: "0030_mixed_corsair",
+        name: "0031_freezing_master_chief",
         version: CONTROL_PLANE_SCHEMA_VERSION,
       },
       workflow: {

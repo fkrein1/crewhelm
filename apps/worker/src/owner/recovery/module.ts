@@ -17,6 +17,7 @@ import {
   auditEvents,
   capabilityGrants,
   connections,
+  remoteMcpConnections,
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
 
@@ -106,6 +107,11 @@ export class AuthorityControls {
               .all().length === 1;
 
           if (changed) {
+            transaction
+              .update(remoteMcpConnections)
+              .set({ credentialCiphertext: null, credentialNonce: null })
+              .where(eq(remoteMcpConnections.connectionId, input.connectionId))
+              .run();
             transaction
               .update(capabilityGrants)
               .set({ revokedAt: changedAt, status: "revoked" })

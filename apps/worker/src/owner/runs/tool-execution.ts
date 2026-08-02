@@ -2,20 +2,24 @@ import {
   TOOL_EXECUTION_PERMIT_LIFETIME_MS,
   completeToolExecutionInputSchema,
   completeToolExecutionResultSchema,
+  classifiedComposioToolActionSchema,
+  classifiedRemoteMcpToolActionSchema,
   composioToolCapabilityGrantSchema,
+  externalToolCapabilityGrantSchema,
   evaluateToolExecutionInputSchema,
   evaluateToolExecutionResultSchema,
   listUnresolvedToolEffectsInputSchema,
   listUnresolvedToolEffectsResultSchema,
   reserveToolExecutionInputSchema,
   reserveToolExecutionResultSchema,
+  remoteMcpToolCapabilityGrantSchema,
   reconcileToolExecutionInputSchema,
   reconcileToolExecutionResultSchema,
   resolveToolExecutionConnectionResultSchema,
   runAdmissionNonceSchema,
   toolExecutionPermitSchema,
   type CompleteToolExecutionResult,
-  type ComposioToolGateInput,
+  type ExternalToolGateInput,
   type EvaluateToolExecutionResult,
   type ReserveToolExecutionResult,
   type ReconcileToolExecutionResult,
@@ -71,7 +75,7 @@ type ControlPlaneTransaction = Parameters<Parameters<ControlPlaneDatabase["trans
 type ToolExecutionDatabase = ControlPlaneDatabase | ControlPlaneTransaction;
 type ToolExecutionRequest = ReturnType<typeof evaluateToolExecutionInputSchema.parse>;
 type GateInputResult =
-  | { input: ComposioToolGateInput; ok: true }
+  | { input: ExternalToolGateInput; ok: true }
   | { ok: false; reason: ToolExecutionEvaluationFailureReason };
 
 function encodeBase64Url(bytes: Uint8Array): string {
@@ -99,14 +103,24 @@ async function digestToolExecutionPermit(
 export async function digestExternalEffect(
   action: ToolExecutionRequest["action"],
 ): Promise<string> {
-  const canonicalEffect = JSON.stringify({
-    schemaVersion: 1,
-    connectionId: action.connectionId,
-    inputDigest: action.inputDigest,
-    integrationSlug: action.integrationSlug,
-    toolkitVersion: action.toolkitVersion,
-    toolSlug: action.toolSlug,
-  });
+  const canonicalEffect = JSON.stringify(
+    action.capabilityId === "composio.tool.execute"
+      ? {
+          schemaVersion: 1,
+          connectionId: action.connectionId,
+          inputDigest: action.inputDigest,
+          integrationSlug: action.integrationSlug,
+          toolkitVersion: action.toolkitVersion,
+          toolSlug: action.toolSlug,
+        }
+      : {
+          schemaVersion: 1,
+          connectionId: action.connectionId,
+          inputDigest: action.inputDigest,
+          snapshotDigest: action.snapshotDigest,
+          toolName: action.toolName,
+        },
+  );
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalEffect));
 
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -195,7 +209,6 @@ export class ToolExecutions {
     if (!request.success) {
       return INVALID_TOOL_EXECUTION;
     }
-
     const evaluatedAt = Date.now();
     const effectDigest = await digestExternalEffect(request.data.action);
     const existingExecution = this.#database
@@ -266,7 +279,10 @@ export class ToolExecutions {
     const permit = toolExecutionPermitSchema.parse({
       action: request.data.action,
       actionDigest: decision.actionDigest,
-      audience: "composio_adapter",
+      audience:
+        request.data.action.capabilityId === "remote_mcp.tool.execute"
+          ? "remote_mcp_adapter"
+          : "composio_adapter",
       constraints: {
         ...decision.constraints,
         decisionExpiresAt: new Date(
@@ -637,7 +653,7 @@ export class ToolExecutions {
       .all();
     const hasMore = rows.length > request.data.limit;
     const effects = rows.slice(0, request.data.limit).map((row) => {
-      const grant = composioToolCapabilityGrantSchema.parse(row.grant);
+      const grant = externalToolCapabilityGrantSchema.parse(row.grant);
 
       return {
         agentId: grant.agentId,
@@ -646,13 +662,21 @@ export class ToolExecutions {
         connectionId: grant.connectionId,
         dispatchedAt: row.dispatchedAt === null ? null : new Date(row.dispatchedAt).toISOString(),
         effect: grant.effect,
-        integrationSlug: grant.integrationSlug,
         legacyWildcard: row.effectDigest === LEGACY_UNKNOWN_EFFECT_DIGEST,
+        ...(grant.capabilityId === "composio.tool.execute"
+          ? {
+              integrationSlug: grant.integrationSlug,
+              toolkitVersion: grant.toolkitVersion,
+              toolSlug: grant.toolSlug,
+            }
+          : {
+              provider: "remote_mcp" as const,
+              snapshotDigest: grant.snapshotDigest,
+              toolName: grant.toolName,
+            }),
         recordedAt: new Date(row.completedAt ?? row.startedAt).toISOString(),
         runId: row.runId,
         toolCallId: row.toolCallId,
-        toolkitVersion: grant.toolkitVersion,
-        toolSlug: grant.toolSlug,
       };
     });
 
@@ -764,11 +788,14 @@ export class ToolExecutions {
 
     if (
       !permit.success ||
+      permit.data.audience !== "composio_adapter" ||
+      permit.data.action.capabilityId !== "composio.tool.execute" ||
       permit.data.action.ownerKey !== this.#objectName ||
       Date.parse(permit.data.constraints.decisionExpiresAt) <= Date.now()
     ) {
       return INVALID_TOOL_EXECUTION;
     }
+    const action = classifiedComposioToolActionSchema.parse(permit.data.action);
 
     const reservedPermitDigest = await digestToolExecutionPermit(permit.data, "reserved");
     const dispatchedPermitDigest = await digestToolExecutionPermit(permit.data, "dispatched");
@@ -799,7 +826,7 @@ export class ToolExecutions {
         .innerJoin(connections, eq(connections.connectionId, capabilityGrants.connectionId))
         .innerJoin(runAdmissions, eq(runAdmissions.runId, toolExecutions.runId))
         .innerJoin(agents, eq(agents.agentId, runAdmissions.agentId))
-        .where(eq(toolExecutions.toolCallId, permit.data.action.toolCallId))
+        .where(eq(toolExecutions.toolCallId, action.toolCallId))
         .get();
       const grant = composioToolCapabilityGrantSchema.safeParse(row?.grant);
 
@@ -812,16 +839,16 @@ export class ToolExecutions {
         row.budgetReservation.fleetConfigurationRevision !==
           this.#currentFleetConfiguration().revision ||
         row.agentStatus !== "active" ||
-        row.currentAgentRevision !== permit.data.action.agentRevision ||
+        row.currentAgentRevision !== action.agentRevision ||
         row.connectionStatus !== "active" ||
         row.grantStatus !== "active" ||
         row.nonceDigest !== reservedPermitDigest ||
         row.actionDigest !== permit.data.actionDigest ||
-        row.runId !== permit.data.action.runId ||
-        row.grantId !== permit.data.action.grantId ||
-        row.connectionId !== permit.data.action.connectionId ||
-        grant.data.toolSlug !== permit.data.action.toolSlug ||
-        grant.data.toolkitVersion !== permit.data.action.toolkitVersion
+        row.runId !== action.runId ||
+        row.grantId !== action.grantId ||
+        row.connectionId !== action.connectionId ||
+        grant.data.toolSlug !== action.toolSlug ||
+        grant.data.toolkitVersion !== action.toolkitVersion
       ) {
         return INVALID_TOOL_EXECUTION;
       }
@@ -831,7 +858,7 @@ export class ToolExecutions {
         .set({ dispatchedAt, nonceDigest: dispatchedPermitDigest })
         .where(
           and(
-            eq(toolExecutions.toolCallId, permit.data.action.toolCallId),
+            eq(toolExecutions.toolCallId, action.toolCallId),
             eq(toolExecutions.status, "reserved"),
             eq(toolExecutions.nonceDigest, reservedPermitDigest),
           ),
@@ -849,7 +876,7 @@ export class ToolExecutions {
           action: "tool.execution_dispatched",
           clientId: row.clientId,
           occurredAt: dispatchedAt,
-          subjectId: permit.data.action.toolCallId,
+          subjectId: action.toolCallId,
         })
         .run();
 
@@ -863,12 +890,134 @@ export class ToolExecutions {
       recordExecutionEvent({
         outcome: "claimed",
         phase: "tool.dispatch",
-        runId: permit.data.action.runId,
-        toolCallId: permit.data.action.toolCallId,
+        runId: action.runId,
+        toolCallId: action.toolCallId,
       });
     }
 
     return result;
+  }
+
+  async claimRemoteMcp(input: unknown): Promise<
+    | {
+        connectionId: string;
+        maximumDurationMs: number;
+        maximumOutputBytes: number;
+        snapshotDigest: string;
+        toolName: string;
+      }
+    | undefined
+  > {
+    const permit = toolExecutionPermitSchema.safeParse(input);
+    if (
+      !permit.success ||
+      permit.data.audience !== "remote_mcp_adapter" ||
+      permit.data.action.capabilityId !== "remote_mcp.tool.execute" ||
+      permit.data.action.ownerKey !== this.#objectName ||
+      Date.parse(permit.data.constraints.decisionExpiresAt) <= Date.now()
+    ) {
+      return undefined;
+    }
+    const action = classifiedRemoteMcpToolActionSchema.parse(permit.data.action);
+    const reservedPermitDigest = await digestToolExecutionPermit(permit.data, "reserved");
+    const dispatchedPermitDigest = await digestToolExecutionPermit(permit.data, "dispatched");
+    const dispatchedAt = Date.now();
+
+    const claimed = this.#database.transaction((transaction) => {
+      const row = transaction
+        .select({
+          actionDigest: toolExecutions.actionDigest,
+          agentStatus: agents.status,
+          budgetReservation: runAdmissions.budgetReservation,
+          cancellationRequestedAt: runAdmissions.cancellationRequestedAt,
+          clientId: runAdmissions.clientId,
+          connectionId: capabilityGrants.connectionId,
+          connectionStatus: connections.status,
+          currentAgentRevision: agents.currentRevision,
+          expiresAt: toolExecutions.expiresAt,
+          grant: capabilityGrants.grant,
+          grantId: toolExecutions.grantId,
+          grantStatus: capabilityGrants.status,
+          nonceDigest: toolExecutions.nonceDigest,
+          provider: connections.provider,
+          runId: toolExecutions.runId,
+          status: toolExecutions.status,
+        })
+        .from(toolExecutions)
+        .innerJoin(capabilityGrants, eq(capabilityGrants.grantId, toolExecutions.grantId))
+        .innerJoin(connections, eq(connections.connectionId, capabilityGrants.connectionId))
+        .innerJoin(runAdmissions, eq(runAdmissions.runId, toolExecutions.runId))
+        .innerJoin(agents, eq(agents.agentId, runAdmissions.agentId))
+        .where(eq(toolExecutions.toolCallId, action.toolCallId))
+        .get();
+      const grant = remoteMcpToolCapabilityGrantSchema.safeParse(row?.grant);
+
+      if (
+        row === undefined ||
+        !grant.success ||
+        row.status !== "reserved" ||
+        row.expiresAt <= dispatchedAt ||
+        row.cancellationRequestedAt !== null ||
+        row.budgetReservation.fleetConfigurationRevision !==
+          this.#currentFleetConfiguration().revision ||
+        row.agentStatus !== "active" ||
+        row.currentAgentRevision !== action.agentRevision ||
+        row.provider !== "remote_mcp" ||
+        row.connectionStatus !== "active" ||
+        row.grantStatus !== "active" ||
+        row.nonceDigest !== reservedPermitDigest ||
+        row.actionDigest !== permit.data.actionDigest ||
+        row.runId !== action.runId ||
+        row.grantId !== action.grantId ||
+        row.connectionId !== action.connectionId ||
+        grant.data.snapshotDigest !== action.snapshotDigest ||
+        grant.data.toolName !== action.toolName
+      ) {
+        return undefined;
+      }
+
+      const updated = transaction
+        .update(toolExecutions)
+        .set({ dispatchedAt, nonceDigest: dispatchedPermitDigest })
+        .where(
+          and(
+            eq(toolExecutions.toolCallId, action.toolCallId),
+            eq(toolExecutions.status, "reserved"),
+            eq(toolExecutions.nonceDigest, reservedPermitDigest),
+          ),
+        )
+        .returning({ toolCallId: toolExecutions.toolCallId })
+        .all();
+      if (updated.length !== 1) return undefined;
+
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: "tool.execution_dispatched",
+          clientId: row.clientId,
+          occurredAt: dispatchedAt,
+          subjectId: action.toolCallId,
+        })
+        .run();
+
+      return {
+        connectionId: action.connectionId,
+        maximumDurationMs: permit.data.constraints.maxDurationMs,
+        maximumOutputBytes: permit.data.constraints.maxOutputBytes,
+        snapshotDigest: action.snapshotDigest,
+        toolName: action.toolName,
+      };
+    });
+
+    if (claimed !== undefined) {
+      recordExecutionEvent({
+        outcome: "claimed",
+        phase: "tool.dispatch",
+        runId: action.runId,
+        toolCallId: action.toolCallId,
+      });
+    }
+    return claimed;
   }
 
   async #scheduleReconciliation(reconcileAt: number): Promise<void> {
@@ -938,7 +1087,7 @@ export class ToolExecutions {
       .innerJoin(connections, eq(connections.connectionId, capabilityGrants.connectionId))
       .where(eq(capabilityGrants.grantId, request.action.grantId))
       .get();
-    const grant = composioToolCapabilityGrantSchema.safeParse(grantRow?.grant);
+    const grant = externalToolCapabilityGrantSchema.safeParse(grantRow?.grant);
     const reservedGrant = request.budgetReservation.toolGrants.find(
       (candidate) => candidate.grantId === request.action.grantId,
     );

@@ -96,4 +96,18 @@ content enters model context. Cloudflare's `global_fetch_strictly_public` flag p
 from bypassing mapped Workers or zone security settings through direct origin routing. Retrieved
 content is evidence, never instructions or authority.
 
+A remote MCP Connection grants access to one reviewed, digest-frozen tool catalog, not ambient
+network access. Endpoints are canonical public HTTPS URLs; local and private targets, credentials in
+URLs, nonstandard ports, cross-origin redirects, reconnects, subscriptions, resources, and prompts
+are denied. Public and bearer authentication share one execution path. Bearer setup uses a
+short-lived owner-bound browser capability, credentials are encrypted at rest in the owner control
+plane, and revocation clears the ciphertext. Raw credentials never enter MCP tool arguments, Agent
+state, model context, logs, audit output, or provider results. Every remote call rechecks the active
+Connection, Agent revision, frozen catalog digest, exact tool, canonical input digest, JSON Schema,
+ToolGate decision, approval, duration, and output bound before a provider request. Untrusted remote
+annotations cannot grant read authority: tools default to approval-gated writes, destructive tools
+always require approval, and dispatch uncertainty remains an unresolved external effect.
+Remote input schemas are compiled before persistence and admit only a bounded non-regex subset;
+unsupported keywords, references, conditionals, and excessive composition fail closed.
+
 No prompt-level instruction is an acceptable substitute for one of these controls.
