@@ -78,4 +78,21 @@ describe("integration observability", () => {
       outcome: "invalid_url",
     });
   });
+
+  it("does not mask primary flow when unknown input cannot be inspected", () => {
+    const hostileInput = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("Untrusted integration input.");
+        },
+      },
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    expect(() => recordIntegrationProviderResponse(hostileInput)).not.toThrow();
+    expect(warn).toHaveBeenCalledExactlyOnceWith({
+      event: "crewhelm.integration.provider_response.telemetry_rejected",
+    });
+  });
 });

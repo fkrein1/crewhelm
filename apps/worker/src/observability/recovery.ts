@@ -33,9 +33,14 @@ const recoveryEventSchema = z.discriminatedUnion("operation", [
 ]);
 
 export function recordRecoveryEvent(input: unknown): void {
-  const event = recoveryEventSchema.safeParse(input);
+  let event: ReturnType<typeof recoveryEventSchema.safeParse> | undefined;
+  try {
+    event = recoveryEventSchema.safeParse(input);
+  } catch {
+    event = undefined;
+  }
 
-  if (!event.success) {
+  if (event === undefined || !event.success) {
     try {
       console.warn({ event: "crewhelm.recovery.telemetry_rejected" });
     } catch {

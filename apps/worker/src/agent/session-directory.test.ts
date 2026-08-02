@@ -1260,6 +1260,229 @@ describe("CrewAgent durable session directory", () => {
     ).resolves.toMatchObject({ error: { code: "session_not_found" }, ok: false });
   });
 
+  it("keeps expired sessions routed while their Run is still active", async () => {
+    const authority = await authorityFor("crew-session-active-retention-805");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("session-agent-active-retention-805"),
+    );
+
+    if (!created.ok) {
+      throw new Error("Expected active retention fixture Agent.");
+    }
+
+    await enableSessions(authority.ownerKey, created.agent.id);
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "session-run-active-retention-805",
+      prompt: SLOW_TEST_PROMPT,
+    });
+
+    if (!started.ok || started.run.session === undefined) {
+      throw new Error("Expected active retained Session Run.");
+    }
+
+    const parent = env.CREW_AGENT.getByName(
+      crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
+    );
+    await runInDurableObject(parent, async (_instance, state) => {
+      const key = `crewhelm:session:${started.run.session?.sessionId}`;
+      const record = await state.storage.get<Record<string, unknown>>(key);
+
+      if (record === undefined) {
+        throw new Error("Expected active Session directory record.");
+      }
+
+      await state.storage.put(key, { ...record, availableUntil: Date.now() - 1 });
+    });
+
+    await expect(
+      controlPlane.deleteAgentSession(authority, {
+        agentId: created.agent.id,
+        expectedBranchRevision: started.run.session.branchRevision,
+        idempotencyKey: "session-delete-active-retention-805",
+        sessionId: started.run.session.sessionId,
+      }),
+    ).resolves.toEqual({
+      error: { code: "session_busy", message: "Session deletion denied." },
+      ok: false,
+    });
+    await expect(
+      runInDurableObject(parent, (_instance, state) =>
+        state.storage.get(`crewhelm:session:${started.run.session?.sessionId}`),
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it("reserves expiry deletion before clearing the session runtime", async () => {
+    const authority = await authorityFor("crew-session-expiry-delete-race-805");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("session-agent-expiry-delete-race-805"),
+    );
+
+    if (!created.ok) {
+      throw new Error("Expected expiry deletion race fixture Agent.");
+    }
+
+    await enableSessions(authority.ownerKey, created.agent.id);
+    const started = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "session-run-expiry-delete-race-805",
+      prompt: "Create a session for the expiry deletion race.",
+    });
+
+    if (!started.ok || started.run.session === undefined) {
+      throw new Error("Expected expiry deletion race Session.");
+    }
+
+    await completedRun(controlPlane, authority, started.run.runId);
+    const child = env.CREW_SESSION.getByName(
+      crewSessionObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+        sessionId: started.run.session.sessionId,
+      }),
+    );
+    await runInDurableObject(child, (instance) => {
+      if (!(instance instanceof TestCrewSession)) {
+        throw new Error("Expected expiry deletion race CrewSession.");
+      }
+
+      instance.delayNextDeletionForTest();
+    });
+    const parent = env.CREW_AGENT.getByName(
+      crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
+    );
+    const cleanup = runInDurableObject(parent, async (instance, state) => {
+      if (!(instance instanceof TestCrewAgent)) {
+        throw new Error("Expected expiry deletion race CrewAgent.");
+      }
+
+      const key = `crewhelm:session:${started.run.session!.sessionId}`;
+      const record = await state.storage.get<Record<string, unknown>>(key);
+      if (record === undefined) {
+        throw new Error("Expected expiry deletion race directory record.");
+      }
+
+      await state.storage.put(key, { ...record, availableUntil: Date.now() - 1 });
+      await instance.cleanupExpiredSessions();
+    });
+    await vi.waitFor(
+      () =>
+        runInDurableObject(child, (instance) => {
+          if (!(instance instanceof TestCrewSession) || !instance.deletionWaitingForTest()) {
+            throw new Error("Expected expiry deletion to wait at the child boundary.");
+          }
+        }),
+      { interval: 25, timeout: 5_000 },
+    );
+    await expect(
+      runInDurableObject(parent, async (_instance, state) => {
+        const record = await state.storage.get<Record<string, unknown>>(
+          `crewhelm:session:${started.run.session!.sessionId}`,
+        );
+        return record?.deleting;
+      }),
+    ).resolves.toBe(true);
+    const continuation = await controlPlane.startRun(authority, {
+      agentId: created.agent.id,
+      continuation: {
+        branchId: started.run.session.branchId,
+        expectedBranchRevision: started.run.session.branchRevision,
+        sessionId: started.run.session.sessionId,
+      },
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "session-run-expiry-delete-race-continuation-805",
+      prompt: "Do not race an in-progress expiry deletion.",
+    });
+    expect(continuation).toMatchObject({ ok: false });
+    if (continuation.ok) {
+      throw new Error("Expected expiry deletion to fence continuation.");
+    }
+    expect(["session_busy", "session_not_found"]).toContain(continuation.error.code);
+    await runInDurableObject(child, (instance) => {
+      if (!(instance instanceof TestCrewSession)) {
+        throw new Error("Expected expiry deletion race CrewSession.");
+      }
+
+      instance.releaseDeletionForTest();
+    });
+    await cleanup;
+    await expect(
+      runInDurableObject(parent, (_instance, state) =>
+        state.storage.get(`crewhelm:session:${started.run.session!.sessionId}`),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps Workflow deletion pending when expired Session cleanup is refused", async () => {
+    const authority = await authorityFor("crew-workflow-expiry-refusal-805");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("workflow-expiry-refusal-agent-805"),
+    );
+
+    if (!created.ok) {
+      throw new Error("Expected Workflow expiry refusal Agent fixture.");
+    }
+
+    await enableSessions(authority.ownerKey, created.agent.id);
+    const sessionId = "session_00000000-0000-4000-8000-000000000805";
+    const branchId = "branch_00000000-0000-4000-8000-000000000805";
+    const workflowId = "workflow_00000000-0000-4000-8000-000000000805";
+    const parent = env.CREW_AGENT.getByName(
+      crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
+    );
+    await runInDurableObject(parent, async (_instance, state) => {
+      const currentTime = Date.now();
+      await state.storage.put(`crewhelm:session:${sessionId}`, {
+        activeRunId: null,
+        agentId: created.agent.id,
+        availableUntil: currentTime - 1,
+        branchId,
+        branchRevision: 1,
+        createdAt: currentTime,
+        deleting: false,
+        ownerKey: authority.ownerKey,
+        sessionId,
+        updatedAt: currentTime,
+        visible: false,
+        workflowId,
+      });
+    });
+    const child = env.CREW_SESSION.getByName(
+      crewSessionObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey, sessionId }),
+    );
+    await runInDurableObject(child, (instance) => {
+      if (!(instance instanceof TestCrewSession)) {
+        throw new Error("Expected Workflow expiry refusal CrewSession.");
+      }
+
+      instance.refuseNextDeletionForTest();
+    });
+
+    await expect(
+      parent.deleteAgentTaskWorkflowSession({
+        idempotencyKey: "workflow-expiry-refusal-delete-805",
+        ownerKey: authority.ownerKey,
+        sessionId,
+        workflowId,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      runInDurableObject(parent, async (_instance, state) => ({
+        intent: await state.storage.get(`crewhelm:session-expiry-deletion-intent:${sessionId}`),
+        record: await state.storage.get<Record<string, unknown>>(`crewhelm:session:${sessionId}`),
+      })),
+    ).resolves.toMatchObject({ intent: { sessionId }, record: { deleting: true, sessionId } });
+  });
+
   it("denies untracked or cross-directory Workflow entrypoints", async () => {
     const authority = await authorityFor("crew-workflow-boundary-806");
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);

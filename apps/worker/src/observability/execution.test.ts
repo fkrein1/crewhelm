@@ -131,4 +131,36 @@ describe("execution observability", () => {
       traceId: runId,
     });
   });
+
+  it("does not mask primary flow when input inspection or logging fails", () => {
+    const failure = new Error("Primary execution must remain controlling.");
+    const hostileInput = new Proxy(
+      {},
+      {
+        get() {
+          throw failure;
+        },
+      },
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    expect(() => recordExecutionEvent(hostileInput)).not.toThrow();
+    warn.mockImplementation(() => {
+      throw failure;
+    });
+    expect(() => recordExecutionEvent(hostileInput)).not.toThrow();
+
+    vi.spyOn(console, "info").mockImplementation(() => {
+      throw failure;
+    });
+    expect(() =>
+      recordExecutionEvent({
+        outcome: "completed",
+        outputBytes: 0,
+        phase: "tool.completion",
+        runId,
+        toolCallId,
+      }),
+    ).not.toThrow();
+  });
 });

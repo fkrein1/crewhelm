@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { NonRetryableError } from "cloudflare:workflows";
 
 import { AgentTaskWorkflow, agentWorkflowStageEventType } from "./agent-task.js";
 
@@ -14,7 +15,52 @@ function event() {
   };
 }
 
+async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
+function runWithDispatchFailure(code: "invalid_request" | "workflow_unavailable") {
+  const controlPlane = {
+    dispatchAgentWorkflowStage: async () => ({
+      error: { code, message: "Agent workflow request denied." },
+      ok: false,
+    }),
+  };
+  const step = {
+    do: async (_name: string, _config: unknown, callback: () => Promise<unknown>) => callback(),
+  };
+  const runtime = {
+    env: { OWNER_CONTROL_PLANE: { getByName: () => controlPlane } },
+  };
+
+  return Reflect.apply(Reflect.get(AgentTaskWorkflow.prototype, "run"), runtime, [event(), step]);
+}
+
 describe("AgentTaskWorkflow", () => {
+  it("marks deterministic stage denials as non-retryable", async () => {
+    const error = await rejectionOf(runWithDispatchFailure("invalid_request"));
+
+    expect(error).toBeInstanceOf(NonRetryableError);
+    expect(error).toMatchObject({
+      message: "Crewhelm workflow stage 1 was not admitted (invalid_request).",
+    });
+  });
+
+  it("leaves transient stage unavailability retryable by the Workflow host", async () => {
+    const error = await rejectionOf(runWithDispatchFailure("workflow_unavailable"));
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(NonRetryableError);
+    expect(error).toMatchObject({
+      message: "Crewhelm workflow stage 1 admission is unavailable.",
+    });
+  });
+
   it("durably dispatches and completes stages in exact order", async () => {
     const runs = [
       "run_00000000-0000-4000-8000-000000000001",
