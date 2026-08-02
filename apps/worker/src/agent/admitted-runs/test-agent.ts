@@ -8,7 +8,7 @@ import {
   type WebFetchRuntimeTool,
   type WebSearchRuntimeTool,
 } from "@crewhelm/contracts";
-import type { ThinkModel } from "@cloudflare/think";
+import { Session, type ThinkModel } from "@cloudflare/think";
 import type { ExecutionResult } from "@cloudflare/sandbox";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import * as z from "zod";
@@ -380,6 +380,7 @@ export class TestCrewSession extends CrewSession {
   #delayDeletion = false;
   #deletionWaiting = false;
   #failDeletionResponse = false;
+  #rejectNextCancellation = false;
   #releaseDeletion: (() => void) | undefined;
   readonly #modelCalls: TestModelCall[] = [];
   readonly #sandboxExecutions: Array<{ code: string; language: string }> = [];
@@ -612,6 +613,31 @@ export class TestCrewSession extends CrewSession {
     this.#completeBeforeNextCancellation = true;
   }
 
+  failNextCancellationForTest(): void {
+    this.#rejectNextCancellation = true;
+  }
+
+  async appendCancellationDescendantsForTest(runId: string): Promise<void> {
+    const childId = `${runId}:cancel-child`;
+    const session = Session.create(this);
+    await session.appendMessage(
+      {
+        id: childId,
+        parts: [{ text: "Cancelled child output.", type: "text" }],
+        role: "assistant",
+      },
+      `crewhelm:${runId}:user`,
+    );
+    await session.appendMessage(
+      {
+        id: `${runId}:cancel-grandchild`,
+        parts: [{ text: "Cancelled grandchild output.", type: "text" }],
+        role: "assistant",
+      },
+      childId,
+    );
+  }
+
   override async cancelAdmittedRun(input: unknown) {
     const request = cancelAdmittedRunInputSchema.safeParse(input);
 
@@ -649,6 +675,15 @@ export class TestCrewSession extends CrewSession {
           },
           trace: result.trace,
         });
+  }
+
+  protected override cancelAdmittedSubmission(runId: string, reason: string): Promise<void> {
+    if (this.#rejectNextCancellation) {
+      this.#rejectNextCancellation = false;
+      return Promise.reject(new Error("Injected Session cancellation failure."));
+    }
+
+    return super.cancelAdmittedSubmission(runId, reason);
   }
 
   delayNextDeletionForTest(): void {

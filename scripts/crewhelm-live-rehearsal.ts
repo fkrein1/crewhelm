@@ -815,9 +815,9 @@ async function typedOutput(options: {
           );
         }
 
-        const deadline = Date.now() + options.runTimeoutMs;
+        const runDeadline = Date.now() + options.runTimeoutMs;
         let compactRun: InspectRunResult | undefined;
-        while (Date.now() < deadline) {
+        while (Date.now() < runDeadline) {
           compactRun = await callTool<InspectRunResult>(
             session,
             "crewhelm_inspect_run",
@@ -880,8 +880,9 @@ async function typedOutput(options: {
           throw new TemporaryOwnerSessionError("invalid_payload", "Typed Workflow was denied.");
         }
         workflowId = workflowStarted.workflow.workflowId;
+        const workflowDeadline = Date.now() + options.runTimeoutMs;
         let compactWorkflow: ReturnType<typeof manageAgentWorkflowsResultSchema.parse> | undefined;
-        while (Date.now() < deadline) {
+        while (Date.now() < workflowDeadline) {
           compactWorkflow = await callTool(
             session,
             "crewhelm_agent_workflows",
@@ -956,21 +957,25 @@ async function typedOutput(options: {
         operationFailure = error;
       }
 
-      const disabled = await callTool<BatchDisableAgentsResult>(
-        session,
-        "crewhelm_batch_disable_agents",
-        { agents: [{ agentId, expectedRevision: created.agent.revision }] },
-        batchDisableAgentsResultSchema,
-      );
-      if (
-        !disabled.ok ||
-        disabled.receipts.length !== 1 ||
-        !["already_disabled", "disabled"].includes(disabled.receipts[0]?.outcome ?? "")
-      ) {
-        throw new TemporaryOwnerSessionError(
-          "invalid_payload",
-          "Disposable typed-output Agent was not disabled.",
+      try {
+        const disabled = await callTool<BatchDisableAgentsResult>(
+          session,
+          "crewhelm_batch_disable_agents",
+          { agents: [{ agentId, expectedRevision: created.agent.revision }] },
+          batchDisableAgentsResultSchema,
         );
+        if (
+          !disabled.ok ||
+          disabled.receipts.length !== 1 ||
+          !["already_disabled", "disabled"].includes(disabled.receipts[0]?.outcome ?? "")
+        ) {
+          throw new TemporaryOwnerSessionError(
+            "invalid_payload",
+            "Disposable typed-output Agent was not disabled.",
+          );
+        }
+      } catch (cleanupError) {
+        if (operationFailure === undefined) throw cleanupError;
       }
       if (operationFailure !== undefined) throw operationFailure;
       return evidence;
