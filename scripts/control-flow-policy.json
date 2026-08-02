@@ -24,8 +24,8 @@
     "apps/worker/src/worker-test-entry.ts"
   ],
   "recordedProgress": {
-    "migratedFiles": 35,
-    "migratedUnits": 12,
+    "migratedFiles": 45,
+    "migratedUnits": 15,
     "totalFiles": 159,
     "totalUnits": 30
   },
@@ -143,8 +143,15 @@
       "pathPrefixes": ["apps/worker/src/owner/agent-blueprints/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": [
+          "apps/worker/src/agent/admitted-runs/module.test.ts",
+          "apps/worker/src/owner/durable-object.test.ts"
+        ]
+      },
       "id": "owner-agent-channel",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/agent-channel/"]
     },
     {
@@ -157,8 +164,12 @@
       "pathPrefixes": ["apps/worker/src/owner/agents/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/owner/briefs/module.test.ts"]
+      },
       "id": "owner-briefs",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/briefs/"]
     },
     {
@@ -270,8 +281,12 @@
     },
     {
       "files": ["apps/worker/src/env.ts", "apps/worker/src/index.ts", "apps/worker/src/sandbox.ts"],
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/sandbox/purge.test.ts"]
+      },
       "id": "worker-runtime",
-      "status": "legacy"
+      "status": "migrated"
     }
   ]
 }

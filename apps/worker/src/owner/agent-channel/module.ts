@@ -143,6 +143,37 @@ function alignRunCompletion(run: Run, timeline: RunTimelineEvent[]): Run {
   return terminal === undefined ? run : { ...run, completedAt: terminal.occurredAt };
 }
 
+function unreachableAgentChannelState(state: never): never {
+  throw new Error(`Unreachable Agent channel state: ${String(state)}`);
+}
+
+function approvalDecision(decision: z.infer<typeof decideRunToolApprovalInputSchema>["decision"]): {
+  capabilityAction: "approve_tool" | "reject_tool";
+  stored: "approved" | "rejected";
+} {
+  switch (decision) {
+    case "approve":
+      return { capabilityAction: "approve_tool", stored: "approved" };
+    case "reject":
+      return { capabilityAction: "reject_tool", stored: "rejected" };
+  }
+
+  return unreachableAgentChannelState(decision);
+}
+
+function approvalTimelineEvent(
+  decision: NonNullable<typeof toolApprovals.$inferSelect.decision>,
+): "tool.approval_approved" | "tool.approval_rejected" {
+  switch (decision) {
+    case "approved":
+      return "tool.approval_approved";
+    case "rejected":
+      return "tool.approval_rejected";
+  }
+
+  return unreachableAgentChannelState(decision);
+}
+
 export function deniedStartRun(code: StartRunFailure["error"]["code"]): StartRunFailure {
   return {
     error: { code, message: "Run request denied." },
@@ -401,7 +432,10 @@ export class AgentChannel {
           );
 
           if (!page.success) {
-            throw new Error("Session run index unavailable.");
+            return {
+              error: { code: "session_unavailable", message: "Session deletion denied." },
+              ok: false,
+            };
           }
 
           this.#database.transaction((transaction) => {
@@ -622,11 +656,7 @@ export class AgentChannel {
       .all()) {
       add("tool.approval_required", approval.requestedAt, approval.toolCallId);
       if (approval.decision !== null && approval.decidedAt !== null) {
-        add(
-          approval.decision === "approved" ? "tool.approval_approved" : "tool.approval_rejected",
-          approval.decidedAt,
-          approval.toolCallId,
-        );
+        add(approvalTimelineEvent(approval.decision), approval.decidedAt, approval.toolCallId);
       } else if (approval.expiresAt <= Date.now()) {
         add("tool.approval_expired", approval.expiresAt, approval.toolCallId);
       }
@@ -1634,7 +1664,8 @@ export class AgentChannel {
     }
 
     const currentTime = Date.now();
-    const storedDecision = request.data.decision === "approve" ? "approved" : "rejected";
+    const decision = approvalDecision(request.data.decision);
+    const storedDecision = decision.stored;
     const existing = this.#database
       .select()
       .from(toolApprovals)
@@ -1739,7 +1770,7 @@ export class AgentChannel {
     const decisionCapability = this.#capabilities.issue(
       authority,
       admission,
-      request.data.decision === "approve" ? "approve_tool" : "reject_tool",
+      decision.capabilityAction,
       approval.executionId,
     );
 
