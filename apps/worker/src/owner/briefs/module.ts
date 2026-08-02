@@ -179,7 +179,10 @@ function storageDenied(code: BriefStorageFailureCode) {
   }
 }
 
-export function workflowDeliverableStorageFailure(code: BriefStorageFailureCode) {
+export function workflowDeliverableStorageFailure(code: BriefStorageFailureCode): {
+  code: "storage_corrupt" | "storage_unavailable";
+  ok: false;
+} {
   switch (code) {
     case "brief_storage_corrupt":
       return { code: "storage_corrupt" as const, ok: false as const };
@@ -190,7 +193,7 @@ export function workflowDeliverableStorageFailure(code: BriefStorageFailureCode)
   }
 }
 
-export function deniedBrief(code: BriefFailureCode) {
+export function deniedBrief(code: BriefFailureCode): ReturnType<typeof denied> {
   return denied(code);
 }
 

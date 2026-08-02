@@ -2,6 +2,7 @@ import * as z from "zod";
 
 import { diagnoseDeployment, doctorReportSchema, type DoctorOptions } from "./doctor.js";
 import { mcpControlPlaneStatusResultSchema } from "./mcp-result-schemas.js";
+import { requiredRehearsalCheckName } from "./rehearsal/checks.js";
 import {
   initializeResponseSchema,
   MCP_PROTOCOL_VERSION,
@@ -250,7 +251,7 @@ export async function diagnoseAuthenticatedDeployment(
 
   if (sessionResult.operation.status === "failed") {
     checks[activeCheckIndex] = failedCheck(
-      checks[activeCheckIndex]!.name,
+      requiredRehearsalCheckName(checks, activeCheckIndex),
       mcpEndpoint,
       sessionResult.operation.error,
     );

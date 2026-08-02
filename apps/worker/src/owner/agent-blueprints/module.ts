@@ -176,7 +176,7 @@ function validParameterValue(
   return false;
 }
 
-export function deniedAgentBlueprint(code: FailureCode) {
+export function deniedAgentBlueprint(code: FailureCode): ReturnType<typeof denied> {
   return denied(code);
 }
 

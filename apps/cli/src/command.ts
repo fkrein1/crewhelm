@@ -618,7 +618,8 @@ function rejectDuplicateFlags(arguments_: readonly string[]): void {
       continue;
     }
 
-    const flag = argument.split("=", 1)[0]!;
+    const separatorIndex = argument.indexOf("=");
+    const flag = separatorIndex === -1 ? argument : argument.slice(0, separatorIndex);
 
     if (seenFlags.has(flag)) {
       throw new CliUsageError("A flag was provided more than once.");

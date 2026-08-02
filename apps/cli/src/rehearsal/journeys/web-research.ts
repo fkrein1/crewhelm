@@ -33,6 +33,7 @@ import {
   type TemporaryOwnerMcpSession,
 } from "../../temporary-owner-session.js";
 import { CREWHELM_CLI_VERSION } from "../../version.js";
+import { requiredRehearsalCheckName } from "../checks.js";
 import { callRehearsalTool, normalizeRehearsalFailure, readRehearsalStatus } from "../mcp.js";
 
 const REQUIRED_TOOLS = [
@@ -535,7 +536,7 @@ export async function runWebResearchRehearsal(
         "The live Agent searched, fetched one exact source, and recorded both calls.",
       );
     } catch (error) {
-      checks[activeCheck] = failure(checks[activeCheck]!.name, error);
+      checks[activeCheck] = failure(requiredRehearsalCheckName(checks, activeCheck), error);
     } finally {
       await cleanup(session);
     }
@@ -545,7 +546,10 @@ export async function runWebResearchRehearsal(
     ? check("saved-owner-access", "valid", "Saved owner access refreshed and rotated.")
     : failure("saved-owner-access", sessionResult.authorization.error);
   if (sessionResult.operation.status === "failed") {
-    checks[activeCheck] = failure(checks[activeCheck]!.name, sessionResult.operation.error);
+    checks[activeCheck] = failure(
+      requiredRehearsalCheckName(checks, activeCheck),
+      sessionResult.operation.error,
+    );
   }
   checks[7] =
     sessionResult.revocation.status === "revoked"

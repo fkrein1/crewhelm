@@ -11,6 +11,11 @@ export const MCP_AGENT_WORKFLOWS_TOOL_NAME = "crewhelm_agent_workflows";
 
 export function registerWorkflowTools(server: McpServer, context: McpToolContext): void {
   const { authority, controlPlane } = context;
+  const cancelAgentWorkflow = controlPlane.cancelAgentWorkflow?.bind(controlPlane);
+  const deleteAgentWorkflow = controlPlane.deleteAgentWorkflow?.bind(controlPlane);
+  const inspectAgentWorkflow = controlPlane.inspectAgentWorkflow?.bind(controlPlane);
+  const listAgentWorkflows = controlPlane.listAgentWorkflows?.bind(controlPlane);
+  const startAgentWorkflow = controlPlane.startAgentWorkflow?.bind(controlPlane);
 
   server.registerTool(
     MCP_AGENT_WORKFLOWS_TOOL_NAME,
@@ -32,37 +37,37 @@ export function registerWorkflowTools(server: McpServer, context: McpToolContext
       switch (input.action) {
         case "start":
           return optionalControlPlaneToolResult(
-            controlPlane.startAgentWorkflow === undefined
+            startAgentWorkflow === undefined
               ? undefined
-              : () => controlPlane.startAgentWorkflow!(authority, request),
+              : () => startAgentWorkflow(authority, request),
             manageAgentWorkflowsResultSchema,
           );
         case "list":
           return optionalControlPlaneToolResult(
-            controlPlane.listAgentWorkflows === undefined
+            listAgentWorkflows === undefined
               ? undefined
-              : () => controlPlane.listAgentWorkflows!(authority, request),
+              : () => listAgentWorkflows(authority, request),
             manageAgentWorkflowsResultSchema,
           );
         case "inspect":
           return optionalControlPlaneToolResult(
-            controlPlane.inspectAgentWorkflow === undefined
+            inspectAgentWorkflow === undefined
               ? undefined
-              : () => controlPlane.inspectAgentWorkflow!(authority, request),
+              : () => inspectAgentWorkflow(authority, request),
             manageAgentWorkflowsResultSchema,
           );
         case "cancel":
           return optionalControlPlaneToolResult(
-            controlPlane.cancelAgentWorkflow === undefined
+            cancelAgentWorkflow === undefined
               ? undefined
-              : () => controlPlane.cancelAgentWorkflow!(authority, request),
+              : () => cancelAgentWorkflow(authority, request),
             manageAgentWorkflowsResultSchema,
           );
         case "delete":
           return optionalControlPlaneToolResult(
-            controlPlane.deleteAgentWorkflow === undefined
+            deleteAgentWorkflow === undefined
               ? undefined
-              : () => controlPlane.deleteAgentWorkflow!(authority, request),
+              : () => deleteAgentWorkflow(authority, request),
             manageAgentWorkflowsResultSchema,
           );
       }

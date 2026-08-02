@@ -39,6 +39,7 @@ import {
   type TemporaryOwnerSessionDependencies,
 } from "../../temporary-owner-session.js";
 import { CREWHELM_CLI_VERSION } from "../../version.js";
+import { requiredRehearsalCheckName } from "../checks.js";
 import { callRehearsalTool, normalizeRehearsalFailure, readRehearsalStatus } from "../mcp.js";
 
 const FULL_SCOPE = "crewhelm:full";
@@ -1631,7 +1632,11 @@ export async function runStandingIntegrationRehearsal(
           await wait(Math.min(POLL_INTERVAL_MS, Math.max(1, deadline - now())));
         }
       } catch (error) {
-        checks[activeCheckIndex] = failedCheck(checks[activeCheckIndex]!.name, mcpEndpoint, error);
+        checks[activeCheckIndex] = failedCheck(
+          requiredRehearsalCheckName(checks, activeCheckIndex),
+          mcpEndpoint,
+          error,
+        );
       } finally {
         if (triggerCleanupFailedWithAuthority) {
           await cleanupGrant(session);
@@ -1668,7 +1673,7 @@ export async function runStandingIntegrationRehearsal(
 
   if (sessionResult.operation.status === "failed") {
     checks[activeCheckIndex] = failedCheck(
-      checks[activeCheckIndex]!.name,
+      requiredRehearsalCheckName(checks, activeCheckIndex),
       mcpEndpoint,
       sessionResult.operation.error,
     );

@@ -1132,7 +1132,7 @@ export class RunAdmissions {
     );
   }
 
-  skillProvenance(admission: StoredRunAdmission) {
+  skillProvenance(admission: StoredRunAdmission): ReturnType<Skills["runtimeProvenance"]> {
     return (
       this.#skills.runtimeProvenance(admission.budgetReservation.runtimePlan.skillReferences) ?? []
     );

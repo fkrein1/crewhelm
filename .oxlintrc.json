@@ -14,8 +14,8 @@
     "typescript/consistent-type-imports": "error",
     "typescript/no-explicit-any": "error",
     "typescript/no-floating-promises": "error",
-    "typescript/no-misused-promises": "error",
     "typescript/no-confusing-void-expression": "error",
+    "typescript/no-misused-promises": "error",
     "typescript/no-redundant-type-constituents": "error",
     "typescript/no-unnecessary-type-assertion": "error",
     "typescript/only-throw-error": "error",
@@ -31,5 +31,15 @@
     "typescript/use-unknown-in-catch-callback-variable": "error",
     "unicorn/custom-error-definition": "error",
     "unicorn/error-message": "error"
-  }
+  },
+  "overrides": [
+    {
+      "files": ["apps/*/src/**/*.ts", "packages/*/src/**/*.ts"],
+      "excludeFiles": ["**/*.test.ts", "**/test-*.ts", "**/testkit.ts"],
+      "rules": {
+        "typescript/explicit-module-boundary-types": "error",
+        "typescript/no-non-null-assertion": "error"
+      }
+    }
+  ]
 }
