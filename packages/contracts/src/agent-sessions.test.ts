@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  agentConversationSchema,
   browseAgentSessionsInputSchema,
   continuationFromRunSession,
+  conversationFromRunSession,
   manageAgentSessionsInputSchema,
   sessionContinuationSchema,
 } from "./agent-sessions.js";
@@ -34,6 +36,14 @@ describe("Agent session contracts", () => {
       sessionId,
     });
     expect(continuationFromRunSession(undefined)).toBeUndefined();
+    expect(conversationFromRunSession({ branchId, branchRevision: 3, sessionId })).toEqual({
+      expectedRevision: 3,
+      id: sessionId,
+    });
+    expect(conversationFromRunSession(undefined)).toBeUndefined();
+    expect(agentConversationSchema.safeParse({ expectedRevision: 3, id: sessionId }).success).toBe(
+      true,
+    );
   });
 
   it("keeps read actions compact and deletion fields exact", () => {

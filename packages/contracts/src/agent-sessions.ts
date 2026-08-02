@@ -31,6 +31,13 @@ export const sessionContinuationSchema = z.strictObject({
   sessionId: sessionIdSchema,
 });
 
+export const agentConversationSchema = z.strictObject({
+  expectedRevision: branchRevisionSchema.describe(
+    "Exact conversation revision previously returned by Crewhelm.",
+  ),
+  id: sessionIdSchema.describe("Stable owner-private conversation identity."),
+});
+
 export const runSessionSchema = z.strictObject({
   branchId: branchIdSchema,
   branchRevision: branchRevisionSchema,
@@ -46,6 +53,17 @@ export function continuationFromRunSession(
         branchId: session.branchId,
         expectedBranchRevision: session.branchRevision,
         sessionId: session.sessionId,
+      });
+}
+
+export function conversationFromRunSession(
+  session: RunSession | undefined,
+): AgentConversation | undefined {
+  return session === undefined
+    ? undefined
+    : agentConversationSchema.parse({
+        expectedRevision: session.branchRevision,
+        id: session.sessionId,
       });
 }
 
@@ -199,6 +217,7 @@ export const listAgentSessionsResultSchema = z.discriminatedUnion("ok", [
 
 export const inspectAgentSessionResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
+    conversation: agentConversationSchema,
     continuation: sessionContinuationSchema.describe(
       "Pass this object unchanged to crewhelm_start_run.continuation when the session is idle.",
     ),
@@ -249,6 +268,7 @@ export const browseAgentSessionsResultSchema = z.union([
 
 export type DeleteAgentSessionResult = z.infer<typeof deleteAgentSessionResultSchema>;
 export type DeleteAgentSessionInput = z.infer<typeof deleteAgentSessionInputSchema>;
+export type AgentConversation = z.infer<typeof agentConversationSchema>;
 export type InspectAgentSessionInput = z.infer<typeof inspectAgentSessionInputSchema>;
 export type InspectAgentSessionResult = z.infer<typeof inspectAgentSessionResultSchema>;
 export type ListAgentSessionsInput = z.infer<typeof listAgentSessionsInputSchema>;

@@ -59,9 +59,13 @@ The MCP initialization response provides a compact operating model and identifie
 the first read. Status derives at most three advisory next steps from counts already in its bounded
 projection, including active durable Workflows. Guidance never grants authority or replaces
 validation, and clients may call exact tools directly. Primary operation results return
-input-shaped handoffs: a Run continuation can be passed unchanged into a manual follow-up, while a
-Workflow returns its stable ID and revision for compact list, exact inspection, cancellation, or
-terminal deletion.
+input-shaped handoffs: `crewhelm_start_run` returns a small owner-private conversation handle that
+can be passed unchanged with the next message, while a Workflow returns its stable ID and revision
+for compact list, exact inspection, cancellation, or terminal deletion. Each conversation message
+is still one bounded Run; the handle resolves server-side to the exact Session branch coordinates,
+so the simpler MCP journey does not weaken replay safety or concurrent-write detection. Exact
+conversation inspection recovers a lost handle. The lower-level continuation remains in results
+and inputs for compatibility with existing clients.
 
 Agent revisions answer how work is performed: Skills and integration grants are configured there.
 Brief revisions answer which owner-provided context is admitted to one Run or Workflow. The single

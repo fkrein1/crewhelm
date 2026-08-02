@@ -28,6 +28,11 @@ Each stage rechecks the frozen fleet revision inside Run admission before a perm
 Workflow-owned Session is not an ordinary continuation target: direct Runs and Session deletion
 cannot mutate it, and it is removed only through the Workflow deletion path.
 
+An owner-private conversation handle is a convenience coordinate, not authority. Continuing it
+requires both Run-write and Agent-read scope, resolves only inside the authenticated owner's Agent,
+and retains the exact Session branch revision check. A stale handle cannot overwrite, fork, or
+silently append to newer conversation state.
+
 Brief contents and Workflow deliverables are untrusted owner data, not authority. Owner-local
 SQLite stores only compact metadata, exact references, digests, and provenance; object content is
 read through a bounded Crewhelm adapter and verified before use. Run admission binds the ordered

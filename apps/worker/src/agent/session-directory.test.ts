@@ -191,18 +191,24 @@ describe("CrewAgent durable session directory", () => {
       run: { session: { branchRevision: 1 } },
     });
 
-    if (!first.ok || first.run.session === undefined || first.continuation === undefined) {
+    if (
+      !first.ok ||
+      first.run.session === undefined ||
+      first.continuation === undefined ||
+      first.conversation === undefined
+    ) {
       throw new Error("Expected first durable session run.");
     }
 
     await completedRun(controlPlane, authority, first.run.runId);
-    const continued = await controlPlane.startRun(authority, {
+    const continuationRequest = {
       agentId: created.agent.id,
-      continuation: first.continuation,
+      conversation: first.conversation,
       expectedRevision: created.agent.revision,
       idempotencyKey: "session-run-801-second",
       prompt: "What codename did I give you?",
-    });
+    };
+    const continued = await controlPlane.startRun(authority, continuationRequest);
 
     expect(continued).toMatchObject({
       ok: true,
@@ -219,6 +225,12 @@ describe("CrewAgent durable session directory", () => {
     }
 
     await completedRun(controlPlane, authority, continued.run.runId);
+    await expect(controlPlane.startRun(authority, continuationRequest)).resolves.toMatchObject({
+      conversation: continued.conversation,
+      created: false,
+      ok: true,
+      run: { runId: continued.run.runId },
+    });
     await expect(
       controlPlane.startRun(authority, {
         agentId: created.agent.id,

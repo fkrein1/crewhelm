@@ -162,9 +162,9 @@ export function registerRunTools(server: McpServer, context: McpToolContext): vo
         readOnlyHint: false,
       },
       description:
-        "Durably start one bounded turn for an exact Agent revision. Skills and integrations come from that Agent revision; attach owner context separately with exact {id, revision} Brief references. Omit outputContract for normal Markdown, or pass one bounded object-root JSON schema when software needs an exact typed deliverable. Omit continuation for a new conversation; to continue, pass a returned continuation unchanged. Retain run.runId for exact inspection.",
+        "Talk with one exact Crewhelm Agent through a durable owner-private conversation. Omit conversation and legacy continuation to start; pass the returned conversation unchanged for each follow-up. Each message starts one bounded Run using the Agent revision's Skills, integrations, policy, and limits. Attach exact Brief revisions for owner context, use outputContract only for a typed final answer, and retain run.runId for exact inspection.",
       inputSchema: startRunInputSchema,
-      title: "Start Crewhelm run",
+      title: "Talk with Crewhelm Agent",
     },
     async (input) =>
       controlPlaneToolResult(() => controlPlane.startRun(authority, input), startRunResultSchema),
