@@ -92,6 +92,7 @@ export class TestCrewAgent extends CrewAgent {
   #durableSessions = false;
   #completeBeforeNextCancellation = false;
   #delayNextAdmissionMs = 0;
+  #ignoreNextCancellation = false;
   #rejectNextCancellation = false;
   readonly #model = new MockLanguageModelV4({
     doGenerate: async (options) => {
@@ -246,6 +247,10 @@ export class TestCrewAgent extends CrewAgent {
     this.#rejectNextCancellation = true;
   }
 
+  ignoreNextCancellationForTest(): void {
+    this.#ignoreNextCancellation = true;
+  }
+
   completeBeforeNextCancellationForTest(): void {
     this.#completeBeforeNextCancellation = true;
   }
@@ -258,11 +263,16 @@ export class TestCrewAgent extends CrewAgent {
     this.#cancellationCount += 1;
     const request = cancelAdmittedRunInputSchema.safeParse(input);
 
-    if (!this.#completeBeforeNextCancellation || !request.success) {
+    if (
+      (!this.#completeBeforeNextCancellation && !this.#ignoreNextCancellation) ||
+      !request.success
+    ) {
       return super.cancelAdmittedRun(input);
     }
 
+    const completeBeforeCancellation = this.#completeBeforeNextCancellation;
     this.#completeBeforeNextCancellation = false;
+    this.#ignoreNextCancellation = false;
     const redeemed = await this.env.OWNER_CONTROL_PLANE.getByName(
       request.data.capability.ownerKey,
     ).redeemRunReceiverCapability(request.data.capability);
@@ -271,7 +281,12 @@ export class TestCrewAgent extends CrewAgent {
       return cancelAdmittedRunResultSchema.parse(redeemed);
     }
 
-    this.#completedBeforeCancellation.set(request.data.capability.runId, new Date().toISOString());
+    if (completeBeforeCancellation) {
+      this.#completedBeforeCancellation.set(
+        request.data.capability.runId,
+        new Date().toISOString(),
+      );
+    }
 
     return cancelAdmittedRunResultSchema.parse({
       cancelled: false,

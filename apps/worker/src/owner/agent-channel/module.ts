@@ -1424,7 +1424,7 @@ export class AgentChannel {
         }
 
         if (!["completed", "failed"].includes(inspected.run.status)) {
-          return deniedCancelRun("run_unavailable");
+          return this.#settleExpiredCancellationOrDeny(authority, admission);
         }
 
         if (!this.#admissions.releaseCancellation(authority, admission.runId)) {
