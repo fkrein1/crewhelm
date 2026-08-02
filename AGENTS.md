@@ -2,6 +2,9 @@
 
 For changes intended for commit, follow `.agents/skills/crewhelm-delivery/SKILL.md`.
 
+For public documentation changes or public behavior that requires documentation, also follow
+`.agents/skills/crewhelm-docs/SKILL.md`.
+
 Preserve unrelated changes, use the domain language in `CONTEXT.md`, and never weaken
 `docs/security/invariants.md`.
 

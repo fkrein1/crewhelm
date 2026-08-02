@@ -6,6 +6,13 @@
 
 <!-- Explain the important design decisions, affected capability owners, and rejected alternatives. -->
 
+## Documentation impact
+
+<!--
+List public behavior and documentation routes added, changed, redirected, or retired, including
+generated reference and discovery surfaces. If none, write "None" and explain why.
+-->
+
 ## Safety impact
 
 <!--

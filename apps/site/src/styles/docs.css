@@ -1,0 +1,157 @@
+@import "tailwindcss/theme.css" layer(theme);
+@import "@crewhelm/design/theme.css" layer(theme);
+
+:root,
+::backdrop {
+  --sl-color-white: var(--color-paper-50);
+  --sl-color-gray-1: var(--color-paper-100);
+  --sl-color-gray-2: var(--color-paper-300);
+  --sl-color-gray-3: var(--color-ink-400);
+  --sl-color-gray-4: var(--color-ink-600);
+  --sl-color-gray-5: var(--color-ink-700);
+  --sl-color-gray-6: var(--color-ink-900);
+  --sl-color-black: var(--color-ink-950);
+  --sl-color-bg-nav: var(--sl-color-black);
+  --sl-color-accent-low: var(--color-signal-950);
+  --sl-color-accent: var(--color-signal-400);
+  --sl-color-accent-high: var(--color-signal-100);
+  --sl-color-orange-low: var(--color-warning-950);
+  --sl-color-orange: var(--color-warning-400);
+  --sl-color-orange-high: var(--color-warning-100);
+  --sl-color-green-low: var(--color-success-950);
+  --sl-color-green: var(--color-success-400);
+  --sl-color-green-high: var(--color-success-100);
+  --sl-color-red-low: var(--color-danger-950);
+  --sl-color-red: var(--color-danger-400);
+  --sl-color-red-high: var(--color-danger-100);
+  --sl-font: var(--font-sans);
+  --sl-font-mono: var(--font-mono);
+  --sl-content-width: 48rem;
+  --sl-line-height: 1.7;
+  --sl-nav-height: 4rem;
+  --sl-sidebar-width: 19rem;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+:root[data-theme="light"],
+[data-theme="light"] ::backdrop {
+  color-scheme: light;
+  --sl-color-white: var(--color-ink-950);
+  --sl-color-gray-1: var(--color-ink-900);
+  --sl-color-gray-2: var(--color-ink-700);
+  --sl-color-gray-3: var(--color-ink-600);
+  --sl-color-gray-4: var(--color-paper-500);
+  --sl-color-gray-5: var(--color-paper-300);
+  --sl-color-gray-6: var(--color-paper-200);
+  --sl-color-gray-7: var(--color-paper-100);
+  --sl-color-black: var(--color-paper-50);
+  --sl-color-accent-high: var(--color-signal-800);
+  --sl-color-accent: var(--color-signal-600);
+  --sl-color-accent-low: var(--color-signal-100);
+  --sl-color-orange-high: var(--color-warning-800);
+  --sl-color-orange: var(--color-warning-600);
+  --sl-color-orange-low: var(--color-warning-100);
+  --sl-color-green-high: var(--color-success-800);
+  --sl-color-green: var(--color-success-600);
+  --sl-color-green-low: var(--color-success-100);
+  --sl-color-red-high: var(--color-danger-800);
+  --sl-color-red: var(--color-danger-600);
+  --sl-color-red-low: var(--color-danger-100);
+}
+
+body {
+  letter-spacing: -0.006em;
+}
+
+.site-title {
+  align-items: center;
+  color: var(--sl-color-white);
+  gap: 0.65rem;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+}
+
+.site-title img {
+  height: 1.25rem;
+  width: 1.25rem;
+  flex: 0 0 1.25rem;
+  object-position: center;
+}
+
+.header {
+  border-bottom-color: var(--sl-color-gray-5);
+}
+
+.social-icons::after {
+  display: none;
+}
+
+.social-icons a {
+  align-items: center;
+  color: var(--sl-color-white);
+  justify-content: center;
+  line-height: 1;
+}
+
+.social-icons svg {
+  display: block;
+}
+
+.sidebar-pane {
+  border-inline-end-color: var(--sl-color-gray-5);
+}
+
+.sidebar-content a[aria-current="page"] {
+  font-weight: 750;
+}
+
+.sidebar-content .top-level > li > details > summary,
+.sidebar-content .top-level > li > a {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.sl-markdown-content {
+  font-size: 1.03rem;
+}
+
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3 {
+  letter-spacing: -0.035em;
+}
+
+.sl-markdown-content h1 {
+  letter-spacing: -0.05em;
+}
+
+.sl-markdown-content :not(pre) > code {
+  border: 1px solid var(--sl-color-gray-5);
+}
+
+.sl-markdown-content blockquote {
+  border-inline-start-color: var(--sl-color-accent);
+  color: var(--sl-color-gray-2);
+  font-family: var(--font-serif);
+  font-size: 1.12rem;
+}
+
+.sl-markdown-content table {
+  font-size: 0.92rem;
+}
+
+@media (min-width: 72rem) {
+  :root {
+    --sl-content-pad-x: 2rem;
+  }
+}

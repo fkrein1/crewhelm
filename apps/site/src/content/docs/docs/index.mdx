@@ -1,0 +1,54 @@
+---
+title: Crewhelm documentation
+description: Install Crewhelm, connect an MCP client, and operate bounded Agents on infrastructure you own.
+type: explanation
+audience: owner
+area: overview
+availability: available
+sources:
+  - README.md
+  - CONTEXT.md
+  - docs/product/philosophy.md
+  - docs/architecture/system.md
+---
+
+Crewhelm is an owner-operated control plane for long-lived Agents on Cloudflare. You define how an
+Agent works, grant the minimum capabilities it needs, and run or automate bounded work through an
+authorized MCP client.
+
+The local CLI installs, upgrades, and diagnoses Crewhelm. MCP is the ongoing administration
+surface for Agents, Runs, Connections, Briefs, Workflows, Schedules, Event Triggers, approvals,
+and recovery.
+
+## Start here
+
+1. [Install Crewhelm](/docs/start/install/).
+2. [Connect an MCP client](/docs/start/connect-mcp/).
+3. [Create and run your first Agent](/docs/start/first-agent/).
+
+## Operate Crewhelm
+
+- [Run an Agent](/docs/guides/run-agent/) for one bounded turn or a continued owner-private
+  conversation.
+- [Use a Workflow](/docs/guides/workflows/) for a known sequence of two to eight ordered Runs.
+- [Add Briefs and Skills](/docs/guides/briefs-and-skills/) without confusing context with
+  authority.
+- [Connect an integration](/docs/guides/connections/) or a reviewed
+  [remote MCP server](/docs/guides/remote-mcp/).
+- Start work from [Schedules](/docs/guides/schedules/) or
+  [connected-app events](/docs/guides/event-triggers/).
+- [Diagnose and recover](/docs/guides/diagnose-and-recover/) when work stops or an external effect
+  is uncertain.
+
+## Understand the boundaries
+
+- [Operating model](/docs/concepts/operating-model/)
+- [Authority and custody](/docs/concepts/authority-and-custody/)
+- [Owner responsibilities](/docs/security/owner-responsibilities/)
+- [Access levels](/docs/reference/access-levels/)
+- [MCP tool reference](/docs/reference/mcp-tools/)
+- [Errors and recovery](/docs/reference/errors/)
+
+Crewhelm treats prompts, retrieved pages, provider responses, remote MCP metadata, and Agent output
+as untrusted data. They can inform work, but they cannot grant authority, approve actions, or
+change policy.
