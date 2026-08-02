@@ -54,7 +54,7 @@ import {
   recoverWorkflowRehearsal,
   runWorkflowRehearsal,
 } from "../apps/cli/src/rehearsal/journeys/workflow.js";
-import { readRehearsalStatus } from "../apps/cli/src/rehearsal/mcp.js";
+import { callRehearsalTool, readRehearsalStatus } from "../apps/cli/src/rehearsal/mcp.js";
 
 const DEFAULT_INSTALLATION = "crewhelm.testing.installation.json";
 const DEFAULT_CREDENTIAL = ".crewhelm-rehearsal-credential.json";
@@ -300,6 +300,100 @@ async function recover(options: {
     },
     { expectedDeploymentFingerprint: rehearsalTarget.expectedDeploymentFingerprint, fetch },
   );
+}
+
+async function recoverConversation(options: {
+  agentId: string;
+  credentialPath: string;
+  installationPath: string;
+  sessionId: string;
+  timeoutMs: number;
+}): Promise<unknown> {
+  const target = await resolveRehearsalTarget(options.installationPath);
+  const publicReport = await diagnoseDeployment(
+    { origin: target.origin, timeoutMs: options.timeoutMs },
+    { expectedDeploymentFingerprint: target.expectedDeploymentFingerprint, fetch },
+  );
+  if (!publicReport.ok || publicReport.deployment.alignment !== "aligned") {
+    return { ok: false, public: publicReport, schemaVersion: 1 };
+  }
+
+  const credential = await readRehearsalCredential(options.credentialPath);
+  const result = await runRefreshableOwnerSession(
+    {
+      credential,
+      origin: target.origin,
+      persistCredential: (rotated) => writeRehearsalCredential(options.credentialPath, rotated),
+      timeoutMs: options.timeoutMs,
+    },
+    { expectedDeploymentFingerprint: target.expectedDeploymentFingerprint, fetch },
+    async (session) => {
+      await session.call(
+        "initialize",
+        {
+          capabilities: {},
+          clientInfo: { name: "crewhelm-live-rehearsal", version: CREWHELM_CLI_VERSION },
+          protocolVersion: MCP_PROTOCOL_VERSION,
+        },
+        initializeResponseSchema,
+      );
+      const inspected = await callRehearsalTool(
+        session,
+        "crewhelm_agent_sessions",
+        { action: "inspect", agentId: options.agentId, sessionId: options.sessionId },
+        manageAgentSessionsResultSchema,
+        "Exact conversation recovery returned an invalid payload.",
+        { acceptErrorResult: true },
+      );
+      if (!inspected.ok) {
+        if (inspected.error.code === "session_not_found") {
+          return { alreadyDeleted: true, deleted: true };
+        }
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          "Exact conversation recovery inspection was denied.",
+        );
+      }
+      if (!("conversation" in inspected)) {
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          "Exact conversation recovery did not find the retained Session.",
+        );
+      }
+      const deleted = await callTool(
+        session,
+        "crewhelm_delete_agent_session",
+        {
+          agentId: options.agentId,
+          expectedBranchRevision: inspected.conversation.expectedRevision,
+          idempotencyKey: `conversation-recover-${options.sessionId.slice("session_".length)}`,
+          sessionId: options.sessionId,
+        },
+        manageAgentSessionsResultSchema,
+      );
+      if (!deleted.ok || !("deleted" in deleted) || !deleted.deleted) {
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          "Retained conversation Session deletion was not verified.",
+        );
+      }
+      return { deleted: true };
+    },
+  );
+
+  return {
+    agentId: options.agentId,
+    authorization: result.authorization,
+    ok:
+      result.authorization.ok &&
+      result.operation.status === "completed" &&
+      result.revocation.status === "revoked",
+    operation: result.operation,
+    public: publicReport,
+    revocation: result.revocation,
+    schemaVersion: 1,
+    sessionId: options.sessionId,
+  };
 }
 
 async function callTool<T>(
@@ -783,6 +877,7 @@ async function conversation(options: {
       }
       agentId = created.agent.id;
       let evidence: unknown;
+      let expectedConversationRevision: number | undefined;
       let operationFailure: unknown;
       let sessionDeleted = false;
 
@@ -834,6 +929,7 @@ async function conversation(options: {
           );
         }
         conversationId = first.conversation.id;
+        expectedConversationRevision = first.conversation.expectedRevision;
         firstRunId = first.run.runId;
         const firstReplay = await callTool<StartRunResult>(
           session,
@@ -907,6 +1003,7 @@ async function conversation(options: {
           );
         }
         secondRunId = second.run.runId;
+        expectedConversationRevision = second.conversation.expectedRevision;
         const secondInspection = await waitForRun(secondRunId);
         if (!secondInspection.run.output?.includes(marker)) {
           throw new TemporaryOwnerSessionError(
@@ -970,7 +1067,12 @@ async function conversation(options: {
         const deleted = await callTool(
           session,
           "crewhelm_delete_agent_session",
-          { agentId, sessionId: conversationId },
+          {
+            agentId,
+            expectedBranchRevision: expectedConversationRevision,
+            idempotencyKey: `conversation-delete-${suffix}`,
+            sessionId: conversationId,
+          },
           manageAgentSessionsResultSchema,
         );
         if (!deleted.ok || !("deleted" in deleted) || !deleted.deleted) {
@@ -1032,10 +1134,28 @@ async function conversation(options: {
             }
           }
 
+          const recovered = await callTool(
+            session,
+            "crewhelm_agent_sessions",
+            { action: "inspect", agentId, sessionId: conversationId },
+            manageAgentSessionsResultSchema,
+          );
+          if (!recovered.ok || !("conversation" in recovered)) {
+            throw new TemporaryOwnerSessionError(
+              "invalid_payload",
+              "Conversation cleanup could not recover the latest exact revision.",
+            );
+          }
+          expectedConversationRevision = recovered.conversation.expectedRevision;
           const deleted = await callTool(
             session,
             "crewhelm_delete_agent_session",
-            { agentId, sessionId: conversationId },
+            {
+              agentId,
+              expectedBranchRevision: expectedConversationRevision,
+              idempotencyKey: `conversation-delete-${suffix}`,
+              sessionId: conversationId,
+            },
             manageAgentSessionsResultSchema,
           );
           if (!deleted.ok && deleted.error.code !== "session_not_found") {
@@ -1417,6 +1537,7 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
     action !== "conversation" &&
     action !== "inspect-sandbox" &&
     action !== "recover" &&
+    action !== "recover-conversation" &&
     action !== "sandbox" &&
     action !== "schedules" &&
     action !== "typed-output" &&
@@ -1424,7 +1545,7 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
     action !== "workflow"
   ) {
     process.stderr.write(
-      "Usage: crewhelm-live-rehearsal.ts <authorize|conversation|inspect-sandbox|recover|sandbox|schedules|typed-output|web-research|workflow> [options]\n",
+      "Usage: crewhelm-live-rehearsal.ts <authorize|conversation|inspect-sandbox|recover|recover-conversation|sandbox|schedules|typed-output|web-research|workflow> [options]\n",
     );
     return 2;
   }
@@ -1437,6 +1558,7 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
       installation: { default: DEFAULT_INSTALLATION, type: "string" },
       "run-timeout-ms": { default: "240000", type: "string" },
       "run-id": { type: "string" },
+      "session-id": { type: "string" },
       "timeout-ms": { default: "5000", type: "string" },
       "workflow-id": { type: "string" },
     },
@@ -1476,39 +1598,53 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
                   throw new Error("inspect-sandbox requires run-id.");
                 })(),
             })
-          : action === "recover"
-            ? await recover({
+          : action === "recover-conversation"
+            ? await recoverConversation({
                 ...common,
                 agentId:
                   parsed.values["agent-id"] ??
                   (() => {
-                    throw new Error("recover requires agent-id.");
+                    throw new Error("recover-conversation requires agent-id.");
                   })(),
-                runTimeoutMs,
-                workflowId:
-                  parsed.values["workflow-id"] ??
+                sessionId:
+                  parsed.values["session-id"] ??
                   (() => {
-                    throw new Error("recover requires workflow-id.");
+                    throw new Error("recover-conversation requires session-id.");
                   })(),
               })
-            : action === "sandbox"
-              ? await sandbox({
+            : action === "recover"
+              ? await recover({
                   ...common,
+                  agentId:
+                    parsed.values["agent-id"] ??
+                    (() => {
+                      throw new Error("recover requires agent-id.");
+                    })(),
                   runTimeoutMs,
+                  workflowId:
+                    parsed.values["workflow-id"] ??
+                    (() => {
+                      throw new Error("recover requires workflow-id.");
+                    })(),
                 })
-              : action === "schedules"
-                ? await schedules(common)
-                : action === "typed-output"
-                  ? await typedOutput({ ...common, runTimeoutMs })
-                  : action === "web-research"
-                    ? await webResearch({
-                        ...common,
-                        runTimeoutMs,
-                      })
-                    : await workflow({
-                        ...common,
-                        runTimeoutMs,
-                      });
+              : action === "sandbox"
+                ? await sandbox({
+                    ...common,
+                    runTimeoutMs,
+                  })
+                : action === "schedules"
+                  ? await schedules(common)
+                  : action === "typed-output"
+                    ? await typedOutput({ ...common, runTimeoutMs })
+                    : action === "web-research"
+                      ? await webResearch({
+                          ...common,
+                          runTimeoutMs,
+                        })
+                      : await workflow({
+                          ...common,
+                          runTimeoutMs,
+                        });
   process.stdout.write(`${JSON.stringify(report)}\n`);
   return typeof report === "object" && report !== null && Reflect.get(report, "ok") === true
     ? 0
