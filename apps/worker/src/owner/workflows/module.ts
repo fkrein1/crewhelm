@@ -39,6 +39,7 @@ import {
   type OwnerAuthority,
   type StartAgentWorkflowInput,
   type StartAgentWorkflowResult,
+  type StartRunResult,
   type AdmittedBriefContext,
   type AdmittedOutputContract,
   type OutputContract,
@@ -65,6 +66,7 @@ import {
 
 type Database = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type FailureCode = Extract<StartAgentWorkflowResult, { ok: false }>["error"]["code"];
+type RunStartFailureCode = Extract<StartRunResult, { ok: false }>["error"]["code"];
 type StoredWorkflow = typeof agentWorkflows.$inferSelect;
 type StoredStage = typeof agentWorkflowStages.$inferSelect;
 type StoredFailureCode = NonNullable<StoredWorkflow["failureCode"]>;
@@ -127,8 +129,39 @@ function workflowDeliverableIntentKey(id: string): string {
   return `${WORKFLOW_DELIVERABLE_INTENT_PREFIX}${id}`;
 }
 
-function denied(code: FailureCode): Extract<StartAgentWorkflowResult, { ok: false }> {
-  return { error: { code, message: "Agent workflow request denied." }, ok: false };
+function denied<const Code extends FailureCode>(code: Code) {
+  return { error: { code, message: "Agent workflow request denied." }, ok: false } as const;
+}
+
+export function agentWorkflowFailureFromRunStart(code: RunStartFailureCode): FailureCode {
+  switch (code) {
+    case "branch_revision_conflict":
+      return "revision_conflict";
+    case "session_busy":
+      return "workflow_busy";
+    case "run_unavailable":
+    case "session_not_found":
+      return "workflow_unavailable";
+    case "agent_not_found":
+    case "agent_unavailable":
+    case "admission_limit_exceeded":
+    case "budget_exhausted":
+    case "brief_context_too_large":
+    case "brief_unavailable":
+    case "capability_unavailable":
+    case "idempotency_conflict":
+    case "incompatible_schema":
+    case "insufficient_scope":
+    case "invalid_authority":
+    case "invalid_request":
+    case "model_unavailable":
+    case "owner_mismatch":
+    case "revision_conflict":
+      return code;
+  }
+
+  code satisfies never;
+  throw new Error("Invariant violated: unsupported Run start failure.");
 }
 
 function admittedStagePrompt(
@@ -182,12 +215,55 @@ function outputContractSummary(contract: AdmittedOutputContract | null) {
     : { kind: "markdown" as const };
 }
 
-function failureNextAction(code: StoredFailureCode) {
-  if (code === "run_failed") return "inspect_run" as const;
-  if (code === "agent_unavailable" || code === "revision_conflict") {
-    return "review_agent" as const;
+function failureNextAction(
+  code: StoredFailureCode,
+): "inspect_run" | "inspect_workflow" | "review_agent" {
+  switch (code) {
+    case "run_failed":
+      return "inspect_run";
+    case "agent_unavailable":
+    case "revision_conflict":
+      return "review_agent";
+    case "brief_unavailable":
+    case "budget_exhausted":
+    case "capability_unavailable":
+    case "coordinator_failed":
+    case "model_unavailable":
+    case "workflow_unavailable":
+      return "inspect_workflow";
   }
-  return "inspect_workflow" as const;
+
+  code satisfies never;
+  throw new Error("Invariant violated: unsupported stored Workflow failure.");
+}
+
+function storedWorkflowFailureCode(code: FailureCode): StoredFailureCode {
+  switch (code) {
+    case "agent_unavailable":
+    case "brief_unavailable":
+    case "budget_exhausted":
+    case "capability_unavailable":
+    case "model_unavailable":
+    case "revision_conflict":
+    case "workflow_unavailable":
+      return code;
+    case "admission_limit_exceeded":
+    case "agent_not_found":
+    case "brief_context_too_large":
+    case "idempotency_conflict":
+    case "incompatible_schema":
+    case "insufficient_scope":
+    case "invalid_authority":
+    case "invalid_request":
+    case "owner_mismatch":
+    case "workflow_busy":
+    case "workflow_deleted":
+    case "workflow_not_found":
+      return "workflow_unavailable";
+  }
+
+  code satisfies never;
+  throw new Error("Invariant violated: unsupported Workflow failure.");
 }
 
 function isTerminalWorkflowStatus(
@@ -469,10 +545,7 @@ export class AgentWorkflows {
   list(input: unknown): ListAgentWorkflowsResult {
     const request = listAgentWorkflowsInputSchema.safeParse(input);
     if (!request.success) {
-      return {
-        error: { code: "invalid_request", message: "Agent workflow request denied." },
-        ok: false,
-      };
+      return denied("invalid_request");
     }
 
     if (
@@ -483,10 +556,7 @@ export class AgentWorkflows {
         .where(eq(agents.agentId, request.data.agentId))
         .get() === undefined
     ) {
-      return {
-        error: { code: "agent_not_found", message: "Agent workflow request denied." },
-        ok: false,
-      };
+      return denied("agent_not_found");
     }
 
     const filters = [
@@ -521,10 +591,7 @@ export class AgentWorkflows {
   async inspect(input: unknown): Promise<InspectAgentWorkflowResult> {
     const request = inspectAgentWorkflowInputSchema.safeParse(input);
     if (!request.success) {
-      return {
-        error: { code: "invalid_request", message: "Agent workflow request denied." },
-        ok: false,
-      };
+      return denied("invalid_request");
     }
 
     const row = this.#database
@@ -533,10 +600,7 @@ export class AgentWorkflows {
       .where(eq(agentWorkflows.workflowId, request.data.workflowId))
       .get();
     if (row === undefined) {
-      return {
-        error: { code: "workflow_not_found", message: "Agent workflow request denied." },
-        ok: false,
-      };
+      return denied("workflow_not_found");
     }
 
     const stages = this.#stages(row.workflowId);
@@ -554,19 +618,13 @@ export class AgentWorkflows {
       );
 
       if (content === null) {
-        return {
-          error: { code: "workflow_unavailable", message: "Agent workflow request denied." },
-          ok: false,
-        };
+        return denied("workflow_unavailable");
       }
 
       if (row.deliverable.mediaType === "application/json") {
         const parsed = parseJsonText(content);
         if (parsed === undefined) {
-          return {
-            error: { code: "workflow_unavailable", message: "Agent workflow request denied." },
-            ok: false,
-          };
+          return denied("workflow_unavailable");
         }
         deliverableContent = parsed;
       } else {
@@ -765,14 +823,7 @@ export class AgentWorkflows {
         return this.dispatch(request.data);
       }
 
-      const code: FailureCode =
-        started.error.code === "branch_revision_conflict"
-          ? "revision_conflict"
-          : started.error.code === "session_busy"
-            ? "workflow_busy"
-            : started.error.code === "run_unavailable" || started.error.code === "session_not_found"
-              ? "workflow_unavailable"
-              : started.error.code;
+      const code = agentWorkflowFailureFromRunStart(started.error.code);
       if (code !== "workflow_unavailable" && code !== "workflow_busy") {
         this.#failBeforeDispatch(row, stage, code);
         await this.#scheduleRecovery(Math.max(row.cleanupAt, Date.now()));
@@ -1902,17 +1953,9 @@ export class AgentWorkflows {
     await this.#scheduleRecovery(Date.now() + RECOVERY_DELAY_MS);
   }
 
-  #failBeforeDispatch(row: StoredWorkflow, stage: StoredStage, code: string): void {
+  #failBeforeDispatch(row: StoredWorkflow, stage: StoredStage, code: FailureCode): void {
     const completedAt = Date.now();
-    const failureCode: StoredFailureCode =
-      code === "agent_unavailable" ||
-      code === "brief_unavailable" ||
-      code === "budget_exhausted" ||
-      code === "capability_unavailable" ||
-      code === "model_unavailable" ||
-      code === "revision_conflict"
-        ? code
-        : "workflow_unavailable";
+    const failureCode = storedWorkflowFailureCode(code);
     this.#database.transaction((transaction) => {
       const current = transaction
         .select()
