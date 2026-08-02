@@ -1,5 +1,8 @@
 import {
   agentCapabilityConfigurationSchema,
+  AI_GATEWAY_AGENT_MODELS,
+  CLOUDFLARE_AI_AGENT_MODELS,
+  DEFAULT_AI_GATEWAY_AGENT_MODEL,
   WORKERS_AI_AGENT_MODELS,
   WORKERS_AI_CAPABILITY_ID,
   WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
@@ -7,6 +10,7 @@ import {
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
+import { AI_GATEWAY_PREREQUISITE } from "./ai-gateway.js";
 import type { AgentCapabilityModule } from "./kernel.js";
 import {
   inferenceConfigurationFields,
@@ -26,10 +30,11 @@ const WORKERS_AI_REASONING_MODELS = new Set([
   "@cf/qwen/qwen3-30b-a3b-fp8",
   "@cf/zai-org/glm-4.7-flash",
   "@cf/zai-org/glm-5.2",
+  "openai/gpt-5.6-luna",
 ]);
 
 export const workersAiCapabilityConfigurationSchema = inferenceProfileConfigurationSchema(
-  WORKERS_AI_AGENT_MODELS,
+  CLOUDFLARE_AI_AGENT_MODELS,
   WORKERS_AI_REASONING_MODELS,
 );
 
@@ -56,24 +61,38 @@ export const workersAiCapabilityModule: AgentCapabilityModule<
   z.infer<typeof workersAiCapabilityConfigurationSchema>
 > = {
   configurationSchema: workersAiCapabilityConfigurationSchema,
-  defaultConfiguration: (fleetConfiguration) => {
-    const model = z.enum(WORKERS_AI_AGENT_MODELS).safeParse(fleetConfiguration.models.default);
+  defaultConfiguration: (context) => {
+    const gatewayModel = z
+      .enum(AI_GATEWAY_AGENT_MODELS)
+      .safeParse(context.fleetConfiguration.models.default);
+
+    if (
+      gatewayModel.success &&
+      (gatewayModel.data !== DEFAULT_AI_GATEWAY_AGENT_MODEL ||
+        context.availablePrerequisites.has(AI_GATEWAY_PREREQUISITE))
+    ) {
+      return undefined;
+    }
+
+    const model = z
+      .enum(CLOUDFLARE_AI_AGENT_MODELS)
+      .safeParse(context.fleetConfiguration.models.default);
     return model.success ? workersAiCapabilityConfiguration(model.data) : undefined;
   },
   descriptor: {
-    configurationFields: inferenceConfigurationFields(WORKERS_AI_AGENT_MODELS),
+    configurationFields: inferenceConfigurationFields(CLOUDFLARE_AI_AGENT_MODELS),
     description:
-      "Selects an ordered Workers AI inference profile for Agent reasoning and tool orchestration.",
+      "Selects an ordered direct Cloudflare AI profile for Agent reasoning and tool orchestration.",
     id: WORKERS_AI_CAPABILITY_ID,
     prerequisites: [
       {
-        description: "Cloudflare Workers AI binding used for admitted model calls.",
+        description: "Cloudflare AI binding used for admitted model calls.",
         id: WORKERS_AI_BINDING_PREREQUISITE,
         kind: "binding",
       },
     ],
     schemaVersion: WORKERS_AI_CAPABILITY_SCHEMA_VERSION,
-    title: "Workers AI inference",
+    title: "Direct Cloudflare AI inference",
     trust: {
       configuration: "untrusted-until-validated",
       runtimeContribution: "module-validated",

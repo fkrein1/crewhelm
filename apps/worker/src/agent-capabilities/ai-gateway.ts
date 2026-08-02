@@ -3,6 +3,7 @@ import {
   AI_GATEWAY_AGENT_MODELS,
   AI_GATEWAY_CAPABILITY_ID,
   AI_GATEWAY_CAPABILITY_SCHEMA_VERSION,
+  DEFAULT_AI_GATEWAY_AGENT_MODEL,
   type AgentCapabilityConfiguration,
 } from "@crewhelm/contracts";
 import * as z from "zod";
@@ -48,8 +49,19 @@ export const aiGatewayCapabilityModule: AgentCapabilityModule<
   z.infer<typeof aiGatewayCapabilityConfigurationSchema>
 > = {
   configurationSchema: aiGatewayCapabilityConfigurationSchema,
-  defaultConfiguration: (fleetConfiguration) => {
-    const model = z.enum(AI_GATEWAY_AGENT_MODELS).safeParse(fleetConfiguration.models.default);
+  defaultConfiguration: (context) => {
+    const model = z
+      .enum(AI_GATEWAY_AGENT_MODELS)
+      .safeParse(context.fleetConfiguration.models.default);
+
+    if (
+      model.success &&
+      model.data === DEFAULT_AI_GATEWAY_AGENT_MODEL &&
+      !context.availablePrerequisites.has(AI_GATEWAY_PREREQUISITE)
+    ) {
+      return undefined;
+    }
+
     return model.success ? aiGatewayCapabilityConfiguration(model.data) : undefined;
   },
   descriptor: {

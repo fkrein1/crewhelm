@@ -7,6 +7,7 @@ import {
   DEFAULT_FLEET_MAXIMUM_TOOL_CONCURRENCY_PER_GRANT,
   DEFAULT_FLEET_MINIMUM_SCHEDULE_INTERVAL_SECONDS,
   DEFAULT_AI_GATEWAY_AGENT_MODEL,
+  DEFAULT_RUNNABLE_AGENT_MODEL,
   RUNNABLE_AGENT_MODELS,
   defaultFleetCapacity,
   defaultFleetExecutionLimits,
@@ -95,16 +96,82 @@ function contextModule(id = "context.test"): AgentCapabilityModule<{ text: strin
 }
 
 describe("Agent capability registry", () => {
-  it("defaults budgeted Gateway installations to Luna and keeps the Workers AI fallback", () => {
+  it("routes the new Luna fleet default through Gateway or direct Cloudflare AI", () => {
     expect(
       defaultAgentModelForPrerequisites(availableAgentCapabilityPrerequisites("crewhelm")),
     ).toBe(DEFAULT_AI_GATEWAY_AGENT_MODEL);
     expect(defaultAgentModelForPrerequisites(availableAgentCapabilityPrerequisites())).toBe(
-      "@cf/zai-org/glm-4.7-flash",
+      DEFAULT_RUNNABLE_AGENT_MODEL,
     );
     expect(defaultAgentModelForPrerequisites(availableAgentCapabilityPrerequisites("   "))).toBe(
-      "@cf/zai-org/glm-4.7-flash",
+      DEFAULT_RUNNABLE_AGENT_MODEL,
     );
+
+    const registry = new AgentCapabilityRegistry([
+      aiGatewayCapabilityModule,
+      workersAiCapabilityModule,
+    ]);
+    const lunaFleetConfiguration = fleetConfigurationDataSchema.parse({
+      ...fleetConfiguration,
+      models: {
+        ...fleetConfiguration.models,
+        default: DEFAULT_RUNNABLE_AGENT_MODEL,
+      },
+    });
+
+    expect(
+      registry.compile(undefined, {
+        availablePrerequisites: availableAgentCapabilityPrerequisites("crewhelm"),
+        checkPrerequisites: true,
+        fleetConfiguration: lunaFleetConfiguration,
+      }),
+    ).toMatchObject({
+      ok: true,
+      runtimePlan: {
+        inference: {
+          model: DEFAULT_AI_GATEWAY_AGENT_MODEL,
+          moduleId: "inference.ai-gateway",
+        },
+      },
+    });
+    expect(
+      registry.compile(undefined, {
+        availablePrerequisites: availableAgentCapabilityPrerequisites(),
+        checkPrerequisites: true,
+        fleetConfiguration: lunaFleetConfiguration,
+      }),
+    ).toMatchObject({
+      ok: true,
+      runtimePlan: {
+        inference: {
+          model: DEFAULT_RUNNABLE_AGENT_MODEL,
+          moduleId: "inference.workers-ai",
+        },
+      },
+    });
+
+    const unavailableGatewayFleetConfiguration = fleetConfigurationDataSchema.parse({
+      ...fleetConfiguration,
+      models: {
+        ...fleetConfiguration.models,
+        default: "openai/gpt-5.6-sol",
+      },
+    });
+    expect(
+      registry.compile(undefined, {
+        availablePrerequisites: availableAgentCapabilityPrerequisites(),
+        checkPrerequisites: false,
+        fleetConfiguration: unavailableGatewayFleetConfiguration,
+      }),
+    ).toMatchObject({
+      ok: true,
+      runtimePlan: {
+        inference: {
+          model: "openai/gpt-5.6-sol",
+          moduleId: "inference.ai-gateway",
+        },
+      },
+    });
   });
 
   it("compiles an AI Gateway profile with bounded fallbacks and sampling controls", () => {

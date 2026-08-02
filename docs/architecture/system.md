@@ -46,6 +46,7 @@ through the Agent object during migration.
 | `CrewSession`        | One conversation's Think transcript, submissions, output, deadlines, and approval waits                                                                                               |
 | Sandbox container    | One runtime-tool call's ephemeral process and filesystem; never owner authority or credentials; its backing Durable Object is purged after teardown                                   |
 | Search/fetch adapter | Bounded public evidence reads; provider credentials stay in the Worker and exact source handles expire with their Run                                                                 |
+| Cloudflare AI        | Direct model execution through the Workers AI binding when no dedicated Gateway is configured                                                                                         |
 | AI Gateway           | Optional installation-wide hard spend ceiling and model-call cost metadata                                                                                                            |
 | Composio             | Connected-account credentials and refresh                                                                                                                                             |
 | Remote MCP server    | Untrusted tool catalog and tool results; Crewhelm retains encrypted bearer or OAuth credentials                                                                                       |
