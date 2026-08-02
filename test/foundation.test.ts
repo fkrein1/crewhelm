@@ -1053,10 +1053,6 @@ describe("repository foundation", () => {
     expect(checksJob["steps"]).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          env: {
-            CONTROL_FLOW_BASE_REF:
-              "${{ github.event.pull_request.base.sha || github.event.before }}",
-          },
           name: "Check control-flow migration",
           run: "pnpm control-flow:check",
         }),

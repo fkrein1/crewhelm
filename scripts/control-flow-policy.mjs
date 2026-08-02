@@ -5,14 +5,27 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const policyUrl = new URL("./control-flow-policy.json", import.meta.url);
+const productionSourceRoots = [
+  "apps/cli/src",
+  "apps/worker/control-plane-migrations",
+  "apps/worker/src",
+  "packages/composio/src",
+  "packages/contracts/src",
+];
+const excludedFileSuffixes = [".d.ts", ".test-double.ts", ".test.ts"];
+const excludedFiles = new Set([
+  "apps/worker/src/agent/admitted-runs/test-agent.ts",
+  "apps/worker/src/oauth/testkit.ts",
+  "apps/worker/src/owner/testkit.ts",
+  "apps/worker/src/worker-test-entry.ts",
+]);
 
 /**
  * @typedef {object} ControlFlowUnit
  * @property {string} id
- * @property {string} status
  * @property {string[]} [files]
  * @property {string[]} [pathPrefixes]
- * @property {{definitionVersion: number, testFiles: string[]}} [evidence]
+ * @property {{definitionVersion: number, testFiles: string[]}} evidence
  */
 
 /**
@@ -20,10 +33,6 @@ const policyUrl = new URL("./control-flow-policy.json", import.meta.url);
  * @property {number} schemaVersion
  * @property {number} definitionVersion
  * @property {string[]} definitionOfMigrated
- * @property {string[]} sourceRoots
- * @property {string[]} excludedFiles
- * @property {string[]} excludedFileSuffixes
- * @property {{migratedFiles: number, migratedUnits: number, totalFiles: number, totalUnits: number}} recordedProgress
  * @property {ControlFlowUnit[]} units
  */
 
@@ -31,7 +40,7 @@ const policyUrl = new URL("./control-flow-policy.json", import.meta.url);
  * @typedef {object} ControlFlowPolicyResult
  * @property {string[]} errors
  * @property {Map<string, string[]>} filesByUnit
- * @property {{migratedFiles: number, migratedFilePercentage: number, migratedUnits: number, migratedUnitPercentage: number, totalFiles: number, totalUnits: number}} summary
+ * @property {{classifiedFiles: number, classifiedPercentage: number, compliantUnits: number, compliantUnitPercentage: number, totalFiles: number, totalUnits: number}} summary
  */
 
 /** @param {string} path */
@@ -59,9 +68,7 @@ function duplicates(values) {
   const repeated = new Set();
 
   for (const value of values) {
-    if (seen.has(value)) {
-      repeated.add(value);
-    }
+    if (seen.has(value)) repeated.add(value);
     seen.add(value);
   }
 
@@ -114,88 +121,45 @@ function readNumber(value, name) {
 }
 
 /**
- * @param {string[]} errors
- * @param {string} label
- * @param {number} actual
- * @param {number} recorded
+ * @param {string} value
+ * @param {{directory: boolean}} options
  */
-function verifyRecordedProgress(errors, label, actual, recorded) {
-  if (actual !== recorded) {
-    errors.push(`${label} changed: policy records ${recorded}, repository has ${actual}.`);
-  }
+function isRepositoryPath(value, options) {
+  const path = options.directory && value.endsWith("/") ? value.slice(0, -1) : value;
+  return (
+    path.length > 0 &&
+    !path.startsWith("/") &&
+    !path.includes("\\") &&
+    path.split("/").every((part) => part.length > 0 && part !== "." && part !== "..") &&
+    (!options.directory || value.endsWith("/")) &&
+    (options.directory || path.endsWith(".ts"))
+  );
 }
 
 /**
- * Compare completed unit identities with the base branch so progress cannot be rewritten downward.
- *
- * @param {ControlFlowPolicy} policy
- * @param {ControlFlowPolicy} basePolicy
- * @param {string[]} files
- * @param {string[]} baseFiles
- * @param {Set<string>} [existingFiles]
- * @returns {string[]}
+ * @param {unknown} value
+ * @param {string} name
+ * @param {{directory: boolean}} options
  */
-export function compareControlFlowProgress(
-  policy,
-  basePolicy,
-  files,
-  baseFiles,
-  existingFiles = new Set(files),
-) {
-  const errors = [];
-  const currentFiles = new Set(files);
-  const baseResult = evaluateControlFlowPolicy(basePolicy, baseFiles);
+function readRepositoryPaths(value, name, options) {
+  const paths = readStringArray(value, name);
 
-  if (policy.definitionVersion < basePolicy.definitionVersion) {
-    errors.push("Migration definition version decreased.");
+  if (paths.length === 0 || !paths.every((path) => isRepositoryPath(path, options))) {
+    throw new TypeError(`${name} must contain repository-relative paths.`);
   }
 
-  if (
-    JSON.stringify(policy.definitionOfMigrated) !==
-      JSON.stringify(basePolicy.definitionOfMigrated) &&
-    policy.definitionVersion <= basePolicy.definitionVersion
-  ) {
-    errors.push("Migration definition changed without increasing its version.");
-  }
-
-  for (const baseUnit of basePolicy.units) {
-    if (baseUnit.status !== "migrated") {
-      continue;
-    }
-
-    for (const file of baseResult.filesByUnit.get(baseUnit.id) ?? []) {
-      if (!existingFiles.has(file)) {
-        continue;
-      }
-
-      const matchingUnits = policy.units.filter((unit) => matchesUnit(file, unit));
-      if (
-        !currentFiles.has(file) ||
-        matchingUnits.length !== 1 ||
-        matchingUnits[0]?.status !== "migrated"
-      ) {
-        errors.push(`Previously migrated file is no longer migrated: ${file}.`);
-      }
-    }
-  }
-
-  return errors;
+  return paths;
 }
 
 /**
- * Discover production TypeScript files covered by the migration policy.
+ * Discover production TypeScript files covered by the permanent policy.
  *
- * @param {object} policy
- * @param {string[]} policy.sourceRoots
- * @param {string[]} policy.excludedFiles
- * @param {string[]} policy.excludedFileSuffixes
  * @param {string} [root]
  * @returns {string[]}
  */
-export function discoverControlFlowFiles(policy, root = repositoryRoot) {
+export function discoverControlFlowFiles(root = repositoryRoot) {
   /** @type {string[]} */
   const discovered = [];
-  const excludedFiles = new Set(policy.excludedFiles);
 
   /** @param {string} directory */
   function visit(directory) {
@@ -212,50 +176,20 @@ export function discoverControlFlowFiles(policy, root = repositoryRoot) {
         entry.isFile() &&
         repositoryPath.endsWith(".ts") &&
         !excludedFiles.has(repositoryPath) &&
-        !policy.excludedFileSuffixes.some((suffix) => repositoryPath.endsWith(suffix))
+        !excludedFileSuffixes.some((suffix) => repositoryPath.endsWith(suffix))
       ) {
         discovered.push(repositoryPath);
       }
     }
   }
 
-  for (const sourceRoot of policy.sourceRoots) {
-    visit(resolve(root, sourceRoot));
-  }
-
+  for (const sourceRoot of productionSourceRoots) visit(resolve(root, sourceRoot));
   return discovered.toSorted((left, right) => left.localeCompare(right));
 }
 
 /**
- * @param {ControlFlowPolicy} policy
- * @param {string} reference
- * @returns {string[]}
- */
-function discoverControlFlowFilesAtReference(policy, reference) {
-  const tree = spawnSync(
-    "git",
-    ["ls-tree", "-r", "--name-only", reference, "--", ...policy.sourceRoots],
-    { cwd: repositoryRoot, encoding: "utf8" },
-  );
-
-  if (tree.status !== 0) {
-    throw new Error(`Could not inventory control-flow files at ${reference}.`);
-  }
-
-  const excludedFiles = new Set(policy.excludedFiles);
-  return tree.stdout
-    .split("\n")
-    .filter(
-      (file) =>
-        file.endsWith(".ts") &&
-        !excludedFiles.has(file) &&
-        !policy.excludedFileSuffixes.some((suffix) => file.endsWith(suffix)),
-    )
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-/**
- * Evaluate classification completeness and recorded migration progress.
+ * Require every production file to belong to exactly one unit and every unit to carry current
+ * test evidence. There is no legacy state after migration: any regression fails directly.
  *
  * @param {ControlFlowPolicy} policy
  * @param {string[]} files
@@ -264,44 +198,54 @@ export function evaluateControlFlowPolicy(policy, files) {
   const errors = [];
   const unitIds = policy.units.map((unit) => unit.id);
 
-  if (policy.schemaVersion !== 1) {
+  if (policy.schemaVersion !== 2) {
     errors.push(`Unsupported policy schema version: ${policy.schemaVersion}.`);
   }
-
+  if (policy.units.length === 0) {
+    errors.push("Control-flow policy has no capability units.");
+  }
+  if (files.length === 0) {
+    errors.push("Control-flow policy discovered no production files.");
+  }
+  if (
+    policy.definitionOfMigrated.length === 0 ||
+    policy.definitionOfMigrated.some((definition) => definition.trim().length === 0)
+  ) {
+    errors.push("Control-flow policy has no migration definition.");
+  }
   for (const id of duplicates(unitIds)) {
     errors.push(`Capability unit id is duplicated: ${id}.`);
   }
 
   /** @type {Map<string, string[]>} */
   const filesByUnit = new Map(policy.units.map((unit) => [unit.id, []]));
+  let compliantUnits = 0;
 
   for (const unit of policy.units) {
-    if (unit.status !== "legacy" && unit.status !== "migrated") {
-      errors.push(`Capability unit ${unit.id} has invalid status: ${unit.status}.`);
-    }
-
-    if (unit.status === "migrated") {
-      if (!unit.evidence) {
-        errors.push(`Migrated capability unit lacks evidence: ${unit.id}.`);
-      } else {
-        if (unit.evidence.definitionVersion !== policy.definitionVersion) {
-          errors.push(`Migrated capability unit uses stale criteria: ${unit.id}.`);
-        }
-        if (unit.evidence.testFiles.length === 0) {
-          errors.push(`Migrated capability unit has no evidence tests: ${unit.id}.`);
-        }
-      }
-    }
-
     const selectors = [...(unit.files ?? []), ...(unit.pathPrefixes ?? [])];
+    let compliant = true;
+
     if (selectors.length === 0) {
       errors.push(`Capability unit ${unit.id} has no file selectors.`);
+      compliant = false;
     }
-
     for (const selector of duplicates(selectors)) {
       errors.push(`Capability unit ${unit.id} repeats selector: ${selector}.`);
+      compliant = false;
     }
+    if (unit.evidence.definitionVersion !== policy.definitionVersion) {
+      errors.push(`Capability unit uses stale criteria: ${unit.id}.`);
+      compliant = false;
+    }
+    if (unit.evidence.testFiles.length === 0) {
+      errors.push(`Capability unit has no evidence tests: ${unit.id}.`);
+      compliant = false;
+    }
+
+    if (compliant) compliantUnits += 1;
   }
+
+  let classifiedFiles = 0;
 
   for (const file of files) {
     const matchingUnits = policy.units.filter((unit) => matchesUnit(file, unit));
@@ -310,7 +254,6 @@ export function evaluateControlFlowPolicy(policy, files) {
       errors.push(`Production file is not assigned to a capability unit: ${file}.`);
       continue;
     }
-
     if (matchingUnits.length > 1) {
       errors.push(
         `Production file belongs to multiple capability units (${matchingUnits
@@ -320,10 +263,9 @@ export function evaluateControlFlowPolicy(policy, files) {
       continue;
     }
 
-    const [matchingUnit] = matchingUnits;
-    if (matchingUnit) {
-      filesByUnit.get(matchingUnit.id)?.push(file);
-    }
+    const unit = matchingUnits[0];
+    if (unit) filesByUnit.get(unit.id)?.push(file);
+    classifiedFiles += 1;
   }
 
   for (const unit of policy.units) {
@@ -332,47 +274,14 @@ export function evaluateControlFlowPolicy(policy, files) {
     }
   }
 
-  const migratedUnits = policy.units.filter((unit) => unit.status === "migrated");
-  const migratedFiles = migratedUnits.reduce(
-    (count, unit) => count + (filesByUnit.get(unit.id)?.length ?? 0),
-    0,
-  );
-  const migratedFilePercentage = percentage(migratedFiles, files.length);
-  const migratedUnitPercentage = percentage(migratedUnits.length, policy.units.length);
-
-  verifyRecordedProgress(
-    errors,
-    "Migrated unit count",
-    migratedUnits.length,
-    policy.recordedProgress.migratedUnits,
-  );
-  verifyRecordedProgress(
-    errors,
-    "Migrated file count",
-    migratedFiles,
-    policy.recordedProgress.migratedFiles,
-  );
-  verifyRecordedProgress(
-    errors,
-    "Total unit count",
-    policy.units.length,
-    policy.recordedProgress.totalUnits,
-  );
-  verifyRecordedProgress(
-    errors,
-    "Total file count",
-    files.length,
-    policy.recordedProgress.totalFiles,
-  );
-
   return {
     errors,
     filesByUnit,
     summary: {
-      migratedFiles,
-      migratedFilePercentage,
-      migratedUnits: migratedUnits.length,
-      migratedUnitPercentage,
+      classifiedFiles,
+      classifiedPercentage: percentage(classifiedFiles, files.length),
+      compliantUnits,
+      compliantUnitPercentage: percentage(compliantUnits, policy.units.length),
       totalFiles: files.length,
       totalUnits: policy.units.length,
     },
@@ -382,32 +291,29 @@ export function evaluateControlFlowPolicy(policy, files) {
 /**
  * @param {ControlFlowPolicy} policy
  * @param {string} [root]
- * @param {Set<string>} [knownRepositoryFiles]
+ * @param {Set<string>} [trackedFiles]
  * @returns {string[]}
  */
-export function verifyControlFlowEvidence(policy, root = repositoryRoot, knownRepositoryFiles) {
+export function verifyControlFlowEvidence(policy, root = repositoryRoot, trackedFiles) {
   const errors = [];
-  let repositoryFiles = knownRepositoryFiles;
+  let repositoryFiles = trackedFiles;
 
   if (!repositoryFiles) {
-    const inventory = spawnSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], {
-      cwd: root,
-      encoding: "utf8",
-    });
+    const inventory = spawnSync("git", ["ls-files", "--cached"], { cwd: root, encoding: "utf8" });
 
     if (inventory.status !== 0) {
-      throw new Error("Could not inventory repository files for migration evidence.");
+      throw new Error("Could not inventory tracked files for control-flow evidence.");
     }
 
     repositoryFiles = new Set(inventory.stdout.split("\n"));
   }
 
   for (const unit of policy.units) {
-    for (const testFile of duplicates(unit.evidence?.testFiles ?? [])) {
+    for (const testFile of duplicates(unit.evidence.testFiles)) {
       errors.push(`Evidence test for ${unit.id} is duplicated: ${testFile}.`);
     }
 
-    for (const testFile of unit.evidence?.testFiles ?? []) {
+    for (const testFile of unit.evidence.testFiles) {
       const absolutePath = resolve(root, testFile);
       const insideRepository = absolutePath.startsWith(`${resolve(root)}${sep}`);
       const includedByVitest =
@@ -437,19 +343,19 @@ export function verifyControlFlowEvidence(policy, root = repositoryRoot, knownRe
 export function renderControlFlowReport(policy, result) {
   const { summary } = result;
   const rows = policy.units.map((unit) => {
-    const count = result.filesByUnit.get(unit.id)?.length ?? 0;
-    return `| ${unit.id} | ${unit.status} | ${count} |`;
+    const files = result.filesByUnit.get(unit.id)?.length ?? 0;
+    return `| ${unit.id} | ${files} | ${unit.evidence.testFiles.length} |`;
   });
 
   return [
-    "## Control-flow migration",
+    "## Control-flow policy",
     "",
-    `- Capability units: ${summary.migratedUnits}/${summary.totalUnits} (${summary.migratedUnitPercentage}%)`,
-    `- Production files: ${summary.migratedFiles}/${summary.totalFiles} (${summary.migratedFilePercentage}%)`,
+    `- Classified production files: ${summary.classifiedFiles}/${summary.totalFiles} (${summary.classifiedPercentage}%)`,
+    `- Units declaring current evidence: ${summary.compliantUnits}/${summary.totalUnits} (${summary.compliantUnitPercentage}%)`,
     `- Policy: ${result.errors.length === 0 ? "passing" : `failing (${result.errors.length} errors)`}`,
     "",
-    "| Capability unit | Status | Files |",
-    "| --- | --- | ---: |",
+    "| Capability unit | Files | Evidence tests |",
+    "| --- | ---: | ---: |",
     ...rows,
     "",
   ].join("\n");
@@ -463,35 +369,39 @@ export function parseControlFlowPolicy(source) {
   /** @type {unknown} */
   const value = JSON.parse(source);
 
-  if (!isRecord(value) || !isRecord(value.recordedProgress) || !Array.isArray(value.units)) {
-    throw new TypeError("Control-flow policy must contain recordedProgress and units.");
+  if (!isRecord(value) || !Array.isArray(value.units)) {
+    throw new TypeError("Control-flow policy must contain units.");
   }
 
   const units = value.units.map((unit, index) => {
-    if (!isRecord(unit) || typeof unit.id !== "string" || typeof unit.status !== "string") {
-      throw new TypeError(`units[${index}] must contain string id and status fields.`);
+    if (!isRecord(unit) || typeof unit.id !== "string" || !isRecord(unit.evidence)) {
+      throw new TypeError(`units[${index}] must contain id and evidence fields.`);
+    }
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(unit.id)) {
+      throw new TypeError(`units[${index}].id must be a kebab-case identifier.`);
     }
 
     /** @type {ControlFlowUnit} */
-    const parsed = { id: unit.id, status: unit.status };
-
-    if (unit.files !== undefined) {
-      parsed.files = readStringArray(unit.files, `units[${index}].files`);
-    }
-    if (unit.pathPrefixes !== undefined) {
-      parsed.pathPrefixes = readStringArray(unit.pathPrefixes, `units[${index}].pathPrefixes`);
-    }
-    if (unit.evidence !== undefined) {
-      if (!isRecord(unit.evidence)) {
-        throw new TypeError(`units[${index}].evidence must be an object.`);
-      }
-      parsed.evidence = {
+    const parsed = {
+      evidence: {
         definitionVersion: readNumber(
           unit.evidence.definitionVersion,
           `units[${index}].evidence.definitionVersion`,
         ),
         testFiles: readStringArray(unit.evidence.testFiles, `units[${index}].evidence.testFiles`),
-      };
+      },
+      id: unit.id,
+    };
+
+    if (unit.files !== undefined) {
+      parsed.files = readRepositoryPaths(unit.files, `units[${index}].files`, {
+        directory: false,
+      });
+    }
+    if (unit.pathPrefixes !== undefined) {
+      parsed.pathPrefixes = readRepositoryPaths(unit.pathPrefixes, `units[${index}].pathPrefixes`, {
+        directory: true,
+      });
     }
 
     return parsed;
@@ -500,22 +410,7 @@ export function parseControlFlowPolicy(source) {
   return {
     definitionOfMigrated: readStringArray(value.definitionOfMigrated, "definitionOfMigrated"),
     definitionVersion: readNumber(value.definitionVersion, "definitionVersion"),
-    excludedFiles: readStringArray(value.excludedFiles, "excludedFiles"),
-    excludedFileSuffixes: readStringArray(value.excludedFileSuffixes, "excludedFileSuffixes"),
-    recordedProgress: {
-      migratedFiles: readNumber(
-        value.recordedProgress.migratedFiles,
-        "recordedProgress.migratedFiles",
-      ),
-      migratedUnits: readNumber(
-        value.recordedProgress.migratedUnits,
-        "recordedProgress.migratedUnits",
-      ),
-      totalFiles: readNumber(value.recordedProgress.totalFiles, "recordedProgress.totalFiles"),
-      totalUnits: readNumber(value.recordedProgress.totalUnits, "recordedProgress.totalUnits"),
-    },
     schemaVersion: readNumber(value.schemaVersion, "schemaVersion"),
-    sourceRoots: readStringArray(value.sourceRoots, "sourceRoots"),
     units,
   };
 }
@@ -528,36 +423,6 @@ export function loadControlFlowPolicy(url = policyUrl) {
   return parseControlFlowPolicy(readFileSync(url, "utf8"));
 }
 
-/**
- * @param {string} reference
- * @returns {{files: string[], policy: ControlFlowPolicy} | undefined}
- */
-function loadBaseControlFlowPolicy(reference) {
-  const commit = spawnSync("git", ["rev-parse", "--verify", `${reference}^{commit}`], {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-  });
-
-  if (commit.status !== 0) {
-    throw new Error(`Control-flow base reference is unavailable: ${reference}.`);
-  }
-
-  const policy = spawnSync("git", ["show", `${reference}:scripts/control-flow-policy.json`], {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-  });
-
-  if (policy.status !== 0) {
-    return undefined;
-  }
-
-  const parsedPolicy = parseControlFlowPolicy(policy.stdout);
-  return {
-    files: discoverControlFlowFilesAtReference(parsedPolicy, reference),
-    policy: parsedPolicy,
-  };
-}
-
 function run() {
   const acceptedArguments = new Set(["--check", "--report"]);
   const argument = process.argv[2] ?? "--check";
@@ -568,22 +433,9 @@ function run() {
   }
 
   const policy = loadControlFlowPolicy();
-  const files = discoverControlFlowFiles(policy);
+  const files = discoverControlFlowFiles();
   const result = evaluateControlFlowPolicy(policy, files);
   result.errors.push(...verifyControlFlowEvidence(policy));
-  const baseReference = process.env.CONTROL_FLOW_BASE_REF;
-
-  if (baseReference && !/^0+$/.test(baseReference)) {
-    const base = loadBaseControlFlowPolicy(baseReference);
-    if (base) {
-      const existingFiles = new Set(
-        base.files.filter((file) => existsSync(resolve(repositoryRoot, file))),
-      );
-      result.errors.push(
-        ...compareControlFlowProgress(policy, base.policy, files, base.files, existingFiles),
-      );
-    }
-  }
   const report = renderControlFlowReport(policy, result);
 
   console.log(report);
@@ -598,6 +450,4 @@ function run() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  run();
-}
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) run();
