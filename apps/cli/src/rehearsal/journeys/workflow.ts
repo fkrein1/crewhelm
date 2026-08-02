@@ -25,6 +25,7 @@ import {
   type TemporaryOwnerMcpSession,
 } from "../../temporary-owner-session.js";
 import { CREWHELM_CLI_VERSION } from "../../version.js";
+import { requiredRehearsalCheckName } from "../checks.js";
 import { callRehearsalTool, normalizeRehearsalFailure, readRehearsalStatus } from "../mcp.js";
 
 const POLL_INTERVAL_MS = 5_000;
@@ -448,11 +449,12 @@ export async function runWorkflowRehearsal(
         const recovered = listed.ok
           ? listed.agents.filter((candidate) => candidate.name === createInput.name)
           : [];
-        if (recovered.length === 1) {
+        const recoveredAgent = recovered.length === 1 ? recovered[0] : undefined;
+        if (recoveredAgent !== undefined) {
           const exact = await callRehearsalTool(
             session,
             "crewhelm_get_agent",
-            { id: recovered[0]!.id },
+            { id: recoveredAgent.id },
             getAgentResultSchema,
             "Agent creation recovery inspection returned an invalid payload.",
           );
@@ -472,6 +474,7 @@ export async function runWorkflowRehearsal(
 
     try {
       activeCheck = 4;
+      const initialPrompt = "State that the first bounded stage completed.";
       const input = {
         action: "start",
         agentId: agent.id,
@@ -479,7 +482,7 @@ export async function runWorkflowRehearsal(
         idempotencyKey: `rehearsal-workflow-${suffix}`,
         objective: "Produce one concise two-step rehearsal acknowledgment.",
         stages: [
-          { name: "Observe", prompt: "State that the first bounded stage completed." },
+          { name: "Observe", prompt: initialPrompt },
           { name: "Conclude", prompt: "Use prior context and state that the rehearsal completed." },
         ],
       };
@@ -591,7 +594,7 @@ export async function runWorkflowRehearsal(
         manageAgentWorkflowsResultSchema,
         "Workflow inspection returned an invalid payload.",
       );
-      if (JSON.stringify(inspected).includes(input.stages[0]!.prompt)) {
+      if (JSON.stringify(inspected).includes(initialPrompt)) {
         throw new TemporaryOwnerSessionError(
           "invalid_payload",
           "Compact inspection returned frozen prompts.",
@@ -632,7 +635,7 @@ export async function runWorkflowRehearsal(
       }
       checks[7] = check("workflow-terminal", "valid", "Both Workflow stages completed durably.");
     } catch (error) {
-      checks[activeCheck] = failure(checks[activeCheck]!.name, error);
+      checks[activeCheck] = failure(requiredRehearsalCheckName(checks, activeCheck), error);
     } finally {
       await cleanup(session);
     }
@@ -642,7 +645,10 @@ export async function runWorkflowRehearsal(
     ? check("saved-owner-access", "valid", "Saved owner access refreshed and rotated.")
     : failure("saved-owner-access", sessionResult.authorization.error);
   if (sessionResult.operation.status === "failed") {
-    checks[activeCheck] = failure(checks[activeCheck]!.name, sessionResult.operation.error);
+    checks[activeCheck] = failure(
+      requiredRehearsalCheckName(checks, activeCheck),
+      sessionResult.operation.error,
+    );
   }
   checks[10] =
     sessionResult.revocation.status === "revoked"

@@ -2,6 +2,7 @@ import {
   inferenceReasoningEffortSchema,
   MAXIMUM_INFERENCE_FALLBACKS,
   type AgentRuntimePlan,
+  type AgentCapabilityDescriptor,
   type FleetConfigurationData,
 } from "@crewhelm/contracts";
 import * as z from "zod";
@@ -11,7 +12,12 @@ import type { CapabilityModuleResolution } from "./kernel.js";
 export function inferenceProfileConfigurationSchema<const Models extends readonly string[]>(
   models: Models,
   reasoningModels: ReadonlySet<string>,
-) {
+): z.ZodType<
+  InferenceProfileConfiguration & {
+    fallbackModels: Models[number][];
+    primaryModel: Models[number];
+  }
+> {
   const modelSchema = z.enum(models);
 
   return z
@@ -94,7 +100,9 @@ export function resolveInferenceProfile(
   };
 }
 
-export function inferenceConfigurationFields(models: readonly string[]) {
+export function inferenceConfigurationFields(
+  models: readonly string[],
+): AgentCapabilityDescriptor["configurationFields"] {
   return [
     {
       description: "Primary supported model selected for each model turn.",

@@ -274,7 +274,7 @@ export function runtimeLoadFailureFromSkill(code: GetSkillFailureCode): SkillRun
   }
 }
 
-export function deniedSkill(code: FailureCode) {
+export function deniedSkill(code: FailureCode): ReturnType<typeof denied> {
   return denied(code);
 }
 
@@ -392,7 +392,11 @@ export class Skills {
             return denied("no_changes");
           }
 
-          const current = this.#summary(request.data.target.id!, transaction);
+          if (request.data.target.id === undefined) {
+            throw new SkillStorageInvariantError();
+          }
+
+          const current = this.#summary(request.data.target.id, transaction);
 
           if (current === null) {
             throw new SkillStorageInvariantError();

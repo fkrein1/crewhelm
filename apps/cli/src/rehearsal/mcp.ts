@@ -92,7 +92,7 @@ export async function callRehearsalTool<T>(
 export async function readRehearsalStatus(
   session: TemporaryOwnerMcpSession,
   options: Pick<RehearsalToolCallOptions, "timeoutMs"> = {},
-) {
+): Promise<Extract<z.infer<typeof mcpControlPlaneStatusResultSchema>, { ok: true }>["status"]> {
   const result = await callRehearsalTool(
     session,
     "crewhelm_status",

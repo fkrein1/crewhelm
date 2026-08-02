@@ -1396,7 +1396,7 @@ export class CrewSession extends Think {
     });
   }
 
-  async cancelAdmittedRun(input: unknown) {
+  async cancelAdmittedRun(input: unknown): Promise<z.infer<typeof cancelAdmittedRunResultSchema>> {
     const request = cancelAdmittedRunInputSchema.safeParse(input);
 
     if (!request.success || !(await this.#redeemReceiverCapability(request.data.capability))) {
@@ -1477,7 +1477,9 @@ export class CrewSession extends Think {
     });
   }
 
-  async listAdmittedRunToolApprovals(input: unknown) {
+  async listAdmittedRunToolApprovals(
+    input: unknown,
+  ): Promise<z.infer<typeof listAdmittedRunToolApprovalsResultSchema>> {
     const request = listAdmittedRunToolApprovalsInputSchema.safeParse(input);
 
     if (!request.success || !(await this.#redeemReceiverCapability(request.data.capability))) {
@@ -1521,7 +1523,9 @@ export class CrewSession extends Think {
     return listAdmittedRunToolApprovalsResultSchema.parse({ approvals, ok: true });
   }
 
-  async decideAdmittedRunToolApproval(input: unknown) {
+  async decideAdmittedRunToolApproval(
+    input: unknown,
+  ): Promise<z.infer<typeof decideAdmittedRunToolApprovalResultSchema>> {
     const request = decideAdmittedRunToolApprovalInputSchema.safeParse(input);
 
     if (!request.success || !(await this.#redeemReceiverCapability(request.data.capability))) {

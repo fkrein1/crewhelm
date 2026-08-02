@@ -752,7 +752,10 @@ function completedReport(
   });
 }
 
-export function createUpgradeRehearsalFailure(receiptPath: string, error?: unknown) {
+export function createUpgradeRehearsalFailure(
+  receiptPath: string,
+  error?: unknown,
+): z.infer<typeof upgradeRehearsalFailureSchema> {
   const failure =
     error instanceof UpgradeRehearsalError
       ? error

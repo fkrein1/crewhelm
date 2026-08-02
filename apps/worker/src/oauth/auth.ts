@@ -87,7 +87,9 @@ const accessTokenClaimsSchema = z.looseObject({
   sub: ownerKeySchema,
 });
 
-export type CrewhelmAuth = ReturnType<typeof createCrewhelmAuth>;
+export interface CrewhelmAuth {
+  handler(request: Request): Promise<Response>;
+}
 
 function logAuthorizationFailure(stage: AuthorizationFailureStage): void {
   console.error("crewhelm.authorization_unavailable", { stage });
@@ -336,7 +338,7 @@ function stripUpstreamTokens<T>(account: T): T {
   };
 }
 
-export function createCrewhelmAuth(env: WorkerEnv, origin: string) {
+export function createCrewhelmAuth(env: WorkerEnv, origin: string): CrewhelmAuth {
   const configuration = configurationSchema.parse({
     BETTER_AUTH_SECRET: env.BETTER_AUTH_SECRET,
     GITHUB_CLIENT_ID: env.GITHUB_CLIENT_ID,

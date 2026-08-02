@@ -32,6 +32,7 @@ import {
   type TemporaryOwnerMcpSession,
 } from "../../temporary-owner-session.js";
 import { CREWHELM_CLI_VERSION } from "../../version.js";
+import { requiredRehearsalCheckName } from "../checks.js";
 import { callRehearsalTool, normalizeRehearsalFailure, readRehearsalStatus } from "../mcp.js";
 
 const POLL_INTERVAL_MS = 5_000;
@@ -213,10 +214,15 @@ async function startRunWithRecovery(
   if (candidates.length !== 1) {
     throw new TemporaryOwnerSessionError("request_failed", "Sandbox Run start was not recovered.");
   }
+  const candidate = candidates[0];
+
+  if (candidate === undefined) {
+    throw new TemporaryOwnerSessionError("request_failed", "Sandbox Run start was not recovered.");
+  }
   const inspected = await callRehearsalTool(
     session,
     "crewhelm_inspect_run",
-    { runId: candidates[0]!.runId, timelineLimit: 1 },
+    { runId: candidate.runId, timelineLimit: 1 },
     inspectRunResultSchema,
     "Sandbox Run recovery inspection returned an invalid payload.",
   );
@@ -544,11 +550,12 @@ export async function runSandboxRehearsal(
         const recovered = listed.ok
           ? listed.agents.filter((candidate) => candidate.name === createInput.name)
           : [];
-        if (recovered.length === 1) {
+        const recoveredAgent = recovered.length === 1 ? recovered[0] : undefined;
+        if (recoveredAgent !== undefined) {
           const exact = await callRehearsalTool(
             session,
             "crewhelm_get_agent",
-            { id: recovered[0]!.id },
+            { id: recoveredAgent.id },
             getAgentResultSchema,
             "Sandbox Agent recovery inspection returned an invalid payload.",
           );
@@ -678,7 +685,7 @@ export async function runSandboxRehearsal(
         "Run listing exposed compact identities without detailed Sandbox output.",
       );
     } catch (error) {
-      checks[activeCheck] = failure(checks[activeCheck]!.name, error);
+      checks[activeCheck] = failure(requiredRehearsalCheckName(checks, activeCheck), error);
     } finally {
       await cleanup(session);
     }
@@ -688,7 +695,10 @@ export async function runSandboxRehearsal(
     ? check("saved-owner-access", "valid", "Saved owner access refreshed and rotated.")
     : failure("saved-owner-access", sessionResult.authorization.error);
   if (sessionResult.operation.status === "failed") {
-    checks[activeCheck] = failure(checks[activeCheck]!.name, sessionResult.operation.error);
+    checks[activeCheck] = failure(
+      requiredRehearsalCheckName(checks, activeCheck),
+      sessionResult.operation.error,
+    );
   }
   checks[9] =
     sessionResult.revocation.status === "revoked"

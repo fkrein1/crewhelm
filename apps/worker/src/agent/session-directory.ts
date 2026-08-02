@@ -757,21 +757,25 @@ export class CrewAgent extends CrewSession {
     return inspectAdmittedRunResultSchema.parse(inspected);
   }
 
-  override async cancelAdmittedRun(input: unknown) {
+  override async cancelAdmittedRun(input: unknown): ReturnType<CrewSession["cancelAdmittedRun"]> {
     const session = await this.#sessionForRunInput(input);
     return session === undefined
       ? super.cancelAdmittedRun(input)
       : session.cancelAdmittedRun(input);
   }
 
-  override async listAdmittedRunToolApprovals(input: unknown) {
+  override async listAdmittedRunToolApprovals(
+    input: unknown,
+  ): ReturnType<CrewSession["listAdmittedRunToolApprovals"]> {
     const session = await this.#sessionForRunInput(input);
     return session === undefined
       ? super.listAdmittedRunToolApprovals(input)
       : session.listAdmittedRunToolApprovals(input);
   }
 
-  override async decideAdmittedRunToolApproval(input: unknown) {
+  override async decideAdmittedRunToolApproval(
+    input: unknown,
+  ): ReturnType<CrewSession["decideAdmittedRunToolApproval"]> {
     const session = await this.#sessionForRunInput(input);
     return session === undefined
       ? super.decideAdmittedRunToolApproval(input)

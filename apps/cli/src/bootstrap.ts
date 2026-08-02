@@ -2625,12 +2625,17 @@ export async function cleanupCreatedInstallationResources(
     );
   }
 
+  const firstResource = parsed[0];
+
+  if (firstResource === undefined) {
+    throw commandFailed("configuration", "At least one cleanup resource is required.");
+  }
   const cwd = await createPrivateWorkspace();
 
   try {
     const neutralConfigPath = await writeAccountConfig(cwd);
     const account = await authenticate(
-      { accountId: parsed[0]!.accountId },
+      { accountId: firstResource.accountId },
       cwd,
       neutralConfigPath,
       dependencies,

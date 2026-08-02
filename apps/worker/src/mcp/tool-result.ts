@@ -156,7 +156,7 @@ export async function integrationReadToolResult<Result extends { ok: boolean }>(
   authority: OwnerAuthority,
   operation: () => Promise<unknown>,
   schema: z.ZodType<Result>,
-) {
+): Promise<McpToolResult> {
   if (!authority.scopes.includes(INTEGRATIONS_READ_SCOPE)) {
     return validatedToolResult(
       {
@@ -194,7 +194,7 @@ export async function connectionConfigurationToolResult<Result extends { ok: boo
   authority: OwnerAuthority,
   operation: () => Promise<unknown>,
   schema: z.ZodType<Result>,
-) {
+): Promise<McpToolResult> {
   return authority.scopes.includes(INTEGRATIONS_READ_SCOPE) &&
     authority.scopes.includes(CONNECTION_CONFIGS_READ_SCOPE)
     ? integrationReadToolResult(authority, operation, schema)
