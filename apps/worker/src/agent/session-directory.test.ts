@@ -95,6 +95,28 @@ async function completedRun(
   );
 }
 
+async function drainSlowSessionRun(
+  session: ReturnType<typeof env.CREW_SESSION.getByName>,
+  runId: string,
+): Promise<void> {
+  await runInDurableObject(session, (instance) => {
+    if (!(instance instanceof TestCrewSession)) {
+      throw new Error("Expected the test CrewSession implementation.");
+    }
+
+    instance.releaseSlowModelForTest();
+  });
+  await vi.waitFor(
+    async () => {
+      const drained = await runInDurableObject(session, (_instance, state) =>
+        state.storage.get(`crewhelm:session-run-drained:${runId}`),
+      );
+      if (drained !== true) throw new Error("Expected the slow Session Run to drain.");
+    },
+    { interval: 25, timeout: 5_000 },
+  );
+}
+
 describe("CrewAgent durable session directory", () => {
   it("logically cancels a Session Run whose Think submission record is missing", async () => {
     const authority = await authorityFor("crew-session-cancellation-missing-submission");
@@ -156,7 +178,7 @@ describe("CrewAgent durable session directory", () => {
       ok: false,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 3_250));
+    await drainSlowSessionRun(child, started.run.runId);
 
     const continued = await controlPlane.startRun(authority, {
       agentId: created.agent.id,
@@ -238,7 +260,7 @@ describe("CrewAgent durable session directory", () => {
       ok: false,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 3_250));
+    await drainSlowSessionRun(child, started.run.runId);
     const cancelledAfterDrain = await controlPlane.inspectRun(authority, {
       includeDeliverable: true,
       runId: started.run.runId,
@@ -343,7 +365,7 @@ describe("CrewAgent durable session directory", () => {
     if (!inspected.ok) throw new Error("Expected deadline Session inspection.");
     expect(inspected.messages.map((message) => message.text)).toEqual([]);
 
-    await new Promise((resolve) => setTimeout(resolve, 3_250));
+    await drainSlowSessionRun(child, started.run.runId);
     const reinspected = await controlPlane.inspectAgentSession(authority, {
       agentId: created.agent.id,
       sessionId: started.run.session.sessionId,

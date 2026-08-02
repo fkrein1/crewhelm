@@ -398,6 +398,8 @@ export class TestCrewSession extends CrewSession {
   #ignoreNextCancellation = false;
   #rejectNextCancellation = false;
   #releaseDeletion: (() => void) | undefined;
+  #releaseNextSlowModel = false;
+  #releaseSlowModel: (() => void) | undefined;
   readonly #modelCalls: TestModelCall[] = [];
   readonly #sandboxExecutions: Array<{ code: string; language: string }> = [];
   readonly #webFetchExecutions: string[] = [];
@@ -426,6 +428,10 @@ export class TestCrewSession extends CrewSession {
         toolCount: options.tools?.length ?? 0,
       });
       const serializedPrompt = JSON.stringify(options.prompt);
+
+      if (serializedPrompt.includes(SLOW_TEST_PROMPT)) {
+        await this.#waitForSlowModelReleaseForTest();
+      }
 
       if (
         serializedPrompt.includes(WEB_RESEARCH_TEST_PROMPT) &&
@@ -533,13 +539,29 @@ export class TestCrewSession extends CrewSession {
               },
             },
           ],
-          initialDelayInMs: JSON.stringify(options.prompt).includes(SLOW_TEST_PROMPT)
-            ? 3_000
-            : null,
+          initialDelayInMs: null,
         }),
       };
     },
   });
+
+  async #waitForSlowModelReleaseForTest(): Promise<void> {
+    if (this.#releaseNextSlowModel) {
+      this.#releaseNextSlowModel = false;
+      return;
+    }
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const released = new Promise<void>((resolve) => {
+      this.#releaseSlowModel = resolve;
+    });
+    const timedOut = new Promise<void>((resolve) => {
+      timeout = setTimeout(resolve, 3_000);
+    });
+    await Promise.race([released, timedOut]);
+    if (timeout !== undefined) clearTimeout(timeout);
+    this.#releaseSlowModel = undefined;
+  }
 
   override getModel(): ThinkModel {
     return this.#model;
@@ -547,6 +569,15 @@ export class TestCrewSession extends CrewSession {
 
   modelCallsForTest(): TestModelCall[] {
     return structuredClone(this.#modelCalls);
+  }
+
+  releaseSlowModelForTest(): void {
+    if (this.#releaseSlowModel === undefined) {
+      this.#releaseNextSlowModel = true;
+      return;
+    }
+
+    this.#releaseSlowModel();
   }
 
   sandboxExecutionsForTest(): Array<{ code: string; language: string }> {

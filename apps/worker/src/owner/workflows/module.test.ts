@@ -100,6 +100,28 @@ async function terminalRun(
   );
 }
 
+async function drainSlowSessionRun(
+  session: ReturnType<typeof env.CREW_SESSION.getByName>,
+  runId: string,
+): Promise<void> {
+  await runInDurableObject(session, (instance) => {
+    if (!(instance instanceof TestCrewSession)) {
+      throw new Error("Expected the test CrewSession implementation.");
+    }
+
+    instance.releaseSlowModelForTest();
+  });
+  await vi.waitFor(
+    async () => {
+      const drained = await runInDurableObject(session, (_instance, state) =>
+        state.storage.get(`crewhelm:session-run-drained:${runId}`),
+      );
+      if (drained !== true) throw new Error("Expected the slow Session Run to drain.");
+    },
+    { interval: 25, timeout: 5_000 },
+  );
+}
+
 async function sha256Hex(content: string): Promise<string> {
   return [
     ...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content))),
@@ -1230,7 +1252,7 @@ describe("Agent workflows", () => {
         ok: false,
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 3_250));
+      await drainSlowSessionRun(session, dispatched.runId);
       await expect(
         controlPlane.inspectAgentWorkflow(authority, { workflowId: cancelled.workflow.workflowId }),
       ).resolves.toMatchObject({ ok: true, workflow: { status: "cancelled" } });

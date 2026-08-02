@@ -1001,9 +1001,33 @@ describe("repository foundation", () => {
     });
     expect(continuousIntegrationCommands).toEqual([
       "pnpm install --frozen-lockfile",
-      "pnpm docs:mcp:check",
-      "pnpm verify",
+      "pnpm format:check",
+      "pnpm lint",
+      "pnpm typecheck",
+      "pnpm exec vitest run --project cli --project foundation --maxWorkers=50%",
+      "pnpm build",
+      "pnpm release:check",
+      "pnpm install --frozen-lockfile",
+      'pnpm exec vitest run --project worker --shard="$SHARD/2" --maxWorkers=50%',
+      'test "$CHECKS_RESULT" = success\ntest "$WORKER_TESTS_RESULT" = success\n',
     ]);
+
+    const continuousIntegrationJobs = continuousIntegration?.workflow["jobs"];
+    expect(isRecord(continuousIntegrationJobs)).toBe(true);
+    if (!isRecord(continuousIntegrationJobs)) {
+      throw new TypeError("Expected CI jobs.");
+    }
+    expect(continuousIntegrationJobs["worker-tests"]).toMatchObject({
+      name: "Worker tests (${{ matrix.shard }}/2)",
+      "runs-on": "ubuntu-24.04",
+      strategy: { matrix: { shard: [1, 2] } },
+    });
+    expect(continuousIntegrationJobs["verify"]).toMatchObject({
+      if: "${{ always() }}",
+      name: "Verify",
+      needs: ["checks", "worker-tests"],
+      "runs-on": "ubuntu-24.04",
+    });
   });
 
   it("versions the protected main ruleset", async () => {
