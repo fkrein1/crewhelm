@@ -18,6 +18,7 @@ import {
   skillBucketNameForWorker,
   type BootstrapDependencies,
 } from "../../bootstrap.js";
+import { normalizeThrownError } from "../../errors.js";
 
 const MAXIMUM_RECEIPT_BYTES = 16 * 1_024;
 const BROWSER_EDGE_SETTLE_MS = 15_000;
@@ -353,7 +354,7 @@ export async function runInstallationRehearsal(
   delete bootstrapDependencies.promptSecret;
   let deployment: InstallationRehearsalReport["deployment"];
   let agent: InstallationRehearsalReport["agent"];
-  let unexpectedError: unknown;
+  let unexpectedError: Error | undefined;
 
   try {
     deployment = await bootstrapDeployment(
@@ -389,7 +390,7 @@ export async function runInstallationRehearsal(
     if (error instanceof BootstrapError) {
       deployment = createBootstrapFailure(error);
     } else {
-      unexpectedError = error;
+      unexpectedError = normalizeThrownError(error, "Installation rehearsal failed unexpectedly.");
     }
   }
 

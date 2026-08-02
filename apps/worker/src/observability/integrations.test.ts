@@ -90,7 +90,9 @@ describe("integration observability", () => {
     );
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-    expect(() => recordIntegrationProviderResponse(hostileInput)).not.toThrow();
+    expect(() => {
+      recordIntegrationProviderResponse(hostileInput);
+    }).not.toThrow();
     expect(warn).toHaveBeenCalledExactlyOnceWith({
       event: "crewhelm.integration.provider_response.telemetry_rejected",
     });

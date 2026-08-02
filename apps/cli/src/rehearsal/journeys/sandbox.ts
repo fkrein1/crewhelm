@@ -20,6 +20,7 @@ import {
 import * as z from "zod";
 
 import { diagnoseDeployment, doctorReportSchema, type DoctorOptions } from "../../doctor.js";
+import { normalizeThrownError } from "../../errors.js";
 import {
   initializeResponseSchema,
   MCP_PROTOCOL_VERSION,
@@ -273,7 +274,7 @@ export async function runSandboxRehearsal(
     activeCheck = 8;
     if (!agent) return;
     const cleanupAgentId = agent.id;
-    let runCleanupError: unknown;
+    let runCleanupError: Error | undefined;
 
     try {
       try {
@@ -352,7 +353,7 @@ export async function runSandboxRehearsal(
         }
       }
     } catch (error) {
-      runCleanupError = error;
+      runCleanupError = normalizeThrownError(error, "Sandbox Run cleanup failed.");
     }
 
     try {

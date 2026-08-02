@@ -21,6 +21,7 @@ import {
 import * as z from "zod";
 
 import { diagnoseDeployment, doctorReportSchema, type DoctorOptions } from "../../doctor.js";
+import { normalizeThrownError } from "../../errors.js";
 import {
   initializeResponseSchema,
   MCP_PROTOCOL_VERSION,
@@ -187,7 +188,7 @@ export async function runWebResearchRehearsal(
   const cleanup = async (session: TemporaryOwnerMcpSession): Promise<void> => {
     activeCheck = 6;
     if (agent === undefined) return;
-    let runCleanupError: unknown;
+    let runCleanupError: Error | undefined;
 
     try {
       try {
@@ -266,7 +267,7 @@ export async function runWebResearchRehearsal(
         }
       }
     } catch (error) {
-      runCleanupError = error;
+      runCleanupError = normalizeThrownError(error, "Web research Run cleanup failed.");
     }
 
     try {

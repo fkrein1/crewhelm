@@ -553,10 +553,9 @@ export class RuntimeToolExecutions {
           await Promise.race([
             this.#sandbox.getByName(execution.toolCallId).destroyAndPurge(),
             new Promise<never>((_resolve, reject) => {
-              timeout = setTimeout(
-                () => reject(new Error("Sandbox cleanup timed out.")),
-                RUNTIME_TOOL_CLEANUP_TIMEOUT_MS,
-              );
+              timeout = setTimeout(() => {
+                reject(new Error("Sandbox cleanup timed out."));
+              }, RUNTIME_TOOL_CLEANUP_TIMEOUT_MS);
             }),
           ]);
           cleaned = true;

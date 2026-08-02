@@ -18,7 +18,9 @@ export interface CodexBrowserDependencies {
 
 function closeServer(server: Server): Promise<void> {
   return new Promise((resolve) => {
-    server.close(() => resolve());
+    server.close(() => {
+      resolve();
+    });
     server.closeAllConnections();
   });
 }
@@ -154,10 +156,9 @@ export async function openInCodexBrowser(
     await Promise.race([
       visit,
       new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error("Codex browser handoff timed out.")),
-          dependencies.handoffTimeoutMs ?? DEFAULT_HANDOFF_TIMEOUT_MS,
-        );
+        timeout = setTimeout(() => {
+          reject(new Error("Codex browser handoff timed out."));
+        }, dependencies.handoffTimeoutMs ?? DEFAULT_HANDOFF_TIMEOUT_MS);
       }),
     ]);
   } finally {

@@ -72,7 +72,9 @@ describe("schedule observability", () => {
     );
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-    expect(() => recordScheduleEvent(hostileInput)).not.toThrow();
+    expect(() => {
+      recordScheduleEvent(hostileInput);
+    }).not.toThrow();
     expect(warn).toHaveBeenCalledExactlyOnceWith({ event: "crewhelm.schedule.telemetry_rejected" });
   });
 });
