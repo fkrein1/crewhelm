@@ -1234,6 +1234,36 @@ describe("Agent workflows", () => {
       await expect(
         controlPlane.inspectAgentWorkflow(authority, { workflowId: cancelled.workflow.workflowId }),
       ).resolves.toMatchObject({ ok: true, workflow: { status: "cancelled" } });
+
+      const objectName = crewSessionObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+        sessionId: dispatched.session.sessionId,
+      });
+      const restartKey = `crewhelm:session-run-restart:${dispatched.runId}`;
+      const settlement = {
+        objectName,
+        runId: dispatched.runId,
+        session: dispatched.session,
+      };
+      await runInDurableObject(session, async (instance, state) => {
+        if (!(instance instanceof TestCrewSession)) throw new Error("Expected test CrewSession.");
+        await state.storage.delete(`crewhelm:session-run-drained:${dispatched.runId}`);
+        if (failCancellation) await state.storage.put(restartKey, true);
+        else await state.storage.delete(restartKey);
+        await expect(instance.settleExpiredSessionRunForDeletion(settlement)).resolves.toBe(false);
+        await expect(state.storage.get(restartKey)).resolves.toEqual(expect.any(String));
+
+        const abort = vi.spyOn(state, "abort").mockImplementation((message?: string) => {
+          throw new Error(message ?? "Durable Object aborted.");
+        });
+        await expect(instance.settleExpiredSessionRunForDeletion(settlement)).rejects.toThrow(
+          "Expired Session Run is restarting to prove deletion quiescence.",
+        );
+        expect(abort).toHaveBeenCalledOnce();
+        abort.mockRestore();
+      });
+
       await expect(controlPlane.deleteAgentWorkflow(authority, deletion)).resolves.toEqual({
         deleted: true,
         ok: true,
