@@ -13,28 +13,30 @@ import type { AgentSchedules } from "../schedules/index.js";
 import type { AgentEventWatches } from "./event-module.js";
 
 type AgentWatchFailure = Extract<AgentWatchesResult, { ok: false }>;
+type ScheduleFailureCode = Extract<
+  Awaited<ReturnType<AgentSchedules["configure"]>>,
+  { ok: false }
+>["error"]["code"];
+type WatchSchedules = Pick<
+  AgentSchedules,
+  | "configure"
+  | "deleteWatch"
+  | "get"
+  | "list"
+  | "resumableWatchDefinition"
+  | "watchHistory"
+  | "watchSourceLimits"
+>;
+type WatchEvents = Pick<
+  AgentEventWatches,
+  "create" | "history" | "inspect" | "lifecycle" | "list" | "sources" | "update"
+>;
 
 export function deniedAgentWatch(code: AgentWatchFailure["error"]["code"]): AgentWatchFailure {
   return { error: { code, message: "Agent Watch request denied." }, ok: false };
 }
 
-function watchFailureFromSchedule(
-  code:
-    | "agent_not_found"
-    | "agent_unavailable"
-    | "idempotency_conflict"
-    | "incompatible_schema"
-    | "insufficient_scope"
-    | "invalid_authority"
-    | "invalid_request"
-    | "no_changes"
-    | "owner_mismatch"
-    | "revision_conflict"
-    | "schedule_busy"
-    | "schedule_limit_exceeded"
-    | "schedule_not_found"
-    | "schedule_selection_required",
-): AgentWatchFailure {
+function watchFailureFromSchedule(code: ScheduleFailureCode): AgentWatchFailure {
   switch (code) {
     case "schedule_busy":
       return deniedAgentWatch("watch_busy");
@@ -55,7 +57,7 @@ function watchFailureFromSchedule(
     case "revision_conflict":
       return deniedAgentWatch(code);
     default:
-      return deniedAgentWatch(code);
+      throw new Error("Agent Watch received an unhandled schedule failure.");
   }
 }
 
@@ -75,10 +77,10 @@ function scheduleDefinition(definition: AgentWatchDefinition) {
 }
 
 export class AgentWatches {
-  readonly #events: AgentEventWatches;
-  readonly #schedules: AgentSchedules;
+  readonly #events: WatchEvents;
+  readonly #schedules: WatchSchedules;
 
-  constructor(schedules: AgentSchedules, events: AgentEventWatches) {
+  constructor(schedules: WatchSchedules, events: WatchEvents) {
     this.#events = events;
     this.#schedules = schedules;
   }

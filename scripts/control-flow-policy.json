@@ -7,7 +7,7 @@
     "Unknown failures are narrowed at host and third-party boundaries.",
     "HTTP, MCP, CLI, workflow, and Durable Object adapters translate failures once at their boundary.",
     "Failure and state unions are handled exhaustively.",
-    "Tests cover success, each expected failure variant, and boundary translation."
+    "Tests cover success, representative expected failure families, and boundary translation."
   ],
   "sourceRoots": [
     "apps/cli/src",
@@ -24,8 +24,8 @@
     "apps/worker/src/worker-test-entry.ts"
   ],
   "recordedProgress": {
-    "migratedFiles": 6,
-    "migratedUnits": 3,
+    "migratedFiles": 12,
+    "migratedUnits": 6,
     "totalFiles": 155,
     "totalUnits": 30
   },
@@ -134,8 +134,12 @@
       "pathPrefixes": ["apps/worker/src/observability/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/owner/agent-blueprints/module.test.ts"]
+      },
       "id": "owner-agent-blueprints",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/agent-blueprints/"]
     },
     {
@@ -144,8 +148,12 @@
       "pathPrefixes": ["apps/worker/src/owner/agent-channel/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/owner/agents/module.test.ts"]
+      },
       "id": "owner-agents",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/agents/"]
     },
     {
@@ -201,8 +209,12 @@
       "pathPrefixes": ["apps/worker/src/owner/usage/"]
     },
     {
+      "evidence": {
+        "definitionVersion": 1,
+        "testFiles": ["apps/worker/src/owner/watches/module.test.ts"]
+      },
       "id": "owner-watches",
-      "status": "legacy",
+      "status": "migrated",
       "pathPrefixes": ["apps/worker/src/owner/watches/"]
     },
     {

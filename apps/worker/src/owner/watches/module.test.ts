@@ -4,10 +4,15 @@ import {
   AUTONOMY_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   MAXIMUM_RETAINED_AGENT_WATCH_OCCURRENCES,
+  configureAgentScheduleResultSchema,
   crewAgentObjectName,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
   RUNS_WRITE_SCOPE,
+  type AgentSchedule,
+  type AgentWatchesResult,
+  type ConfigureAgentScheduleResult,
+  type OwnerAuthority,
 } from "@crewhelm/contracts";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -19,6 +24,51 @@ import { AgentSchedules } from "../schedules/index.js";
 import { controlPlaneSchema } from "../schema.js";
 import { agentInput, authorityFor } from "../testkit.js";
 import { COMPOSIO_WEBHOOK_INGRESS_OBJECT_NAME } from "./composio-ingress.js";
+import { AgentWatches } from "./module.js";
+
+type ScheduleFailureCode = Extract<ConfigureAgentScheduleResult, { ok: false }>["error"]["code"];
+type WatchFailureCode = Extract<AgentWatchesResult, { ok: false }>["error"]["code"];
+type WatchEvents = ConstructorParameters<typeof AgentWatches>[1];
+type WatchSchedules = ConstructorParameters<typeof AgentWatches>[0];
+
+const AGENT_ID = "agent_00000000-0000-4000-8000-000000000001";
+const WATCH_ID = "schedule_00000000-0000-4000-8000-000000000001";
+const OWNER_AUTHORITY = {
+  clientId: "watch-control-flow-client",
+  ownerKey: "owner_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  scopes: [],
+} satisfies OwnerAuthority;
+const LOST_DEFINITION_SCHEDULE = {
+  agentId: AGENT_ID,
+  agentRevision: 1,
+  configuration: null,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  id: WATCH_ID,
+  lastAttempt: null,
+  lastDispatchedAt: null,
+  lastRunId: null,
+  name: "Inbox attention",
+  nextRunAt: null,
+  revision: 2,
+  status: "paused",
+} satisfies AgentSchedule;
+
+const WATCH_FAILURE_BY_SCHEDULE_FAILURE = {
+  agent_not_found: "agent_not_found",
+  agent_unavailable: "agent_unavailable",
+  idempotency_conflict: "idempotency_conflict",
+  incompatible_schema: "incompatible_schema",
+  insufficient_scope: "insufficient_scope",
+  invalid_authority: "invalid_authority",
+  invalid_request: "invalid_request",
+  no_changes: "no_changes",
+  owner_mismatch: "owner_mismatch",
+  revision_conflict: "revision_conflict",
+  schedule_busy: "watch_busy",
+  schedule_limit_exceeded: "watch_limit_exceeded",
+  schedule_not_found: "watch_not_found",
+  schedule_selection_required: "watch_not_found",
+} as const satisfies Record<ScheduleFailureCode, WatchFailureCode>;
 
 const WATCH_SCOPES = [
   OWNER_READ_SCOPE,
@@ -63,6 +113,99 @@ async function signComposioWebhook(
 
   return `v1,${btoa(binary)}`;
 }
+
+function watchSchedules(overrides: Partial<WatchSchedules> = {}): WatchSchedules {
+  return {
+    configure: vi.fn<AgentSchedules["configure"]>(),
+    deleteWatch: vi.fn<AgentSchedules["deleteWatch"]>(),
+    get: vi.fn<AgentSchedules["get"]>(),
+    list: vi.fn<AgentSchedules["list"]>(),
+    resumableWatchDefinition: vi.fn<AgentSchedules["resumableWatchDefinition"]>(),
+    watchHistory: vi.fn<AgentSchedules["watchHistory"]>(),
+    watchSourceLimits: vi.fn<AgentSchedules["watchSourceLimits"]>(),
+    ...overrides,
+  };
+}
+
+function watchEvents(): WatchEvents {
+  return {
+    create: vi.fn<WatchEvents["create"]>(),
+    history: vi.fn<WatchEvents["history"]>(),
+    inspect: vi.fn<WatchEvents["inspect"]>(),
+    lifecycle: vi.fn<WatchEvents["lifecycle"]>(),
+    list: vi.fn<WatchEvents["list"]>(),
+    sources: vi.fn<WatchEvents["sources"]>(),
+    update: vi.fn<WatchEvents["update"]>(),
+  };
+}
+
+describe("AgentWatches control flow", () => {
+  it("translates every expected schedule failure at the Watch boundary", async () => {
+    for (const [scheduleCode, watchCode] of Object.entries(WATCH_FAILURE_BY_SCHEDULE_FAILURE)) {
+      const configure = vi.fn<AgentSchedules["configure"]>().mockResolvedValue(
+        configureAgentScheduleResultSchema.parse({
+          error: { code: scheduleCode, message: "Agent schedule request denied." },
+          ok: false,
+        }),
+      );
+
+      await expect(
+        new AgentWatches(watchSchedules({ configure }), watchEvents()).execute(OWNER_AUTHORITY, {
+          action: "create",
+          agentId: AGENT_ID,
+          expectedAgentRevision: 1,
+          idempotencyKey: "watch-create",
+          watch: {
+            instruction: "Check the inbox.",
+            name: "Inbox attention",
+            source: {
+              kind: "scheduled_check",
+              trigger: { intervalSeconds: 600, type: "interval" },
+            },
+          },
+        }),
+      ).resolves.toEqual({
+        error: { code: watchCode, message: "Agent Watch request denied." },
+        ok: false,
+      });
+    }
+  });
+
+  it("returns malformed requests as a typed boundary failure", async () => {
+    const configure = vi.fn<AgentSchedules["configure"]>();
+
+    await expect(
+      new AgentWatches(watchSchedules({ configure }), watchEvents()).execute(OWNER_AUTHORITY, {
+        action: "inspect",
+      }),
+    ).resolves.toEqual({
+      error: { code: "invalid_request", message: "Agent Watch request denied." },
+      ok: false,
+    });
+    expect(configure).not.toHaveBeenCalled();
+  });
+
+  it("keeps missing persisted Watch definitions exceptional", async () => {
+    const get = vi.fn<AgentSchedules["get"]>().mockReturnValue({
+      ok: true,
+      schedule: LOST_DEFINITION_SCHEDULE,
+    });
+    const resumableWatchDefinition = vi
+      .fn<AgentSchedules["resumableWatchDefinition"]>()
+      .mockReturnValue(null);
+
+    await expect(
+      new AgentWatches(watchSchedules({ get, resumableWatchDefinition }), watchEvents()).execute(
+        OWNER_AUTHORITY,
+        {
+          action: "inspect",
+          agentId: AGENT_ID,
+          watchId: WATCH_ID,
+        },
+      ),
+    ).rejects.toThrow("Agent Watch lost its last active definition.");
+  });
+});
 
 describe("OwnerControlPlane Agent Watches", () => {
   it("turns one signed Composio event into one duplicate-safe Watch Run", async () => {
