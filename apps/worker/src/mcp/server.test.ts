@@ -50,6 +50,7 @@ import {
   retireAgentBlueprintResultSchema,
   startRunResultSchema,
   updateAgentResultSchema,
+  unavailableMcpToolResultSchema,
   type OwnerScope,
 } from "@crewhelm/contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -546,6 +547,54 @@ describe("authenticated MCP handler", () => {
         },
       },
     });
+  });
+
+  it("classifies a malformed status payload as an invalid response", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const authority = await ownerAuthority("mcp-invalid-status-owner");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const invalidStatusEnv = {
+      ...env,
+      OWNER_CONTROL_PLANE: {
+        getByName: () =>
+          new Proxy(controlPlane, {
+            get(target, property, receiver) {
+              return property === "status"
+                ? async () => ({ secret: "must-not-reflect-status" })
+                : Reflect.get(target, property, receiver);
+            },
+          }),
+      },
+    };
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 1,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {},
+            name: MCP_STATUS_TOOL_NAME,
+          },
+        }),
+      ),
+      invalidStatusEnv,
+      { authority },
+    );
+    const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+    const result = unavailableMcpToolResultSchema.parse(JSON.parse(payload.content[0]?.text ?? ""));
+
+    expect(result.error).toMatchObject({
+      code: "invalid_control_plane_response",
+      diagnostic: {
+        disposition: "contact_operator",
+        nextAction: "contact_operator",
+        phase: "control_plane.response",
+        reason: "invalid_response",
+      },
+    });
+    expect(JSON.stringify(payload)).not.toContain("must-not-reflect-status");
+    warning.mockRestore();
   });
 
   it("lists bounded unresolved provider effects through a read-only MCP tool", async () => {

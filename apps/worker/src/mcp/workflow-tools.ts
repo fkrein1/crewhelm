@@ -5,7 +5,7 @@ import {
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { McpToolContext } from "./context.js";
-import { controlPlaneToolResult } from "./tool-result.js";
+import { optionalControlPlaneToolResult } from "./tool-result.js";
 
 export const MCP_AGENT_WORKFLOWS_TOOL_NAME = "crewhelm_agent_workflows";
 
@@ -26,39 +26,49 @@ export function registerWorkflowTools(server: McpServer, context: McpToolContext
       inputSchema: manageAgentWorkflowsInputSchema,
       title: "Manage Crewhelm Agent workflows",
     },
-    async (input) =>
-      controlPlaneToolResult(() => {
-        const { action: _action, ...request } = input;
+    async (input) => {
+      const { action: _action, ...request } = input;
 
-        switch (input.action) {
-          case "start":
-            return (
-              controlPlane.startAgentWorkflow?.(authority, request) ??
-              Promise.reject(new Error("Workflow control plane unavailable."))
-            );
-          case "list":
-            return (
-              controlPlane.listAgentWorkflows?.(authority, request) ??
-              Promise.reject(new Error("Workflow control plane unavailable."))
-            );
-          case "inspect":
-            return (
-              controlPlane.inspectAgentWorkflow?.(authority, request) ??
-              Promise.reject(new Error("Workflow control plane unavailable."))
-            );
-          case "cancel":
-            return (
-              controlPlane.cancelAgentWorkflow?.(authority, request) ??
-              Promise.reject(new Error("Workflow control plane unavailable."))
-            );
-          case "delete":
-            return (
-              controlPlane.deleteAgentWorkflow?.(authority, request) ??
-              Promise.reject(new Error("Workflow control plane unavailable."))
-            );
-        }
+      switch (input.action) {
+        case "start":
+          return optionalControlPlaneToolResult(
+            controlPlane.startAgentWorkflow === undefined
+              ? undefined
+              : () => controlPlane.startAgentWorkflow!(authority, request),
+            manageAgentWorkflowsResultSchema,
+          );
+        case "list":
+          return optionalControlPlaneToolResult(
+            controlPlane.listAgentWorkflows === undefined
+              ? undefined
+              : () => controlPlane.listAgentWorkflows!(authority, request),
+            manageAgentWorkflowsResultSchema,
+          );
+        case "inspect":
+          return optionalControlPlaneToolResult(
+            controlPlane.inspectAgentWorkflow === undefined
+              ? undefined
+              : () => controlPlane.inspectAgentWorkflow!(authority, request),
+            manageAgentWorkflowsResultSchema,
+          );
+        case "cancel":
+          return optionalControlPlaneToolResult(
+            controlPlane.cancelAgentWorkflow === undefined
+              ? undefined
+              : () => controlPlane.cancelAgentWorkflow!(authority, request),
+            manageAgentWorkflowsResultSchema,
+          );
+        case "delete":
+          return optionalControlPlaneToolResult(
+            controlPlane.deleteAgentWorkflow === undefined
+              ? undefined
+              : () => controlPlane.deleteAgentWorkflow!(authority, request),
+            manageAgentWorkflowsResultSchema,
+          );
+      }
 
-        throw new Error("Workflow action unavailable.");
-      }, manageAgentWorkflowsResultSchema),
+      input.action satisfies never;
+      throw new Error("Invariant violated: unsupported workflow action.");
+    },
   );
 }

@@ -39,8 +39,8 @@ const fieldsByType: Record<string, ReadonlySet<string>> = {
   string: new Set([...commonSchemaFields, "maxLength", "minLength"]),
 };
 const MAXIMUM_OUTPUT_SCHEMA_JSON_DEPTH = 32;
-const MAXIMUM_OUTPUT_SCHEMA_JSON_CONTAINERS = 1_024;
-const MAXIMUM_OUTPUT_VALUE_CONTAINERS = 65_536;
+const MAXIMUM_OUTPUT_SCHEMA_JSON_NODES = 1_024;
+const MAXIMUM_OUTPUT_VALUE_NODES = 65_536;
 
 export type JsonValue = z.infer<typeof jsonValueSchema>;
 type PublicJsonScalar = boolean | null | number | string;
@@ -52,11 +52,6 @@ type PublicJsonValue5 = PublicJsonScalar | PublicJsonValue4[] | Record<string, P
 type PublicJsonValue6 = PublicJsonScalar | PublicJsonValue5[] | Record<string, PublicJsonValue5>;
 type PublicJsonValue7 = PublicJsonScalar | PublicJsonValue6[] | Record<string, PublicJsonValue6>;
 export type PublicJsonObject = Record<string, PublicJsonValue7>;
-export const publicJsonObjectSchema = jsonValueSchema.refine(
-  (value): value is PublicJsonObject =>
-    typeof value === "object" && value !== null && !Array.isArray(value),
-  "Expected a JSON object.",
-) as z.ZodType<PublicJsonObject>;
 
 export type OutputValidationIssue = {
   code: "additional_property" | "bound" | "enum" | "invalid_json" | "required" | "type_mismatch";
@@ -71,57 +66,215 @@ function schemaIssue(context: z.RefinementCtx, path: PropertyKey[], message: str
   context.addIssue({ code: "custom", message, path });
 }
 
-function jsonValuePreflight(
+type JsonContainerRead =
+  | { kind: "array"; ok: true; values: unknown[] }
+  | { entries: Array<[string, unknown]>; kind: "object"; ok: true }
+  | { failure: "invalid" | "size"; ok: false };
+
+function readJsonContainer(container: object, maximumChildren: number): JsonContainerRead {
+  try {
+    if (Array.isArray(container)) {
+      if (Object.getPrototypeOf(container) !== Array.prototype) {
+        return { failure: "invalid", ok: false };
+      }
+
+      if (container.length > maximumChildren) {
+        return { failure: "size", ok: false };
+      }
+
+      const ownKeys = Reflect.ownKeys(container);
+
+      if (
+        ownKeys.length !== container.length + 1 ||
+        !ownKeys.every(
+          (key) =>
+            key === "length" ||
+            (typeof key === "string" &&
+              /^(0|[1-9][0-9]*)$/.test(key) &&
+              Number(key) < container.length),
+        )
+      ) {
+        return { failure: "invalid", ok: false };
+      }
+
+      const values: unknown[] = [];
+
+      for (let index = 0; index < container.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(container, String(index));
+
+        if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+          return { failure: "invalid", ok: false };
+        }
+
+        values.push(descriptor.value);
+      }
+
+      return { kind: "array", ok: true, values };
+    }
+
+    const prototype = Object.getPrototypeOf(container);
+
+    if (prototype !== Object.prototype && prototype !== null) {
+      return { failure: "invalid", ok: false };
+    }
+
+    const entries: Array<[string, unknown]> = [];
+    const ownKeys = Reflect.ownKeys(container);
+
+    if (ownKeys.length > maximumChildren) {
+      return { failure: "size", ok: false };
+    }
+
+    for (const key of ownKeys) {
+      if (typeof key !== "string") {
+        return { failure: "invalid", ok: false };
+      }
+
+      const descriptor = Object.getOwnPropertyDescriptor(container, key);
+
+      if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+        return { failure: "invalid", ok: false };
+      }
+
+      entries.push([key, descriptor.value]);
+    }
+
+    return { entries, kind: "object", ok: true };
+  } catch {
+    return { failure: "invalid", ok: false };
+  }
+}
+
+type JsonSnapshotTarget =
+  | { array: JsonValue[]; index: number; kind: "array" }
+  | { key: string; kind: "object"; object: Record<string, JsonValue> };
+
+type JsonValueSnapshot =
+  | { failure: "cycle" | "depth" | "invalid" | "size"; ok: false }
+  | { ok: true; value: JsonValue };
+
+function assignJsonSnapshot(target: JsonSnapshotTarget, value: JsonValue): void {
+  if (target.kind === "array") {
+    target.array[target.index] = value;
+    return;
+  }
+
+  Object.defineProperty(target.object, target.key, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+}
+
+function snapshotJsonValue(
   value: unknown,
-  limits: { maxContainers: number; maxDepth: number },
-): "cycle" | "depth" | "invalid" | "size" | null {
-  const stack: Array<{ depth: number; value: unknown }> = [{ depth: 1, value }];
+  limits: { maxDepth: number; maxNodes: number },
+): JsonValueSnapshot {
+  const stack: Array<{ depth: number; target?: JsonSnapshotTarget; value: unknown }> = [
+    { depth: 1, value },
+  ];
   const seen = new WeakSet<object>();
-  let containers = 0;
+  let nodes = 0;
+  let snapshot: JsonValue | undefined;
 
   while (stack.length > 0) {
     const current = stack.pop();
     if (current === undefined) break;
-    if (current.depth > limits.maxDepth) return "depth";
+    nodes += 1;
+    if (nodes > limits.maxNodes) return { failure: "size", ok: false };
+    if (current.depth > limits.maxDepth) return { failure: "depth", ok: false };
     if (typeof current.value !== "object" || current.value === null) {
+      let snapshotValue: JsonValue;
+
       if (
-        current.value !== null &&
-        typeof current.value !== "string" &&
-        typeof current.value !== "boolean" &&
-        !finiteNumber(current.value)
+        current.value === null ||
+        typeof current.value === "string" ||
+        typeof current.value === "boolean"
       ) {
-        return "invalid";
+        snapshotValue = current.value;
+      } else if (finiteNumber(current.value)) {
+        snapshotValue = current.value;
+      } else {
+        return { failure: "invalid", ok: false };
       }
+
+      if (current.target === undefined) snapshot = snapshotValue;
+      else assignJsonSnapshot(current.target, snapshotValue);
       continue;
     }
     if (seen.has(current.value)) {
-      return "cycle";
+      return { failure: "cycle", ok: false };
     }
     seen.add(current.value);
-    containers += 1;
-    if (containers > limits.maxContainers) return "size";
-    const container: object = current.value;
-    const children = Array.isArray(container)
-      ? container
-      : Reflect.ownKeys(container).map((key) => Reflect.get(container, key));
-    for (const child of children) stack.push({ depth: current.depth + 1, value: child });
+    const container = readJsonContainer(current.value, limits.maxNodes - nodes - stack.length);
+
+    if (!container.ok) return { failure: container.failure, ok: false };
+
+    if (container.kind === "array") {
+      const snapshotArray = Array.from(
+        { length: container.values.length },
+        () => null as JsonValue,
+      );
+
+      if (current.target === undefined) snapshot = snapshotArray;
+      else assignJsonSnapshot(current.target, snapshotArray);
+
+      for (let index = container.values.length - 1; index >= 0; index -= 1) {
+        stack.push({
+          depth: current.depth + 1,
+          target: { array: snapshotArray, index, kind: "array" },
+          value: container.values[index],
+        });
+      }
+    } else {
+      const snapshotObject: Record<string, JsonValue> = {};
+
+      if (current.target === undefined) snapshot = snapshotObject;
+      else assignJsonSnapshot(current.target, snapshotObject);
+
+      for (let index = container.entries.length - 1; index >= 0; index -= 1) {
+        const entry = container.entries[index];
+        if (entry === undefined) return { failure: "invalid", ok: false };
+        stack.push({
+          depth: current.depth + 1,
+          target: { key: entry[0], kind: "object", object: snapshotObject },
+          value: entry[1],
+        });
+      }
+    }
   }
 
-  return null;
+  return snapshot === undefined ? { failure: "invalid", ok: false } : { ok: true, value: snapshot };
 }
 
+export const publicJsonObjectSchema = z.preprocess(
+  (value) => {
+    const snapshot = snapshotJsonValue(value, {
+      maxDepth: MAXIMUM_OUTPUT_SCHEMA_DEPTH + 1,
+      maxNodes: MAXIMUM_OUTPUT_VALUE_NODES,
+    });
+    return snapshot.ok ? snapshot.value : undefined;
+  },
+  jsonValueSchema.refine(
+    (value): value is PublicJsonObject =>
+      typeof value === "object" && value !== null && !Array.isArray(value),
+    "Expected a JSON object.",
+  ),
+) as z.ZodType<PublicJsonObject>;
+
 function preflightSchemaValue(value: unknown, context: z.RefinementCtx): boolean {
-  const failure = jsonValuePreflight(value, {
-    maxContainers: MAXIMUM_OUTPUT_SCHEMA_JSON_CONTAINERS,
+  const snapshot = snapshotJsonValue(value, {
     maxDepth: MAXIMUM_OUTPUT_SCHEMA_JSON_DEPTH,
+    maxNodes: MAXIMUM_OUTPUT_SCHEMA_JSON_NODES,
   });
-  if (failure === null) return true;
+  if (snapshot.ok) return true;
   const message = {
     cycle: "Output schema must not contain cycles.",
     depth: "Output schema JSON is nested too deeply.",
     invalid: "Output schema must contain only finite JSON values.",
     size: "Output schema JSON has too many containers.",
-  }[failure];
+  }[snapshot.failure];
   schemaIssue(context, [], message);
   return false;
 }
@@ -379,13 +532,13 @@ export function canonicalJson(value: JsonValue): string {
 
 const restrictedJsonSchema = z
   .preprocess(
-    (value) =>
-      jsonValuePreflight(value, {
-        maxContainers: MAXIMUM_OUTPUT_SCHEMA_JSON_CONTAINERS,
+    (value) => {
+      const snapshot = snapshotJsonValue(value, {
         maxDepth: MAXIMUM_OUTPUT_SCHEMA_JSON_DEPTH,
-      }) === null
-        ? value
-        : null,
+        maxNodes: MAXIMUM_OUTPUT_SCHEMA_JSON_NODES,
+      });
+      return snapshot.ok ? snapshot.value : null;
+    },
     z.record(z.string(), z.json()),
   )
   .superRefine((schema, context) => {
@@ -588,15 +741,15 @@ export function validateJsonOutput(
   schema: Record<string, JsonValue>,
   value: unknown,
 ): { issues: OutputValidationIssue[]; ok: false } | { ok: true; value: JsonValue } {
-  if (
-    jsonValuePreflight(value, {
-      maxContainers: MAXIMUM_OUTPUT_VALUE_CONTAINERS,
-      maxDepth: MAXIMUM_OUTPUT_SCHEMA_DEPTH + 1,
-    }) !== null
-  ) {
+  const snapshot = snapshotJsonValue(value, {
+    maxDepth: MAXIMUM_OUTPUT_SCHEMA_DEPTH + 1,
+    maxNodes: MAXIMUM_OUTPUT_VALUE_NODES,
+  });
+
+  if (!snapshot.ok) {
     return { issues: [{ code: "bound", path: "$" }], ok: false };
   }
-  const parsed = jsonValueSchema.safeParse(value);
+  const parsed = jsonValueSchema.safeParse(snapshot.value);
   if (!parsed.success) return { issues: [{ code: "invalid_json", path: "$" }], ok: false };
   const issues: OutputValidationIssue[] = [];
   validateValue(schema, parsed.data, [], issues);

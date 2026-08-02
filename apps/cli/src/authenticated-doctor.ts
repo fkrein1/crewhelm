@@ -6,6 +6,7 @@ import {
   initializeResponseSchema,
   MCP_PROTOCOL_VERSION,
   parseMcpToolResult,
+  parseTemporaryOwnerSessionFailure,
   runTemporaryOwnerSession,
   TemporaryOwnerSessionError,
   temporaryOwnerSessionErrorCodeSchema,
@@ -103,21 +104,10 @@ function failedCheck(
   endpoint: URL,
   error: unknown,
 ): AuthenticatedDoctorCheck {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    "message" in error &&
-    typeof error.code === "string" &&
-    typeof error.message === "string" &&
-    temporaryOwnerSessionErrorCodeSchema.safeParse(error.code).success
-  ) {
-    return createCheck(
-      name,
-      endpoint,
-      temporaryOwnerSessionErrorCodeSchema.parse(error.code),
-      error.message,
-    );
+  const failure = parseTemporaryOwnerSessionFailure(error);
+
+  if (failure !== null) {
+    return createCheck(name, endpoint, failure.code, failure.message);
   }
 
   return createCheck(name, endpoint, "request_failed", "Authenticated check failed.");

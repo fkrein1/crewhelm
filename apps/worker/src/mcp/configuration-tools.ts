@@ -163,69 +163,65 @@ export function registerConfigurationTools(server: McpServer, context: McpToolCo
       title: "Get Crewhelm configuration",
     },
     async (input) => {
-      const capabilityRequest = getAgentCapabilityCatalogInputSchema.safeParse(input);
+      const { target } = input;
 
-      if (capabilityRequest.success) {
-        return controlPlaneToolResult(async () => {
-          if (!authority.scopes.includes(OWNER_READ_SCOPE)) {
-            return {
-              error: {
-                code: "insufficient_scope",
-                message: "Agent capability request denied.",
-              },
-              ok: false,
-            };
-          }
-
-          const capabilities = agentCapabilityRegistry.catalog(
-            availableAgentCapabilityPrerequisites,
-            capabilityRequest.data.target.id,
-          );
-
-          return capabilities.length === 0
-            ? {
+      switch (target.kind) {
+        case "agent-capability":
+          return controlPlaneToolResult(async () => {
+            if (!authority.scopes.includes(OWNER_READ_SCOPE)) {
+              return {
                 error: {
-                  code: "capability_not_found",
+                  code: "insufficient_scope",
                   message: "Agent capability request denied.",
                 },
                 ok: false,
-              }
-            : { capabilities, ok: true };
-        }, getConfigurationResultSchema);
+              };
+            }
+
+            const capabilities = agentCapabilityRegistry.catalog(
+              availableAgentCapabilityPrerequisites,
+              target.id,
+            );
+
+            return capabilities.length === 0
+              ? {
+                  error: {
+                    code: "capability_not_found",
+                    message: "Agent capability request denied.",
+                  },
+                  ok: false,
+                }
+              : { capabilities, ok: true };
+          }, getConfigurationResultSchema);
+        case "skill-catalog":
+          return controlPlaneToolResult(
+            () => controlPlane.listSkills(authority, input),
+            getConfigurationResultSchema,
+          );
+        case "skill-package":
+          return controlPlaneToolResult(
+            () => controlPlane.getSkill(authority, input),
+            getConfigurationResultSchema,
+          );
+        case "agent-blueprint-catalog":
+          return controlPlaneToolResult(
+            () => controlPlane.listAgentBlueprints(authority, input),
+            getConfigurationResultSchema,
+          );
+        case "agent-blueprint-package":
+          return controlPlaneToolResult(
+            () => controlPlane.getAgentBlueprint(authority, input),
+            getConfigurationResultSchema,
+          );
+        case "fleet":
+          return controlPlaneToolResult(
+            () => controlPlane.getFleetConfiguration(authority, input),
+            getConfigurationResultSchema,
+          );
       }
 
-      if (listSkillsInputSchema.safeParse(input).success) {
-        return controlPlaneToolResult(
-          () => controlPlane.listSkills(authority, input),
-          getConfigurationResultSchema,
-        );
-      }
-
-      if (getSkillInputSchema.safeParse(input).success) {
-        return controlPlaneToolResult(
-          () => controlPlane.getSkill(authority, input),
-          getConfigurationResultSchema,
-        );
-      }
-
-      if (listAgentBlueprintsInputSchema.safeParse(input).success) {
-        return controlPlaneToolResult(
-          () => controlPlane.listAgentBlueprints(authority, input),
-          getConfigurationResultSchema,
-        );
-      }
-
-      if (getAgentBlueprintInputSchema.safeParse(input).success) {
-        return controlPlaneToolResult(
-          () => controlPlane.getAgentBlueprint(authority, input),
-          getConfigurationResultSchema,
-        );
-      }
-
-      return controlPlaneToolResult(
-        () => controlPlane.getFleetConfiguration(authority, input),
-        getConfigurationResultSchema,
-      );
+      target satisfies never;
+      throw new Error("Invariant violated: unsupported configuration read target.");
     },
   );
 
@@ -244,45 +240,43 @@ export function registerConfigurationTools(server: McpServer, context: McpToolCo
       title: "Configure Crewhelm",
     },
     async (input) => {
-      if (publishSkillInputSchema.safeParse(input).success) {
-        return controlPlaneToolResult(
-          () => controlPlane.publishSkill(authority, input),
-          configureResultSchema,
-        );
+      const { target } = input;
+
+      switch (target.kind) {
+        case "skill-package":
+          return controlPlaneToolResult(
+            () => controlPlane.publishSkill(authority, input),
+            configureResultSchema,
+          );
+        case "skill-retirement":
+          return controlPlaneToolResult(
+            () => controlPlane.retireSkill(authority, input),
+            configureResultSchema,
+          );
+        case "agent-blueprint-package":
+          return controlPlaneToolResult(
+            () => controlPlane.publishAgentBlueprint(authority, input),
+            configureResultSchema,
+          );
+        case "agent-blueprint-retirement":
+          return controlPlaneToolResult(
+            () => controlPlane.retireAgentBlueprint(authority, input),
+            configureResultSchema,
+          );
+        case "agent-blueprint-instance":
+          return controlPlaneToolResult(
+            () => controlPlane.instantiateAgentBlueprint(authority, input),
+            configureResultSchema,
+          );
+        case "fleet":
+          return controlPlaneToolResult(
+            () => controlPlane.configureFleetConfiguration(authority, input),
+            configureResultSchema,
+          );
       }
 
-      if (retireSkillInputSchema.safeParse(input).success) {
-        return controlPlaneToolResult(
-          () => controlPlane.retireSkill(authority, input),
-          configureResultSchema,
-        );
-      }
-
-      if (publishAgentBlueprintInputSchema.safeParse(input).success) {
-        return controlPlaneToolResult(
-          () => controlPlane.publishAgentBlueprint(authority, input),
-          configureResultSchema,
-        );
-      }
-
-      if (retireAgentBlueprintInputSchema.safeParse(input).success) {
-        return controlPlaneToolResult(
-          () => controlPlane.retireAgentBlueprint(authority, input),
-          configureResultSchema,
-        );
-      }
-
-      if (instantiateAgentBlueprintInputSchema.safeParse(input).success) {
-        return controlPlaneToolResult(
-          () => controlPlane.instantiateAgentBlueprint(authority, input),
-          configureResultSchema,
-        );
-      }
-
-      return controlPlaneToolResult(
-        () => controlPlane.configureFleetConfiguration(authority, input),
-        configureResultSchema,
-      );
+      target satisfies never;
+      throw new Error("Invariant violated: unsupported configuration write target.");
     },
   );
 }

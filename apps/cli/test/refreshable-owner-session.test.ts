@@ -4,6 +4,7 @@ import {
   authorizeRefreshableOwnerCredential,
   initializeResponseSchema,
   MCP_PROTOCOL_VERSION,
+  parseTemporaryOwnerSessionFailure,
   runRefreshableOwnerSession,
   type RefreshableOwnerCredential,
 } from "../src/temporary-owner-session.js";
@@ -25,6 +26,23 @@ function requestBodyText(body: BodyInit | null | undefined): string {
 }
 
 describe("refreshable owner sessions", () => {
+  it("validates explicit session failures without trusting hostile thrown values", () => {
+    expect(
+      parseTemporaryOwnerSessionFailure({ code: "timeout", message: "Authorization timed out." }),
+    ).toEqual({ code: "timeout", message: "Authorization timed out." });
+
+    const hostile = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("hostile getter");
+        },
+      },
+    );
+
+    expect(parseTemporaryOwnerSessionFailure(hostile)).toBeNull();
+  });
+
   it("requests offline access once and retains only the refresh credential", async () => {
     const persisted = vi.fn<(value: RefreshableOwnerCredential) => Promise<void>>(
       async () => undefined,

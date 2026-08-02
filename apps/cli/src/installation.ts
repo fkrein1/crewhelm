@@ -30,6 +30,14 @@ export const installationSchema = z.strictObject({
 
 export type Installation = z.infer<typeof installationSchema>;
 
+function isMissingFileError(error: unknown): boolean {
+  try {
+    return typeof error === "object" && error !== null && Reflect.get(error, "code") === "ENOENT";
+  } catch {
+    return false;
+  }
+}
+
 export async function readInstallation(path: string): Promise<Installation | undefined> {
   const absolutePath = resolve(path);
   let file;
@@ -37,7 +45,7 @@ export async function readInstallation(path: string): Promise<Installation | und
   try {
     file = await lstat(absolutePath);
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+    if (isMissingFileError(error)) {
       return undefined;
     }
 
@@ -68,7 +76,11 @@ export async function writeInstallation(path: string, installation: Installation
     });
     await rename(temporaryPath, absolutePath);
   } catch {
-    await rm(temporaryPath, { force: true });
+    try {
+      await rm(temporaryPath, { force: true });
+    } catch {
+      // Preserve the bounded installation write failure.
+    }
     throw new Error("Crewhelm installation metadata could not be saved.");
   }
 }

@@ -15,7 +15,6 @@ import {
 } from "@crewhelm/contracts";
 import type { ComposioAuthConfigs, ComposioCatalog } from "@crewhelm/composio";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type * as z from "zod";
 
 import type { McpToolContext } from "./context.js";
 import {
@@ -37,7 +36,12 @@ interface IntegrationToolConfiguration {
 }
 
 function integrationEnablementMcpResult(result: unknown) {
-  return validatedToolResult(result, enableIntegrationResultSchema);
+  return validatedToolResult(result, enableIntegrationResultSchema, {
+    code: "invalid_integration_response",
+    disposition: "contact_operator",
+    phase: "integration.response",
+    reason: "invalid_response",
+  });
 }
 
 function unknownIntegrationEnablementMcpResult(operation: {
@@ -75,6 +79,18 @@ async function enableIntegration(
     });
   }
 
+  const request = enableIntegrationInputSchema.safeParse(input);
+
+  if (!request.success) {
+    return integrationEnablementMcpResult({
+      error: {
+        code: "invalid_request",
+        message: "Integration enablement request denied.",
+      },
+      ok: false,
+    });
+  }
+
   if (!authConfigs.isAvailable()) {
     return integrationEnablementMcpResult({
       error: {
@@ -85,62 +101,84 @@ async function enableIntegration(
     });
   }
 
-  let reservation: z.infer<typeof reserveIntegrationEnablementResultSchema>;
+  let reservationResponse: unknown;
 
   try {
-    reservation = reserveIntegrationEnablementResultSchema.parse(
-      await controlPlane.reserveIntegrationEnablement(authority, input),
-    );
+    reservationResponse = await controlPlane.reserveIntegrationEnablement(authority, request.data);
   } catch {
-    return unavailableToolResult();
+    return unavailableToolResult({
+      phase: "control_plane.rpc",
+      reason: "transport_error",
+    });
   }
 
-  if (!reservation.ok) {
-    return integrationEnablementMcpResult(reservation);
+  const reservation = reserveIntegrationEnablementResultSchema.safeParse(reservationResponse);
+
+  if (!reservation.success) {
+    return unavailableToolResult({
+      code: "invalid_control_plane_response",
+      disposition: "contact_operator",
+      phase: "control_plane.response",
+      reason: "invalid_response",
+    });
   }
 
-  if (reservation.state === "replay") {
+  if (!reservation.data.ok) {
+    return integrationEnablementMcpResult(reservation.data);
+  }
+
+  if (reservation.data.state === "replay") {
     return integrationEnablementMcpResult({
-      authConfigId: reservation.authConfigId,
-      authScheme: reservation.authScheme,
+      authConfigId: reservation.data.authConfigId,
+      authScheme: reservation.data.authScheme,
       created: false,
-      integrationSlug: reservation.integrationSlug,
+      integrationSlug: reservation.data.integrationSlug,
       managed: true,
       ok: true,
     });
   }
 
-  const request = enableIntegrationInputSchema.parse(input);
   let providerResult: Awaited<ReturnType<ComposioAuthConfigs["ensureManaged"]>>;
 
   try {
     providerResult = await authConfigs.ensureManaged({
-      integrationSlug: request.integrationSlug,
+      integrationSlug: request.data.integrationSlug,
     });
   } catch {
-    return unknownIntegrationEnablementMcpResult(reservation);
+    return unknownIntegrationEnablementMcpResult(reservation.data);
   }
 
   if (!providerResult.ok) {
     return providerResult.error.code === "integration_enablement_outcome_unknown"
-      ? unknownIntegrationEnablementMcpResult(reservation)
+      ? unknownIntegrationEnablementMcpResult(reservation.data)
       : integrationEnablementMcpResult(providerResult);
   }
 
+  const completion = completeIntegrationEnablementInputSchema.safeParse({
+    ...providerResult.authConfig,
+    created: providerResult.created,
+    reservationId: reservation.data.reservationId,
+  });
+
+  if (!completion.success) {
+    return unknownIntegrationEnablementMcpResult(reservation.data);
+  }
+
+  let completionResponse: unknown;
+
   try {
-    return integrationEnablementMcpResult(
-      await controlPlane.completeIntegrationEnablement(
-        authority,
-        completeIntegrationEnablementInputSchema.parse({
-          ...providerResult.authConfig,
-          created: providerResult.created,
-          reservationId: reservation.reservationId,
-        }),
-      ),
+    completionResponse = await controlPlane.completeIntegrationEnablement(
+      authority,
+      completion.data,
     );
   } catch {
-    return unknownIntegrationEnablementMcpResult(reservation);
+    return unknownIntegrationEnablementMcpResult(reservation.data);
   }
+
+  const completed = enableIntegrationResultSchema.safeParse(completionResponse);
+  return completed.success
+    ? integrationEnablementMcpResult(completed.data)
+    : unknownIntegrationEnablementMcpResult(reservation.data);
 }
 
 export function registerIntegrationTools(

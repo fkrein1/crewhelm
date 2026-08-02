@@ -20,24 +20,64 @@ interface UnavailableToolOptions {
   reason?: string;
 }
 
+interface McpToolResult {
+  [key: string]: unknown;
+  content: Array<{
+    text: string;
+    type: "text";
+  }>;
+  isError: boolean;
+}
+
+type EncodedToolResult<Result> = { ok: true; result: Result; text: string } | { ok: false };
+
+function encodeToolResult<Result extends { ok: boolean }>(
+  input: unknown,
+  schema: z.ZodType<Result>,
+): EncodedToolResult<Result> {
+  try {
+    const parsed = schema.safeParse(input);
+
+    if (!parsed.success) {
+      return { ok: false };
+    }
+
+    const text = JSON.stringify(parsed.data);
+    return typeof text === "string" ? { ok: true, result: parsed.data, text } : { ok: false };
+  } catch {
+    // Hostile dependency values can still throw through accessors during validation or serialization.
+    return { ok: false };
+  }
+}
+
 export function validatedToolResult<Result extends { ok: boolean }>(
   input: unknown,
   schema: z.ZodType<Result>,
-) {
-  const result = schema.parse(input);
+  invalidResponse: UnavailableToolOptions = {
+    code: "invalid_control_plane_response",
+    disposition: "contact_operator",
+    phase: "control_plane.response",
+    reason: "invalid_response",
+  },
+): McpToolResult {
+  const encoded = encodeToolResult(input, schema);
+
+  if (!encoded.ok) {
+    return unavailableToolResult(invalidResponse);
+  }
 
   return {
     content: [
       {
-        text: JSON.stringify(result),
+        text: encoded.text,
         type: "text" as const,
       },
     ],
-    isError: !result.ok,
+    isError: !encoded.result.ok,
   };
 }
 
-export function unavailableToolResult(options: UnavailableToolOptions = {}) {
+export function unavailableToolResult(options: UnavailableToolOptions = {}): McpToolResult {
   const diagnosticId = `diag_${crypto.randomUUID()}`;
   const code = options.code ?? "control_plane_unavailable";
   const result = unavailableMcpToolResultSchema.parse({
@@ -85,7 +125,7 @@ export function unavailableToolResult(options: UnavailableToolOptions = {}) {
 export async function controlPlaneToolResult<Result extends { ok: boolean }>(
   operation: () => Promise<unknown>,
   schema: z.ZodType<Result>,
-) {
+): Promise<McpToolResult> {
   let result: unknown;
 
   try {
@@ -97,16 +137,19 @@ export async function controlPlaneToolResult<Result extends { ok: boolean }>(
     });
   }
 
-  try {
-    return validatedToolResult(result, schema);
-  } catch {
-    return unavailableToolResult({
-      code: "invalid_control_plane_response",
-      disposition: "contact_operator",
-      phase: "control_plane.response",
-      reason: "invalid_response",
-    });
-  }
+  return validatedToolResult(result, schema);
+}
+
+export async function optionalControlPlaneToolResult<Result extends { ok: boolean }>(
+  operation: (() => Promise<unknown>) | undefined,
+  schema: z.ZodType<Result>,
+): Promise<McpToolResult> {
+  return operation === undefined
+    ? unavailableToolResult({
+        phase: "control_plane.rpc",
+        reason: "dependency_unavailable",
+      })
+    : controlPlaneToolResult(operation, schema);
 }
 
 export async function integrationReadToolResult<Result extends { ok: boolean }>(
@@ -139,16 +182,12 @@ export async function integrationReadToolResult<Result extends { ok: boolean }>(
     });
   }
 
-  try {
-    return validatedToolResult(result, schema);
-  } catch {
-    return unavailableToolResult({
-      code: "invalid_integration_response",
-      disposition: "contact_operator",
-      phase: "integration.response",
-      reason: "invalid_response",
-    });
-  }
+  return validatedToolResult(result, schema, {
+    code: "invalid_integration_response",
+    disposition: "contact_operator",
+    phase: "integration.response",
+    reason: "invalid_response",
+  });
 }
 
 export async function connectionConfigurationToolResult<Result extends { ok: boolean }>(

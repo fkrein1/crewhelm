@@ -1,6 +1,7 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
+import type { Readable } from "node:stream";
 
 const MAX_COMMAND_OUTPUT_BYTES = 1_048_576;
 const WRANGLER_TIMEOUT_MS = 300_000;
@@ -89,12 +90,19 @@ export function createWranglerRunner(
 
   return (arguments_, runOptions) =>
     new Promise<WranglerResult>((resolveResult, reject) => {
-      const child = spawn(process.execPath, [executablePath, ...arguments_], {
-        cwd: runOptions.cwd,
-        env: childEnvironment,
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-      });
+      let child: ChildProcessByStdio<null, Readable, Readable>;
+
+      try {
+        child = spawn(process.execPath, [executablePath, ...arguments_], {
+          cwd: runOptions.cwd,
+          env: childEnvironment,
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+        });
+      } catch {
+        reject(new WranglerExecutionError("Cloudflare command could not be started."));
+        return;
+      }
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       let stdoutSize = 0;

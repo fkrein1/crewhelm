@@ -71,10 +71,6 @@ export class DoctorInputError extends Error {
   override readonly name = "DoctorInputError";
 }
 
-class ResponseTooLargeError extends Error {
-  override readonly name = "ResponseTooLargeError";
-}
-
 export function parseDeploymentOrigin(input: string): URL {
   const parsedInput = deploymentOriginInputSchema.safeParse(input);
 
@@ -140,9 +136,13 @@ function createCheck(
   });
 }
 
-async function readBoundedBody(response: Response): Promise<string> {
+type BoundedBodyRead =
+  | { ok: true; body: string }
+  | { ok: false; reason: "invalid_encoding" | "response_too_large" };
+
+async function readBoundedBody(response: Response): Promise<BoundedBodyRead> {
   if (!response.body) {
-    return "";
+    return { body: "", ok: true };
   }
 
   const reader = response.body.getReader();
@@ -159,8 +159,12 @@ async function readBoundedBody(response: Response): Promise<string> {
     byteLength += result.value.byteLength;
 
     if (byteLength > MAX_DIAGNOSTIC_RESPONSE_BYTES) {
-      await reader.cancel();
-      throw new ResponseTooLargeError();
+      try {
+        await reader.cancel();
+      } catch {
+        // The size result is authoritative even if upstream cancellation fails.
+      }
+      return { ok: false, reason: "response_too_large" };
     }
 
     chunks.push(result.value);
@@ -174,11 +178,41 @@ async function readBoundedBody(response: Response): Promise<string> {
     offset += chunk.byteLength;
   }
 
-  return new TextDecoder("utf-8", { fatal: true }).decode(body);
+  try {
+    return { body: new TextDecoder("utf-8", { fatal: true }).decode(body), ok: true };
+  } catch {
+    return { ok: false, reason: "invalid_encoding" };
+  }
 }
 
 function isTimeout(error: unknown): boolean {
   return error instanceof Error && error.name === "TimeoutError";
+}
+
+function boundedBodyFailureCheck(
+  definition: CheckDefinition,
+  endpoint: URL,
+  reason: Extract<BoundedBodyRead, { ok: false }>["reason"],
+): DoctorCheck {
+  switch (reason) {
+    case "invalid_encoding":
+      return createCheck(
+        definition,
+        endpoint,
+        "request_failed",
+        `${definition.subject} request failed.`,
+      );
+    case "response_too_large":
+      return createCheck(
+        definition,
+        endpoint,
+        "response_too_large",
+        `${definition.subject} response exceeded ${MAX_DIAGNOSTIC_RESPONSE_BYTES} bytes.`,
+      );
+  }
+
+  reason satisfies never;
+  throw new Error("Invariant violated: unsupported bounded response failure.");
 }
 
 function stringArrayContaining(value: string) {
@@ -261,7 +295,7 @@ async function runCheck(
   const requestEndpoint = new URL(endpoint);
   requestEndpoint.searchParams.set("crewhelm-doctor", Date.now().toString(36));
   let response: Response;
-  let body: string;
+  let bodyRead: BoundedBodyRead;
 
   try {
     response = await dependencies.fetch(requestEndpoint, {
@@ -272,17 +306,8 @@ async function runCheck(
       redirect: "manual",
       signal: AbortSignal.timeout(options.timeoutMs),
     });
-    body = await readBoundedBody(response);
+    bodyRead = await readBoundedBody(response);
   } catch (error) {
-    if (error instanceof ResponseTooLargeError) {
-      return createCheck(
-        definition,
-        endpoint,
-        "response_too_large",
-        `${definition.subject} response exceeded ${MAX_DIAGNOSTIC_RESPONSE_BYTES} bytes.`,
-      );
-    }
-
     const timedOut = isTimeout(error);
 
     return createCheck(
@@ -293,6 +318,10 @@ async function runCheck(
         ? `${definition.subject} request timed out.`
         : `${definition.subject} request failed.`,
     );
+  }
+
+  if (!bodyRead.ok) {
+    return boundedBodyFailureCheck(definition, endpoint, bodyRead.reason);
   }
 
   if (response.status !== 200) {
@@ -318,7 +347,7 @@ async function runCheck(
   let payload: unknown;
 
   try {
-    payload = JSON.parse(body);
+    payload = JSON.parse(bodyRead.body);
   } catch {
     return createCheck(
       definition,

@@ -129,9 +129,23 @@ export interface TemporaryOwnerMcpSession {
   endpoint: URL;
 }
 
-interface SessionFailure {
+export interface SessionFailure {
   code: TemporaryOwnerSessionErrorCode;
   message: string;
+}
+
+const sessionFailureSchema = z.strictObject({
+  code: temporaryOwnerSessionErrorCodeSchema,
+  message: z.string().max(512),
+});
+
+export function parseTemporaryOwnerSessionFailure(error: unknown): SessionFailure | null {
+  try {
+    const parsed = sessionFailureSchema.safeParse(error);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
 }
 
 type SessionStep =

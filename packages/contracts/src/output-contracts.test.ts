@@ -4,6 +4,7 @@ import {
   MAXIMUM_OUTPUT_VALIDATION_ISSUES,
   canonicalJson,
   outputContractSchema,
+  publicJsonObjectSchema,
   validateJsonOutput,
 } from "./output-contracts.js";
 
@@ -28,6 +29,30 @@ const reportSchema = {
   required: ["findings", "confidence"],
   type: "object",
 } as const;
+
+function singleReflectionProxy<const Value extends object>(
+  value: Value,
+): {
+  ownKeysCalls(): number;
+  value: Value;
+} {
+  let calls = 0;
+
+  return {
+    ownKeysCalls: () => calls,
+    value: new Proxy(value, {
+      ownKeys(target) {
+        calls += 1;
+
+        if (calls > 1) {
+          throw new Error("Injected repeated reflection failure.");
+        }
+
+        return Reflect.ownKeys(target);
+      },
+    }),
+  };
+}
 
 describe("typed output contracts", () => {
   it("accepts and canonicalizes the restricted object-root schema", () => {
@@ -164,6 +189,73 @@ describe("typed output contracts", () => {
       issues: [{ code: "bound", path: "$" }],
       ok: false,
     });
+  });
+
+  it("rejects hostile object reflection as a bounded value instead of throwing", () => {
+    const hostileSchema = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("Injected schema reflection failure.");
+        },
+      },
+    );
+    const parsed = outputContractSchema.safeParse({
+      kind: "json",
+      schema: { jsonSchema: hostileSchema, name: "hostile_schema", version: "1" },
+    });
+
+    expect(parsed.success).toBe(false);
+    expect(publicJsonObjectSchema.safeParse(hostileSchema).success).toBe(false);
+
+    const contract = outputContractSchema.parse({
+      kind: "json",
+      schema: { jsonSchema: reportSchema, name: "hostile_value", version: "1" },
+    });
+    if (contract.kind !== "json") throw new Error("Expected JSON contract.");
+    let getterCalled = false;
+    const hostileValue = Object.defineProperty({}, "confidence", {
+      enumerable: true,
+      get() {
+        getterCalled = true;
+        throw new Error("Injected value getter failure.");
+      },
+    });
+
+    expect(validateJsonOutput(contract.schema.jsonSchema, hostileValue)).toEqual({
+      issues: [{ code: "bound", path: "$" }],
+      ok: false,
+    });
+    expect(getterCalled).toBe(false);
+  });
+
+  it("validates a stable snapshot without reflecting over stateful input twice", () => {
+    const statefulSchema = singleReflectionProxy(reportSchema);
+    const parsed = outputContractSchema.safeParse({
+      kind: "json",
+      schema: { jsonSchema: statefulSchema.value, name: "stateful_schema", version: "1" },
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(statefulSchema.ownKeysCalls()).toBe(1);
+
+    if (!parsed.success || parsed.data.kind !== "json") {
+      throw new Error("Expected stateful JSON contract.");
+    }
+
+    const statefulValue = singleReflectionProxy({
+      confidence: 0.9,
+      findings: [{ severity: "high", summary: "Stable snapshot" }],
+    });
+
+    expect(validateJsonOutput(parsed.data.schema.jsonSchema, statefulValue.value)).toMatchObject({
+      ok: true,
+    });
+    expect(statefulValue.ownKeysCalls()).toBe(1);
+
+    const publicValue = singleReflectionProxy({ answer: "Stable snapshot" });
+    expect(publicJsonObjectSchema.safeParse(publicValue.value).success).toBe(true);
+    expect(publicValue.ownKeysCalls()).toBe(1);
   });
 
   it.each(["__proto__", "constructor", "prototype"])(

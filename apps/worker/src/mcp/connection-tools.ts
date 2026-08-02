@@ -10,7 +10,6 @@ import {
 } from "@crewhelm/contracts";
 import type { ComposioConnectionLinks, ComposioRuntime } from "@crewhelm/composio";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type * as z from "zod";
 
 import { createConnectionAuthorizationCallback } from "../owner/connections/index.js";
 import type { McpToolContext, OwnerControlPlaneClient } from "./context.js";
@@ -28,7 +27,12 @@ interface ConnectionToolConfiguration {
 }
 
 function connectionLinkMcpResult(result: unknown) {
-  return validatedToolResult(result, createConnectionLinkResultSchema);
+  return validatedToolResult(result, createConnectionLinkResultSchema, {
+    code: "invalid_integration_response",
+    disposition: "contact_operator",
+    phase: "integration.response",
+    reason: "invalid_response",
+  });
 }
 
 function unknownConnectionLinkMcpResult(operation: {
@@ -65,6 +69,18 @@ async function createConnectionLink(
     });
   }
 
+  const request = createConnectionLinkInputSchema.safeParse(input);
+
+  if (!request.success) {
+    return connectionLinkMcpResult({
+      error: {
+        code: "invalid_request",
+        message: "Connection link request denied.",
+      },
+      ok: false,
+    });
+  }
+
   if (!configuration.connectionLinks.isAvailable()) {
     return connectionLinkMcpResult({
       error: {
@@ -75,70 +91,90 @@ async function createConnectionLink(
     });
   }
 
-  let reservation: z.infer<typeof reserveConnectionLinkResultSchema>;
+  let reservationResponse: unknown;
 
   try {
-    reservation = reserveConnectionLinkResultSchema.parse(
-      await controlPlane.reserveConnectionLink(authority, input),
-    );
+    reservationResponse = await controlPlane.reserveConnectionLink(authority, request.data);
   } catch {
-    return unavailableToolResult();
+    return unavailableToolResult({
+      phase: "control_plane.rpc",
+      reason: "transport_error",
+    });
   }
 
-  if (!reservation.ok) {
-    return connectionLinkMcpResult(reservation);
+  const reservation = reserveConnectionLinkResultSchema.safeParse(reservationResponse);
+
+  if (!reservation.success) {
+    return unavailableToolResult({
+      code: "invalid_control_plane_response",
+      disposition: "contact_operator",
+      phase: "control_plane.response",
+      reason: "invalid_response",
+    });
   }
 
-  if (reservation.state === "replay") {
+  if (!reservation.data.ok) {
+    return connectionLinkMcpResult(reservation.data);
+  }
+
+  if (reservation.data.state === "replay") {
     return connectionLinkMcpResult({
-      connectionLink: reservation.connectionLink,
+      connectionLink: reservation.data.connectionLink,
       created: false,
       ok: true,
     });
   }
 
-  const request = createConnectionLinkInputSchema.parse(input);
   let providerResult: Awaited<ReturnType<ComposioConnectionLinks["create"]>>;
 
   try {
     const callback = await createConnectionAuthorizationCallback({
-      authorizationExpiresAt: reservation.authorizationExpiresAt,
-      authorizationToken: reservation.authorizationToken,
+      authorizationExpiresAt: reservation.data.authorizationExpiresAt,
+      authorizationToken: reservation.data.authorizationToken,
       ownerKey: authority.ownerKey,
       origin: configuration.publicOrigin,
-      reservationId: reservation.reservationId,
+      reservationId: reservation.data.reservationId,
       signingSecret: configuration.signingSecret,
     });
 
     providerResult = await configuration.connectionLinks.create({
-      authConfigId: request.authConfigId,
+      authConfigId: request.data.authConfigId,
       callbackSecrets: callback.callbackSecrets,
       callbackUrl: callback.callbackUrl,
       userId: authority.ownerKey,
     });
   } catch {
-    return unknownConnectionLinkMcpResult(reservation);
+    return unknownConnectionLinkMcpResult(reservation.data);
   }
 
   if (!providerResult.ok) {
     return providerResult.error.code === "connection_link_outcome_unknown"
-      ? unknownConnectionLinkMcpResult(reservation)
+      ? unknownConnectionLinkMcpResult(reservation.data)
       : connectionLinkMcpResult(providerResult);
   }
 
-  try {
-    const completion = completeConnectionLinkInputSchema.parse({
-      ...providerResult.connectionLink,
-      authorizationToken: reservation.authorizationToken,
-      reservationId: reservation.reservationId,
-    });
+  const completion = completeConnectionLinkInputSchema.safeParse({
+    ...providerResult.connectionLink,
+    authorizationToken: reservation.data.authorizationToken,
+    reservationId: reservation.data.reservationId,
+  });
 
-    return connectionLinkMcpResult(
-      await controlPlane.completeConnectionLink(authority, completion),
-    );
-  } catch {
-    return unknownConnectionLinkMcpResult(reservation);
+  if (!completion.success) {
+    return unknownConnectionLinkMcpResult(reservation.data);
   }
+
+  let completionResponse: unknown;
+
+  try {
+    completionResponse = await controlPlane.completeConnectionLink(authority, completion.data);
+  } catch {
+    return unknownConnectionLinkMcpResult(reservation.data);
+  }
+
+  const completed = createConnectionLinkResultSchema.safeParse(completionResponse);
+  return completed.success
+    ? connectionLinkMcpResult(completed.data)
+    : unknownConnectionLinkMcpResult(reservation.data);
 }
 
 async function listConnections(
