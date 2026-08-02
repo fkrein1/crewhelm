@@ -2995,15 +2995,20 @@ describe("authenticated MCP handler", () => {
       reservationId: reservation.reservationId,
       status: "success",
     });
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json({
-        alias: "Personal Todoist",
-        id: providerConnectionId,
-        state: { val: { access_token: "provider-secret" } },
-        status: "ACTIVE",
-        toolkit: { slug: "todoist" },
-      }),
-    );
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ error: "forbidden" }, { status: 403 }))
+      .mockRejectedValueOnce(new Error("Composio unavailable"))
+      .mockResolvedValue(
+        Response.json({
+          alias: "Personal Todoist",
+          id: providerConnectionId,
+          state: { val: { access_token: "provider-secret" } },
+          status: "ACTIVE",
+          toolkit: { slug: "todoist" },
+        }),
+      );
     const request = toolRequest(
       JSON.stringify({
         id: 146,
@@ -3028,6 +3033,44 @@ describe("authenticated MCP handler", () => {
       ok: false,
     });
     expect(fetchMock).not.toHaveBeenCalled();
+    const configurationResponse = await handleAuthenticatedMcpRequest(request.clone(), env, {
+      authority,
+    });
+    const configurationPayload = jsonRpcToolResultSchema.parse(
+      await configurationResponse.json(),
+    ).result;
+    const configurationResult = unavailableMcpToolResultSchema.parse(
+      JSON.parse(configurationPayload.content[0]?.text ?? ""),
+    );
+
+    expect(configurationPayload.isError).toBe(true);
+    expect(configurationResult.error).toMatchObject({
+      code: "invalid_integration_response",
+      diagnostic: {
+        disposition: "contact_operator",
+        phase: "integration.response",
+        reason: "configuration_unavailable",
+      },
+    });
+    const unavailableResponse = await handleAuthenticatedMcpRequest(request.clone(), env, {
+      authority,
+    });
+    const unavailablePayload = jsonRpcToolResultSchema.parse(
+      await unavailableResponse.json(),
+    ).result;
+    const unavailableResult = unavailableMcpToolResultSchema.parse(
+      JSON.parse(unavailablePayload.content[0]?.text ?? ""),
+    );
+
+    expect(unavailablePayload.isError).toBe(true);
+    expect(unavailableResult.error).toMatchObject({
+      code: "integration_provider_unavailable",
+      diagnostic: {
+        phase: "integration.rpc",
+        reason: "transport_error",
+      },
+    });
+    const postActivationRequest = request.clone();
     const response = await handleAuthenticatedMcpRequest(request, env, { authority });
     const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
     const result = listConnectionsResultSchema.parse(JSON.parse(payload.content[0]?.text ?? ""));
@@ -3045,11 +3088,24 @@ describe("authenticated MCP handler", () => {
       ],
       ok: true,
     });
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchMock.mock.calls[0]?.[0]).toEqual(
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[2]?.[0]).toEqual(
       new URL(`https://backend.composio.dev/api/v3.1/connected_accounts/${providerConnectionId}`),
     );
     expect(JSON.stringify(result)).not.toContain("provider-secret");
+    const postActivationResponse = await handleAuthenticatedMcpRequest(postActivationRequest, env, {
+      authority,
+    });
+    const postActivationPayload = jsonRpcToolResultSchema.parse(
+      await postActivationResponse.json(),
+    ).result;
+
+    expect(postActivationPayload.isError).toBe(false);
+    expect(
+      listConnectionsResultSchema.parse(JSON.parse(postActivationPayload.content[0]?.text ?? "")),
+    ).toEqual(result);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    warning.mockRestore();
     fetchMock.mockRestore();
   });
 

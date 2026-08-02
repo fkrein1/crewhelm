@@ -391,6 +391,37 @@ describe("Composio trigger event verification", () => {
     });
   });
 
+  it.each([
+    ["a missing channel", { text: "missing channel", ts: "1785662400.100" }],
+    ["a malformed channel", { channel: "general", ts: "1785662400.100" }],
+    ["a missing timestamp", { channel: "C0BM0EQS27R", text: "missing timestamp" }],
+    ["a malformed timestamp", { channel: "C0BM0EQS27R", ts: "not-a-timestamp" }],
+  ])("rejects a signed Slack message with %s", async (_description, data) => {
+    const original = triggerEvent();
+    const signed = await signedRequest({
+      body: JSON.stringify({
+        ...original,
+        data,
+        metadata: {
+          ...original.metadata,
+          trigger_slug: "SLACK_RECEIVE_MESSAGE",
+        },
+      }),
+    });
+
+    await expect(
+      verifyComposioTriggerEvent({
+        ...signed,
+        now: 1_785_662_400_000,
+        projectApiKey: API_KEY,
+        secret: WEBHOOK_SECRET,
+      }),
+    ).resolves.toEqual({
+      error: { code: "invalid_webhook", message: "Integration webhook request denied." },
+      ok: false,
+    });
+  });
+
   it("acknowledges a validly signed preserved event type without routing it", async () => {
     const signed = await signedRequest({
       body: JSON.stringify({ data: {}, type: "composio.connected_account.expired" }),

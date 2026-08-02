@@ -402,6 +402,7 @@ export function createComposioCatalog(options: ComposioCatalogOptions): Composio
 
 export {
   createComposioRuntime,
+  type ComposioConnectionVerificationResult,
   type ComposioRuntime,
   type ComposioRuntimeOptions,
 } from "./execution.js";
@@ -418,6 +419,7 @@ export {
   createComposioEventCatalog,
   type ComposioEventCatalog,
   type ComposioEventCatalogOptions,
+  type ComposioProviderTriggerConfigurationResult,
   type ComposioWatchableEvent,
   type ComposioWatchableEventCatalogResult,
   type ComposioWatchableEventConfigurationField,

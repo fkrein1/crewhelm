@@ -888,6 +888,99 @@ describe("Composio runtime adapter", () => {
     });
   });
 
+  it.each([
+    {
+      name: "a rejected account",
+      outcome: "configuration_unavailable",
+      reason: "configuration_unavailable",
+      response: () => catalogResponse({ error: "not active" }, { status: 403 }),
+      status: 403,
+    },
+    {
+      name: "a missing account",
+      outcome: "provider_rejected",
+      reason: "provider_rejected",
+      response: () => catalogResponse({ error: "not found" }, { status: 404 }),
+      status: 404,
+    },
+    {
+      name: "provider unavailability",
+      outcome: "provider_unavailable",
+      reason: "provider_unavailable",
+      response: () => catalogResponse({ error: "temporarily unavailable" }, { status: 503 }),
+      status: 503,
+    },
+    {
+      name: "an invalid success response",
+      outcome: "invalid_response",
+      reason: "invalid_response",
+      response: () => new Response("not json", { status: 200 }),
+      status: 200,
+    },
+  ])("classifies $name while verifying a connection", async (testCase) => {
+    const onResponse = vi.fn<(event: unknown) => void>();
+    const result = await createComposioRuntime({
+      apiKey: "composio-project-secret",
+      fetch: vi.fn<typeof fetch>().mockResolvedValue(testCase.response()),
+      onResponse,
+    }).verifyConnection("ca_project_123");
+
+    expect(result).toEqual({ ok: false, reason: testCase.reason });
+    expect(onResponse).toHaveBeenCalledExactlyOnceWith({
+      durationMs: expect.any(Number),
+      operation: "verify",
+      outcome: testCase.outcome,
+      status: testCase.status,
+    });
+  });
+
+  it("keeps a valid initializing account in the expected not-ready state", async () => {
+    const onResponse = vi.fn<(event: unknown) => void>();
+    const result = await createComposioRuntime({
+      apiKey: "composio-project-secret",
+      fetch: vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({
+          alias: "Personal Todoist",
+          id: "ca_project_123",
+          status: "INITIALIZING",
+          toolkit: { slug: "todoist" },
+        }),
+      ),
+      onResponse,
+    }).verifyConnection("ca_project_123");
+
+    expect(result).toEqual({ ok: false, reason: "provider_rejected" });
+    expect(onResponse).toHaveBeenCalledExactlyOnceWith({
+      durationMs: expect.any(Number),
+      operation: "verify",
+      outcome: "provider_rejected",
+      status: 200,
+    });
+  });
+
+  it("distinguishes invalid connection verification input from transport failure", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(new Error("provider unavailable"));
+    const runtime = createComposioRuntime({
+      apiKey: "composio-project-secret",
+      fetch: fetchMock,
+    });
+
+    await expect(runtime.verifyConnection("not-a-provider-id")).resolves.toEqual({
+      ok: false,
+      reason: "invalid_request",
+    });
+    await expect(runtime.verifyConnection("ca_project_123")).resolves.toEqual({
+      ok: false,
+      reason: "transport_error",
+    });
+    await expect(
+      createComposioRuntime({ apiKey: undefined, fetch: fetchMock }).verifyConnection(
+        "ca_project_123",
+      ),
+    ).resolves.toEqual({ ok: false, reason: "configuration_unavailable" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("executes one pinned tool exactly once and returns only bounded provider data", async () => {
     const apiKey = "composio-project-secret";
     const onResponse = vi.fn<(event: unknown) => void>();

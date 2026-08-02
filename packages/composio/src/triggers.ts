@@ -257,7 +257,11 @@ function normalizeEvent(
     return null;
   }
 
-  if (SLACK_CHANNEL_FILTER_SOURCES.has(trigger.slug) && configuration.length === 0) {
+  if (SLACK_CHANNEL_FILTER_SOURCES.has(trigger.slug)) {
+    if (configuration.some((field) => field.id === SLACK_CHANNEL_FILTER_ID)) {
+      return null;
+    }
+
     configuration.push({
       description: "Only messages from this Slack channel are sent to the Agent.",
       id: SLACK_CHANNEL_FILTER_ID,
@@ -282,19 +286,29 @@ function normalizeEvent(
   };
 }
 
+export type ComposioProviderTriggerConfigurationResult =
+  | { configuration: Record<string, IntegrationToolParameterValue>; ok: true }
+  | { ok: false };
+
 export function composioProviderTriggerConfiguration(
   sourceSlug: string,
   configuration: Record<string, IntegrationToolParameterValue>,
-): Record<string, IntegrationToolParameterValue> {
+): ComposioProviderTriggerConfigurationResult {
   if (!SLACK_CHANNEL_FILTER_SOURCES.has(sourceSlug)) {
-    return configuration;
+    return { configuration, ok: true };
+  }
+
+  const expectedChannel = configuration[SLACK_CHANNEL_FILTER_ID];
+
+  if (typeof expectedChannel !== "string" || !/^[A-Z0-9]{1,64}$/u.test(expectedChannel)) {
+    return { ok: false };
   }
 
   const providerConfiguration = { ...configuration };
 
   delete providerConfiguration[SLACK_CHANNEL_FILTER_ID];
 
-  return providerConfiguration;
+  return { configuration: providerConfiguration, ok: true };
 }
 
 export function composioEventMatchesConfiguration(
@@ -307,8 +321,14 @@ export function composioEventMatchesConfiguration(
   }
 
   const expectedChannel = configuration[SLACK_CHANNEL_FILTER_ID];
+  const deliveredChannel = data.channel;
 
-  return typeof expectedChannel !== "string" || data.channel === expectedChannel;
+  return (
+    typeof expectedChannel === "string" &&
+    /^[A-Z0-9]{1,64}$/u.test(expectedChannel) &&
+    typeof deliveredChannel === "string" &&
+    deliveredChannel === expectedChannel
+  );
 }
 
 export function createComposioEventCatalog(

@@ -613,6 +613,17 @@ describe("OwnerControlPlane connections", () => {
       throw new Error("Expected connection-link completion.");
     }
 
+    const activation = {
+      accountLabel: "Personal Todoist",
+      connectionId: completion.connectionLink.connectionId,
+      providerConnectionId,
+      verifiedIntegrationSlug: "todoist",
+    };
+
+    await expect(stub.activateVerifiedConnection(authority, activation)).resolves.toEqual(
+      fixedConnectionReadFailure("invalid_request"),
+    );
+
     await expect(
       stub.recordConnectionAuthorizationReturn({
         authorizationToken: reservation.authorizationToken,
@@ -621,12 +632,6 @@ describe("OwnerControlPlane connections", () => {
         status: "success",
       }),
     ).resolves.toMatchObject({ ok: true, outcome: "returned" });
-    const activation = {
-      accountLabel: "Personal Todoist",
-      connectionId: completion.connectionLink.connectionId,
-      providerConnectionId,
-      verifiedIntegrationSlug: "todoist",
-    };
 
     for (const scope of [CONNECTIONS_READ_SCOPE, CONNECTIONS_WRITE_SCOPE]) {
       await expect(
@@ -653,6 +658,12 @@ describe("OwnerControlPlane connections", () => {
       stub.activateVerifiedConnection(authority, {
         ...activation,
         providerConnectionId: "ca_todoist_substituted",
+      }),
+    ).resolves.toEqual(fixedConnectionReadFailure("invalid_request"));
+    await expect(
+      stub.activateVerifiedConnection(authority, {
+        ...activation,
+        verifiedIntegrationSlug: "slack",
       }),
     ).resolves.toEqual(fixedConnectionReadFailure("invalid_request"));
 
