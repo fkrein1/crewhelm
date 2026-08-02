@@ -310,10 +310,11 @@ describe("Composio trigger event verification", () => {
         data: {
           issue: { id: "issue-42", title: "A bounded événement ✨" },
         },
-        eventId: "msg_event_42",
+        eventId: "log_event_42",
         occurredAt: "2026-08-02T09:20:00.000Z",
         ownerKey: `owner_${"a".repeat(43)}`,
         providerConnectionId: "ca_github_owner",
+        providerOccurredAt: null,
         providerTriggerId: "ti_github_issue",
         sourceSlug: "GITHUB_ISSUE_EVENT",
       },
@@ -321,6 +322,73 @@ describe("Composio trigger event verification", () => {
       ok: true,
     });
     expect(JSON.stringify(result)).not.toContain(WEBHOOK_SECRET);
+  });
+
+  it("preserves the Slack message timestamp separately from its webhook delivery time", async () => {
+    const original = triggerEvent();
+    const signed = await signedRequest({
+      body: JSON.stringify({
+        ...original,
+        data: {
+          channel: "C0BM0EQS27R",
+          text: "A current Crewhelm message",
+          ts: "1785679063.331059",
+        },
+        metadata: {
+          ...original.metadata,
+          trigger_slug: "SLACK_RECEIVE_MESSAGE",
+        },
+      }),
+      timestamp: "1785679063",
+    });
+    const result = await verifyComposioTriggerEvent({
+      ...signed,
+      now: 1_785_679_063_331,
+      projectApiKey: API_KEY,
+      secret: WEBHOOK_SECRET,
+    });
+
+    expect(result).toMatchObject({
+      event: {
+        eventId: expect.stringMatching(/^slack_[A-Za-z0-9_-]{43}$/u),
+        providerOccurredAt: "2026-08-02T13:57:43.331Z",
+      },
+      kind: "trigger",
+      ok: true,
+    });
+
+    const repeated = await signedRequest({
+      body: JSON.stringify({
+        ...original,
+        data: {
+          channel: "C0BM0EQS27R",
+          text: "A current Crewhelm message",
+          ts: "1785679063.331059",
+        },
+        metadata: {
+          ...original.metadata,
+          log_id: "log_repeated_delivery",
+          trigger_slug: "SLACK_RECEIVE_MESSAGE",
+        },
+      }),
+      id: "webhook_repeated_delivery",
+      timestamp: "1785679063",
+    });
+    const repeatedResult = await verifyComposioTriggerEvent({
+      ...repeated,
+      now: 1_785_679_063_331,
+      projectApiKey: API_KEY,
+      secret: WEBHOOK_SECRET,
+    });
+
+    expect(repeatedResult).toMatchObject({
+      event: {
+        eventId:
+          result.ok && result.kind === "trigger" ? result.event.eventId : "unreachable_event_id",
+      },
+      kind: "trigger",
+      ok: true,
+    });
   });
 
   it("acknowledges a validly signed preserved event type without routing it", async () => {

@@ -200,7 +200,11 @@ function createMcpServer(
       signal,
     }),
     publicOrigin: env.PUBLIC_ORIGIN,
+    runtime: createComposioRuntime({
+      apiKey: env.COMPOSIO_API_KEY,
+    }),
     signingSecret: env.BETTER_AUTH_SECRET,
+    signal,
   });
   registerConnectionAttachmentTools(server, context, {
     catalog: createComposioCatalog({

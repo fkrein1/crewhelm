@@ -565,6 +565,113 @@ describe("OwnerControlPlane connections", () => {
     expect(JSON.stringify(stored)).not.toContain(reservation.authorizationToken);
   });
 
+  it("activates an exact returned connection only after independent provider verification", async () => {
+    const authority = await authorityFor("verified-connection-activation", [
+      CONNECTION_CONFIGS_WRITE_SCOPE,
+      CONNECTIONS_READ_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const enablement = await stub.reserveIntegrationEnablement(authority, {
+      idempotencyKey: "verified-connection-activation-enable",
+      integrationSlug: "todoist",
+    });
+
+    if (!enablement.ok || enablement.state !== "dispatch") {
+      throw new Error("Expected integration enablement reservation.");
+    }
+
+    await expect(
+      stub.completeIntegrationEnablement(authority, {
+        authConfigId: "ac_todoist_verified",
+        authScheme: "oauth2",
+        created: true,
+        integrationSlug: "todoist",
+        managed: true,
+        reservationId: enablement.reservationId,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    const reservation = await stub.reserveConnectionLink(
+      authority,
+      connectionLinkInput("verified-connection-activation", "ac_todoist_verified"),
+    );
+
+    if (!reservation.ok || reservation.state !== "dispatch") {
+      throw new Error("Expected connection-link reservation.");
+    }
+
+    const providerConnectionId = "ca_todoist_verified";
+    const completion = await stub.completeConnectionLink(authority, {
+      authorizationToken: reservation.authorizationToken,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+      providerConnectionId,
+      reservationId: reservation.reservationId,
+      url: "https://connect.composio.dev/link/ln_todoist_verified",
+    });
+
+    if (!completion.ok) {
+      throw new Error("Expected connection-link completion.");
+    }
+
+    await expect(
+      stub.recordConnectionAuthorizationReturn({
+        authorizationToken: reservation.authorizationToken,
+        providerConnectionId,
+        reservationId: reservation.reservationId,
+        status: "success",
+      }),
+    ).resolves.toMatchObject({ ok: true, outcome: "returned" });
+    const activation = {
+      accountLabel: "Personal Todoist",
+      connectionId: completion.connectionLink.connectionId,
+      providerConnectionId,
+      verifiedIntegrationSlug: "todoist",
+    };
+
+    for (const scope of [CONNECTIONS_READ_SCOPE, CONNECTIONS_WRITE_SCOPE]) {
+      await expect(
+        stub.activateVerifiedConnection({ ...authority, scopes: [scope] }, activation),
+      ).resolves.toEqual(fixedConnectionReadFailure("insufficient_scope"));
+    }
+
+    await expect(stub.activateVerifiedConnection(authority, activation)).resolves.toMatchObject({
+      connections: [
+        {
+          accountLabel: "Personal Todoist",
+          connectionId: completion.connectionLink.connectionId,
+          integrationSlug: "todoist",
+          status: "active",
+        },
+      ],
+      ok: true,
+    });
+    await expect(stub.activateVerifiedConnection(authority, activation)).resolves.toMatchObject({
+      connections: [{ status: "active" }],
+      ok: true,
+    });
+    await expect(
+      stub.activateVerifiedConnection(authority, {
+        ...activation,
+        providerConnectionId: "ca_todoist_substituted",
+      }),
+    ).resolves.toEqual(fixedConnectionReadFailure("invalid_request"));
+
+    const audit = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec(
+          "SELECT action FROM audit_events WHERE subject_id = ? ORDER BY event_id",
+          completion.connectionLink.connectionId,
+        )
+        .toArray(),
+    );
+
+    expect(audit).toEqual([
+      { action: "connection.link_created" },
+      { action: "connection.authorization_returned" },
+      { action: "connection.activated" },
+    ]);
+  });
+
   it("denies malformed, cross-owner, substituted, and expired authorization returns", async () => {
     const authority = await authorityFor("127", [CONNECTIONS_WRITE_SCOPE]);
     const other = await authorityFor("128", [CONNECTIONS_WRITE_SCOPE]);

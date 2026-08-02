@@ -406,6 +406,8 @@ export {
   type ComposioConnectionLinksOptions,
 } from "./connection-links.js";
 export {
+  composioEventMatchesConfiguration,
+  composioProviderTriggerConfiguration,
   createComposioEventCatalog,
   type ComposioEventCatalog,
   type ComposioEventCatalogOptions,

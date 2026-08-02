@@ -110,6 +110,12 @@ export const listConnectionsInputSchema = z.strictObject({
 export const inspectConnectionInputSchema = z.strictObject({
   connectionId: connectionIdSchema,
 });
+export const activateVerifiedConnectionInputSchema = z.strictObject({
+  accountLabel: connectionSummarySchema.shape.accountLabel,
+  connectionId: connectionIdSchema,
+  providerConnectionId: composioConnectedAccountIdSchema,
+  verifiedIntegrationSlug: connectionSummarySchema.shape.integrationSlug.unwrap(),
+});
 
 const connectionLinkRequestErrorSchema = z.strictObject({
   code: z.enum([
@@ -261,6 +267,7 @@ export const inspectConnectionResultSchema = z.discriminatedUnion("ok", [
 ]);
 
 export type CompleteConnectionLinkInput = z.infer<typeof completeConnectionLinkInputSchema>;
+export type ActivateVerifiedConnectionInput = z.infer<typeof activateVerifiedConnectionInputSchema>;
 export type ConnectionAuthorizationOutcome = z.infer<typeof connectionAuthorizationOutcomeSchema>;
 export type ConnectionSummary = z.infer<typeof connectionSummarySchema>;
 export type CreateConnectionLinkInput = z.infer<typeof createConnectionLinkInputSchema>;

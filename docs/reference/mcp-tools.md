@@ -3566,11 +3566,11 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 ## `crewhelm_list_connections`
 
-**List integration connections**
+**Inspect and reconcile integration connections**
 
-List bounded connection summaries, or set connectionId to inspect one exact connection and its safe lifecycle timeline after OAuth. Prefer the exact returned ID or an integration filter; credentials are never exposed.
+List bounded local connection summaries. Exact inspection with Connections write access verifies and activates one returned provider account. Credentials are never exposed.
 
-Attributes: read-only, non-destructive, idempotent, closed-world.
+Attributes: write, non-destructive, idempotent, open-world.
 
 <details>
 <summary>Input schema</summary>

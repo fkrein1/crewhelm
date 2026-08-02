@@ -64,15 +64,22 @@ pnpm exec tsx scripts/crewhelm-live-rehearsal.ts conversation \
 ```
 
 Run the Composio connected-event Watch journey to discover a filter-free event on an existing
-active test connection, create one provider trigger, prove exact replay and lifecycle controls,
-deny unsigned ingress, delete the trigger and Watch, restore Agent capacity, and revoke the
-short-lived access token:
+returned test connection, independently activate it when the provider confirms readiness, create
+one provider trigger, prove exact replay, deny unsigned ingress, wait for one authentic provider
+event and verify its exact Watch-to-Run provenance, then exercise lifecycle controls, delete the
+trigger and Watch, restore Agent capacity, and revoke the short-lived access token:
 
 ```sh
 pnpm exec tsx scripts/crewhelm-live-rehearsal.ts connected-watches \
   --installation crewhelm.testing.installation.json \
-  --credential .crewhelm-rehearsal-credential.json
+  --credential .crewhelm-rehearsal-credential.json \
+  --slack-channel-id '<exact connected test channel ID>'
 ```
+
+The journey emits one safe `CONNECTED_WATCH_READY` phase marker after the provider trigger is
+active. The rehearsal orchestrator must create one harmless matching event in the connected test
+service after that marker and remove the provider fixture after the terminal report. This uses the
+saved rotating owner credential and must not require the user to reauthorize Crewhelm.
 
 If a conversation rehearsal reports retained exact IDs, resume its cleanup before creating another
 fixture:

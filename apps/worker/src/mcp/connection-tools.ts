@@ -8,17 +8,13 @@ import {
   reserveConnectionLinkResultSchema,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
-import type { ComposioConnectionLinks } from "@crewhelm/composio";
+import type { ComposioConnectionLinks, ComposioRuntime } from "@crewhelm/composio";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type * as z from "zod";
 
 import { createConnectionAuthorizationCallback } from "../owner/connections/index.js";
 import type { McpToolContext, OwnerControlPlaneClient } from "./context.js";
-import {
-  controlPlaneToolResult,
-  unavailableToolResult,
-  validatedToolResult,
-} from "./tool-result.js";
+import { unavailableToolResult, validatedToolResult } from "./tool-result.js";
 
 export const MCP_CREATE_CONNECTION_LINK_TOOL_NAME = "crewhelm_create_connection_link";
 export const MCP_LIST_CONNECTIONS_TOOL_NAME = "crewhelm_list_connections";
@@ -26,7 +22,9 @@ export const MCP_LIST_CONNECTIONS_TOOL_NAME = "crewhelm_list_connections";
 interface ConnectionToolConfiguration {
   connectionLinks: ComposioConnectionLinks;
   publicOrigin: string;
+  runtime: ComposioRuntime;
   signingSecret: string;
+  signal: AbortSignal;
 }
 
 function connectionLinkMcpResult(result: unknown) {
@@ -143,6 +141,79 @@ async function createConnectionLink(
   }
 }
 
+async function listConnections(
+  authority: OwnerAuthority,
+  controlPlane: OwnerControlPlaneClient,
+  configuration: ConnectionToolConfiguration,
+  input: z.infer<typeof listConnectionsInputSchema>,
+) {
+  let local: z.infer<typeof listConnectionsResultSchema>;
+
+  try {
+    local = listConnectionsResultSchema.parse(await controlPlane.listConnections(authority, input));
+  } catch {
+    return unavailableToolResult();
+  }
+
+  if (!local.ok || input.connectionId === undefined) {
+    return validatedToolResult(local, listConnectionsResultSchema);
+  }
+
+  const connection = local.connections[0];
+
+  if (
+    connection === undefined ||
+    connection.status !== "initiated" ||
+    connection.authorizationOutcome !== "returned" ||
+    connection.integrationSlug === null
+  ) {
+    return validatedToolResult(local, listConnectionsResultSchema);
+  }
+
+  if (!authority.scopes.includes(CONNECTIONS_WRITE_SCOPE)) {
+    return validatedToolResult(
+      {
+        error: { code: "insufficient_scope", message: "Connection request denied." },
+        ok: false,
+      },
+      listConnectionsResultSchema,
+    );
+  }
+
+  let verified: Awaited<ReturnType<ComposioRuntime["verifyConnection"]>>;
+
+  try {
+    verified = await configuration.runtime.verifyConnection(
+      connection.providerConnectionId,
+      configuration.signal,
+    );
+  } catch {
+    return validatedToolResult(local, listConnectionsResultSchema);
+  }
+
+  if (!verified.ok || verified.toolkitSlug !== connection.integrationSlug) {
+    return validatedToolResult(local, listConnectionsResultSchema);
+  }
+
+  if (controlPlane.activateVerifiedConnection === undefined) {
+    return unavailableToolResult();
+  }
+
+  try {
+    return validatedToolResult(
+      await controlPlane.activateVerifiedConnection(authority, {
+        accountLabel: verified.accountLabel,
+        connectionId: connection.connectionId,
+        providerConnectionId: connection.providerConnectionId,
+        verifiedIntegrationSlug: verified.toolkitSlug,
+      }),
+      listConnectionsResultSchema,
+    );
+  } catch {
+    return unavailableToolResult();
+  }
+}
+
 export function registerConnectionTools(
   server: McpServer,
   context: McpToolContext,
@@ -173,18 +244,14 @@ export function registerConnectionTools(
       annotations: {
         destructiveHint: false,
         idempotentHint: true,
-        openWorldHint: false,
-        readOnlyHint: true,
+        openWorldHint: true,
+        readOnlyHint: false,
       },
       description:
-        "List bounded connection summaries, or set connectionId to inspect one exact connection and its safe lifecycle timeline after OAuth. Prefer the exact returned ID or an integration filter; credentials are never exposed.",
+        "List bounded local connection summaries. Exact inspection with Connections write access verifies and activates one returned provider account. Credentials are never exposed.",
       inputSchema: listConnectionsInputSchema,
-      title: "List integration connections",
+      title: "Inspect and reconcile integration connections",
     },
-    async (input) =>
-      controlPlaneToolResult(
-        () => controlPlane.listConnections(authority, input),
-        listConnectionsResultSchema,
-      ),
+    async (input) => listConnections(authority, controlPlane, configuration, input),
   );
 }

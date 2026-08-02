@@ -5,6 +5,7 @@ import {
   MAXIMUM_CONNECTION_LINK_REQUESTS_PER_OWNER,
   completeConnectionLinkInputSchema,
   completeIntegrationEnablementInputSchema,
+  activateVerifiedConnectionInputSchema,
   connectionAuthorizationTokenSchema,
   connectionSummarySchema,
   createConnectionLinkInputSchema,
@@ -1100,6 +1101,110 @@ export class Connections {
     const nextCursor = hasMore ? (page.at(-1)?.connectionId ?? null) : null;
 
     return listConnectionsResultSchema.parse({ connections: page, nextCursor, ok: true });
+  }
+
+  activateVerified(authority: OwnerAuthority, input: unknown): ListConnectionsResult {
+    const request = activateVerifiedConnectionInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return deniedConnectionRead("invalid_request");
+    }
+
+    const activated = this.#database.transaction((transaction) => {
+      const row = transaction
+        .select({
+          authConfigId: connections.authConfigId,
+          providerConnectionId: connections.providerConnectionId,
+          status: connections.status,
+        })
+        .from(connections)
+        .where(eq(connections.connectionId, request.data.connectionId))
+        .get();
+
+      if (
+        row === undefined ||
+        row.providerConnectionId !== request.data.providerConnectionId ||
+        row.status === "revoked" ||
+        row.status === "unavailable"
+      ) {
+        return false;
+      }
+
+      const authorization = transaction
+        .select({ status: connectionAuthorizationReturns.status })
+        .from(connectionAuthorizationReturns)
+        .where(eq(connectionAuthorizationReturns.connectionId, request.data.connectionId))
+        .orderBy(
+          desc(connectionAuthorizationReturns.completedAt),
+          desc(connectionAuthorizationReturns.reservationId),
+        )
+        .get();
+      const integration = transaction
+        .select({ slug: integrationEnablementRequests.integrationSlug })
+        .from(integrationEnablementRequests)
+        .where(
+          and(
+            eq(integrationEnablementRequests.authConfigId, row.authConfigId),
+            eq(integrationEnablementRequests.status, "completed"),
+          ),
+        )
+        .orderBy(
+          desc(integrationEnablementRequests.completedAt),
+          desc(integrationEnablementRequests.reservationId),
+        )
+        .get();
+
+      if (
+        authorization?.status !== "returned" ||
+        integration?.slug !== request.data.verifiedIntegrationSlug
+      ) {
+        return false;
+      }
+
+      if (row.status === "active") {
+        transaction
+          .update(connections)
+          .set({ accountLabel: request.data.accountLabel })
+          .where(eq(connections.connectionId, request.data.connectionId))
+          .run();
+        return true;
+      }
+
+      const updated = transaction
+        .update(connections)
+        .set({
+          accountLabel: request.data.accountLabel,
+          status: "active",
+        })
+        .where(
+          and(
+            eq(connections.connectionId, request.data.connectionId),
+            eq(connections.providerConnectionId, request.data.providerConnectionId),
+            eq(connections.status, "initiated"),
+          ),
+        )
+        .returning({ connectionId: connections.connectionId })
+        .all()[0];
+
+      if (updated === undefined) {
+        return false;
+      }
+
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: "connection.activated",
+          clientId: authority.clientId,
+          occurredAt: Date.now(),
+          subjectId: request.data.connectionId,
+        })
+        .run();
+      return true;
+    });
+
+    return activated
+      ? this.list({ connectionId: request.data.connectionId })
+      : deniedConnectionRead("invalid_request");
   }
 
   inspect(input: unknown): InspectConnectionResult {
