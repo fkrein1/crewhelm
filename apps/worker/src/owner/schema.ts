@@ -6,14 +6,17 @@ import type {
   AgentInboxDeferredReason,
   AgentExecutionLimits,
   AgentScheduleConfiguration,
+  AgentWatchDefinition,
   AgentWorkflowAggregateBudget,
   AdmittedBriefContext,
   AdmittedOutputContract,
   ComposioToolCapabilityGrant,
   ConnectionAuthorizationOutcome,
   FleetConfigurationData,
+  IntegrationToolParameterValue,
   RunBudgetReservation,
   RunSession,
+  RunWatchReference,
   SkillProvenance,
   SkillWarning,
   WorkflowDeliverable,
@@ -533,6 +536,232 @@ export const agentScheduleOccurrences = sqliteTable(
   ],
 );
 
+export const agentEventWatchRevisions = sqliteTable(
+  "agent_event_watch_revisions",
+  {
+    watchId: text("watch_id").notNull(),
+    agentId: text("agent_id").notNull(),
+    revision: integer("revision").notNull(),
+    agentRevision: integer("agent_revision").notNull(),
+    definition: text("definition", { mode: "json" }).$type<AgentWatchDefinition | null>(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.watchId, table.revision] }),
+    foreignKey({
+      columns: [table.agentId, table.agentRevision],
+      foreignColumns: [agentRevisions.agentId, agentRevisions.revision],
+    }).onDelete("restrict"),
+    check("agent_event_watch_revisions_revision_positive", sql`${table.revision} > 0`),
+    check("agent_event_watch_revisions_agent_revision_positive", sql`${table.agentRevision} > 0`),
+    check(
+      "agent_event_watch_revisions_definition_json",
+      sql`${table.definition} IS NULL OR json_valid(${table.definition})`,
+    ),
+    check("agent_event_watch_revisions_created_at_positive", sql`${table.createdAt} > 0`),
+  ],
+);
+
+export const agentEventWatches = sqliteTable(
+  "agent_event_watches",
+  {
+    watchId: text("watch_id").primaryKey(),
+    agentId: text("agent_id").notNull(),
+    currentRevision: integer("current_revision").notNull(),
+    connectionId: text("connection_id").notNull(),
+    sourceSlug: text("source_slug").notNull(),
+    status: text("status", { enum: ["active", "paused", "deleted"] }).notNull(),
+    providerTriggerId: text("provider_trigger_id").unique(),
+    providerOperation: text("provider_operation", {
+      enum: ["stable", "creating", "pausing", "resuming", "deleting"],
+    }).notNull(),
+    providerAttempts: integer("provider_attempts").notNull().default(0),
+    providerRetryAt: integer("provider_retry_at"),
+    lastRunId: text("last_run_id"),
+    lastDispatchedAt: integer("last_dispatched_at"),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.agentId],
+      foreignColumns: [agents.agentId],
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.connectionId],
+      foreignColumns: [connections.connectionId],
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.watchId, table.currentRevision],
+      foreignColumns: [agentEventWatchRevisions.watchId, agentEventWatchRevisions.revision],
+    }).onDelete("restrict"),
+    index("agent_event_watches_agent").on(table.agentId),
+    uniqueIndex("agent_event_watches_active_source")
+      .on(table.connectionId, table.sourceSlug)
+      .where(sql`${table.status} != 'deleted'`),
+    index("agent_event_watches_operation")
+      .on(table.providerOperation)
+      .where(sql`${table.providerOperation} != 'stable'`),
+    check("agent_event_watches_current_revision_positive", sql`${table.currentRevision} > 0`),
+    check(
+      "agent_event_watches_provider_attempts",
+      sql`${table.providerAttempts} BETWEEN 0 AND 2147483647`,
+    ),
+    check("agent_event_watches_status", sql`${table.status} IN ('active', 'paused', 'deleted')`),
+    check(
+      "agent_event_watches_provider_operation",
+      sql`${table.providerOperation} IN ('stable', 'creating', 'pausing', 'resuming', 'deleting')`,
+    ),
+    check("agent_event_watches_created_at_positive", sql`${table.createdAt} > 0`),
+    check(
+      "agent_event_watches_dispatch_state",
+      sql`((${table.lastRunId} IS NULL AND ${table.lastDispatchedAt} IS NULL)
+        OR (${table.lastRunId} IS NOT NULL
+          AND ${table.lastDispatchedAt} IS NOT NULL
+          AND ${table.lastDispatchedAt} >= ${table.createdAt}))`,
+    ),
+    check(
+      "agent_event_watches_provider_state",
+      sql`(
+        (${table.providerOperation} = 'creating' AND ${table.providerTriggerId} IS NULL)
+        OR (${table.providerOperation} IN ('stable', 'pausing', 'resuming', 'deleting')
+          AND (${table.status} = 'deleted' OR ${table.providerTriggerId} IS NOT NULL))
+      )`,
+    ),
+    check(
+      "agent_event_watches_provider_retry_state",
+      sql`(
+        (${table.providerOperation} = 'stable'
+          AND ${table.providerAttempts} = 0
+          AND ${table.providerRetryAt} IS NULL)
+        OR (${table.providerOperation} != 'stable'
+          AND ${table.providerAttempts} BETWEEN 0 AND 4
+          AND ${table.providerRetryAt} IS NOT NULL)
+        OR (${table.providerOperation} != 'stable'
+          AND ${table.providerAttempts} >= 5
+          AND ${table.providerRetryAt} IS NULL)
+      )`,
+    ),
+  ],
+);
+
+export const agentEventWatchUpdates = sqliteTable(
+  "agent_event_watch_updates",
+  {
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    action: text("action", {
+      enum: ["create", "update", "pause", "resume", "delete"],
+    }).notNull(),
+    watchId: text("watch_id").notNull(),
+    revision: integer("revision").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.clientId, table.idempotencyKey] }),
+    foreignKey({
+      columns: [table.watchId, table.revision],
+      foreignColumns: [agentEventWatchRevisions.watchId, agentEventWatchRevisions.revision],
+    }).onDelete("restrict"),
+    check(
+      "agent_event_watch_updates_request_digest_length",
+      sql`length(${table.requestDigest}) = 43`,
+    ),
+    check(
+      "agent_event_watch_updates_action",
+      sql`${table.action} IN ('create', 'update', 'pause', 'resume', 'delete')`,
+    ),
+    check("agent_event_watch_updates_revision_positive", sql`${table.revision} > 0`),
+  ],
+);
+
+export const agentEventWatchOccurrences = sqliteTable(
+  "agent_event_watch_occurrences",
+  {
+    watchId: text("watch_id").notNull(),
+    watchRevision: integer("watch_revision").notNull(),
+    agentId: text("agent_id").notNull(),
+    eventId: text("event_id").notNull(),
+    eventData: text("event_data", { mode: "json" })
+      .$type<Record<string, IntegrationToolParameterValue>>()
+      .notNull(),
+    scheduledAt: integer("scheduled_at").notNull(),
+    occurredAt: integer("occurred_at").notNull(),
+    nextAttemptAt: integer("next_attempt_at"),
+    attempts: integer("attempts").notNull(),
+    status: text("status", { enum: ["pending", "dispatched", "skipped"] }).notNull(),
+    runId: text("run_id"),
+    reason: text("reason", {
+      enum: [
+        "active_run",
+        "agent_changed",
+        "agent_unavailable",
+        "connection_unavailable",
+        "dispatch_exception",
+        "event_too_large",
+        "record_dispatch_conflict",
+        "run_unavailable",
+        "source_mismatch",
+        "watch_deleted",
+        "watch_paused",
+        "watch_queue_full",
+      ],
+    }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.watchId, table.eventId] }),
+    foreignKey({
+      columns: [table.watchId, table.watchRevision],
+      foreignColumns: [agentEventWatchRevisions.watchId, agentEventWatchRevisions.revision],
+    }).onDelete("restrict"),
+    index("agent_event_watch_occurrences_pending")
+      .on(table.nextAttemptAt)
+      .where(sql`${table.status} = 'pending'`),
+    index("agent_event_watch_occurrences_history").on(table.watchId, table.occurredAt),
+    check("agent_event_watch_occurrences_revision_positive", sql`${table.watchRevision} > 0`),
+    check("agent_event_watch_occurrences_scheduled_at_positive", sql`${table.scheduledAt} > 0`),
+    check("agent_event_watch_occurrences_occurred_at_positive", sql`${table.occurredAt} > 0`),
+    check("agent_event_watch_occurrences_attempts_positive", sql`${table.attempts} > 0`),
+    check("agent_event_watch_occurrences_event_data_json", sql`json_valid(${table.eventData})`),
+    check(
+      "agent_event_watch_occurrences_status",
+      sql`${table.status} IN ('pending', 'dispatched', 'skipped')`,
+    ),
+    check(
+      "agent_event_watch_occurrences_state",
+      sql`(
+        (${table.status} = 'pending'
+          AND ${table.nextAttemptAt} IS NOT NULL
+          AND ${table.runId} IS NULL
+          AND ${table.reason} IS NULL)
+        OR (${table.status} = 'dispatched'
+          AND ${table.nextAttemptAt} IS NULL
+          AND ${table.runId} IS NOT NULL
+          AND ${table.reason} IS NULL)
+        OR (${table.status} = 'skipped'
+          AND ${table.nextAttemptAt} IS NULL
+          AND ${table.runId} IS NULL
+          AND ${table.reason} IS NOT NULL)
+      )`,
+    ),
+  ],
+);
+
+export const composioWatchWebhook = sqliteTable(
+  "composio_watch_webhook",
+  {
+    singleton: integer("singleton").primaryKey(),
+    subscriptionId: text("subscription_id").notNull(),
+    secretCiphertext: text("secret_ciphertext").notNull(),
+    secretNonce: text("secret_nonce").notNull(),
+    url: text("url").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [
+    check("composio_watch_webhook_singleton", sql`${table.singleton} = 1`),
+    check("composio_watch_webhook_updated_at_positive", sql`${table.updatedAt} > 0`),
+  ],
+);
+
 export const agentWorkflows = sqliteTable(
   "agent_workflows",
   {
@@ -965,9 +1194,15 @@ export const runAdmissions = sqliteTable(
       mode: "json",
     }).$type<AdmittedOutputContract | null>(),
     scheduleRevision: integer("schedule_revision"),
-    trigger: text("trigger", { enum: ["manual", "schedule", "workflow"] })
+    trigger: text("trigger", { enum: ["manual", "schedule", "watch", "workflow"] })
       .notNull()
       .default("manual"),
+    watchEventId: text("watch_event_id"),
+    watchId: text("watch_id"),
+    watchRevision: integer("watch_revision"),
+    watchSourceKind: text("watch_source_kind", {
+      enum: ["connection_event"],
+    }).$type<RunWatchReference["sourceKind"]>(),
     budgetReservation: text("budget_reservation", { mode: "json" })
       .$type<RunBudgetReservation>()
       .notNull(),
@@ -990,6 +1225,10 @@ export const runAdmissions = sqliteTable(
     foreignKey({
       columns: [table.agentId, table.agentRevision],
       foreignColumns: [agentRevisions.agentId, agentRevisions.revision],
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.watchId, table.watchRevision],
+      foreignColumns: [agentEventWatchRevisions.watchId, agentEventWatchRevisions.revision],
     }).onDelete("restrict"),
     index("run_admissions_cleanup").on(table.cleanupAt),
     index("run_admissions_expiry")
@@ -1014,7 +1253,29 @@ export const runAdmissions = sqliteTable(
       "run_admissions_schedule_revision_positive",
       sql`${table.scheduleRevision} IS NULL OR ${table.scheduleRevision} > 0`,
     ),
-    check("run_admissions_trigger", sql`${table.trigger} IN ('manual', 'schedule', 'workflow')`),
+    check(
+      "run_admissions_trigger",
+      sql`${table.trigger} IN ('manual', 'schedule', 'watch', 'workflow')`,
+    ),
+    check(
+      "run_admissions_watch_identity",
+      sql`(
+        (${table.watchId} IS NULL
+          AND ${table.watchRevision} IS NULL
+          AND ${table.watchEventId} IS NULL
+          AND ${table.watchSourceKind} IS NULL
+          AND ${table.trigger} <> 'watch')
+        OR (${table.watchId} IS NOT NULL
+          AND ${table.watchRevision} IS NOT NULL
+          AND ${table.watchEventId} IS NOT NULL
+          AND ${table.watchSourceKind} = 'connection_event'
+          AND ${table.trigger} = 'watch')
+      )`,
+    ),
+    check(
+      "run_admissions_watch_revision_positive",
+      sql`${table.watchRevision} IS NULL OR ${table.watchRevision} > 0`,
+    ),
     check("run_admissions_nonce_digest_length", sql`length(${table.nonceDigest}) = 43`),
     check("run_admissions_status", sql`${table.status} IN ('issued', 'redeemed', 'expired')`),
     check(
@@ -1408,7 +1669,13 @@ export const agentInboxItems = sqliteTable(
     scheduleId: text("schedule_id"),
     scheduleRevision: integer("schedule_revision"),
     runId: text("run_id"),
-    trigger: text("trigger", { enum: ["manual", "schedule", "workflow"] }),
+    trigger: text("trigger", { enum: ["manual", "schedule", "watch", "workflow"] }),
+    watchEventId: text("watch_event_id"),
+    watchId: text("watch_id"),
+    watchRevision: integer("watch_revision"),
+    watchSourceKind: text("watch_source_kind", {
+      enum: ["connection_event"],
+    }).$type<RunWatchReference["sourceKind"]>(),
     runStatus: text("run_status", {
       enum: ["cancelled", "completed", "failed", "running"],
     }),
@@ -1449,6 +1716,21 @@ export const agentInboxItems = sqliteTable(
     check(
       "agent_inbox_items_schedule_identity",
       sql`(${table.scheduleId} IS NULL) = (${table.scheduleRevision} IS NULL)`,
+    ),
+    check(
+      "agent_inbox_items_watch_identity",
+      sql`(
+        (${table.watchId} IS NULL
+          AND ${table.watchRevision} IS NULL
+          AND ${table.watchEventId} IS NULL
+          AND ${table.watchSourceKind} IS NULL
+          AND (${table.trigger} IS NULL OR ${table.trigger} <> 'watch'))
+        OR (${table.watchId} IS NOT NULL
+          AND ${table.watchRevision} IS NOT NULL
+          AND ${table.watchEventId} IS NOT NULL
+          AND ${table.watchSourceKind} = 'connection_event'
+          AND ${table.trigger} = 'watch')
+      )`,
     ),
     check(
       "agent_inbox_items_kind",
@@ -1704,6 +1986,10 @@ export const controlPlaneSchema = {
   agentBlueprintVersions,
   agentBlueprints,
   agentCreations,
+  agentEventWatchOccurrences,
+  agentEventWatchRevisions,
+  agentEventWatchUpdates,
+  agentEventWatches,
   agentInboxAcknowledgements,
   agentInboxItems,
   agentRevisions,
@@ -1725,6 +2011,7 @@ export const controlPlaneSchema = {
   connectionAuthorizationReturns,
   connectionLinkRequests,
   connections,
+  composioWatchWebhook,
   controlPlane,
   controlPlaneMigrations,
   fleetConfigurationRevisions,

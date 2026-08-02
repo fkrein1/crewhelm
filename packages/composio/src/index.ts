@@ -413,3 +413,22 @@ export {
   type ComposioWatchableEventCatalogResult,
   type ComposioWatchableEventConfigurationField,
 } from "./triggers.js";
+export {
+  createComposioTriggerInstances,
+  type ComposioTriggerInstanceResult,
+  type ComposioTriggerInstances,
+  type ComposioTriggerInstancesOptions,
+  type ComposioTriggerManageResult,
+} from "./trigger-instances.js";
+export {
+  createComposioWebhookSubscriptions,
+  verifiedComposioTriggerEventSchema,
+  verifyComposioTriggerEvent,
+  type ComposioWebhookSubscription,
+  type ComposioWebhookSubscriptions,
+  type ComposioWebhookSubscriptionsOptions,
+  type EnsureComposioWebhookSubscriptionResult,
+  type VerifiedComposioTriggerEvent,
+  type VerifyComposioTriggerEventInput,
+  type VerifyComposioTriggerEventResult,
+} from "./webhook-subscriptions.js";

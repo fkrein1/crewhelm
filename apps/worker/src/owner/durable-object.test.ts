@@ -63,6 +63,11 @@ function removeRuntimeToolSchema(storage: DurableObjectStorage): void {
 }
 
 function removeWatchSchema(storage: DurableObjectStorage): void {
+  storage.sql.exec("DROP TABLE IF EXISTS agent_event_watch_occurrences");
+  storage.sql.exec("DROP TABLE IF EXISTS agent_event_watch_updates");
+  storage.sql.exec("DROP TABLE IF EXISTS agent_event_watches");
+  storage.sql.exec("DROP TABLE IF EXISTS agent_event_watch_revisions");
+  storage.sql.exec("DROP TABLE IF EXISTS composio_watch_webhook");
   storage.sql.exec("DROP TABLE IF EXISTS agent_schedule_occurrences");
 }
 
@@ -316,6 +321,16 @@ describe("OwnerControlPlane", () => {
           checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
           name: "0028_purple_impossible_man",
           version: 29,
+        },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0029_mushy_legion",
+          version: 30,
+        },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0030_mixed_corsair",
+          version: 31,
         },
       ],
       owner: { owner_key: authority.ownerKey },
@@ -1338,7 +1353,7 @@ describe("OwnerControlPlane", () => {
       AUTONOMY_WRITE_SCOPE,
     ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
-    const legacyMigrations = controlPlaneMigrations.slice(0, -3);
+    const legacyMigrations = controlPlaneMigrations.slice(0, -5);
     const migrations = await Promise.all(
       legacyMigrations.map(async (migration) => ({
         ...migration,
@@ -1714,6 +1729,8 @@ describe("OwnerControlPlane", () => {
         { version: 27 },
         { version: 28 },
         { version: 29 },
+        { version: 30 },
+        { version: 31 },
       ]);
     });
   });
@@ -2027,7 +2044,7 @@ describe("OwnerControlPlane", () => {
       admission: { run_id: admission.permit.runId, trigger: "manual" },
       foreignKeys: [],
       migration: {
-        name: "0028_purple_impossible_man",
+        name: "0030_mixed_corsair",
         version: CONTROL_PLANE_SCHEMA_VERSION,
       },
       workflow: {

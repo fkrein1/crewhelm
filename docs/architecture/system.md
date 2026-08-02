@@ -104,20 +104,39 @@ wall-clock trigger with an explicit IANA time zone. Alarm claims advance each sc
 its next future occurrence, so late alarms do not replay a backlog. Agent revision changes pause
 stale schedules before admission, while schedule IDs flow into deferred inbox projections and
 schedule-specific audit events. Scheduled Run discovery retains the originating schedule ID and
-revision. Each Agent has eight bounded schedule slots; an owner reclaims capacity by exactly
-updating a paused schedule, retaining one auditable identity and revision chain for that slot.
+revision. Each Agent has eight shared Watch slots across scheduled checks and connected events; an
+owner reclaims capacity by exactly updating or deleting a Watch while retaining its auditable
+identity and revision chain.
 
-The owner-facing Watch lifecycle initially presents those recurring checks as “every N minutes,
-ask this Agent to check,” without exposing alarm or webhook configuration. A Watch occurrence is
-recorded before dispatch, receives one deterministic scheduled-Run idempotency key, and remains
-recoverable if the alarm stops after admission but before its outcome is recorded. Inspectable
-history distinguishes pending, dispatched, and skipped occurrences; Crewhelm retains the latest
-100 terminal occurrences per Watch. Only one occurrence from a Watch is claimed per alarm, and a
-pending admission must settle before pause, resume, update, or deletion so history never hides an
-already-started Run. Lifecycle changes are revision-bound; deletion redacts prior Watch definitions,
-leaves an auditable tombstone revision, releases the Agent's Watch capacity, and hides the Watch
-from ordinary reads. Connected event and resource sources extend this lifecycle rather than creating
-provider-specific automation objects.
+The owner-facing Watch lifecycle supports both “every N minutes, ask this Agent to check” and “when
+this happens in my connected app, send it to this Agent,” without exposing alarm, webhook, bearer
+token, Run, or Workflow configuration. A scheduled occurrence or exact connected event is recorded
+before dispatch, receives one deterministic Run idempotency key, and remains recoverable if an alarm
+stops after admission but before its outcome is recorded. Each connected event starts a fresh bounded
+Run; ongoing human conversation remains a separate Channel concern.
+
+Composio is the first connected-event source. Crewhelm discovers the event catalog for one active
+Connection, freezes the exact event slug, version, provider filters, Agent revision, instruction,
+and optional output contract, then owns the trigger-instance lifecycle. One installation-level V3
+webhook reaches a bounded public ingress and a dedicated high-capacity rate policy. One fixed
+installation ingress object verifies the signature over the exact raw bytes and timestamp before it
+reads the signed owner identity or routes to any owner object. Its encrypted secret is reconciled on
+a bounded TTL and cooldown rather than on every invalid request. The owner then matches the exact
+Connection, auth config, trigger, source slug, and source version frozen by the Watch. Authenticated
+but unmatched stale deliveries are safely acknowledged without starting a Run. Provider lifecycle
+retries are bounded, duplicate event IDs are idempotent, and terminal occurrences discard provider
+payload data.
+
+Inspectable history distinguishes pending, dispatched, and skipped occurrences; Crewhelm retains
+the latest 100 terminal occurrences per Watch. A connected Watch retains at most 20 pending events
+and 128 KiB of pending event data; overflow is recorded as an explicit skipped occurrence. Only one
+occurrence from a Watch is claimed per alarm, and a pending admission must settle before pause,
+resume, update, or deletion so history never hides an already-started Run. Every event Run is stored
+with its Watch ID, Watch revision, source kind, and provider event ID even after occurrence-history
+pruning. Lifecycle changes are revision-bound; deletion removes the
+provider trigger, redacts prior Watch definitions, leaves an auditable tombstone revision, releases
+the Agent's Watch capacity, and hides the Watch from ordinary reads. Connected resource sources can
+later extend this lifecycle without creating provider-specific automation objects.
 
 An Agent capability module may contribute a native runtime-tool descriptor, but only the owner
 control plane can freeze it into a Run plan and reserve its shared tool-call budget. `CrewSession`

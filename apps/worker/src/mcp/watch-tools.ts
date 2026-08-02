@@ -19,7 +19,7 @@ export function registerWatchTools(server: McpServer, context: McpToolContext): 
         readOnlyHint: false,
       },
       description:
-        "Tell an Agent when to check something, then inspect, pause, resume, update, or delete that Watch. Start with sources to see what Crewhelm can notice. Scheduled checks may find nothing and require no webhook, bearer token, API workflow, or external setup.",
+        "Create and manage Watches that start a fresh Agent Run on a schedule or connected-app event. Call sources first; Crewhelm owns delivery and recovery.",
       inputSchema: agentWatchesToolInputSchema,
       title: "Manage Crewhelm Agent Watches",
     },
@@ -30,23 +30,43 @@ export function registerWatchTools(server: McpServer, context: McpToolContext): 
             authority,
             input.watch === undefined
               ? input
-              : {
-                  ...input,
-                  watch: {
-                    instruction: input.watch.instruction,
-                    name: input.watch.name,
-                    ...(input.watch.outputContract === undefined
-                      ? {}
-                      : { outputContract: input.watch.outputContract }),
-                    source: {
-                      kind: "scheduled_check",
-                      trigger: {
-                        intervalSeconds: input.watch.everyMinutes * 60,
-                        type: "interval",
+              : "everyMinutes" in input.watch
+                ? {
+                    ...input,
+                    watch: {
+                      instruction: input.watch.instruction,
+                      name: input.watch.name,
+                      ...(input.watch.outputContract === undefined
+                        ? {}
+                        : { outputContract: input.watch.outputContract }),
+                      source: {
+                        kind: "scheduled_check",
+                        trigger: {
+                          intervalSeconds: input.watch.everyMinutes * 60,
+                          type: "interval",
+                        },
+                      },
+                    },
+                  }
+                : {
+                    ...input,
+                    watch: {
+                      instruction: input.watch.instruction,
+                      name: input.watch.name,
+                      ...(input.watch.outputContract === undefined
+                        ? {}
+                        : { outputContract: input.watch.outputContract }),
+                      source: {
+                        configuration: input.watch.filters,
+                        connectionId: input.watch.connectionId,
+                        delivery: input.watch.delivery,
+                        integrationSlug: input.watch.integrationSlug,
+                        kind: "connection_event",
+                        sourceSlug: input.watch.eventSlug,
+                        sourceVersion: input.watch.eventVersion,
                       },
                     },
                   },
-                },
           ) ?? Promise.reject(new Error("Watch control plane unavailable.")),
         agentWatchesResultSchema,
       ),

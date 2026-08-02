@@ -26,6 +26,7 @@ import {
 import {
   and,
   asc,
+  count,
   desc,
   eq,
   isNotNull,
@@ -40,6 +41,7 @@ import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import {
   agentInboxItems,
+  agentEventWatches,
   agentScheduleOccurrences,
   agentScheduleRevisions,
   agentSchedules,
@@ -373,7 +375,22 @@ export class AgentSchedules {
         return deniedAgentSchedule("schedule_busy");
       }
 
-      if (current === undefined && schedules.length >= MAXIMUM_AGENT_SCHEDULES_PER_AGENT) {
+      const eventWatchCount =
+        transaction
+          .select({ value: count() })
+          .from(agentEventWatches)
+          .where(
+            and(
+              eq(agentEventWatches.agentId, request.data.agentId),
+              ne(agentEventWatches.status, "deleted"),
+            ),
+          )
+          .get()?.value ?? 0;
+
+      if (
+        current === undefined &&
+        schedules.length + eventWatchCount >= MAXIMUM_AGENT_SCHEDULES_PER_AGENT
+      ) {
         return deniedAgentSchedule("schedule_limit_exceeded");
       }
 
@@ -787,11 +804,13 @@ export class AgentSchedules {
       .limit(limit)
       .all()
       .map((occurrence) => ({
+        eventId: null,
         occurredAt: new Date(occurrence.occurredAt).toISOString(),
         outcome: occurrence.status,
         reason: occurrence.reason,
         runId: occurrence.runId,
         scheduledFor: new Date(occurrence.scheduledAt).toISOString(),
+        sourceKind: "scheduled_check" as const,
         watchRevision: occurrence.watchRevision,
       }));
   }

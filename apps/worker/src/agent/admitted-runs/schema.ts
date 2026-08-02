@@ -13,6 +13,7 @@ import {
   runIdSchema,
   runSessionSchema,
   runTriggerSchema,
+  runWatchReferenceSchema,
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
@@ -217,6 +218,7 @@ export const admittedRunRecordSchema = z.strictObject({
   promptDigest: z.string().regex(/^[0-9a-f]{64}$/),
   scheduleRevision: z.number().int().positive().nullable().default(null),
   trigger: runTriggerSchema.default("manual"),
+  watch: runWatchReferenceSchema.optional(),
   session: runSessionSchema.optional(),
   sessionContext: z
     .strictObject({

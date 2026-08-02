@@ -103,6 +103,14 @@
         "period": 60,
       },
     },
+    {
+      "name": "COMPOSIO_WEBHOOK_RATE_LIMIT",
+      "namespace_id": "10003",
+      "simple": {
+        "limit": 600,
+        "period": 60,
+      },
+    },
   ],
   "r2_buckets": [
     {

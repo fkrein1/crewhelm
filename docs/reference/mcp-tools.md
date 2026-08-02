@@ -257,7 +257,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 **Manage Crewhelm Agent Watches**
 
-Tell an Agent when to check something, then inspect, pause, resume, update, or delete that Watch. Start with sources to see what Crewhelm can notice. Scheduled checks may find nothing and require no webhook, bearer token, API workflow, or external setup.
+Create and manage Watches that start a fresh Agent Run on a schedule or connected-app event. Call sources first; Crewhelm owns delivery and recovery.
 
 Attributes: write, destructive, idempotent, closed-world.
 
@@ -282,11 +282,15 @@ Attributes: write, destructive, idempotent, closed-world.
         "list",
         "history"
       ],
-      "description": "Choose one action and send only its fields: sources(); create(agentId, expectedAgentRevision, idempotencyKey, watch); update(agentId, expectedAgentRevision, expectedWatchRevision, idempotencyKey, watchId, watch); pause(agentId, expectedAgentRevision, expectedWatchRevision, idempotencyKey, watchId); resume(agentId, expectedAgentRevision, expectedWatchRevision, idempotencyKey, watchId); delete(agentId, expectedAgentRevision, expectedWatchRevision, idempotencyKey, watchId); inspect(agentId, watchId); list(agentId); history(agentId, watchId, limit?)."
+      "description": "Send only fields for the action: sources(connectionId?); create(agentId,expectedAgentRevision,idempotencyKey,watch); update(create fields plus watchId,expectedWatchRevision); pause|resume|delete(agentId,expectedAgentRevision,expectedWatchRevision,idempotencyKey,watchId); inspect(agentId,watchId); list(agentId); history(agentId,watchId,limit?)."
     },
     "agentId": {
       "type": "string",
       "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "connectionId": {
+      "type": "string",
+      "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "expectedAgentRevision": {
       "type": "integer",
@@ -310,101 +314,256 @@ Attributes: write, destructive, idempotent, closed-world.
       "maximum": 20
     },
     "watch": {
-      "type": "object",
-      "properties": {
-        "everyMinutes": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 10080,
-          "description": "How often Crewhelm should ask the Agent to check. A check may find nothing."
-        },
-        "instruction": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 16384,
-          "description": "What the Agent should check and what useful outcome it should return."
-        },
-        "name": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 80,
-          "description": "Short owner-facing name for this scheduled responsibility."
-        },
-        "outputContract": {
-          "oneOf": [
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "markdown"
-                }
-              },
-              "required": [
-                "kind"
-              ],
-              "additionalProperties": false
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "everyMinutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10080,
+              "description": "How often Crewhelm should ask the Agent to check. A check may find nothing."
             },
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "json"
-                },
-                "schema": {
+            "instruction": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384,
+              "description": "What the Agent should check and what useful outcome it should return."
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "description": "Short owner-facing name for this scheduled responsibility."
+            },
+            "outputContract": {
+              "oneOf": [
+                {
                   "type": "object",
                   "properties": {
-                    "jsonSchema": {
-                      "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
-                      "type": "object",
-                      "propertyNames": {
-                        "type": "string"
-                      },
-                      "additionalProperties": {
-                        "$ref": "#/definitions/__schema0"
-                      }
-                    },
-                    "name": {
+                    "kind": {
                       "type": "string",
-                      "minLength": 1,
-                      "maxLength": 64,
-                      "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-                    },
-                    "version": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 32,
-                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                      "const": "markdown"
                     }
                   },
                   "required": [
-                    "name",
-                    "version"
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "json"
+                    },
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "jsonSchema": {
+                          "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {
+                            "$ref": "#/definitions/__schema0"
+                          }
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+                        },
+                        "version": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 32,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "version"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "schema"
                   ],
                   "additionalProperties": false
                 }
-              },
-              "required": [
-                "kind",
-                "schema"
               ],
-              "additionalProperties": false
+              "description": "Optional deliverable contract frozen for every Watch occurrence."
             }
+          },
+          "required": [
+            "everyMinutes",
+            "instruction",
+            "name"
           ],
-          "description": "Optional deliverable contract frozen for every Watch occurrence."
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "connectionId": {
+              "type": "string",
+              "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "description": "Connected account returned by sources."
+            },
+            "delivery": {
+              "type": "string",
+              "enum": [
+                "provider_polling",
+                "realtime"
+              ],
+              "description": "Delivery returned by sources."
+            },
+            "eventSlug": {
+              "type": "string",
+              "pattern": "^[A-Z0-9][A-Z0-9_]{0,255}$",
+              "description": "Event slug returned by sources."
+            },
+            "eventVersion": {
+              "type": "string",
+              "pattern": "^[0-9]{8}_[0-9]{2}$",
+              "description": "Event version returned by sources."
+            },
+            "filters": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "maxLength": 2048
+                  }
+                ]
+              },
+              "description": "Event filters described by the source."
+            },
+            "integrationSlug": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$",
+              "description": "Integration returned by sources."
+            },
+            "instruction": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384,
+              "description": "The Agent's responsibility for each matching event."
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "description": "Short owner-facing name for this scheduled responsibility."
+            },
+            "outputContract": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "markdown"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "json"
+                    },
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "jsonSchema": {
+                          "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {
+                            "$ref": "#/definitions/__schema0"
+                          }
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+                        },
+                        "version": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 32,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "version"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "schema"
+                  ],
+                  "additionalProperties": false
+                }
+              ],
+              "description": "Optional output contract for each event Run."
+            }
+          },
+          "required": [
+            "connectionId",
+            "delivery",
+            "eventSlug",
+            "eventVersion",
+            "filters",
+            "integrationSlug",
+            "instruction",
+            "name"
+          ],
+          "additionalProperties": false
         }
-      },
-      "required": [
-        "everyMinutes",
-        "instruction",
-        "name"
-      ],
-      "additionalProperties": false
+      ]
     },
     "watchId": {
-      "type": "string",
-      "pattern": "^schedule_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^schedule_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        {
+          "type": "string",
+          "pattern": "^watch_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        }
+      ],
       "description": "Opaque Watch identity. Scheduled-check Watches retain their compatible schedule identity."
     }
   },
@@ -3305,11 +3464,12 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
       ]
     },
     "trigger": {
-      "description": "Return manual, scheduled, or workflow runs.",
+      "description": "Return manual, scheduled, connected-Watch, or workflow runs.",
       "type": "string",
       "enum": [
         "manual",
         "schedule",
+        "watch",
         "workflow"
       ]
     }

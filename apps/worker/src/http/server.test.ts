@@ -89,6 +89,56 @@ describe("Crewhelm Worker", () => {
     expect(await mcpResponse.text()).not.toContain("/mcp");
   });
 
+  it("routes Composio payloads only to the fixed verifier before owner selection", async () => {
+    const ownerKey = await deriveOwnerKey({
+      issuer: "https://github.com",
+      subject: "composio-webhook-routing",
+    });
+    const getByName = vi.spyOn(env.OWNER_CONTROL_PLANE, "getByName");
+    const wrongMethod = await request("/webhooks/composio", { method: "GET" });
+
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.headers.get("allow")).toBe("POST");
+
+    const wrongMediaType = await request("/webhooks/composio", {
+      body: "{}",
+      headers: { "content-type": "text/plain" },
+      method: "POST",
+    });
+
+    expect(wrongMediaType.status).toBe(400);
+
+    const oversized = await request("/webhooks/composio", {
+      body: "{}",
+      headers: {
+        "content-length": String(256 * 1_024 + 1),
+        "content-type": "application/json",
+      },
+      method: "POST",
+    });
+
+    expect(oversized.status).toBe(400);
+
+    const unsigned = await request("/webhooks/composio", {
+      body: JSON.stringify({ metadata: { user_id: ownerKey } }),
+      headers: {
+        "content-type": "application/json",
+        "webhook-id": "webhook_unsigned",
+        "webhook-signature": "v1,invalid-signature",
+        "webhook-timestamp": String(Math.floor(Date.now() / 1_000)),
+      },
+      method: "POST",
+    });
+
+    expect(unsigned.status).toBe(503);
+    expect(await unsigned.text()).not.toContain(ownerKey);
+    expect(getByName).toHaveBeenCalled();
+    expect(getByName.mock.calls.every(([name]) => name === "system:composio-webhook-ingress")).toBe(
+      true,
+    );
+    getByName.mockRestore();
+  });
+
   it.each(["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"])(
     "advertises exact protected-resource metadata at %s",
     async (path) => {

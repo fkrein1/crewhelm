@@ -204,6 +204,20 @@
       "when": 1785657486173,
       "tag": "0028_purple_impossible_man",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1785665589788,
+      "tag": "0029_mushy_legion",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1785670994517,
+      "tag": "0030_mixed_corsair",
+      "breakpoints": true
     }
   ]
 }
