@@ -405,3 +405,11 @@ export {
   type ComposioConnectionLinks,
   type ComposioConnectionLinksOptions,
 } from "./connection-links.js";
+export {
+  createComposioEventCatalog,
+  type ComposioEventCatalog,
+  type ComposioEventCatalogOptions,
+  type ComposioWatchableEvent,
+  type ComposioWatchableEventCatalogResult,
+  type ComposioWatchableEventConfigurationField,
+} from "./triggers.js";
