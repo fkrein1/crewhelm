@@ -110,6 +110,8 @@ export interface ComposioCatalogOptions {
   signal?: AbortSignal;
 }
 
+type CatalogResponse = { ok: true; value: unknown } | { ok: false };
+
 function unavailable() {
   return {
     error: {
@@ -202,32 +204,37 @@ export function createComposioCatalog(options: ComposioCatalogOptions): Composio
   const apiKey = composioApiKeySchema.safeParse(options.apiKey);
   const fetchImplementation = options.fetch ?? globalThis.fetch;
 
-  async function fetchCatalog(endpoint: URL, maximumBytes: number): Promise<unknown> {
+  async function fetchCatalog(endpoint: URL, maximumBytes: number): Promise<CatalogResponse> {
     if (!apiKey.success) {
-      throw new Error("Composio catalog is unavailable.");
+      return { ok: false };
     }
 
-    const response = await fetchImplementation(endpoint, {
-      headers: {
-        accept: "application/json",
-        "x-api-key": apiKey.data,
-      },
-      method: "GET",
-      redirect: "manual",
-      signal:
-        options.signal === undefined
-          ? AbortSignal.timeout(CATALOG_TIMEOUT_MS)
-          : AbortSignal.any([options.signal, AbortSignal.timeout(CATALOG_TIMEOUT_MS)]),
-    });
+    try {
+      const response = await fetchImplementation(endpoint, {
+        headers: {
+          accept: "application/json",
+          "x-api-key": apiKey.data,
+        },
+        method: "GET",
+        redirect: "manual",
+        signal:
+          options.signal === undefined
+            ? AbortSignal.timeout(CATALOG_TIMEOUT_MS)
+            : AbortSignal.any([options.signal, AbortSignal.timeout(CATALOG_TIMEOUT_MS)]),
+      });
 
-    if (
-      response.status !== 200 ||
-      !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
-    ) {
-      throw new Error("Composio catalog is unavailable.");
+      if (
+        response.status !== 200 ||
+        !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
+      ) {
+        return { ok: false };
+      }
+
+      const body = await readBoundedJson(response, maximumBytes);
+      return body.ok ? body : { ok: false };
+    } catch {
+      return { ok: false };
     }
-
-    return readBoundedJson(response, maximumBytes);
   }
 
   return {
@@ -242,9 +249,9 @@ export function createComposioCatalog(options: ComposioCatalogOptions): Composio
       endpoint.searchParams.set("version", request.data.version);
 
       try {
-        const inspected = composioToolInspectionSchema.safeParse(
-          await fetchCatalog(endpoint, MAXIMUM_TOOL_RESPONSE_BYTES),
-        );
+        const response = await fetchCatalog(endpoint, MAXIMUM_TOOL_RESPONSE_BYTES);
+        if (!response.ok) return unavailable();
+        const inspected = composioToolInspectionSchema.safeParse(response.value);
 
         if (
           !inspected.success ||
@@ -281,9 +288,9 @@ export function createComposioCatalog(options: ComposioCatalogOptions): Composio
       }
 
       try {
-        const authConfigs = composioAuthConfigListResponseSchema.safeParse(
-          await fetchCatalog(endpoint, MAXIMUM_AUTH_CONFIG_RESPONSE_BYTES),
-        );
+        const response = await fetchCatalog(endpoint, MAXIMUM_AUTH_CONFIG_RESPONSE_BYTES);
+        if (!response.ok) return unavailable();
+        const authConfigs = composioAuthConfigListResponseSchema.safeParse(response.value);
 
         if (
           !authConfigs.success ||
@@ -327,9 +334,9 @@ export function createComposioCatalog(options: ComposioCatalogOptions): Composio
       }
 
       try {
-        const catalog = composioCatalogResponseSchema.safeParse(
-          await fetchCatalog(endpoint, MAXIMUM_TOOLKIT_RESPONSE_BYTES),
-        );
+        const response = await fetchCatalog(endpoint, MAXIMUM_TOOLKIT_RESPONSE_BYTES);
+        if (!response.ok) return unavailable();
+        const catalog = composioCatalogResponseSchema.safeParse(response.value);
 
         if (!catalog.success) {
           return unavailable();
@@ -371,9 +378,9 @@ export function createComposioCatalog(options: ComposioCatalogOptions): Composio
       }
 
       try {
-        const catalog = composioToolCatalogResponseSchema.safeParse(
-          await fetchCatalog(endpoint, MAXIMUM_TOOL_RESPONSE_BYTES),
-        );
+        const response = await fetchCatalog(endpoint, MAXIMUM_TOOL_RESPONSE_BYTES);
+        if (!response.ok) return unavailable();
+        const catalog = composioToolCatalogResponseSchema.safeParse(response.value);
 
         if (!catalog.success) {
           return unavailable();

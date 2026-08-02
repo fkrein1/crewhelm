@@ -402,9 +402,9 @@ export function createComposioWebhookSubscriptions(
       return null;
     }
 
-    const parsed = composioWebhookSubscriptionV3Schema.safeParse(
-      await readBoundedJson(response, MAXIMUM_COMPOSIO_WEBHOOK_RESPONSE_BYTES),
-    );
+    const body = await readBoundedJson(response, MAXIMUM_COMPOSIO_WEBHOOK_RESPONSE_BYTES);
+    if (!body.ok) return null;
+    const parsed = composioWebhookSubscriptionV3Schema.safeParse(body.value);
 
     if (
       !parsed.success ||
@@ -437,9 +437,9 @@ export function createComposioWebhookSubscriptions(
           return denied("webhook_subscription_unavailable");
         }
 
-        const listed = composioWebhookSubscriptionListSchema.safeParse(
-          await readBoundedJson(response, MAXIMUM_COMPOSIO_WEBHOOK_RESPONSE_BYTES),
-        );
+        const body = await readBoundedJson(response, MAXIMUM_COMPOSIO_WEBHOOK_RESPONSE_BYTES);
+        if (!body.ok) return denied("webhook_subscription_unavailable");
+        const listed = composioWebhookSubscriptionListSchema.safeParse(body.value);
 
         if (!listed.success || listed.data.next_cursor != null || listed.data.items.length > 1) {
           return denied("webhook_subscription_unavailable");

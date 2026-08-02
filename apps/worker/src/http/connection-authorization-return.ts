@@ -97,29 +97,31 @@ export function registerConnectionAuthorizationReturnRoutes(
       return deniedResponse();
     }
 
+    if (!(await hasValidCallbackAuthenticator(context.env.BETTER_AUTH_SECRET, parameters.data))) {
+      return deniedResponse();
+    }
+
+    let returned: unknown;
+
     try {
-      if (!(await hasValidCallbackAuthenticator(context.env.BETTER_AUTH_SECRET, parameters.data))) {
-        return deniedResponse();
-      }
-
       const controlPlane = context.env.OWNER_CONTROL_PLANE.getByName(parameters.data.ownerKey);
-      const result = recordConnectionAuthorizationReturnResultSchema.parse(
-        await controlPlane.recordConnectionAuthorizationReturn({
-          authorizationToken: parameters.data.authorizationToken,
-          providerConnectionId: providerReturn.providerConnectionId,
-          reservationId: parameters.data.reservationId,
-          status: providerReturn.status,
-        }),
-      );
-
-      if (!result.ok) {
-        return deniedResponse();
-      }
-
-      return workerPageResponse(result.outcome === "returned" ? RETURNED_BODY : FAILED_BODY);
+      returned = await controlPlane.recordConnectionAuthorizationReturn({
+        authorizationToken: parameters.data.authorizationToken,
+        providerConnectionId: providerReturn.providerConnectionId,
+        reservationId: parameters.data.reservationId,
+        status: providerReturn.status,
+      });
     } catch {
       return deniedResponse();
     }
+
+    const result = recordConnectionAuthorizationReturnResultSchema.safeParse(returned);
+
+    if (!result.success || !result.data.ok) {
+      return deniedResponse();
+    }
+
+    return workerPageResponse(result.data.outcome === "returned" ? RETURNED_BODY : FAILED_BODY);
   });
 
   worker.all(CONNECTION_AUTHORIZATION_RETURN_ROUTE, (context) =>

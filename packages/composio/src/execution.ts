@@ -335,13 +335,11 @@ export function createComposioRuntime(options: ComposioRuntimeOptions): Composio
         let providerError: z.infer<typeof toolExecutionErrorSchema> | undefined;
 
         if (response.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
-          try {
-            const parsedError = toolExecutionErrorSchema.safeParse(
-              await readBoundedJson(response, 32 * 1_024),
-            );
+          const errorBody = await readBoundedJson(response, 32 * 1_024);
+
+          if (errorBody.ok) {
+            const parsedError = toolExecutionErrorSchema.safeParse(errorBody.value);
             providerError = parsedError.success ? parsedError.data : undefined;
-          } catch {
-            // The bounded status and generic outcome remain useful without provider error details.
           }
         }
 
@@ -362,13 +360,9 @@ export function createComposioRuntime(options: ComposioRuntimeOptions): Composio
         throw new Error("Composio tool execution failed.");
       }
 
-      let execution: ReturnType<typeof toolExecutionResponseSchema.safeParse>;
+      const executionBody = await readBoundedJson(response, input.maximumOutputBytes);
 
-      try {
-        execution = toolExecutionResponseSchema.safeParse(
-          await readBoundedJson(response, input.maximumOutputBytes),
-        );
-      } catch {
+      if (!executionBody.ok) {
         recordResponse(
           {
             operation: "execute",
@@ -380,6 +374,8 @@ export function createComposioRuntime(options: ComposioRuntimeOptions): Composio
         );
         throw new Error("Composio tool execution failed.");
       }
+
+      const execution = toolExecutionResponseSchema.safeParse(executionBody.value);
 
       if (
         !execution.success ||
@@ -465,13 +461,9 @@ export function createComposioRuntime(options: ComposioRuntimeOptions): Composio
           return { ok: false };
         }
 
-        let account: ReturnType<typeof connectedAccountSchema.safeParse>;
+        const accountBody = await readBoundedJson(response, MAXIMUM_CONNECTION_RESPONSE_BYTES);
 
-        try {
-          account = connectedAccountSchema.safeParse(
-            await readBoundedJson(response, MAXIMUM_CONNECTION_RESPONSE_BYTES),
-          );
-        } catch {
+        if (!accountBody.ok) {
           recordResponse(
             {
               operation: "verify",
@@ -482,6 +474,8 @@ export function createComposioRuntime(options: ComposioRuntimeOptions): Composio
           );
           return { ok: false };
         }
+
+        const account = connectedAccountSchema.safeParse(accountBody.value);
 
         if (
           !account.success ||

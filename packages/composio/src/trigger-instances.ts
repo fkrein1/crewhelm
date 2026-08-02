@@ -219,9 +219,12 @@ export function createComposioTriggerInstances(
         return denied("trigger_operation_unknown");
       }
 
-      const parsed = activeTriggerListSchema.safeParse(
-        await readBoundedJson(response, MAXIMUM_COMPOSIO_TRIGGER_INSTANCE_RESPONSE_BYTES),
+      const body = await readBoundedJson(
+        response,
+        MAXIMUM_COMPOSIO_TRIGGER_INSTANCE_RESPONSE_BYTES,
       );
+      if (!body.ok) return denied("trigger_operation_unknown");
+      const parsed = activeTriggerListSchema.safeParse(body.value);
       const exact = parsed.success
         ? parsed.data.items.filter(
             (item) =>
@@ -289,12 +292,15 @@ export function createComposioTriggerInstances(
           ![200, 201].includes(response.status) ||
           !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
         ) {
-          return denied("trigger_unavailable");
+          return denied("trigger_operation_unknown");
         }
 
-        const parsed = upsertResponseSchema.safeParse(
-          await readBoundedJson(response, MAXIMUM_COMPOSIO_TRIGGER_INSTANCE_RESPONSE_BYTES),
+        const body = await readBoundedJson(
+          response,
+          MAXIMUM_COMPOSIO_TRIGGER_INSTANCE_RESPONSE_BYTES,
         );
+        if (!body.ok) return denied("trigger_operation_unknown");
+        const parsed = upsertResponseSchema.safeParse(body.value);
 
         return !parsed.success || containsSecret(parsed.data, apiKey.data)
           ? denied("trigger_operation_unknown")
@@ -324,12 +330,15 @@ export function createComposioTriggerInstances(
           response.status !== 200 ||
           !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
         ) {
-          return denied("trigger_unavailable");
+          return denied("trigger_operation_unknown");
         }
 
-        const parsed = manageResponseSchema.safeParse(
-          await readBoundedJson(response, MAXIMUM_COMPOSIO_TRIGGER_INSTANCE_RESPONSE_BYTES),
+        const body = await readBoundedJson(
+          response,
+          MAXIMUM_COMPOSIO_TRIGGER_INSTANCE_RESPONSE_BYTES,
         );
+        if (!body.ok) return denied("trigger_operation_unknown");
+        const parsed = manageResponseSchema.safeParse(body.value);
 
         return !parsed.success || containsSecret(parsed.data, apiKey.data)
           ? denied("trigger_operation_unknown")
@@ -362,12 +371,15 @@ export function createComposioTriggerInstances(
           response.status !== 200 ||
           !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
         ) {
-          return denied("trigger_unavailable");
+          return denied("trigger_operation_unknown");
         }
 
-        const parsed = deleteResponseSchema.safeParse(
-          await readBoundedJson(response, MAXIMUM_COMPOSIO_TRIGGER_INSTANCE_RESPONSE_BYTES),
+        const body = await readBoundedJson(
+          response,
+          MAXIMUM_COMPOSIO_TRIGGER_INSTANCE_RESPONSE_BYTES,
         );
+        if (!body.ok) return denied("trigger_operation_unknown");
+        const parsed = deleteResponseSchema.safeParse(body.value);
 
         return !parsed.success ||
           parsed.data.trigger_id !== request.data.providerTriggerId ||

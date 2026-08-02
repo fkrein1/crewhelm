@@ -84,7 +84,13 @@ consentForms.forEach((consentForm) => {
 
 type OAuthApp = Hono<{ Bindings: WorkerEnv }>;
 type WorkerContext = Context<{ Bindings: WorkerEnv }>;
-type AuthFactory = (context: WorkerContext) => CrewhelmAuth;
+type AuthFactory = (context: WorkerContext) => Pick<CrewhelmAuth, "handler">;
+type NavigationTargetResult =
+  | { ok: true; target: URL | null }
+  | { ok: false; reason: "invalid_target" };
+type NavigationResponseResult =
+  | { ok: true; response: Response }
+  | { ok: false; reason: "invalid_target" };
 
 function actionsScriptResponse(): Response {
   return new Response(`${OAUTH_ACTIONS_SCRIPT}\n`, {
@@ -196,7 +202,10 @@ function authUrl(request: Request, path: string): string {
   return new URL(`/api/auth${path}`, request.url).toString();
 }
 
-async function navigationTarget(response: Response, request: Request): Promise<URL | null> {
+async function navigationTarget(
+  response: Response,
+  request: Request,
+): Promise<NavigationTargetResult> {
   const location = response.headers.get("location");
 
   let target = location;
@@ -211,43 +220,69 @@ async function navigationTarget(response: Response, request: Request): Promise<U
   }
 
   if (target === null) {
-    return null;
+    return { ok: true, target: null };
   }
 
-  const targetUrl = new URL(target, request.url);
+  let targetUrl: URL;
+
+  try {
+    targetUrl = new URL(target, request.url);
+  } catch {
+    return { ok: false, reason: "invalid_target" };
+  }
 
   if (targetUrl.protocol !== "https:" && targetUrl.protocol !== "http:") {
-    return null;
+    return { ok: false, reason: "invalid_target" };
   }
 
-  return targetUrl;
+  return { ok: true, target: targetUrl };
 }
 
-async function navigationResponse(response: Response, request: Request): Promise<Response> {
-  const targetUrl = await navigationTarget(response, request);
+async function navigationResponse(
+  response: Response,
+  request: Request,
+): Promise<NavigationResponseResult> {
+  const navigation = await navigationTarget(response, request);
 
-  if (targetUrl === null) {
-    return response;
+  if (!navigation.ok) {
+    return navigation;
+  }
+
+  if (navigation.target === null) {
+    return { ok: true, response };
   }
 
   const headers = new Headers(response.headers);
-  headers.set("location", targetUrl.toString());
-  return new Response(null, { headers, status: 302 });
+  headers.set("location", navigation.target.toString());
+  return { ok: true, response: new Response(null, { headers, status: 302 }) };
 }
 
-async function navigationJsonResponse(response: Response, request: Request): Promise<Response> {
-  const targetUrl = await navigationTarget(response, request);
+async function navigationJsonResponse(
+  response: Response,
+  request: Request,
+): Promise<NavigationResponseResult> {
+  const navigation = await navigationTarget(response, request);
 
-  if (targetUrl === null) {
-    return response;
+  if (!navigation.ok) {
+    return navigation;
   }
 
-  return Response.json(navigationJsonSchema.parse({ redirectUrl: targetUrl.toString() }), {
-    headers: {
-      "cache-control": "no-store",
-      "x-content-type-options": "nosniff",
-    },
-  });
+  if (navigation.target === null) {
+    return { ok: true, response };
+  }
+
+  return {
+    ok: true,
+    response: Response.json(
+      navigationJsonSchema.parse({ redirectUrl: navigation.target.toString() }),
+      {
+        headers: {
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        },
+      },
+    ),
+  };
 }
 
 function loginPage(query: string): string {
@@ -359,7 +394,7 @@ async function startLogin(
   oauthQuery: string,
 ): Promise<Response> {
   try {
-    return navigationResponse(
+    const navigation = await navigationResponse(
       await createAuth(context).handler(
         new Request(authUrl(context.req.raw, "/sign-in/social"), {
           body: JSON.stringify({
@@ -373,6 +408,8 @@ async function startLogin(
       ),
       context.req.raw,
     );
+
+    return navigation.ok ? navigation.response : authorizationUnavailable("login");
   } catch {
     return authorizationUnavailable("login");
   }
@@ -510,9 +547,11 @@ async function startConsent(
       }),
     );
 
-    return jsonNavigation
+    const navigation = await (jsonNavigation
       ? navigationJsonResponse(response, context.req.raw)
-      : navigationResponse(response, context.req.raw);
+      : navigationResponse(response, context.req.raw));
+
+    return navigation.ok ? navigation.response : authorizationUnavailable("consent");
   } catch {
     return authorizationUnavailable("consent");
   }

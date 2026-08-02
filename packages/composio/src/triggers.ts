@@ -370,9 +370,9 @@ export function createComposioEventCatalog(
             return unavailable();
           }
 
-          const catalog = composioTriggerCatalogResponseSchema.safeParse(
-            await readBoundedJson(response, MAXIMUM_COMPOSIO_TRIGGER_RESPONSE_BYTES),
-          );
+          const body = await readBoundedJson(response, MAXIMUM_COMPOSIO_TRIGGER_RESPONSE_BYTES);
+          if (!body.ok) return unavailable();
+          const catalog = composioTriggerCatalogResponseSchema.safeParse(body.value);
 
           if (
             !catalog.success ||

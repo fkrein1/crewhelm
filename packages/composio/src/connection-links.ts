@@ -195,12 +195,14 @@ export function createComposioConnectionLinks(
           return outcomeUnknown();
         }
 
-        const connectionLink = composioConnectionLinkResponseSchema.safeParse(
-          await readBoundedJson(response, MAXIMUM_CONNECTION_LINK_RESPONSE_BYTES),
-        );
+        const body = await readBoundedJson(response, MAXIMUM_CONNECTION_LINK_RESPONSE_BYTES);
+        const connectionLink = body.ok
+          ? composioConnectionLinkResponseSchema.safeParse(body.value)
+          : { success: false as const };
 
         if (!connectionLink.success) {
-          const field = connectionLink.error.issues[0]?.path[0];
+          const field =
+            "error" in connectionLink ? connectionLink.error.issues[0]?.path[0] : undefined;
           const outcome =
             field === "connected_account_id"
               ? "invalid_connected_account_id"

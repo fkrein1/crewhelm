@@ -190,9 +190,9 @@ export function createComposioAuthConfigs(
       return undefined;
     }
 
-    const result = managedAuthConfigListSchema.safeParse(
-      await readBoundedJson(response, MAXIMUM_AUTH_CONFIG_RESPONSE_BYTES),
-    );
+    const body = await readBoundedJson(response, MAXIMUM_AUTH_CONFIG_RESPONSE_BYTES);
+    if (!body.ok) return undefined;
+    const result = managedAuthConfigListSchema.safeParse(body.value);
 
     if (
       !result.success ||
@@ -255,9 +255,10 @@ export function createComposioAuthConfigs(
           response.status === 201 &&
           response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
         ) {
-          const created = managedAuthConfigCreateSchema.safeParse(
-            await readBoundedJson(response, MAXIMUM_AUTH_CONFIG_RESPONSE_BYTES),
-          );
+          const body = await readBoundedJson(response, MAXIMUM_AUTH_CONFIG_RESPONSE_BYTES);
+          const created = body.ok
+            ? managedAuthConfigCreateSchema.safeParse(body.value)
+            : { success: false as const };
 
           if (created.success && created.data.toolkit.slug === integrationSlug.data) {
             const authConfig = normalize(created.data.auth_config, created.data.toolkit.slug);

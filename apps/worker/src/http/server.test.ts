@@ -119,6 +119,20 @@ describe("Crewhelm Worker", () => {
 
     expect(oversized.status).toBe(400);
 
+    const oversizedHeaders = await request("/webhooks/composio", {
+      body: "{}",
+      headers: {
+        "content-type": "application/json",
+        "webhook-id": "webhook_oversized_headers",
+        "webhook-signature": "s".repeat(513),
+        "webhook-timestamp": String(Math.floor(Date.now() / 1_000)),
+      },
+      method: "POST",
+    });
+
+    expect(oversizedHeaders.status).toBe(401);
+    expect(getByName).not.toHaveBeenCalled();
+
     const unsigned = await request("/webhooks/composio", {
       body: JSON.stringify({ metadata: { user_id: ownerKey } }),
       headers: {
