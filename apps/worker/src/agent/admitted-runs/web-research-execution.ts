@@ -193,7 +193,9 @@ function createBoundedSignal(
 } {
   const controller = new AbortController();
   let timeoutReached = false;
-  const abort = () => controller.abort(parent.reason);
+  const abort = () => {
+    controller.abort(parent.reason);
+  };
   if (parent.aborted) abort();
   else parent.addEventListener("abort", abort, { once: true });
   const timeout = setTimeout(() => {

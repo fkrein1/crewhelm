@@ -353,7 +353,9 @@ async function fetchJson<T>(
 
 function closeServer(server: Server): Promise<void> {
   return new Promise((resolve) => {
-    server.close(() => resolve());
+    server.close(() => {
+      resolve();
+    });
     server.closeAllConnections();
   });
 }
@@ -458,7 +460,9 @@ async function startCallbackListener(state: string, issuer: string): Promise<Cal
         const result = await Promise.race([
           callback,
           new Promise<CallbackResult>((resolve) => {
-            timer = setTimeout(() => resolve({ code: "timeout", kind: "error" }), timeoutMs);
+            timer = setTimeout(() => {
+              resolve({ code: "timeout", kind: "error" });
+            }, timeoutMs);
           }),
         ]);
 

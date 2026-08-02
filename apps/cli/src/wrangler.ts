@@ -130,20 +130,17 @@ export function createWranglerRunner(
         unknownOutcome = true;
         child.kill("SIGTERM");
         escalation = setTimeout(() => child.kill("SIGKILL"), terminationGraceMs);
-        terminationDeadline = setTimeout(
-          () =>
-            finishWithError(
-              new WranglerExecutionError(
-                `${error.message} Process termination could not be confirmed; do not retry yet.`,
-              ),
+        terminationDeadline = setTimeout(() => {
+          finishWithError(
+            new WranglerExecutionError(
+              `${error.message} Process termination could not be confirmed; do not retry yet.`,
             ),
-          terminationGraceMs * 2,
-        );
+          );
+        }, terminationGraceMs * 2);
       };
-      const timeout = setTimeout(
-        () => terminate(new WranglerExecutionError("Cloudflare command timed out.")),
-        timeoutMs,
-      );
+      const timeout = setTimeout(() => {
+        terminate(new WranglerExecutionError("Cloudflare command timed out."));
+      }, timeoutMs);
 
       child.stdout.on("data", (chunk: Buffer) => {
         try {

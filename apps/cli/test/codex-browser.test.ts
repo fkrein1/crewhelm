@@ -24,13 +24,13 @@ function requestWithHost(url: URL, host: string, method = "GET"): Promise<Handof
         const chunks: Buffer[] = [];
 
         response.on("data", (chunk: Buffer) => chunks.push(chunk));
-        response.on("end", () =>
+        response.on("end", () => {
           resolve({
             body: Buffer.concat(chunks).toString("utf8"),
             headers: response.headers,
             status: response.statusCode ?? 0,
-          }),
-        );
+          });
+        });
       },
     );
 
@@ -60,7 +60,9 @@ describe("Codex browser handoff", () => {
       writeError: (text) => output.push(text),
     });
 
-    await vi.waitFor(() => expect(output).toHaveLength(1));
+    await vi.waitFor(() => {
+      expect(output).toHaveLength(1);
+    });
     const handoff = handoffFromOutput(output);
     const wrongHost = await requestWithHost(handoff, `localhost:${handoff.port}`);
     const wrongMethod = await requestWithHost(handoff, handoff.host, "POST");

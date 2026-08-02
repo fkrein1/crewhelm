@@ -30,6 +30,7 @@ import {
 } from "../packages/contracts/src/index.js";
 
 import { diagnoseDeployment } from "../apps/cli/src/doctor.js";
+import { normalizeThrownError } from "../apps/cli/src/errors.js";
 import { readInstallation } from "../apps/cli/src/installation.js";
 import { openInCodexBrowser } from "../apps/cli/src/codex-browser.js";
 import { openInDefaultBrowser } from "../apps/cli/src/interactive.js";
@@ -608,7 +609,7 @@ async function schedules(options: {
         },
       ] as const;
       let evidence: unknown;
-      let operationFailure: unknown;
+      let operationFailure: Error | undefined;
 
       try {
         for (const definition of definitions) {
@@ -740,10 +741,10 @@ async function schedules(options: {
           })),
         };
       } catch (error) {
-        operationFailure = error;
+        operationFailure = normalizeThrownError(error, "Schedule rehearsal failed.");
       }
 
-      let cleanupFailure: unknown;
+      let cleanupFailure: Error | undefined;
 
       try {
         const listed = await callTool<ListAgentSchedulesResult>(
@@ -802,7 +803,7 @@ async function schedules(options: {
           );
         }
       } catch (error) {
-        cleanupFailure = error;
+        cleanupFailure = normalizeThrownError(error, "Schedule rehearsal cleanup failed.");
       }
 
       try {
@@ -824,7 +825,7 @@ async function schedules(options: {
           );
         }
       } catch (error) {
-        cleanupFailure ??= error;
+        cleanupFailure ??= normalizeThrownError(error, "Schedule rehearsal cleanup failed.");
       }
 
       if (cleanupFailure !== undefined) {
@@ -935,7 +936,7 @@ async function watches(options: {
 
       agentId = created.agent.id;
       let evidence: unknown;
-      let operationFailure: unknown;
+      let operationFailure: Error | undefined;
 
       try {
         const sources = await callTool<AgentWatchesResult>(
@@ -1152,11 +1153,11 @@ async function watches(options: {
         };
         watchId = undefined;
       } catch (error) {
-        operationFailure = error;
+        operationFailure = normalizeThrownError(error, "Watch rehearsal failed.");
       }
 
       if (watchId !== undefined) {
-        let cleanupError: unknown;
+        let cleanupError: Error | undefined;
 
         for (let attempt = 0; attempt < 5 && watchId !== undefined; attempt += 1) {
           try {
@@ -1228,7 +1229,7 @@ async function watches(options: {
               "Watch cleanup did not remove the exact Watch.",
             );
           } catch (error) {
-            cleanupError = error;
+            cleanupError = normalizeThrownError(error, "Watch rehearsal cleanup failed.");
             await new Promise((resolve) => setTimeout(resolve, 1_000));
           }
         }
@@ -1259,7 +1260,7 @@ async function watches(options: {
           );
         }
       } catch (cleanupError) {
-        operationFailure ??= cleanupError;
+        operationFailure ??= normalizeThrownError(cleanupError, "Watch rehearsal cleanup failed.");
       }
 
       if (operationFailure !== undefined) throw operationFailure;
@@ -1487,7 +1488,7 @@ async function connectedWatches(options: {
         },
       } as const;
       let evidence: unknown;
-      let operationFailure: unknown;
+      let operationFailure: Error | undefined;
 
       try {
         let configured: AgentWatchesResult | undefined;
@@ -1788,7 +1789,7 @@ async function connectedWatches(options: {
         };
         watchId = undefined;
       } catch (error) {
-        operationFailure = error;
+        operationFailure = normalizeThrownError(error, "Connected Watch rehearsal failed.");
       }
 
       if (watchId !== undefined) {
@@ -1838,7 +1839,10 @@ async function connectedWatches(options: {
             await new Promise((resolve) => setTimeout(resolve, 1_000));
           }
         } catch (cleanupError) {
-          operationFailure ??= cleanupError;
+          operationFailure ??= normalizeThrownError(
+            cleanupError,
+            "Connected Watch rehearsal cleanup failed.",
+          );
         }
       }
 
@@ -1876,7 +1880,10 @@ async function connectedWatches(options: {
           activeAgentsBefore,
         };
       } catch (cleanupError) {
-        operationFailure ??= cleanupError;
+        operationFailure ??= normalizeThrownError(
+          cleanupError,
+          "Connected Watch rehearsal cleanup failed.",
+        );
       }
 
       if (operationFailure !== undefined) throw operationFailure;
@@ -1984,7 +1991,7 @@ async function conversation(options: {
       agentId = created.agent.id;
       let evidence: unknown;
       let expectedConversationRevision: number | undefined;
-      let operationFailure: unknown;
+      let operationFailure: Error | undefined;
       let sessionDeleted = false;
 
       const waitForRun = async (runId: string) => {
@@ -2200,10 +2207,10 @@ async function conversation(options: {
           secondRunId,
         };
       } catch (error) {
-        operationFailure = error;
+        operationFailure = normalizeThrownError(error, "Conversation rehearsal failed.");
       }
 
-      let cleanupFailure: unknown;
+      let cleanupFailure: Error | undefined;
       if (conversationId !== undefined && !sessionDeleted) {
         try {
           const cleanupDeadline = Date.now() + Math.min(options.runTimeoutMs, 60_000);
@@ -2271,7 +2278,7 @@ async function conversation(options: {
             );
           }
         } catch (error) {
-          cleanupFailure = error;
+          cleanupFailure = normalizeThrownError(error, "Conversation rehearsal cleanup failed.");
         }
       }
 
@@ -2304,7 +2311,7 @@ async function conversation(options: {
           activeAgentsAfter,
         };
       } catch (error) {
-        cleanupFailure ??= error;
+        cleanupFailure ??= normalizeThrownError(error, "Conversation rehearsal cleanup failed.");
       }
 
       if (cleanupFailure !== undefined) throw cleanupFailure;
@@ -2408,7 +2415,7 @@ async function typedOutput(options: {
         throw new TemporaryOwnerSessionError("invalid_payload", "Disposable Agent was denied.");
       }
       agentId = created.agent.id;
-      let operationFailure: unknown;
+      let operationFailure: Error | undefined;
       let evidence: unknown;
 
       try {
@@ -2640,7 +2647,7 @@ async function typedOutput(options: {
           workflowSchemaDigest: exactWorkflowAggregate.deliverable.schema.digest,
         };
       } catch (error) {
-        operationFailure = error;
+        operationFailure = normalizeThrownError(error, "Typed-output rehearsal failed.");
       }
 
       try {
@@ -2661,7 +2668,9 @@ async function typedOutput(options: {
           );
         }
       } catch (cleanupError) {
-        if (operationFailure === undefined) throw cleanupError;
+        if (operationFailure === undefined) {
+          throw normalizeThrownError(cleanupError, "Typed-output rehearsal cleanup failed.");
+        }
       }
       if (operationFailure !== undefined) throw operationFailure;
       return evidence;

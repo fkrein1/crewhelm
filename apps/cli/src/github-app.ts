@@ -43,7 +43,9 @@ export interface CreateGitHubAppOptions {
 
 function closeServer(server: Server): Promise<void> {
   return new Promise((resolve) => {
-    server.close(() => resolve());
+    server.close(() => {
+      resolve();
+    });
   });
 }
 
@@ -214,10 +216,9 @@ export async function createGitHubApp(
     authorizationCode = await Promise.race([
       code,
       new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error("GitHub App setup timed out.")),
-          CALLBACK_TIMEOUT_MS,
-        );
+        timeout = setTimeout(() => {
+          reject(new Error("GitHub App setup timed out."));
+        }, CALLBACK_TIMEOUT_MS);
       }),
     ]);
   } finally {

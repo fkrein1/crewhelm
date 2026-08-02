@@ -178,12 +178,16 @@ export async function runBoundedSandboxCode(input: {
             await runBoundedSandboxCleanup({
               cleanup: () => lateStream.cancel(),
               timeoutMs: SANDBOX_STREAM_CANCEL_TIMEOUT_MS,
-              trackLateCleanup: (cleanup) => input.trackLateCleanup(cleanup),
+              trackLateCleanup: (cleanup) => {
+                input.trackLateCleanup(cleanup);
+              },
             });
             await runBoundedSandboxCleanup({
               cleanup: () => input.cleanupAfterLateOpen(),
               timeoutMs: 1_000,
-              trackLateCleanup: (cleanup) => input.trackLateCleanup(cleanup),
+              trackLateCleanup: (cleanup) => {
+                input.trackLateCleanup(cleanup);
+              },
             });
             return undefined;
           })
@@ -260,7 +264,9 @@ export async function runBoundedSandboxCode(input: {
       await runBoundedSandboxCleanup({
         cleanup: () => reader.cancel(),
         timeoutMs: SANDBOX_STREAM_CANCEL_TIMEOUT_MS,
-        trackLateCleanup: (cleanup) => input.trackLateCleanup(cleanup),
+        trackLateCleanup: (cleanup) => {
+          input.trackLateCleanup(cleanup);
+        },
       });
     } catch {
       // The owning adapter destroys the per-call container even if stream cancellation fails.

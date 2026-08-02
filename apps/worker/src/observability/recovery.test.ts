@@ -58,7 +58,9 @@ describe("recovery observability", () => {
     );
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-    expect(() => recordRecoveryEvent(hostileInput)).not.toThrow();
+    expect(() => {
+      recordRecoveryEvent(hostileInput);
+    }).not.toThrow();
     expect(warn).toHaveBeenCalledExactlyOnceWith({ event: "crewhelm.recovery.telemetry_rejected" });
   });
 });

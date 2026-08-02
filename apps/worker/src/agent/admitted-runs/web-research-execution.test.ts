@@ -203,7 +203,14 @@ describe("Brave web search", () => {
       return new Promise<Response>((_resolve, reject) => {
         const signal = options?.signal;
         if (signal?.aborted) reject(signal.reason);
-        else signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        else
+          signal?.addEventListener(
+            "abort",
+            () => {
+              reject(signal.reason);
+            },
+            { once: true },
+          );
       });
     });
     await expect(

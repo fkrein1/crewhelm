@@ -196,23 +196,27 @@ describe("execution observability", () => {
     );
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-    expect(() => recordExecutionEvent(hostileInput)).not.toThrow();
+    expect(() => {
+      recordExecutionEvent(hostileInput);
+    }).not.toThrow();
     warn.mockImplementation(() => {
       throw failure;
     });
-    expect(() => recordExecutionEvent(hostileInput)).not.toThrow();
+    expect(() => {
+      recordExecutionEvent(hostileInput);
+    }).not.toThrow();
 
     vi.spyOn(console, "info").mockImplementation(() => {
       throw failure;
     });
-    expect(() =>
+    expect(() => {
       recordExecutionEvent({
         outcome: "completed",
         outputBytes: 0,
         phase: "tool.completion",
         runId,
         toolCallId,
-      }),
-    ).not.toThrow();
+      });
+    }).not.toThrow();
   });
 });

@@ -569,7 +569,9 @@ describe("CrewAgent admitted execution", () => {
     const stub = crewAgentNamespace().getByName(objectName);
 
     await runInDurableObject(stub, async (agent) => {
-      expect(() => agent.configure({})).toThrow("CrewAgent runtime admission is not available.");
+      expect(() => {
+        agent.configure({});
+      }).toThrow("CrewAgent runtime admission is not available.");
       expect(() => agent.getSystemPrompt()).toThrow(
         "CrewAgent runtime configuration is missing or invalid.",
       );
@@ -634,10 +636,12 @@ describe("CrewAgent admitted execution", () => {
       await expect(agent.cancelSubmission("unadmitted")).rejects.toThrow(
         "CrewAgent runtime admission is not available.",
       );
-      expect(() => agent.cancelChat("unadmitted")).toThrow(
-        "CrewAgent runtime admission is not available.",
-      );
-      expect(() => agent.cancelAllChats()).toThrow("CrewAgent runtime admission is not available.");
+      expect(() => {
+        agent.cancelChat("unadmitted");
+      }).toThrow("CrewAgent runtime admission is not available.");
+      expect(() => {
+        agent.cancelAllChats();
+      }).toThrow("CrewAgent runtime admission is not available.");
       expect(agent.replyAttachments()).toEqual([]);
       await expect(agent.pendingExecutions()).rejects.toThrow(
         "CrewAgent runtime admission is not available.",
@@ -654,9 +658,9 @@ describe("CrewAgent admitted execution", () => {
         "CrewAgent runtime admission is not available.",
       );
       expect(() => agent.getConfig()).toThrow("CrewAgent runtime admission is not available.");
-      expect(() => agent.setState({ injected: true })).toThrow(
-        "CrewAgent runtime admission is not available.",
-      );
+      expect(() => {
+        agent.setState({ injected: true });
+      }).toThrow("CrewAgent runtime admission is not available.");
       expect(() => callMethod(agent, "sql", ["SELECT 1"])).toThrow(
         "CrewAgent runtime admission is not available.",
       );
@@ -1187,7 +1191,9 @@ describe("CrewAgent admitted execution", () => {
       env.CREW_AGENT.getByName(
         crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
       ),
-      (agent) => asTestCrewAgent(agent).enableDurableSessionsForTest(),
+      (agent) => {
+        asTestCrewAgent(agent).enableDurableSessionsForTest();
+      },
     );
 
     const started = await controlPlane.startRun(authority, {
@@ -1277,7 +1283,9 @@ describe("CrewAgent admitted execution", () => {
       env.CREW_AGENT.getByName(
         crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
       ),
-      (agent) => asTestCrewAgent(agent).enableDurableSessionsForTest(),
+      (agent) => {
+        asTestCrewAgent(agent).enableDurableSessionsForTest();
+      },
     );
     const started = await controlPlane.startRun(authority, {
       agentId: created.agent.id,
@@ -1370,7 +1378,9 @@ describe("CrewAgent admitted execution", () => {
       env.CREW_AGENT.getByName(
         crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
       ),
-      (agent) => asTestCrewAgent(agent).enableDurableSessionsForTest(),
+      (agent) => {
+        asTestCrewAgent(agent).enableDurableSessionsForTest();
+      },
     );
     const started = await controlPlane.startRun(authority, {
       agentId: created.agent.id,
@@ -3697,7 +3707,9 @@ describe("CrewAgent admitted execution", () => {
       env.CREW_AGENT.getByName(
         crewAgentObjectName({ agentId: created.agent.id, ownerKey: authority.ownerKey }),
       ),
-      (agent) => asTestCrewAgent(agent).enableDurableSessionsForTest(),
+      (agent) => {
+        asTestCrewAgent(agent).enableDurableSessionsForTest();
+      },
     );
     const started = await controlPlane.startRun(authority, {
       agentId: created.agent.id,
