@@ -11,6 +11,16 @@ interface AiGatewayUsageSource {
   gateway(id: string): GatewayLogReader;
 }
 
+type GatewayLogState =
+  | {
+      costMicrousd: number;
+      inputTokens: number | null;
+      outputTokens: number | null;
+      state: "ready";
+    }
+  | { state: "not_ready" }
+  | { state: "unavailable" };
+
 const INITIAL_RECONCILIATION_DELAY_MS = 1_000;
 const MAXIMUM_RECONCILIATION_DELAY_MS = 5 * 60 * 1_000;
 const MAXIMUM_RECONCILIATIONS_PER_ALARM = 25;
@@ -26,6 +36,14 @@ function reconciliationDelay(attempt: number): number {
 function costMicrousd(costUsd: number): number | null {
   const value = Math.ceil(costUsd * 1_000_000);
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function tokenCount(value: number | undefined): number | null | undefined {
+  if (value === undefined) {
+    return null;
+  }
+
+  return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 export class AiGatewayUsage {
@@ -167,47 +185,84 @@ export class AiGatewayUsage {
       return;
     }
 
-    try {
-      const log = await this.#ai.gateway(gatewayId).getLog(gatewayLogId);
-      const cost =
-        typeof log.cost === "number" && Number.isFinite(log.cost) ? costMicrousd(log.cost) : null;
+    const log = await this.#readGatewayLog(gatewayId, gatewayLogId, row.runId, row.agentId);
 
-      if (
-        log.id !== gatewayLogId ||
-        log.metadata?.crewhelm_run !== row.runId ||
-        log.metadata?.crewhelm_agent !== row.agentId ||
-        cost === null
-      ) {
-        throw new Error("AI Gateway log is not ready.");
+    switch (log.state) {
+      case "ready":
+        this.#database
+          .update(aiGatewayCalls)
+          .set({
+            costMicrousd: log.costMicrousd,
+            inputTokens: log.inputTokens,
+            outputTokens: log.outputTokens,
+            settledAt: currentTime,
+            status: "settled",
+          })
+          .where(
+            and(
+              eq(aiGatewayCalls.gatewayLogId, gatewayLogId),
+              eq(aiGatewayCalls.status, "pending"),
+            ),
+          )
+          .run();
+        return;
+      case "not_ready":
+      case "unavailable": {
+        const nextReconciliationAt = currentTime + reconciliationDelay(row.reconciliationAttempts);
+        this.#database
+          .update(aiGatewayCalls)
+          .set({
+            nextReconciliationAt,
+            reconciliationAttempts: row.reconciliationAttempts + 1,
+          })
+          .where(
+            and(
+              eq(aiGatewayCalls.gatewayLogId, gatewayLogId),
+              eq(aiGatewayCalls.status, "pending"),
+            ),
+          )
+          .run();
+        await this.#schedule(nextReconciliationAt);
       }
-
-      this.#database
-        .update(aiGatewayCalls)
-        .set({
-          costMicrousd: cost,
-          inputTokens: log.tokens_in ?? null,
-          outputTokens: log.tokens_out ?? null,
-          settledAt: currentTime,
-          status: "settled",
-        })
-        .where(
-          and(eq(aiGatewayCalls.gatewayLogId, gatewayLogId), eq(aiGatewayCalls.status, "pending")),
-        )
-        .run();
-    } catch {
-      const nextReconciliationAt = currentTime + reconciliationDelay(row.reconciliationAttempts);
-      this.#database
-        .update(aiGatewayCalls)
-        .set({
-          nextReconciliationAt,
-          reconciliationAttempts: row.reconciliationAttempts + 1,
-        })
-        .where(
-          and(eq(aiGatewayCalls.gatewayLogId, gatewayLogId), eq(aiGatewayCalls.status, "pending")),
-        )
-        .run();
-      await this.#schedule(nextReconciliationAt);
     }
+  }
+
+  async #readGatewayLog(
+    gatewayId: string,
+    gatewayLogId: string,
+    runId: string,
+    agentId: string,
+  ): Promise<GatewayLogState> {
+    let log: AiGatewayLog;
+
+    try {
+      log = await this.#ai.gateway(gatewayId).getLog(gatewayLogId);
+    } catch {
+      return { state: "unavailable" };
+    }
+
+    const cost =
+      typeof log.cost === "number" && Number.isFinite(log.cost) ? costMicrousd(log.cost) : null;
+    const inputTokens = tokenCount(log.tokens_in);
+    const outputTokens = tokenCount(log.tokens_out);
+
+    if (
+      log.id !== gatewayLogId ||
+      log.metadata?.crewhelm_run !== runId ||
+      log.metadata?.crewhelm_agent !== agentId ||
+      cost === null ||
+      inputTokens === undefined ||
+      outputTokens === undefined
+    ) {
+      return { state: "not_ready" };
+    }
+
+    return {
+      costMicrousd: cost,
+      inputTokens,
+      outputTokens,
+      state: "ready",
+    };
   }
 
   async #schedule(reconcileAt: number): Promise<void> {
