@@ -59,7 +59,7 @@ const GMAIL_DRAFT_REQUIRED_SCOPES = [
 const SAFE_DRAFT_RECIPIENT = "crewhelm-rehearsal@example.invalid";
 const TOOL_CALLING_MODEL = "@cf/zai-org/glm-4.7-flash";
 const MAXIMUM_CONNECTION_PAGES = 50;
-const MAXIMUM_MCP_SCHEMA_BYTES = 64 * 1_024;
+const MAXIMUM_MCP_SCHEMA_BYTES = 160 * 1_024;
 const POLL_INTERVAL_MS = 1_000;
 const CLEANUP_REQUEST_TIMEOUT_MS = 5_000;
 const SCHEDULE_INTERVAL_SECONDS = 60;
@@ -86,86 +86,68 @@ const TOOL_LIMITS = {
   maxOutputBytes: 4_096,
 } as const;
 const REQUIRED_TOOLS = {
-  crewhelm_agent_inbox: {
-    destructiveHint: false,
-    idempotentHint: true,
-    openWorldHint: false,
-    readOnlyHint: false,
-  },
-  crewhelm_batch_disable_agents: {
+  crewhelm_change_agents: {
     destructiveHint: true,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: false,
   },
-  crewhelm_configure_agent_connection: {
+  crewhelm_change_automations: {
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+    readOnlyHint: false,
+  },
+  crewhelm_change_connections: {
     destructiveHint: true,
     idempotentHint: true,
     openWorldHint: true,
     readOnlyHint: false,
   },
-  crewhelm_configure_agent_schedule: {
+  crewhelm_change_work: {
     destructiveHint: true,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: false,
   },
-  crewhelm_create_agent: {
-    destructiveHint: false,
-    idempotentHint: true,
-    openWorldHint: false,
-    readOnlyHint: false,
-  },
-  crewhelm_get_agent: {
+  crewhelm_inspect_agents: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: true,
   },
-  crewhelm_get_agent_schedule: {
+  crewhelm_inspect_automations: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: true,
   },
-  crewhelm_get_config: {
-    destructiveHint: false,
-    idempotentHint: true,
-    openWorldHint: false,
-    readOnlyHint: true,
-  },
-  crewhelm_inspect_integration_tool: {
+  crewhelm_inspect_connections: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: true,
     readOnlyHint: true,
   },
-  crewhelm_inspect_run: {
+  crewhelm_inspect_context: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: true,
   },
-  crewhelm_list_connections: {
+  crewhelm_inspect_recovery: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: true,
   },
-  crewhelm_list_unresolved_tool_effects: {
+  crewhelm_inspect_work: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: true,
   },
-  crewhelm_revoke_authority: {
+  crewhelm_recover: {
     destructiveHint: true,
-    idempotentHint: true,
-    openWorldHint: false,
-    readOnlyHint: false,
-  },
-  crewhelm_start_run: {
-    destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: false,

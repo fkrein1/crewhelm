@@ -73,7 +73,7 @@ did not happen.
 
 ## Maintain recoverability
 
-- Reuse idempotency keys only for the exact same request.
+- Retry only the exact same facade request; preserve an explicit `requestKey` when one was supplied.
 - Reread current revisions after a conflict instead of forcing stale state.
 - Repeat `crewhelm up` for supported upgrades and interrupted installation recovery.
 - Preserve ambiguous resources and receipts for inspection; do not delete by guessed name.

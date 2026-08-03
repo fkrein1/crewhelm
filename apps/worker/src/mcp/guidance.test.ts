@@ -55,10 +55,10 @@ describe("MCP first-use guidance", () => {
   it("keeps initialization guidance compact and centered on bounded discovery", () => {
     expect(new TextEncoder().encode(MCP_SERVER_INSTRUCTIONS).byteLength).toBeLessThanOrEqual(1_536);
     expect(MCP_SERVER_INSTRUCTIONS).toContain("Start with crewhelm_status");
-    expect(MCP_SERVER_INSTRUCTIONS).toContain("choose the action first");
-    expect(MCP_SERVER_INSTRUCTIONS).toContain("Schedules, Briefs, integrations, and recovery");
-    expect(MCP_SERVER_INSTRUCTIONS).toContain("Preserve the returned conversation");
-    expect(MCP_SERVER_INSTRUCTIONS).toContain("crewhelm_agent_workflows");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("Choose one typed intent operation");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("Attach returned Brief objects");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("Preserve returned Agent, conversation, Workflow");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("start_workflow");
     expect(MCP_SERVER_INSTRUCTIONS).toContain("tools.web-search");
     expect(MCP_SERVER_INSTRUCTIONS).toContain("authenticated providers");
     expect(MCP_SERVER_INSTRUCTIONS).toContain("Never guess or blindly retry");
@@ -69,7 +69,7 @@ describe("MCP first-use guidance", () => {
       {
         kind: "user_decision",
         reason: "empty_fleet",
-        tool: "crewhelm_create_agent",
+        tool: "crewhelm_change_agents",
       },
     ]);
   });
@@ -87,22 +87,22 @@ describe("MCP first-use guidance", () => {
       ),
     ).toEqual([
       {
-        arguments: { limit: 10 },
+        arguments: { operation: { kind: "unresolved_effects", limit: 10 } },
         kind: "read",
         reason: "unresolved_effects",
-        tool: "crewhelm_list_unresolved_tool_effects",
+        tool: "crewhelm_inspect_recovery",
       },
       {
-        arguments: { action: "list", limit: 10, needsAction: true },
+        arguments: { operation: { kind: "list_inbox", limit: 10, needsAction: true } },
         kind: "read",
         reason: "inbox_attention",
-        tool: "crewhelm_agent_inbox",
+        tool: "crewhelm_inspect_work",
       },
       {
-        arguments: { limit: 10, status: "active" },
+        arguments: { operation: { kind: "list_runs", limit: 10, status: "active" } },
         kind: "read",
         reason: "active_runs",
-        tool: "crewhelm_list_agent_runs",
+        tool: "crewhelm_inspect_work",
       },
     ]);
   });
@@ -114,22 +114,22 @@ describe("MCP first-use guidance", () => {
       ),
     ).toEqual([
       {
-        arguments: { action: "list", limit: 10, status: "active" },
+        arguments: { operation: { kind: "list_workflows", limit: 10, status: "active" } },
         kind: "read",
         reason: "active_workflows",
-        tool: "crewhelm_agent_workflows",
+        tool: "crewhelm_inspect_work",
       },
       {
-        arguments: { limit: 10, status: "active" },
+        arguments: { operation: { kind: "list_runs", limit: 10, status: "active" } },
         kind: "read",
         reason: "active_runs",
-        tool: "crewhelm_list_agent_runs",
+        tool: "crewhelm_inspect_work",
       },
       {
-        arguments: { limit: 10, status: "active" },
+        arguments: { operation: { kind: "list", limit: 10, status: "active" } },
         kind: "read",
         reason: "choose_agent",
-        tool: "crewhelm_list_agents",
+        tool: "crewhelm_inspect_agents",
       },
     ]);
   });
@@ -137,10 +137,10 @@ describe("MCP first-use guidance", () => {
   it("does not claim a disabled fleet is runnable", () => {
     expect(statusGuidance(fleetStatus({ totalAgents: 2 }))).toEqual([
       {
-        arguments: { limit: 10 },
+        arguments: { operation: { kind: "list", limit: 10 } },
         kind: "read",
         reason: "review_disabled_agents",
-        tool: "crewhelm_list_agents",
+        tool: "crewhelm_inspect_agents",
       },
     ]);
   });

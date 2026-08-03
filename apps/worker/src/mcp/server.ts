@@ -56,6 +56,26 @@ import {
   MCP_AGENT_EVENT_TRIGGERS_TOOL_NAME,
   registerEventTriggerTools,
 } from "./event-trigger-tools.js";
+import {
+  MCP_CHANGE_AGENTS_TOOL_NAME,
+  MCP_CHANGE_AUTOMATIONS_TOOL_NAME,
+  MCP_CHANGE_CONNECTIONS_TOOL_NAME,
+  MCP_CHANGE_CONTEXT_TOOL_NAME,
+  MCP_CHANGE_RECIPES_TOOL_NAME,
+  MCP_CHANGE_WORK_TOOL_NAME,
+  MCP_FACADE_TOOL_COUNT,
+  MCP_INSPECT_AGENTS_TOOL_NAME,
+  MCP_INSPECT_AUTOMATIONS_TOOL_NAME,
+  MCP_INSPECT_CONNECTIONS_TOOL_NAME,
+  MCP_INSPECT_CONTEXT_TOOL_NAME,
+  MCP_INSPECT_RECOVERY_TOOL_NAME,
+  MCP_INSPECT_RECIPES_TOOL_NAME,
+  MCP_INSPECT_WORK_TOOL_NAME,
+  MCP_PUBLISH_RECIPE_TOOL_NAME,
+  MCP_RECOVER_TOOL_NAME,
+  registerFacadeTools,
+} from "./facade-tools.js";
+import { createPrivateToolCatalog } from "./private-tool-catalog.js";
 
 export {
   MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME,
@@ -108,11 +128,28 @@ export {
 } from "./recovery-tools.js";
 export { MCP_RECIPES_TOOL_NAME };
 export { MCP_RECIPE_PUBLICATIONS_TOOL_NAME };
+export {
+  MCP_CHANGE_AGENTS_TOOL_NAME,
+  MCP_CHANGE_AUTOMATIONS_TOOL_NAME,
+  MCP_CHANGE_CONNECTIONS_TOOL_NAME,
+  MCP_CHANGE_CONTEXT_TOOL_NAME,
+  MCP_CHANGE_RECIPES_TOOL_NAME,
+  MCP_CHANGE_WORK_TOOL_NAME,
+  MCP_INSPECT_AGENTS_TOOL_NAME,
+  MCP_INSPECT_AUTOMATIONS_TOOL_NAME,
+  MCP_INSPECT_CONNECTIONS_TOOL_NAME,
+  MCP_INSPECT_CONTEXT_TOOL_NAME,
+  MCP_INSPECT_RECOVERY_TOOL_NAME,
+  MCP_INSPECT_RECIPES_TOOL_NAME,
+  MCP_INSPECT_WORK_TOOL_NAME,
+  MCP_PUBLISH_RECIPE_TOOL_NAME,
+  MCP_RECOVER_TOOL_NAME,
+};
 
 const MAX_MCP_BODY_BYTES = 512 * 1024;
-export const MCP_MODEL_VISIBLE_CATALOG_SIZE_BUDGET_BYTES = 88 * 1_024;
-export const MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES = 68 * 1_024;
-export const MCP_TOOL_COUNT_BUDGET = 40;
+export const MCP_MODEL_VISIBLE_CATALOG_SIZE_BUDGET_BYTES = 160 * 1_024;
+export const MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES = 152 * 1_024;
+export const MCP_TOOL_COUNT_BUDGET = MCP_FACADE_TOOL_COUNT;
 const MCP_SERVER_INFO = {
   name: "crewhelm",
   version: "0.1.0",
@@ -202,56 +239,60 @@ function createMcpServer(
     controlPlane,
   };
 
-  registerConfigurationTools(server, context);
-  registerAgentTools(server, context);
-  registerBriefTools(server, context);
-  registerRunTools(server, context);
-  registerSessionTools(server, context);
-  registerWorkflowTools(server, context);
-  registerEventTriggerTools(server, context);
-  registerScheduleTools(server, context);
-  registerRecoveryTools(server, context);
-  registerRecipeTools(server, context);
-  registerRecipePublicationTools(server, context);
-  registerConnectionTools(server, context, {
-    connectionLinks: createComposioConnectionLinks({
-      apiKey: env.COMPOSIO_API_KEY,
-      onResponse: recordIntegrationProviderResponse,
+  const privateTools = createPrivateToolCatalog((privateServer) => {
+    registerConfigurationTools(privateServer, context);
+    registerAgentTools(privateServer, context);
+    registerBriefTools(privateServer, context);
+    registerRunTools(privateServer, context);
+    registerSessionTools(privateServer, context);
+    registerWorkflowTools(privateServer, context);
+    registerEventTriggerTools(privateServer, context);
+    registerScheduleTools(privateServer, context);
+    registerRecoveryTools(privateServer, context);
+    registerRecipeTools(privateServer, context);
+    registerRecipePublicationTools(privateServer, context);
+    registerConnectionTools(privateServer, context, {
+      connectionLinks: createComposioConnectionLinks({
+        apiKey: env.COMPOSIO_API_KEY,
+        onResponse: recordIntegrationProviderResponse,
+        signal,
+      }),
+      publicOrigin: env.PUBLIC_ORIGIN,
+      runtime: createComposioRuntime({
+        apiKey: env.COMPOSIO_API_KEY,
+      }),
+      signingSecret: env.BETTER_AUTH_SECRET,
       signal,
-    }),
-    publicOrigin: env.PUBLIC_ORIGIN,
-    runtime: createComposioRuntime({
-      apiKey: env.COMPOSIO_API_KEY,
-    }),
-    signingSecret: env.BETTER_AUTH_SECRET,
-    signal,
-  });
-  registerRemoteMcpConnectionTools(server, context, {
-    publicOrigin: env.PUBLIC_ORIGIN,
-    signingSecret: env.BETTER_AUTH_SECRET,
-    signal,
-  });
-  registerConnectionAttachmentTools(server, context, {
-    catalog: createComposioCatalog({
-      apiKey: env.COMPOSIO_API_KEY,
+    });
+    registerRemoteMcpConnectionTools(privateServer, context, {
+      publicOrigin: env.PUBLIC_ORIGIN,
+      signingSecret: env.BETTER_AUTH_SECRET,
       signal,
-    }),
-    runtime: createComposioRuntime({
-      apiKey: env.COMPOSIO_API_KEY,
-    }),
-    signal,
-  });
-  registerIntegrationTools(server, context, {
-    authConfigs: createComposioAuthConfigs({
-      apiKey: env.COMPOSIO_API_KEY,
-      onResponse: recordIntegrationProviderResponse,
+    });
+    registerConnectionAttachmentTools(privateServer, context, {
+      catalog: createComposioCatalog({
+        apiKey: env.COMPOSIO_API_KEY,
+        signal,
+      }),
+      runtime: createComposioRuntime({
+        apiKey: env.COMPOSIO_API_KEY,
+      }),
       signal,
-    }),
-    catalog: createComposioCatalog({
-      apiKey: env.COMPOSIO_API_KEY,
-      signal,
-    }),
+    });
+    registerIntegrationTools(privateServer, context, {
+      authConfigs: createComposioAuthConfigs({
+        apiKey: env.COMPOSIO_API_KEY,
+        onResponse: recordIntegrationProviderResponse,
+        signal,
+      }),
+      catalog: createComposioCatalog({
+        apiKey: env.COMPOSIO_API_KEY,
+        signal,
+      }),
+    });
   });
+
+  registerFacadeTools(server, privateTools);
 
   server.registerTool(
     MCP_STATUS_TOOL_NAME,

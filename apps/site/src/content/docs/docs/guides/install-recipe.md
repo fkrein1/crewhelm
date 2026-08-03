@@ -13,8 +13,8 @@ sources:
   - packages/contracts/src/recipe-installations.ts
 ---
 
-Use `crewhelm_recipes` to find a responsibility, inspect its exact public content, preview how it
-maps onto your installation, and create a disabled Agent with pinned local Skills. Installation
+Use the Recipe inspect and change surfaces to find a responsibility, inspect its exact public
+content, preview how it maps onto your installation, and create a disabled Agent with pinned local Skills. Installation
 does not create Connections, grant tool authority, activate recurring work, or start a Run.
 
 ## Before you begin
@@ -34,16 +34,18 @@ Setup parameters are stored in the owner-local installation plan. Do not use the
 
 ## Discover and inspect
 
-1. Call `crewhelm_recipes` with `action: "search"` and describe the outcome you want.
+1. Call `crewhelm_inspect_recipes` with `operation.kind: "search"` and describe the outcome you
+   want.
 2. Select one exact Recipe coordinate and digest from the bounded results.
-3. Call `inspect` for the exact Recipe package. Review its responsibility boundaries, requested
+3. Call `crewhelm_inspect_recipes` with `operation.kind: "inspect"` and the returned target. Review its responsibility boundaries, requested
    authority, limits, inputs, Skill dependencies, and operation templates.
-4. For a selected Skill, call `read_skill` with one exact file path. Start with `SKILL.md`; read
+4. For a selected Skill, call `operation.kind: "read_skill"` with one exact file path. Start with `SKILL.md`; read
    other files only when needed. Skill Markdown remains inert text.
 
 ## Preview and install
 
-1. Call `preview` with the exact Recipe target, setup parameters, optional Skill choices, existing
+1. Call `crewhelm_change_recipes` with `operation.kind: "preview_install"`, the exact Recipe target,
+   `setup` values, optional Skill choices, existing
    Connection bindings, exact Brief bindings, selected operation templates, and a time zone when a
    selected calendar Schedule requires one.
 2. Confirm `ready: true`. Review the rendered Agent, every pinned Skill, Connection compatibility,
@@ -53,7 +55,8 @@ Setup parameters are stored in the owner-local installation plan. Do not use the
    `combination_unavailable` and also keep the plan unready.
 3. Preserve the returned `confirmationDigest`. If any local fact or public artifact changes, run a
    new preview instead of approving a different plan implicitly.
-4. Call `install` with the same request, confirmation digest, and a fresh idempotency key.
+4. Repeat the same flat plan with `operation.kind: "install"` and the confirmation digest. Do not
+   wrap the plan in a `request` object.
 
 ## Verify the result
 
@@ -68,9 +71,9 @@ runs.
 
 ## Recover safely
 
-If install returns `installation_incomplete`, call `crewhelm_recipes` with `action: "recover"` and
-the returned installation ID. Recovery resumes the same stored plan and deterministic child writes;
-do not use a new installation idempotency key. Completed Skill imports are reused.
+If install returns `installation_incomplete`, call `crewhelm_change_recipes` with
+`operation.kind: "recover_install"` and the returned installation ID. Recovery resumes the same
+stored plan and deterministic child writes; completed Skill imports are reused.
 
 To abandon an incomplete installation, keep the Agent disabled and retire any imported Skill only
 after confirming no other Agent references it. An installed Recipe never follows Registry updates;

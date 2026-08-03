@@ -27,7 +27,7 @@ import { requiredRehearsalCheckName } from "../checks.js";
 import { callRehearsalTool, normalizeRehearsalFailure, readRehearsalStatus } from "../mcp.js";
 
 const FULL_SCOPE = "crewhelm:full";
-const MAXIMUM_MCP_SCHEMA_BYTES = 64 * 1_024;
+const MAXIMUM_MCP_SCHEMA_BYTES = 160 * 1_024;
 const POLL_INTERVAL_MS = 1_000;
 const TERMINAL_RUN_STATUSES = ["cancelled", "completed", "failed"] as const;
 type TerminalRunStatus = (typeof TERMINAL_RUN_STATUSES)[number];
@@ -38,35 +38,29 @@ const AGENT_LIMITS = {
   maxTurns: 1,
 } as const;
 const REQUIRED_TOOLS = {
-  crewhelm_batch_disable_agents: {
+  crewhelm_change_agents: {
     destructiveHint: true,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: false,
   },
-  crewhelm_create_agent: {
-    destructiveHint: false,
+  crewhelm_change_work: {
+    destructiveHint: true,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: false,
   },
-  crewhelm_get_agent: {
+  crewhelm_inspect_agents: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: true,
   },
-  crewhelm_inspect_run: {
+  crewhelm_inspect_work: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: true,
-  },
-  crewhelm_start_run: {
-    destructiveHint: false,
-    idempotentHint: true,
-    openWorldHint: false,
-    readOnlyHint: false,
   },
   crewhelm_status: {
     destructiveHint: false,

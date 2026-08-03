@@ -35,27 +35,28 @@ Brief content is frozen into Run admission. Skill references are frozen into an 
 
 ## Create and use a Brief
 
-1. Call `crewhelm_briefs` with `action: "create"`, a name, supported media type, bounded content,
-   and a fresh idempotency key.
-2. Retain the returned Brief ID and revision.
-3. Pass the exact `{id, revision}` reference to `crewhelm_start_run` or a Workflow start. Do not
-   fetch and resend the content merely to attach it.
-4. Use `inspect` for metadata and `read` only when exact content is needed.
-5. To change the material, use `revise` with the current expected revision. Select the new revision
-   explicitly for future work.
+1. Call `crewhelm_change_context` with `operation.kind: "create_brief"`, a name, supported media
+   type, and bounded content.
+2. Keep the returned Brief object unchanged.
+3. Pass that Brief object directly to a `run` or `start_workflow` operation. Do not fetch and resend
+   the content merely to attach it.
+4. Use `crewhelm_inspect_context` with `inspect_brief` for metadata and `read_brief` only when exact
+   content is needed.
+5. To change the material, call `crewhelm_change_context` with `operation.kind: "revise_brief"`,
+   the returned Brief, and new content. Select the new returned revision explicitly for future work.
 
 Briefs accept `text/markdown`, `text/plain`, or `application/json`. One Run or Workflow can attach
 up to eight exact revisions.
 
 ## Create and use a Skill
 
-1. Call `crewhelm_configure` in preview mode with a `skill-package` target.
+1. Call `crewhelm_change_context` with `operation.kind: "publish_skill"` and leave `confirm` false.
 2. Review its name, description, provenance, and files. Every package requires `SKILL.md`; other
    UTF-8 files may live only under `assets/`, `references/`, or `scripts/`.
-3. Apply the exact preview with a fresh idempotency key.
-4. Use `crewhelm_get_config` with the Skill catalog and exact package targets to retain its ID and
+3. Repeat the unchanged operation with `confirm: true` to apply it.
+4. Use `crewhelm_inspect_context` with `list_skills` and `inspect_skill` to retain its ID and
    version.
-5. Inspect the `context.skills` Agent capability descriptor.
+5. Use `inspect_capabilities` to review the `context.skills` Agent capability descriptor.
 6. Create or revise the Agent with that capability configured to the selected exact Skill ID and
    version. The module accepts one to eight unique Skill references.
 
@@ -78,7 +79,7 @@ Files under a Skill's `scripts/` directory remain inert. Crewhelm does not execu
   historical facts, but an Agent that references the retired version must be revised to an active
   Skill before it can admit more work.
 - If object persistence was interrupted, use exact inspection and the returned recovery state. Do
-  not create a duplicate package with a different idempotency key.
+  not create a duplicate package while the original outcome is uncertain.
 
 ## Next action
 

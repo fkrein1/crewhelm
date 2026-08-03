@@ -7,6 +7,7 @@ import {
   runAgentRehearsal,
 } from "../../../src/rehearsal/public/agent.js";
 import { toolListResponseSchema } from "../../../src/temporary-owner-session.js";
+import { commandFixtureCall } from "../facade-fixtures.js";
 
 const origin = "https://crewhelm.example";
 const clientId = "rehearsal-client";
@@ -16,35 +17,29 @@ const agentId = "agent_11111111-1111-4111-8111-111111111111";
 const runId = "run_22222222-2222-4222-8222-222222222222";
 const timestamp = "2026-07-29T12:00:00.000Z";
 const lifecycleToolAnnotations = {
-  crewhelm_batch_disable_agents: {
+  crewhelm_change_agents: {
     destructiveHint: true,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: false,
   },
-  crewhelm_create_agent: {
-    destructiveHint: false,
+  crewhelm_change_work: {
+    destructiveHint: true,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: false,
   },
-  crewhelm_get_agent: {
+  crewhelm_inspect_agents: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: true,
   },
-  crewhelm_inspect_run: {
+  crewhelm_inspect_work: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: true,
-  },
-  crewhelm_start_run: {
-    destructiveHint: false,
-    idempotentHint: true,
-    openWorldHint: false,
-    readOnlyHint: false,
   },
   crewhelm_status: {
     destructiveHint: false,
@@ -319,9 +314,9 @@ function rehearsalHarness(options: RehearsalHarnessOptions = {}): RehearsalHarne
       });
     }
 
-    const params = z
-      .strictObject({ arguments: z.unknown(), name: z.string() })
-      .parse(request.params);
+    const params = commandFixtureCall(
+      z.strictObject({ arguments: z.unknown(), name: z.string() }).parse(request.params),
+    );
     toolCalls.push(params);
     let payload: unknown;
 
@@ -584,7 +579,7 @@ describe("disposable Agent lifecycle rehearsal", () => {
   });
 
   it("refuses to mutate when the lifecycle catalog is incomplete and still revokes access", async () => {
-    const harness = rehearsalHarness({ omitTool: "crewhelm_batch_disable_agents" });
+    const harness = rehearsalHarness({ omitTool: "crewhelm_change_agents" });
     const report = await runRehearsal(harness);
 
     expect(report.ok).toBe(false);

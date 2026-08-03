@@ -34,12 +34,13 @@ tool authority are separate, explicit configuration choices.
 ## Create and run the Agent
 
 1. Call `crewhelm_status` to confirm that the control plane is ready.
-2. Call `crewhelm_create_agent` with a name, instructions, and a fresh idempotency key.
-3. Retain the returned `agent.id` and `agent.revision`.
-4. Call `crewhelm_start_run` with that exact Agent ID and revision, a fresh idempotency key, and
-   the first prompt. Omit `conversation`, `continuation`, Briefs, and `outputContract`.
-5. Retain the returned `run.runId` and `conversation` object.
-6. Call `crewhelm_inspect_run` with the Run ID until the Run reaches a terminal state.
+2. Call `crewhelm_change_agents` with `operation.kind: "create"`, a name, and instructions.
+3. Keep the returned Agent object unchanged.
+4. Call `crewhelm_change_work` with `operation.kind: "run"`, that Agent object, and the first
+   `message`. Omit `conversation`, Briefs, and `outputContract`.
+5. Keep the returned Run and `conversation` objects unchanged.
+6. Call `crewhelm_inspect_work` with `operation.kind: "inspect_run"` and the Run ID until the Run
+   reaches a terminal state.
 
 For a useful first task, ask for a bounded Markdown result that needs no external tool. This proves
 Agent admission and model execution before introducing Connection authority.
@@ -48,15 +49,17 @@ Agent admission and model execution before introducing Connection authority.
 
 - The Run refers to the same Agent ID and revision returned at creation.
 - The Run reaches a terminal state and exposes its Markdown result.
-- `crewhelm_get_agent` returns the immutable current definition.
-- A later follow-up can pass the returned `conversation` unchanged to `crewhelm_start_run`.
+- `crewhelm_inspect_agents` with `operation.kind: "inspect"` returns the immutable current
+  definition.
+- A later follow-up can pass the returned Agent and `conversation` objects unchanged to
+  `crewhelm_change_work` with `operation.kind: "run"`.
 
 ## Recover safely
 
-- On an Agent revision conflict, call `crewhelm_get_agent` and decide whether the current revision
+- On an Agent revision conflict, inspect the Agent again and decide whether its current revision
   still matches your intent before starting again.
-- If the conversation handle is lost, use `crewhelm_agent_sessions` to list that Agent's
-  conversations and inspect the selected one for a fresh handle.
+- If the conversation handle is lost, use `crewhelm_inspect_work` to list that Agent's
+  conversations, then inspect the selected conversation for a fresh copy-ready object.
 - If the Run waits for approval, inspect the pending action before approving or rejecting it.
 - Do not silently retry an external write whose result is unknown. Follow
   [diagnosis and recovery](/docs/guides/diagnose-and-recover/).

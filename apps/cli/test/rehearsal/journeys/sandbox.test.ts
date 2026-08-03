@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import * as z from "zod";
 
+import { commandFixtureCall } from "../facade-fixtures.js";
+
 import {
   observedNetworkDenial,
   runSandboxRehearsal,
@@ -260,15 +262,11 @@ describe("Sandbox feature rehearsal", () => {
           jsonrpc: "2.0",
           result: {
             tools: [
-              "crewhelm_batch_disable_agents",
-              "crewhelm_cancel_run",
-              "crewhelm_create_agent",
-              "crewhelm_get_config",
-              "crewhelm_get_agent",
-              "crewhelm_inspect_run",
-              "crewhelm_list_agent_runs",
-              "crewhelm_list_agents",
-              "crewhelm_start_run",
+              "crewhelm_change_agents",
+              "crewhelm_change_work",
+              "crewhelm_inspect_agents",
+              "crewhelm_inspect_context",
+              "crewhelm_inspect_work",
               "crewhelm_status",
               ...Array.from({ length: 27 }, (_, index) => `crewhelm_fixture_${index}`),
             ].map((name) => ({
@@ -285,7 +283,12 @@ describe("Sandbox feature rehearsal", () => {
         });
       }
 
-      const name = request.params.name;
+      const fixtureCall = commandFixtureCall({
+        arguments: request.params.arguments ?? {},
+        name: String(request.params.name),
+      });
+      const name = fixtureCall.name;
+      const toolArguments = z.looseObject({}).parse(fixtureCall.arguments);
       if (name === "crewhelm_get_config") {
         return toolResult(request.id, {
           capabilities: [
@@ -327,8 +330,8 @@ describe("Sandbox feature rehearsal", () => {
       }
       if (name === "crewhelm_create_agent") {
         createCalls += 1;
-        createdName = String(request.params.arguments?.name);
-        createdInstructions = String(request.params.arguments?.instructions);
+        createdName = String(toolArguments.name);
+        createdInstructions = String(toolArguments.instructions);
         if (createCalls === 1) {
           activeAgents += 1;
           return new Response("Injected lost Agent create response.", { status: 503 });
@@ -341,9 +344,9 @@ describe("Sandbox feature rehearsal", () => {
       }
       if (name === "crewhelm_start_run") {
         runStartCalls += 1;
-        const idempotencyKey = String(request.params.arguments?.idempotencyKey);
+        const idempotencyKey = String(toolArguments.idempotencyKey);
         const isNetwork = idempotencyKey.includes("network");
-        if (isNetwork) networkPrompt = String(request.params.arguments?.prompt);
+        if (isNetwork) networkPrompt = String(toolArguments.prompt);
         const currentRunId = isNetwork ? networkRunId : codeRunId;
         const previous = startedRuns.get(idempotencyKey);
         if (previous === undefined) {
@@ -353,7 +356,7 @@ describe("Sandbox feature rehearsal", () => {
         return toolResult(request.id, { created: false, ok: true, run: run(previous) });
       }
       if (name === "crewhelm_inspect_run") {
-        const runId = String(request.params.arguments?.runId);
+        const runId = String(toolArguments.runId);
         return toolResult(
           request.id,
           runId === codeRunId
@@ -389,7 +392,7 @@ describe("Sandbox feature rehearsal", () => {
         return toolResult(request.id, {
           cancelled: true,
           ok: true,
-          runId: String(request.params.arguments?.runId),
+          runId: String(toolArguments.runId),
         });
       }
       if (name === "crewhelm_batch_disable_agents") {

@@ -5,6 +5,8 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as z from "zod";
 
+import { commandFixtureCall } from "../facade-fixtures.js";
+
 import {
   DEFAULT_FLEET_DUPLICATE_TOOL_CALL_LIMIT,
   DEFAULT_FLEET_INTEGRATION_CALLS_PER_DAY,
@@ -377,11 +379,9 @@ function ownerFixtureSession(): TemporaryOwnerMcpSession {
         });
       }
 
-      const call = z
-        .looseObject({
-          name: z.string(),
-        })
-        .parse(params);
+      const call = commandFixtureCall(
+        z.looseObject({ arguments: z.unknown(), name: z.string() }).parse(params),
+      );
       const result = toolResults.get(call.name);
 
       if (result === undefined) {

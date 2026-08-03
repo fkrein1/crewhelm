@@ -38,15 +38,11 @@ import { callRehearsalTool, normalizeRehearsalFailure, readRehearsalStatus } fro
 const POLL_INTERVAL_MS = 5_000;
 const TERMINAL_RUN_STATUSES = ["cancelled", "completed", "failed"] as const;
 const REQUIRED_TOOLS = [
-  "crewhelm_batch_disable_agents",
-  "crewhelm_cancel_run",
-  "crewhelm_create_agent",
-  "crewhelm_get_config",
-  "crewhelm_get_agent",
-  "crewhelm_inspect_run",
-  "crewhelm_list_agent_runs",
-  "crewhelm_list_agents",
-  "crewhelm_start_run",
+  "crewhelm_change_agents",
+  "crewhelm_change_work",
+  "crewhelm_inspect_agents",
+  "crewhelm_inspect_context",
+  "crewhelm_inspect_work",
   "crewhelm_status",
 ] as const;
 const REHEARSAL_MODEL = "@cf/zai-org/glm-4.7-flash";

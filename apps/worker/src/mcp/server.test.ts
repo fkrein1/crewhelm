@@ -62,39 +62,42 @@ import { MCP_SERVER_INSTRUCTIONS, mcpControlPlaneStatusResultSchema } from "./gu
 
 import {
   MCP_AGENT_INBOX_TOOL_NAME,
-  MCP_BRIEFS_TOOL_NAME,
   MCP_AGENT_WORKFLOWS_TOOL_NAME,
   MCP_AGENT_SESSIONS_TOOL_NAME,
-  MCP_DELETE_AGENT_SESSION_TOOL_NAME,
   MCP_BATCH_DISABLE_AGENTS_TOOL_NAME,
-  MCP_CANCEL_RUN_TOOL_NAME,
   MCP_CONFIGURE_TOOL_NAME,
+  MCP_CHANGE_AGENTS_TOOL_NAME,
+  MCP_CHANGE_AUTOMATIONS_TOOL_NAME,
+  MCP_CHANGE_CONNECTIONS_TOOL_NAME,
+  MCP_CHANGE_CONTEXT_TOOL_NAME,
+  MCP_CHANGE_RECIPES_TOOL_NAME,
+  MCP_CHANGE_WORK_TOOL_NAME,
   MCP_CREATE_AGENT_TOOL_NAME,
   MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
   MCP_ENABLE_INTEGRATION_TOOL_NAME,
   MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME,
-  MCP_CONFIGURE_AGENT_SCHEDULE_TOOL_NAME,
   MCP_GET_AGENT_TOOL_NAME,
   MCP_GET_CONFIGURATION_TOOL_NAME,
   MCP_GET_AGENT_REVISION_TOOL_NAME,
-  MCP_GET_AGENT_SCHEDULE_TOOL_NAME,
   MCP_INSPECT_INTEGRATION_TOOL_NAME,
   MCP_INSPECT_RUN_TOOL_NAME,
   MCP_LIST_INTEGRATION_AUTH_CONFIGS_TOOL_NAME,
   MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
-  MCP_LIST_AGENT_RUNS_TOOL_NAME,
-  MCP_LIST_AGENT_SCHEDULES_TOOL_NAME,
   MCP_LIST_AGENTS_TOOL_NAME,
   MCP_LIST_CONNECTIONS_TOOL_NAME,
   MCP_LIST_UNRESOLVED_TOOL_EFFECTS_TOOL_NAME,
-  MCP_LIST_RUN_TOOL_APPROVALS_TOOL_NAME,
+  MCP_INSPECT_AGENTS_TOOL_NAME,
+  MCP_INSPECT_AUTOMATIONS_TOOL_NAME,
+  MCP_INSPECT_CONNECTIONS_TOOL_NAME,
+  MCP_INSPECT_CONTEXT_TOOL_NAME,
+  MCP_INSPECT_RECOVERY_TOOL_NAME,
+  MCP_INSPECT_RECIPES_TOOL_NAME,
+  MCP_INSPECT_WORK_TOOL_NAME,
   MCP_MODEL_VISIBLE_CATALOG_SIZE_BUDGET_BYTES,
   MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES,
-  MCP_DECIDE_RUN_TOOL_APPROVAL_TOOL_NAME,
-  MCP_RECONCILE_TOOL_EXECUTION_TOOL_NAME,
-  MCP_RECIPE_PUBLICATIONS_TOOL_NAME,
-  MCP_RECIPES_TOOL_NAME,
+  MCP_PUBLISH_RECIPE_TOOL_NAME,
   MCP_REVOKE_AUTHORITY_TOOL_NAME,
+  MCP_RECOVER_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME,
   MCP_STATUS_TOOL_NAME,
@@ -104,6 +107,7 @@ import {
   handleAuthenticatedMcpRequest,
 } from "./server.js";
 import { TEST_REPLY, TestCrewAgent } from "../agent/admitted-runs/test-agent.js";
+import { recipeFixture } from "../../../registry/src/fixtures.test-double.js";
 import { deriveOwnerKey } from "../owner/identity.js";
 import { CONTROL_PLANE_SCHEMA_VERSION } from "../owner/migrations.js";
 
@@ -120,6 +124,31 @@ const jsonRpcToolResultSchema = z.looseObject({
     isError: z.boolean(),
   }),
 });
+
+function operationCatalogVariant(value: unknown, kind: string): Record<string, unknown> | null {
+  const object = z.looseObject({}).safeParse(value);
+  if (!object.success) return null;
+  const properties = z.looseObject({}).safeParse(object.data.properties);
+  const kindSchema = z.looseObject({ const: z.unknown() }).safeParse(properties.data?.kind);
+
+  if (kindSchema.success && kindSchema.data.const === kind) {
+    return object.data;
+  }
+
+  for (const nested of Object.values(object.data)) {
+    if (Array.isArray(nested)) {
+      for (const candidate of nested) {
+        const found = operationCatalogVariant(candidate, kind);
+        if (found !== null) return found;
+      }
+    } else {
+      const found = operationCatalogVariant(nested, kind);
+      if (found !== null) return found;
+    }
+  }
+
+  return null;
+}
 const jsonRpcToolListSchema = z.looseObject({
   result: z.looseObject({
     tools: z.array(
@@ -138,6 +167,435 @@ const jsonRpcToolListSchema = z.looseObject({
   }),
 });
 
+const testFacadeOperations = new Map<string, { kind: string; tool: string }>([
+  ["crewhelm_list_agents", { kind: "list", tool: MCP_INSPECT_AGENTS_TOOL_NAME }],
+  ["crewhelm_get_agent", { kind: "inspect", tool: MCP_INSPECT_AGENTS_TOOL_NAME }],
+  ["crewhelm_list_agent_revisions", { kind: "list_revisions", tool: MCP_INSPECT_AGENTS_TOOL_NAME }],
+  ["crewhelm_get_agent_revision", { kind: "inspect_revision", tool: MCP_INSPECT_AGENTS_TOOL_NAME }],
+  ["crewhelm_create_agent", { kind: "create", tool: MCP_CHANGE_AGENTS_TOOL_NAME }],
+  ["crewhelm_update_agent", { kind: "replace", tool: MCP_CHANGE_AGENTS_TOOL_NAME }],
+  ["crewhelm_batch_disable_agents", { kind: "disable", tool: MCP_CHANGE_AGENTS_TOOL_NAME }],
+  ["crewhelm_inspect_run", { kind: "inspect_run", tool: MCP_INSPECT_WORK_TOOL_NAME }],
+  ["crewhelm_list_agent_runs", { kind: "list_runs", tool: MCP_INSPECT_WORK_TOOL_NAME }],
+  [
+    "crewhelm_list_run_tool_approvals",
+    { kind: "list_approvals", tool: MCP_INSPECT_WORK_TOOL_NAME },
+  ],
+  ["crewhelm_agent_sessions", { kind: "conversations", tool: MCP_INSPECT_WORK_TOOL_NAME }],
+  ["crewhelm_start_run", { kind: "run", tool: MCP_CHANGE_WORK_TOOL_NAME }],
+  ["crewhelm_cancel_run", { kind: "cancel_run", tool: MCP_CHANGE_WORK_TOOL_NAME }],
+  [
+    "crewhelm_decide_run_tool_approval",
+    { kind: "decide_approval", tool: MCP_CHANGE_WORK_TOOL_NAME },
+  ],
+  ["crewhelm_agent_inbox", { kind: "inbox", tool: MCP_CHANGE_WORK_TOOL_NAME }],
+  ["crewhelm_agent_workflows", { kind: "workflow", tool: MCP_CHANGE_WORK_TOOL_NAME }],
+  [
+    "crewhelm_delete_agent_session",
+    { kind: "delete_conversation", tool: MCP_CHANGE_WORK_TOOL_NAME },
+  ],
+  [
+    "crewhelm_list_agent_schedules",
+    { kind: "list_schedules", tool: MCP_INSPECT_AUTOMATIONS_TOOL_NAME },
+  ],
+  [
+    "crewhelm_get_agent_schedule",
+    { kind: "inspect_schedule", tool: MCP_INSPECT_AUTOMATIONS_TOOL_NAME },
+  ],
+  [
+    "crewhelm_configure_agent_schedule",
+    { kind: "schedule", tool: MCP_CHANGE_AUTOMATIONS_TOOL_NAME },
+  ],
+  [
+    "crewhelm_agent_event_triggers",
+    { kind: "event_trigger", tool: MCP_CHANGE_AUTOMATIONS_TOOL_NAME },
+  ],
+  [
+    "crewhelm_search_integrations",
+    { kind: "search_providers", tool: MCP_INSPECT_CONNECTIONS_TOOL_NAME },
+  ],
+  [
+    "crewhelm_search_integration_tools",
+    { kind: "search_actions", tool: MCP_INSPECT_CONNECTIONS_TOOL_NAME },
+  ],
+  [
+    "crewhelm_inspect_integration_tool",
+    { kind: "inspect_action", tool: MCP_INSPECT_CONNECTIONS_TOOL_NAME },
+  ],
+  [
+    "crewhelm_list_integration_auth_configs",
+    { kind: "list_auth", tool: MCP_INSPECT_CONNECTIONS_TOOL_NAME },
+  ],
+  [
+    "crewhelm_enable_integration",
+    { kind: "enable_provider", tool: MCP_CHANGE_CONNECTIONS_TOOL_NAME },
+  ],
+  [
+    "crewhelm_create_connection_link",
+    { kind: "authorize_provider", tool: MCP_CHANGE_CONNECTIONS_TOOL_NAME },
+  ],
+  [
+    "crewhelm_list_connections",
+    { kind: "list_connections", tool: MCP_INSPECT_CONNECTIONS_TOOL_NAME },
+  ],
+  [
+    "crewhelm_configure_agent_connection",
+    { kind: "grant_provider_actions", tool: MCP_CHANGE_CONNECTIONS_TOOL_NAME },
+  ],
+  [
+    "crewhelm_remote_mcp_connection",
+    { kind: "connect_remote_mcp", tool: MCP_CHANGE_CONNECTIONS_TOOL_NAME },
+  ],
+  [
+    "crewhelm_configure_agent_remote_mcp_connection",
+    { kind: "grant_remote_mcp", tool: MCP_CHANGE_CONNECTIONS_TOOL_NAME },
+  ],
+  ["crewhelm_get_config", { kind: "configuration", tool: MCP_INSPECT_CONTEXT_TOOL_NAME }],
+  ["crewhelm_configure", { kind: "configuration", tool: MCP_CHANGE_CONTEXT_TOOL_NAME }],
+  [
+    "crewhelm_list_unresolved_tool_effects",
+    { kind: "unresolved_effects", tool: MCP_INSPECT_RECOVERY_TOOL_NAME },
+  ],
+  ["crewhelm_reconcile_tool_execution", { kind: "reconcile_effect", tool: MCP_RECOVER_TOOL_NAME }],
+  ["crewhelm_revoke_authority", { kind: "revoke_authority", tool: MCP_RECOVER_TOOL_NAME }],
+]);
+
+function facadeArguments(name: string, input: Record<string, unknown>): Record<string, unknown> {
+  let operation = testFacadeOperations.get(name);
+
+  if (name === "crewhelm_agent_sessions") {
+    operation = {
+      kind: input.action === "inspect" ? "inspect_conversation" : "list_conversations",
+      tool: MCP_INSPECT_WORK_TOOL_NAME,
+    };
+  } else if (name === "crewhelm_agent_inbox") {
+    operation = {
+      kind:
+        input.action === "acknowledge"
+          ? "acknowledge_inbox"
+          : input.action === "overview"
+            ? "inbox_overview"
+            : "list_inbox",
+      tool: input.action === "acknowledge" ? MCP_CHANGE_WORK_TOOL_NAME : MCP_INSPECT_WORK_TOOL_NAME,
+    };
+  } else if (name === "crewhelm_agent_workflows") {
+    const action = String(input.action);
+    operation = {
+      kind: `${action}_workflow${action === "list" ? "s" : ""}`,
+      tool:
+        action === "list" || action === "inspect"
+          ? MCP_INSPECT_WORK_TOOL_NAME
+          : MCP_CHANGE_WORK_TOOL_NAME,
+    };
+  } else if (name === "crewhelm_agent_event_triggers") {
+    const action = String(input.action);
+    operation = {
+      kind:
+        action === "sources"
+          ? "event_sources"
+          : action === "list"
+            ? "list_event_triggers"
+            : action === "inspect"
+              ? "inspect_event_trigger"
+              : action === "history"
+                ? "event_history"
+                : `${action}_event_trigger`,
+      tool:
+        action === "sources" || action === "list" || action === "inspect" || action === "history"
+          ? MCP_INSPECT_AUTOMATIONS_TOOL_NAME
+          : MCP_CHANGE_AUTOMATIONS_TOOL_NAME,
+    };
+  } else if (name === "crewhelm_configure_agent_schedule") {
+    operation = {
+      kind:
+        input.scheduleId === null
+          ? "create_schedule"
+          : input.schedule === null
+            ? "pause_schedule"
+            : "update_schedule",
+      tool: MCP_CHANGE_AUTOMATIONS_TOOL_NAME,
+    };
+  } else if (name === "crewhelm_remote_mcp_connection") {
+    const action = String(input.action);
+    operation = {
+      kind: `${action}_remote_mcp`.replace("connect_remote", "connect_remote"),
+      tool: MCP_CHANGE_CONNECTIONS_TOOL_NAME,
+    };
+  } else if (name === "crewhelm_list_connections") {
+    operation =
+      input.connectionId === undefined
+        ? { kind: "list_connections", tool: MCP_INSPECT_CONNECTIONS_TOOL_NAME }
+        : { kind: "inspect_provider_connection", tool: MCP_CHANGE_CONNECTIONS_TOOL_NAME };
+  } else if (name === "crewhelm_get_config") {
+    const target = z.looseObject({ kind: z.string() }).parse(input.target);
+    operation = {
+      kind:
+        {
+          "agent-blueprint-catalog": "list_blueprints",
+          "agent-blueprint-package": "inspect_blueprint",
+          "agent-capability": "inspect_capabilities",
+          fleet: "inspect_fleet",
+          "skill-catalog": "list_skills",
+          "skill-package": "inspect_skill",
+        }[target.kind] ?? "inspect_fleet",
+      tool: MCP_INSPECT_CONTEXT_TOOL_NAME,
+    };
+  } else if (name === "crewhelm_configure") {
+    const target = z.looseObject({ kind: z.string() }).parse(input.target);
+    operation = {
+      kind:
+        {
+          "agent-blueprint-instance": "create_from_blueprint",
+          "agent-blueprint-package": "publish_blueprint",
+          "agent-blueprint-retirement": "retire_blueprint",
+          fleet: "preview_fleet_change",
+          "skill-package": "publish_skill",
+          "skill-retirement": "retire_skill",
+        }[target.kind] ?? "preview_fleet_change",
+      tool: MCP_CHANGE_CONTEXT_TOOL_NAME,
+    };
+  } else if (name === "crewhelm_revoke_authority") {
+    operation = {
+      kind:
+        input.target === "agent"
+          ? "disable_agent"
+          : input.target === "connection"
+            ? "revoke_connection"
+            : "revoke_capability",
+      tool: MCP_RECOVER_TOOL_NAME,
+    };
+  }
+
+  if (operation === undefined) {
+    return input;
+  }
+
+  const fields = { ...input };
+  if (
+    name === "crewhelm_agent_sessions" ||
+    name === "crewhelm_agent_inbox" ||
+    name === "crewhelm_agent_workflows" ||
+    name === "crewhelm_agent_event_triggers" ||
+    name === "crewhelm_remote_mcp_connection"
+  ) {
+    delete fields.action;
+  }
+
+  if (name === "crewhelm_configure") {
+    delete fields.idempotencyKey;
+  } else if (typeof fields.idempotencyKey === "string") {
+    fields.requestKey = fields.idempotencyKey;
+    delete fields.idempotencyKey;
+  }
+
+  const agentCoordinates = {
+    crewhelm_configure_agent_connection: ["agentId", "expectedRevision"],
+    crewhelm_configure_agent_remote_mcp_connection: ["agentId", "expectedRevision"],
+    crewhelm_configure_agent_schedule: ["agentId", "expectedAgentRevision"],
+    crewhelm_start_run: ["agentId", "expectedRevision"],
+    crewhelm_update_agent: ["id", "expectedRevision"],
+  }[name];
+
+  if (agentCoordinates !== undefined) {
+    const [id, revision] = agentCoordinates;
+    fields.agent = { id: fields[id!], revision: fields[revision!] };
+    delete fields[id!];
+    delete fields[revision!];
+  }
+
+  if (name === "crewhelm_start_run") {
+    fields.message = fields.prompt;
+    delete fields.prompt;
+  }
+
+  if (name === "crewhelm_list_connections" && typeof fields.connectionId === "string") {
+    fields.connection = { connectionId: fields.connectionId };
+    delete fields.connectionId;
+  }
+
+  if (name === "crewhelm_configure_agent_connection") {
+    fields.connection = { connectionId: fields.connectionId };
+    delete fields.connectionId;
+  }
+
+  if (name === "crewhelm_list_agent_schedules") {
+    fields.agent = { id: fields.agentId, revision: 1 };
+    delete fields.agentId;
+  }
+
+  if (name === "crewhelm_get_agent_schedule") {
+    fields.schedule = {
+      agentId: fields.agentId,
+      agentRevision: 1,
+      id: fields.scheduleId,
+      revision: 1,
+    };
+    delete fields.agentId;
+    delete fields.scheduleId;
+  }
+
+  if (name === "crewhelm_batch_disable_agents") {
+    fields.agents = z
+      .array(z.looseObject({ agentId: z.string(), expectedRevision: z.number() }))
+      .parse(fields.agents)
+      .map((agent) => ({ id: agent.agentId, revision: agent.expectedRevision }));
+  }
+
+  if (name === "crewhelm_get_config" || name === "crewhelm_configure") {
+    const target = z.looseObject({ kind: z.string() }).parse(fields.target);
+    delete fields.target;
+    const { kind: _targetKind, ...targetFields } = target;
+    Object.assign(fields, targetFields);
+    if (name === "crewhelm_configure") {
+      if (target.kind === "fleet") {
+        if (fields.mode === "apply") fields.confirm = true;
+        delete fields.mode;
+      } else {
+        fields.confirm = fields.mode === "apply";
+        delete fields.mode;
+      }
+    }
+  }
+
+  if (name === "crewhelm_reconcile_tool_execution") {
+    fields.effect = { toolCallId: fields.toolCallId };
+    delete fields.toolCallId;
+  }
+
+  if (name === "crewhelm_revoke_authority") {
+    if (input.target === "agent") {
+      fields.agent = { id: fields.agentId, revision: 1 };
+      delete fields.agentId;
+    } else if (input.target === "connection") {
+      fields.connection = { connectionId: fields.connectionId };
+      delete fields.connectionId;
+    } else {
+      fields.grant = { grantId: fields.grantId };
+      delete fields.grantId;
+    }
+    delete fields.target;
+  }
+
+  if (name === "crewhelm_delete_agent_session") {
+    fields.conversation = {
+      expectedRevision: fields.expectedBranchRevision,
+      id: fields.sessionId,
+    };
+    delete fields.expectedBranchRevision;
+    delete fields.sessionId;
+  }
+
+  if (name === "crewhelm_configure_agent_remote_mcp_connection") {
+    fields.connection = {
+      id: fields.connectionId,
+      snapshotDigest: fields.snapshotDigest,
+    };
+    delete fields.connectionId;
+    delete fields.snapshotDigest;
+  }
+
+  if (
+    name === "crewhelm_remote_mcp_connection" &&
+    (input.action === "inspect" || input.action === "reauthenticate" || input.action === "delete")
+  ) {
+    fields.connection = {
+      id: fields.connectionId,
+      ...(input.action === "inspect" ? {} : { snapshotDigest: fields.snapshotDigest }),
+    };
+    delete fields.connectionId;
+    delete fields.snapshotDigest;
+  }
+
+  if (name === "crewhelm_agent_workflows" && input.action === "start") {
+    fields.agent = { id: fields.agentId, revision: fields.expectedRevision };
+    delete fields.agentId;
+    delete fields.expectedRevision;
+  }
+
+  if (
+    name === "crewhelm_agent_event_triggers" &&
+    ["create", "update", "pause", "resume", "delete"].includes(String(input.action))
+  ) {
+    fields.agent = { id: fields.agentId, revision: fields.expectedAgentRevision };
+    delete fields.agentId;
+    delete fields.expectedAgentRevision;
+  }
+
+  if (name === "crewhelm_agent_event_triggers" && input.action === "sources") {
+    fields.connection = { connectionId: fields.connectionId };
+    delete fields.connectionId;
+  }
+
+  if (name === "crewhelm_agent_event_triggers" && input.action === "list") {
+    fields.agent = { id: fields.agentId, revision: 1 };
+    delete fields.agentId;
+  }
+
+  if (
+    name === "crewhelm_agent_event_triggers" &&
+    (input.action === "inspect" || input.action === "history")
+  ) {
+    fields.trigger = {
+      agentId: fields.agentId,
+      agentRevision: 1,
+      id: fields.eventTriggerId,
+      revision: 1,
+    };
+    delete fields.agentId;
+    delete fields.eventTriggerId;
+  }
+
+  if (
+    name === "crewhelm_agent_event_triggers" &&
+    ["update", "pause", "resume", "delete"].includes(String(input.action))
+  ) {
+    fields.trigger = {
+      agentId: input.agentId,
+      agentRevision: input.expectedAgentRevision,
+      id: fields.eventTriggerId,
+      revision: fields.expectedEventTriggerRevision,
+    };
+    delete fields.agent;
+    delete fields.eventTriggerId;
+    delete fields.expectedEventTriggerRevision;
+    if (input.action === "update") {
+      fields.definition = fields.eventTrigger;
+      delete fields.eventTrigger;
+    }
+  }
+
+  if (name === "crewhelm_configure_agent_schedule") {
+    if (input.scheduleId === null) {
+      delete fields.scheduleId;
+      delete fields.expectedScheduleRevision;
+    } else {
+      fields.schedule = {
+        agentId: input.agentId,
+        agentRevision: input.expectedAgentRevision,
+        id: fields.scheduleId,
+        revision: fields.expectedScheduleRevision,
+      };
+      delete fields.agent;
+      delete fields.scheduleId;
+      delete fields.expectedScheduleRevision;
+      if (input.schedule !== null) {
+        fields.definition = input.schedule;
+      }
+    }
+  }
+
+  if (
+    name === "crewhelm_agent_workflows" &&
+    (input.action === "cancel" || input.action === "delete")
+  ) {
+    fields.workflow = { revision: fields.expectedRevision, workflowId: fields.workflowId };
+    delete fields.workflowId;
+    delete fields.expectedRevision;
+  }
+
+  return { operation: { kind: operation.kind, ...fields } };
+}
+
 async function ownerAuthority(subject = "123456", scopes: OwnerScope[] = [OWNER_READ_SCOPE]) {
   return ownerAuthoritySchema.parse({
     clientId: "test-client",
@@ -155,8 +613,84 @@ function toolRequest(body: string, additionalHeaders?: HeadersInit): Request {
   headers.set("content-type", "application/json");
   headers.set("mcp-protocol-version", "2025-11-25");
 
+  let requestBody = body;
+
+  try {
+    const decoded: unknown = JSON.parse(body);
+    const payload = z
+      .looseObject({
+        method: z.string().optional(),
+        params: z
+          .looseObject({
+            arguments: z.record(z.string(), z.unknown()).optional(),
+            name: z.string().optional(),
+          })
+          .optional(),
+      })
+      .parse(decoded);
+    const name = payload.params?.name;
+
+    if (payload.method === "tools/call" && typeof name === "string") {
+      const converted = facadeArguments(name, payload.params?.arguments ?? {});
+      let facade = testFacadeOperations.get(name);
+
+      if (name === "crewhelm_agent_sessions") {
+        facade = { kind: "sessions", tool: MCP_INSPECT_WORK_TOOL_NAME };
+      } else if (name === "crewhelm_agent_inbox") {
+        facade = {
+          kind: "inbox",
+          tool:
+            payload.params?.arguments?.action === "acknowledge"
+              ? MCP_CHANGE_WORK_TOOL_NAME
+              : MCP_INSPECT_WORK_TOOL_NAME,
+        };
+      } else if (name === "crewhelm_agent_workflows") {
+        facade = {
+          kind: "workflow",
+          tool:
+            payload.params?.arguments?.action === "list" ||
+            payload.params?.arguments?.action === "inspect"
+              ? MCP_INSPECT_WORK_TOOL_NAME
+              : MCP_CHANGE_WORK_TOOL_NAME,
+        };
+      } else if (name === "crewhelm_agent_event_triggers") {
+        const action = payload.params?.arguments?.action;
+        facade = {
+          kind: "event_trigger",
+          tool:
+            action === "sources" ||
+            action === "list" ||
+            action === "inspect" ||
+            action === "history"
+              ? MCP_INSPECT_AUTOMATIONS_TOOL_NAME
+              : MCP_CHANGE_AUTOMATIONS_TOOL_NAME,
+        };
+      } else if (name === "crewhelm_configure_agent_schedule") {
+        facade = { kind: "schedule", tool: MCP_CHANGE_AUTOMATIONS_TOOL_NAME };
+      } else if (name === "crewhelm_remote_mcp_connection") {
+        facade = { kind: "remote_mcp", tool: MCP_CHANGE_CONNECTIONS_TOOL_NAME };
+      } else if (name === "crewhelm_list_connections") {
+        facade =
+          payload.params?.arguments?.connectionId === undefined
+            ? { kind: "list_connections", tool: MCP_INSPECT_CONNECTIONS_TOOL_NAME }
+            : { kind: "inspect_provider_connection", tool: MCP_CHANGE_CONNECTIONS_TOOL_NAME };
+      }
+
+      if (facade !== undefined) {
+        payload.params = {
+          ...payload.params,
+          arguments: converted,
+          name: facade.tool,
+        };
+        requestBody = JSON.stringify(payload);
+      }
+    }
+  } catch {
+    // Invalid JSON remains invalid at the MCP boundary.
+  }
+
   return new Request(`${origin}/mcp`, {
-    body,
+    body: requestBody,
     headers,
     method: "POST",
   });
@@ -261,8 +795,10 @@ describe("authenticated MCP handler", () => {
           jsonrpc: "2.0",
           method: "tools/call",
           params: {
-            arguments: { action: "search", query: "decision ready research" },
-            name: MCP_RECIPES_TOOL_NAME,
+            arguments: {
+              operation: { kind: "search", query: "decision ready research" },
+            },
+            name: MCP_INSPECT_RECIPES_TOOL_NAME,
           },
         }),
       ),
@@ -295,7 +831,43 @@ describe("authenticated MCP handler", () => {
   });
 
   it("keeps public Recipe publishing on an explicit destructive MCP surface", async () => {
-    const authority = await ownerAuthority("recipe-publication-mcp", [OWNER_WRITE_SCOPE]);
+    const authority = await ownerAuthority("recipe-publication-mcp", [
+      AGENTS_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+    ]);
+    const preparationResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 1,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              operation: {
+                agent: {
+                  id: "agent_00000000-0000-4000-8000-000000000000",
+                  revision: 1,
+                },
+                kind: "prepare",
+                license: "MIT",
+              },
+            },
+            name: MCP_PUBLISH_RECIPE_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const preparation = jsonRpcToolResultSchema.parse(await preparationResponse.json()).result;
+
+    expect(preparation.isError).toBe(true);
+    expect(
+      recipePublicationToolResultSchema.parse(
+        JSON.parse(preparation.content[0]?.text ?? "") as unknown,
+      ),
+    ).toMatchObject({ error: { code: "agent_not_found" }, ok: false });
+
     const response = await handleAuthenticatedMcpRequest(
       toolRequest(
         JSON.stringify({
@@ -303,8 +875,10 @@ describe("authenticated MCP handler", () => {
           jsonrpc: "2.0",
           method: "tools/call",
           params: {
-            arguments: { request: "{}" },
-            name: MCP_RECIPE_PUBLICATIONS_TOOL_NAME,
+            arguments: {
+              operation: { installationLabel: "Crewhelm public registry", kind: "authorize" },
+            },
+            name: MCP_PUBLISH_RECIPE_TOOL_NAME,
           },
         }),
       ),
@@ -312,15 +886,58 @@ describe("authenticated MCP handler", () => {
       { authority },
     );
     const payload = jsonRpcToolResultSchema.parse(await response.json());
-    expect(payload.result.isError).toBe(true);
+    expect(payload.result.isError).toBe(false);
+    const authorized = z
+      .looseObject({
+        authorization: z.looseObject({ attemptId: z.string(), id: z.string() }),
+        ok: z.literal(true),
+      })
+      .parse(JSON.parse(payload.result.content[0]?.text ?? "") as unknown);
+    const { skills: _skills, ...recipe } = recipeFixture();
+    const candidate = {
+      agent: { id: "agent_00000000-0000-4000-8000-000000000000", revision: 1 },
+      recipe,
+      skills: [],
+    };
+    const review = async (id: number, expectedConfirmationDigest?: string) => {
+      const reviewResponse = await handleAuthenticatedMcpRequest(
+        toolRequest(
+          JSON.stringify({
+            id,
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: {
+              arguments: {
+                operation: {
+                  authorization: authorized.authorization,
+                  candidate,
+                  ...(expectedConfirmationDigest === undefined
+                    ? {}
+                    : { expectedConfirmationDigest }),
+                  kind: "publish",
+                },
+              },
+              name: MCP_PUBLISH_RECIPE_TOOL_NAME,
+            },
+          }),
+        ),
+        env,
+        { authority },
+      );
+      return jsonRpcToolResultSchema.parse(await reviewResponse.json()).result;
+    };
+    const preview = await review(2);
+    const publish = await review(3, "0".repeat(64));
+
     expect(
-      recipePublicationToolResultSchema.parse(
-        JSON.parse(payload.result.content[0]?.text ?? "") as unknown,
-      ),
-    ).toMatchObject({ error: { code: "invalid_request" }, ok: false });
+      recipePublicationToolResultSchema.parse(JSON.parse(preview.content[0]?.text ?? "")),
+    ).toMatchObject({ error: { code: "authorization_pending" }, ok: false });
+    expect(
+      recipePublicationToolResultSchema.parse(JSON.parse(publish.content[0]?.text ?? "")),
+    ).toMatchObject({ error: { code: "authorization_pending" }, ok: false });
   });
 
-  it("marks Agent replacement as destructive while keeping creation additive", async () => {
+  it("exposes intent surfaces while preserving read, change, and open-world boundaries", async () => {
     const authority = await ownerAuthority();
     const response = await handleAuthenticatedMcpRequest(
       toolRequest(
@@ -335,272 +952,95 @@ describe("authenticated MCP handler", () => {
       { authority },
     );
     const payload = jsonRpcToolListSchema.parse(await response.json());
-    const createTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_CREATE_AGENT_TOOL_NAME,
-    );
-    const updateTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_UPDATE_AGENT_TOOL_NAME,
-    );
-    const connectionLinkTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_CREATE_CONNECTION_LINK_TOOL_NAME,
-    );
-    const enableIntegrationTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_ENABLE_INTEGRATION_TOOL_NAME,
-    );
-    const connectionListTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_LIST_CONNECTIONS_TOOL_NAME,
-    );
-    const unresolvedEffectsTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_LIST_UNRESOLVED_TOOL_EFFECTS_TOOL_NAME,
-    );
-    const startRunTool = payload.result.tools.find((tool) => tool.name === MCP_START_RUN_TOOL_NAME);
-    const inboxTool = payload.result.tools.find((tool) => tool.name === MCP_AGENT_INBOX_TOOL_NAME);
-    const sessionsTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_AGENT_SESSIONS_TOOL_NAME,
-    );
-    const deleteSessionTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_DELETE_AGENT_SESSION_TOOL_NAME,
-    );
-    const workflowsTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_AGENT_WORKFLOWS_TOOL_NAME,
-    );
-    const briefsTool = payload.result.tools.find((tool) => tool.name === MCP_BRIEFS_TOOL_NAME);
-    const recipesTool = payload.result.tools.find((tool) => tool.name === MCP_RECIPES_TOOL_NAME);
-    const recipePublicationsTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_RECIPE_PUBLICATIONS_TOOL_NAME,
-    );
-    const configureScheduleTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_CONFIGURE_AGENT_SCHEDULE_TOOL_NAME,
-    );
-    const cancelRunTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_CANCEL_RUN_TOOL_NAME,
-    );
-    const inspectRunTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_INSPECT_RUN_TOOL_NAME,
-    );
-    const listApprovalsTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_LIST_RUN_TOOL_APPROVALS_TOOL_NAME,
-    );
-    const decideApprovalTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_DECIDE_RUN_TOOL_APPROVAL_TOOL_NAME,
-    );
-    const getConfigurationTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_GET_CONFIGURATION_TOOL_NAME,
-    );
-    const configureTool = payload.result.tools.find(
-      (tool) => tool.name === MCP_CONFIGURE_TOOL_NAME,
-    );
-    const recoveryTools = payload.result.tools.filter(
-      (tool) =>
-        tool.name === MCP_BATCH_DISABLE_AGENTS_TOOL_NAME ||
-        tool.name === MCP_REVOKE_AUTHORITY_TOOL_NAME ||
-        tool.name === MCP_RECONCILE_TOOL_EXECUTION_TOOL_NAME,
-    );
-    const revisionTools = payload.result.tools.filter(
-      (tool) =>
-        tool.name === MCP_GET_AGENT_REVISION_TOOL_NAME ||
-        tool.name === MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
-    );
-    const scheduleReadTools = payload.result.tools.filter(
-      (tool) =>
-        tool.name === MCP_GET_AGENT_SCHEDULE_TOOL_NAME ||
-        tool.name === MCP_LIST_AGENT_SCHEDULES_TOOL_NAME ||
-        tool.name === MCP_LIST_AGENT_RUNS_TOOL_NAME,
-    );
+    const byName = new Map(payload.result.tools.map((tool) => [tool.name, tool]));
+    const closedReads = [
+      MCP_INSPECT_AGENTS_TOOL_NAME,
+      MCP_INSPECT_WORK_TOOL_NAME,
+      MCP_INSPECT_AUTOMATIONS_TOOL_NAME,
+      MCP_INSPECT_CONTEXT_TOOL_NAME,
+      MCP_INSPECT_RECOVERY_TOOL_NAME,
+    ];
+    const closedChanges = [
+      MCP_CHANGE_AGENTS_TOOL_NAME,
+      MCP_CHANGE_WORK_TOOL_NAME,
+      MCP_CHANGE_AUTOMATIONS_TOOL_NAME,
+      MCP_CHANGE_CONTEXT_TOOL_NAME,
+      MCP_RECOVER_TOOL_NAME,
+    ];
 
-    expect(createTool?.annotations).toMatchObject({
+    expect(payload.result.tools).toHaveLength(MCP_TOOL_COUNT_BUDGET);
+    expect(closedReads.every((name) => byName.get(name)?.annotations.readOnlyHint)).toBe(true);
+    expect(closedChanges.every((name) => byName.get(name)?.annotations.destructiveHint)).toBe(true);
+    expect(byName.get(MCP_INSPECT_CONNECTIONS_TOOL_NAME)?.annotations).toMatchObject({
       destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-      readOnlyHint: false,
-    });
-    expect(updateTool?.annotations).toMatchObject({
-      destructiveHint: true,
-      idempotentHint: true,
-      openWorldHint: false,
-      readOnlyHint: false,
-    });
-    expect(configureScheduleTool?.annotations).toMatchObject({
-      destructiveHint: true,
-      idempotentHint: true,
-      openWorldHint: false,
-      readOnlyHint: false,
-    });
-    expect(configureScheduleTool?.description).toContain("scheduleId null");
-    expect(JSON.stringify(configureScheduleTool?.inputSchema)).toContain('"calendar"');
-    expect(JSON.stringify(configureScheduleTool?.inputSchema)).toContain('"timeZone"');
-    expect(inboxTool?.annotations).toMatchObject({
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-      readOnlyHint: false,
-    });
-    expect(inboxTool?.inputSchema).not.toHaveProperty("oneOf");
-    expect(JSON.stringify(inboxTool?.inputSchema)).toContain("acknowledge(itemId, version)");
-    expect(sessionsTool).toMatchObject({
-      annotations: {
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-        readOnlyHint: true,
-      },
-      description: expect.stringContaining("copy-ready conversation"),
-    });
-    expect(sessionsTool?.inputSchema).not.toHaveProperty("oneOf");
-    expect(JSON.stringify(sessionsTool?.inputSchema)).toContain("inspect(agentId, sessionId)");
-    expect(deleteSessionTool).toMatchObject({
-      annotations: {
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
-        readOnlyHint: false,
-      },
-    });
-    expect(workflowsTool).toMatchObject({
-      annotations: {
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
-        readOnlyHint: false,
-      },
-      description: expect.stringContaining("ordered durable Agent Runs"),
-    });
-    expect(workflowsTool?.inputSchema).not.toHaveProperty("oneOf");
-    expect(JSON.stringify(workflowsTool?.inputSchema)).toContain(
-      "start(agentId, expectedRevision, idempotencyKey, objective, stages, briefs?, outputContract?)",
-    );
-    expect(briefsTool).toMatchObject({
-      annotations: {
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
-        readOnlyHint: false,
-      },
-      description: expect.stringContaining("immutable"),
-    });
-    expect(briefsTool?.inputSchema).not.toHaveProperty("oneOf");
-    expect(JSON.stringify(briefsTool?.inputSchema)).toContain("read(id, revision)");
-    expect(recipesTool?.inputSchema).not.toHaveProperty("oneOf");
-    expect(JSON.stringify(recipesTool?.inputSchema)).toContain(
-      "install(request, expectedConfirmationDigest, idempotencyKey)",
-    );
-    expect(recipePublicationsTool?.annotations).toMatchObject({
-      destructiveHint: true,
-      idempotentHint: true,
       openWorldHint: true,
-      readOnlyHint: false,
-    });
-    expect(scheduleReadTools).toHaveLength(3);
-    expect(scheduleReadTools.every((tool) => tool.annotations.readOnlyHint)).toBe(true);
-    expect(connectionLinkTool?.annotations).toMatchObject({
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: true,
-      readOnlyHint: false,
-    });
-    expect(enableIntegrationTool?.annotations).toMatchObject({
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: true,
-      readOnlyHint: false,
-    });
-    expect(connectionListTool?.annotations).toMatchObject({
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: true,
-      readOnlyHint: false,
-    });
-    expect(unresolvedEffectsTool?.annotations).toMatchObject({
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
       readOnlyHint: true,
     });
-    expect(listApprovalsTool?.annotations).toMatchObject({
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-      readOnlyHint: true,
-    });
-    expect(decideApprovalTool?.annotations).toMatchObject({
+    expect(byName.get(MCP_CHANGE_CONNECTIONS_TOOL_NAME)?.annotations).toMatchObject({
       destructiveHint: true,
-      idempotentHint: true,
-      openWorldHint: false,
+      openWorldHint: true,
       readOnlyHint: false,
     });
-    expect(recoveryTools).toHaveLength(3);
+    expect(byName.get(MCP_INSPECT_RECIPES_TOOL_NAME)?.annotations).toMatchObject({
+      destructiveHint: false,
+      openWorldHint: true,
+      readOnlyHint: true,
+    });
+    expect(byName.get(MCP_CHANGE_RECIPES_TOOL_NAME)?.annotations).toMatchObject({
+      destructiveHint: true,
+      openWorldHint: true,
+      readOnlyHint: false,
+    });
+    expect(byName.get(MCP_PUBLISH_RECIPE_TOOL_NAME)?.annotations).toMatchObject({
+      destructiveHint: true,
+      openWorldHint: true,
+      readOnlyHint: false,
+    });
+
+    const visibleCatalog = JSON.stringify(payload.result.tools);
+    const contextCatalog = JSON.stringify(byName.get(MCP_CHANGE_CONTEXT_TOOL_NAME)?.inputSchema);
+    const recipeReadCatalog = JSON.stringify(
+      byName.get(MCP_INSPECT_RECIPES_TOOL_NAME)?.inputSchema,
+    );
+    const recipeCatalog = JSON.stringify(byName.get(MCP_CHANGE_RECIPES_TOOL_NAME)?.inputSchema);
+    const publicationCatalog = JSON.stringify(
+      byName.get(MCP_PUBLISH_RECIPE_TOOL_NAME)?.inputSchema,
+    );
+    expect(visibleCatalog).toContain('"const":"create"');
+    expect(visibleCatalog).toContain('"const":"run"');
+    expect(visibleCatalog).toContain('"const":"create_event_trigger"');
+    expect(visibleCatalog).not.toContain('"expectedBranchRevision"');
+    expect(visibleCatalog).not.toContain('"idempotencyKey"');
+    expect(visibleCatalog).not.toContain("crewhelm_get_config");
+    expect(visibleCatalog).not.toContain("legacy continuation");
+    expect(visibleCatalog).toContain('"conversation"');
+    expect(visibleCatalog).toContain('"connection"');
+    expect(contextCatalog).not.toContain('"mode":');
+    expect(recipeCatalog).not.toContain('"request":');
+    expect(recipeCatalog).toContain('"setup":');
+    expect(recipeReadCatalog).not.toContain('"requestKey":');
+    expect(publicationCatalog).not.toContain('"request":');
     expect(
-      recoveryTools.every(
-        (tool) =>
-          tool.annotations.destructiveHint &&
-          tool.annotations.idempotentHint &&
-          !tool.annotations.openWorldHint &&
-          !tool.annotations.readOnlyHint,
+      JSON.stringify(
+        operationCatalogVariant(
+          byName.get(MCP_CHANGE_CONTEXT_TOOL_NAME)?.inputSchema,
+          "preview_fleet_change",
+        ),
       ),
-    ).toBe(true);
-    expect(startRunTool?.annotations).toMatchObject({
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-      readOnlyHint: false,
-    });
-    expect(cancelRunTool?.annotations).toMatchObject({
-      destructiveHint: true,
-      idempotentHint: true,
-      openWorldHint: false,
-      readOnlyHint: false,
-    });
-    expect(inspectRunTool?.annotations).toMatchObject({
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-      readOnlyHint: true,
-    });
-    expect(revisionTools).toHaveLength(2);
+    ).not.toContain('"requestKey":');
     expect(
-      revisionTools.every(
-        (tool) =>
-          !tool.annotations.destructiveHint &&
-          tool.annotations.idempotentHint &&
-          !tool.annotations.openWorldHint &&
-          tool.annotations.readOnlyHint,
+      JSON.stringify(
+        operationCatalogVariant(byName.get(MCP_CHANGE_RECIPES_TOOL_NAME)?.inputSchema, "install"),
       ),
-    ).toBe(true);
-    expect(getConfigurationTool).toMatchObject({
-      annotations: {
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-        readOnlyHint: true,
-      },
-      description: expect.stringContaining("deterministic owner step-up path"),
-    });
-    expect(getConfigurationTool?.description).toContain("--ai-budget-usd");
-    const getConfigurationInputSchema = JSON.stringify(getConfigurationTool?.inputSchema);
-    expect(getConfigurationInputSchema).toContain('"target"');
-    expect(getConfigurationInputSchema).toContain('"fleet"');
-    expect(getConfigurationInputSchema).toContain('"agent-capability"');
-    expect(getConfigurationInputSchema).toContain('"skill-catalog"');
-    expect(getConfigurationInputSchema).toContain('"skill-package"');
-    expect(getConfigurationInputSchema).toContain('"agent-blueprint-catalog"');
-    expect(getConfigurationInputSchema).toContain('"agent-blueprint-package"');
-    expect(getConfigurationInputSchema).toContain('"id"');
-    expect(configureTool).toMatchObject({
-      annotations: {
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
-        readOnlyHint: false,
-      },
-      description: expect.stringContaining("never applies policy changes"),
-    });
-    expect(JSON.stringify(configureTool?.inputSchema)).toContain(
-      "Current revision returned by crewhelm_get_config",
-    );
-    expect(JSON.stringify(configureTool?.inputSchema)).toContain(
-      "Fleet accepts preview(target, expectedRevision, patch) only",
-    );
-    expect(JSON.stringify(configureTool?.inputSchema)).toContain("bounds accidental loops");
+    ).not.toContain('"requestKey":');
+    expect(
+      JSON.stringify(
+        operationCatalogVariant(
+          byName.get(MCP_CHANGE_CONNECTIONS_TOOL_NAME)?.inputSchema,
+          "connect_provider",
+        ),
+      ),
+    ).toContain('"requestKey":');
   });
 
   it("returns owner control-plane status through the read-only MCP tool", async () => {
@@ -632,7 +1072,7 @@ describe("authenticated MCP handler", () => {
         {
           kind: "user_decision",
           reason: "empty_fleet",
-          tool: MCP_CREATE_AGENT_TOOL_NAME,
+          tool: MCP_CHANGE_AGENTS_TOOL_NAME,
         },
       ],
       ok: true,
@@ -2343,13 +2783,33 @@ describe("authenticated MCP handler", () => {
       OWNER_WRITE_SCOPE,
     ]);
     const callBriefs = async (id: number, args: Record<string, unknown>) => {
+      const action = String(args.action);
+      const fields = { ...args };
+      delete fields.action;
+      if (typeof fields.idempotencyKey === "string") {
+        fields.requestKey = fields.idempotencyKey;
+        delete fields.idempotencyKey;
+      }
+      if (action === "read") {
+        fields.brief = { id: fields.id, revision: fields.revision };
+        delete fields.id;
+        delete fields.revision;
+      }
       const response = await handleAuthenticatedMcpRequest(
         toolRequest(
           JSON.stringify({
             id,
             jsonrpc: "2.0",
             method: "tools/call",
-            params: { arguments: args, name: MCP_BRIEFS_TOOL_NAME },
+            params: {
+              arguments: {
+                operation: { kind: `${action}_brief${action === "list" ? "s" : ""}`, ...fields },
+              },
+              name:
+                action === "list" || action === "inspect" || action === "read"
+                  ? MCP_INSPECT_CONTEXT_TOOL_NAME
+                  : MCP_CHANGE_CONTEXT_TOOL_NAME,
+            },
           }),
         ),
         env,
@@ -2393,6 +2853,7 @@ describe("authenticated MCP handler", () => {
 
   it("starts and compactly inspects a durable Agent workflow through one discoverable tool", async () => {
     const authority = await ownerAuthority("mcp-workflow-owner", [
+      OWNER_READ_SCOPE,
       OWNER_WRITE_SCOPE,
       AGENTS_READ_SCOPE,
       AGENTS_WRITE_SCOPE,
@@ -2414,6 +2875,13 @@ describe("authenticated MCP handler", () => {
     if (!created.ok) {
       throw new Error("Expected MCP workflow fixture Agent.");
     }
+    const brief = await controlPlane.createBrief(authority, {
+      content: "Prefer primary sources and state uncertainty.",
+      idempotencyKey: "mcp-workflow-brief",
+      mediaType: "text/plain",
+      name: "Workflow evidence rules",
+    });
+    if (!brief.ok) throw new Error("Expected MCP workflow Brief fixture.");
 
     const startResponse = await handleAuthenticatedMcpRequest(
       toolRequest(
@@ -2427,6 +2895,7 @@ describe("authenticated MCP handler", () => {
               agentId: created.agent.id,
               expectedRevision: created.agent.revision,
               idempotencyKey: "mcp-workflow-1",
+              briefs: [brief.brief],
               objective: "Gather the facts, then produce a recommendation.",
               stages: [
                 { name: "Gather", prompt: "Gather the relevant facts." },
@@ -2718,10 +3187,13 @@ describe("authenticated MCP handler", () => {
     expect(text).not.toContain("provider-secret");
   });
 
-  it("enables and exactly replays Composio-managed authentication through MCP", async () => {
+  it("connects a known provider through one replay-safe happy-path operation", async () => {
     const authority = await ownerAuthority("mcp-enable-github-owner", [
       CONNECTION_CONFIGS_WRITE_SCOPE,
+      CONNECTIONS_READ_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
     ]);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1_000).toISOString();
     const authConfig = {
       auth_scheme: "OAUTH2",
       id: "ac_github_managed",
@@ -2744,6 +3216,18 @@ describe("authenticated MCP handler", () => {
           },
           { status: 201 },
         ),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            connected_account_id: "ca_mcp_provider_happy_path",
+            expires_at: expiresAt,
+            experimental: { account_type: "PRIVATE" },
+            link_token: "ln_mcp_provider_happy_path",
+            redirect_url: "https://connect.composio.dev/link/ln_mcp_provider_happy_path",
+          },
+          { status: 201 },
+        ),
       );
     const requestBody = JSON.stringify({
       id: 139,
@@ -2751,38 +3235,69 @@ describe("authenticated MCP handler", () => {
       method: "tools/call",
       params: {
         arguments: {
-          idempotencyKey: "mcp-enable-github",
-          integrationSlug: "github",
+          operation: {
+            integrationSlug: "github",
+            kind: "connect_provider",
+            requestKey: "mcp-enable-github",
+          },
         },
-        name: MCP_ENABLE_INTEGRATION_TOOL_NAME,
+        name: MCP_CHANGE_CONNECTIONS_TOOL_NAME,
       },
     });
     const firstResponse = await handleAuthenticatedMcpRequest(toolRequest(requestBody), env, {
       authority,
     });
     const firstPayload = jsonRpcToolResultSchema.parse(await firstResponse.json()).result;
-    const first = enableIntegrationResultSchema.parse(
+    const first = createConnectionLinkResultSchema.parse(
       JSON.parse(firstPayload.content[0]?.text ?? ""),
     );
     const replayResponse = await handleAuthenticatedMcpRequest(toolRequest(requestBody), env, {
       authority,
     });
     const replayPayload = jsonRpcToolResultSchema.parse(await replayResponse.json()).result;
-    const replay = enableIntegrationResultSchema.parse(
+    const replay = createConnectionLinkResultSchema.parse(
       JSON.parse(replayPayload.content[0]?.text ?? ""),
     );
 
     expect(firstPayload.isError).toBe(false);
-    expect(first).toEqual({
-      authConfigId: "ac_github_managed",
-      authScheme: "oauth2",
+    expect(first).toMatchObject({
+      connectionLink: {
+        expiresAt,
+        url: "https://connect.composio.dev/link/ln_mcp_provider_happy_path",
+      },
       created: true,
-      integrationSlug: "github",
-      managed: true,
       ok: true,
     });
-    expect(replay).toEqual({ ...first, created: false });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(replay).toEqual({
+      ...(first.ok ? { connectionLink: first.connectionLink } : {}),
+      created: false,
+      ok: true,
+    });
+    if (!first.ok) throw new Error("Expected provider connection link.");
+    const inspectResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 141,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              operation: { connection: first, kind: "inspect_provider_connection" },
+            },
+            name: MCP_CHANGE_CONNECTIONS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const inspected = jsonRpcToolResultSchema.parse(await inspectResponse.json()).result;
+
+    expect(inspected.isError).toBe(false);
+    expect(
+      listConnectionsResultSchema.parse(JSON.parse(inspected.content[0]?.text ?? "")),
+    ).toMatchObject({ connections: [{ connectionId: first.connectionLink.connectionId }] });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     const listEndpoint = fetchMock.mock.calls[0]?.[0];
 
     if (!(listEndpoint instanceof URL)) {
@@ -2791,6 +3306,9 @@ describe("authenticated MCP handler", () => {
 
     expect(listEndpoint.href).toContain("/api/v3.1/auth_configs?is_composio_managed=true");
     expect(fetchMock.mock.calls[1]?.[0]).toBe("https://backend.composio.dev/api/v3.1/auth_configs");
+    expect(fetchMock.mock.calls[2]?.[0]).toBe(
+      "https://backend.composio.dev/api/v3.1/connected_accounts/link",
+    );
   });
 
   it("does not widen an existing all-scope token into integration enablement", async () => {

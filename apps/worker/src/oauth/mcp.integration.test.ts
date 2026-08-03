@@ -26,12 +26,9 @@ import { CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX } from "../owner/connection
 import type { WorkerEnv } from "../env.js";
 import { handleWorkerRequest } from "../http/server.js";
 import {
-  MCP_CREATE_AGENT_TOOL_NAME,
-  MCP_GET_AGENT_TOOL_NAME,
-  MCP_GET_AGENT_REVISION_TOOL_NAME,
-  MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
+  MCP_CHANGE_AGENTS_TOOL_NAME,
+  MCP_INSPECT_AGENTS_TOOL_NAME,
   MCP_STATUS_TOOL_NAME,
-  MCP_UPDATE_AGENT_TOOL_NAME,
 } from "../mcp/server.js";
 import { mcpControlPlaneStatusResultSchema } from "../mcp/guidance.js";
 import { deriveOwnerKey } from "../owner/identity.js";
@@ -815,17 +812,19 @@ describe("public OAuth to MCP integration", () => {
     const createMcpResponse = await callMcp(
       workerEnv,
       token.access_token,
-      MCP_CREATE_AGENT_TOOL_NAME,
+      MCP_CHANGE_AGENTS_TOOL_NAME,
       {
-        executionLimits: {
-          maxDurationSeconds: 180,
-          maxModelTokens: 12_000,
-          maxToolCalls: 0,
-          maxTurns: 3,
+        operation: {
+          executionLimits: {
+            maxDurationSeconds: 180,
+            maxModelTokens: 12_000,
+            maxToolCalls: 0,
+            maxTurns: 3,
+          },
+          instructions: "Maintain a concise authenticated work queue.",
+          kind: "create",
+          name: "Authenticated work queue",
         },
-        idempotencyKey: "oauth-integration-create-agent",
-        instructions: "Maintain a concise authenticated work queue.",
-        name: "Authenticated work queue",
       },
     );
     const createToolResult = toolResultSchema.parse(await createMcpResponse.json()).result;
@@ -848,9 +847,12 @@ describe("public OAuth to MCP integration", () => {
     if (!createdAgent.ok) {
       throw new Error("Expected authenticated Agent creation to succeed.");
     }
-    const getMcpResponse = await callMcp(workerEnv, token.access_token, MCP_GET_AGENT_TOOL_NAME, {
-      id: createdAgent.agent.id,
-    });
+    const getMcpResponse = await callMcp(
+      workerEnv,
+      token.access_token,
+      MCP_INSPECT_AGENTS_TOOL_NAME,
+      { operation: { id: createdAgent.agent.id, kind: "inspect" } },
+    );
     const getToolResult = toolResultSchema.parse(await getMcpResponse.json()).result;
 
     expect(getMcpResponse.status).toBe(200);
@@ -862,15 +864,16 @@ describe("public OAuth to MCP integration", () => {
     const updateMcpResponse = await callMcp(
       workerEnv,
       token.access_token,
-      MCP_UPDATE_AGENT_TOOL_NAME,
+      MCP_CHANGE_AGENTS_TOOL_NAME,
       {
-        capabilities: createdAgent.agent.capabilities,
-        executionLimits: createdAgent.agent.executionLimits,
-        expectedRevision: 1,
-        id: createdAgent.agent.id,
-        idempotencyKey: "oauth-integration-update-agent",
-        instructions: "Maintain and coordinate a concise authenticated work queue.",
-        name: "Authenticated work coordinator",
+        operation: {
+          agent: createdAgent.agent,
+          capabilities: createdAgent.agent.capabilities,
+          executionLimits: createdAgent.agent.executionLimits,
+          instructions: "Maintain and coordinate a concise authenticated work queue.",
+          kind: "replace",
+          name: "Authenticated work coordinator",
+        },
       },
     );
     const updateToolResult = toolResultSchema.parse(await updateMcpResponse.json()).result;
@@ -890,8 +893,8 @@ describe("public OAuth to MCP integration", () => {
     const revisionsResponse = await callMcp(
       workerEnv,
       token.access_token,
-      MCP_LIST_AGENT_REVISIONS_TOOL_NAME,
-      { id: createdAgent.agent.id },
+      MCP_INSPECT_AGENTS_TOOL_NAME,
+      { operation: { id: createdAgent.agent.id, kind: "list_revisions" } },
     );
     const revisionsResult = toolResultSchema.parse(await revisionsResponse.json()).result;
     const revisionsText = revisionsResult.content[0].text;
@@ -909,8 +912,8 @@ describe("public OAuth to MCP integration", () => {
     const revisionResponse = await callMcp(
       workerEnv,
       token.access_token,
-      MCP_GET_AGENT_REVISION_TOOL_NAME,
-      { id: createdAgent.agent.id, revision: 1 },
+      MCP_INSPECT_AGENTS_TOOL_NAME,
+      { operation: { id: createdAgent.agent.id, kind: "inspect_revision", revision: 1 } },
     );
     const revisionResult = toolResultSchema.parse(await revisionResponse.json()).result;
 
@@ -1079,11 +1082,13 @@ describe("public OAuth to MCP integration", () => {
     const createResponse = await callMcp(
       workerEnv,
       token.access_token,
-      MCP_CREATE_AGENT_TOOL_NAME,
+      MCP_CHANGE_AGENTS_TOOL_NAME,
       {
-        idempotencyKey: "view-only-create-agent",
-        instructions: "This Agent must not be created.",
-        name: "Denied Agent",
+        operation: {
+          instructions: "This Agent must not be created.",
+          kind: "create",
+          name: "Denied Agent",
+        },
       },
     );
     const createResult = toolResultSchema.parse(await createResponse.json()).result;
@@ -1160,11 +1165,13 @@ describe("public OAuth to MCP integration", () => {
     const createResponse = await callMcp(
       workerEnv,
       token.access_token,
-      MCP_CREATE_AGENT_TOOL_NAME,
+      MCP_CHANGE_AGENTS_TOOL_NAME,
       {
-        idempotencyKey: "use-agents-create-agent",
-        instructions: "Use agents must not create definitions.",
-        name: "Denied Agent",
+        operation: {
+          instructions: "Use agents must not create definitions.",
+          kind: "create",
+          name: "Denied Agent",
+        },
       },
     );
     const createResult = toolResultSchema.parse(await createResponse.json()).result;
@@ -1207,11 +1214,13 @@ describe("public OAuth to MCP integration", () => {
     const createResponse = await callMcp(
       workerEnv,
       token.access_token,
-      MCP_CREATE_AGENT_TOOL_NAME,
+      MCP_CHANGE_AGENTS_TOOL_NAME,
       {
-        idempotencyKey: "full-control-create-agent",
-        instructions: "Full control may create Agent definitions.",
-        name: "Full control Agent",
+        operation: {
+          instructions: "Full control may create Agent definitions.",
+          kind: "create",
+          name: "Full control Agent",
+        },
       },
     );
     const createResult = toolResultSchema.parse(await createResponse.json()).result;

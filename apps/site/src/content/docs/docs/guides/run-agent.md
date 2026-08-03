@@ -18,13 +18,13 @@ conversation when another message is needed.
 ## Prerequisites
 
 - Use agents or Full control access.
-- An active Agent ID and its current immutable revision.
+- An active Agent returned by Crewhelm.
 - A bounded prompt with a clear expected outcome.
 - Exact Brief revisions if this Run needs owner-provided context.
 
 ## Authority and custody
 
-Each call to `crewhelm_start_run` creates a new Run. Admission freezes the Agent and fleet
+Each `run` operation creates a new Run. Admission freezes the Agent and fleet
 revisions, prompt, optional Briefs, output contract, policy, and budget. A conversation handle is a
 private coordinate for continuation, not permission to run.
 
@@ -33,9 +33,9 @@ grant, limits, effect classification, and any required owner approval before dis
 
 ## Start a new conversation
 
-1. Call `crewhelm_list_agents` with a narrow filter and retain the selected Agent ID and revision.
-2. Call `crewhelm_start_run` with that exact Agent ID and revision, a fresh idempotency key, and the
-   prompt. Omit both `conversation` and legacy `continuation`.
+1. Call `crewhelm_inspect_agents` with `operation.kind: "list"` and keep the selected Agent object.
+2. Call `crewhelm_change_work` with `operation.kind: "run"`, that Agent, and the `message`. Omit
+   `conversation` to start a new one.
 3. Attach no more than the exact Brief revisions needed for this task.
 4. Omit `outputContract` for normal Markdown. Use a bounded object-root JSON contract only when
    downstream software requires a typed final object.
@@ -43,12 +43,14 @@ grant, limits, effect classification, and any required owner approval before dis
 
 ## Inspect and continue
 
-1. Call `crewhelm_inspect_run` with the Run ID. Request usage or timeline detail only when needed.
+1. Call `crewhelm_inspect_work` with `operation.kind: "inspect_run"` and the Run ID. Request usage
+   or timeline detail only when needed.
 2. If the Run is waiting for a sensitive tool action, call
-   `crewhelm_list_run_tool_approvals` for that Run.
-3. Review the exact action and call `crewhelm_decide_run_tool_approval` to approve or reject it.
-4. After the Run completes, pass the returned `conversation` unchanged in a new
-   `crewhelm_start_run` call for the next message.
+   `crewhelm_inspect_work` with `operation.kind: "list_approvals"` for that Run.
+3. Review the exact action and call `crewhelm_change_work` with
+   `operation.kind: "decide_approval"` to approve or reject it.
+4. After the Run completes, pass the returned Agent and `conversation` objects unchanged in a new
+   `run` operation for the next message.
 
 Do not continue an old handle after a revision conflict. Inspect the current conversation before
 deciding whether to retry the message.
@@ -62,10 +64,11 @@ deciding whether to retry the message.
 
 ## Recover safely
 
-- Use `crewhelm_cancel_run` only before an external tool effect has been dispatched. Cancellation
+- Use `crewhelm_change_work` with `operation.kind: "cancel_run"` only before an external tool
+  effect has been dispatched. Cancellation
   cannot undo a provider write.
-- If a conversation handle is lost, list and inspect that Agent's sessions with
-  `crewhelm_agent_sessions` to recover a fresh handle.
+- If a conversation handle is lost, list and inspect that Agent's conversations through
+  `crewhelm_inspect_work` to recover a fresh copy-ready object.
 - On a revision or branch conflict, reread the exact Agent or conversation; do not overwrite newer
   state.
 - If an external effect is unknown, stop equivalent writes and follow
