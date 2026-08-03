@@ -38,6 +38,16 @@ describe("Registry packages", () => {
     expect(inspectPublicText(skill).suspectedSecrets).toBe(true);
   });
 
+  it("scans adversarial markdown without backtracking", () => {
+    const skill = skillFixture();
+    skill.files[0]!.content = `${"![".repeat(8_000)}plain](local)\n![remote](https://example.com/image.png)\n<!-- hidden`;
+
+    const warnings = inspectPublicSkill(registrySkillPackageSchema.parse(skill));
+
+    expect(warnings.activeMarkdown).toBe(1);
+    expect(warnings.hiddenText).toBe(1);
+  });
+
   it("scans the complete normalized Skill provenance URL", () => {
     const skill = skillFixture();
     skill.provenance = {
