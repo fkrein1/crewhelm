@@ -306,20 +306,19 @@ only a workflow- and environment-bound npm OIDC identity. It publishes the verif
 a separate GitHub-write job creates the immutable prerelease; retries require the existing npm and
 GitHub artifacts to match exactly.
 
-Pull requests, including forks, receive secretless Registry and site verification only. After a
-protected-main merge, one non-cancelling workflow verifies the exact revision, applies Registry D1
-migrations, deploys the Registry before its site gateway, smoke-tests development, and requires
-environment approval before repeating that order in production. Cloudflare Workers Builds does not
-independently deploy the site.
+Pull requests, including forks, and protected-main pushes receive secretless Registry and site
+verification in GitHub. Cloudflare Workers Builds owns deployment from the connected repository;
+its build token remains in Cloudflare custody and is not exposed to GitHub. A site build token needs
+Worker deployment authority; a Registry build token additionally needs remote D1 migration
+authority. Registry GitHub OAuth credentials remain runtime Worker secrets and are not build
+inputs.
 
-Each environment holds a minimally scoped Cloudflare token. GitHub exposes it only to the explicit
-credential check, migration, and deploy steps; checkout, action setup, dependency installation,
-verification, and smoke tests never receive it. Registry GitHub OAuth credentials remain
-Cloudflare Worker secrets and are not workflow inputs. Cloudflare deployment and D1 permissions
-remain account-scoped residual authority. Suspected compromise requires stopping promotions,
-revoking the affected environment token, auditing migrations and Worker versions, restoring the
-last verified Registry and site versions where needed, and repairing D1 schema state forward. D1
-migrations therefore remain compatible with the prior Worker until promotion completes.
+Registry deployment applies ordered D1 migrations before uploading the Worker. Registry and site
+builds are independent, so their service contract and every migration remain compatible with the
+prior deployed version. Cloudflare deployment and D1 permissions remain account-scoped residual
+authority. Suspected compromise requires disabling builds, rotating the affected Cloudflare build
+token from the Worker build settings, auditing migrations and Worker versions, restoring verified
+Worker versions where needed, and repairing D1 schema state forward.
 
 AI Gateway management may use a process-scoped `CREWHELM_CLOUDFLARE_API_TOKEN` limited to
 account-level AI Gateway Edit. Interactive recovery prints a scoped token recipe and never stores

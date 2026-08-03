@@ -30,17 +30,19 @@ shared frontmatter contract, `src/lib/docs-manifest.ts` owns navigation and publ
 ## Delivery
 
 `wrangler.jsonc` is the source of truth for site bindings and public domains. Pull requests verify
-the site without deployment credentials, including for forks. Cloudflare Workers Builds does not
-independently deploy this Worker.
+the site without deployment credentials, including for forks. Cloudflare Workers Builds owns
+deployment from the connected repository and supplies its own build identity; GitHub holds no
+Cloudflare deployment secret.
 
-After a protected-main merge, the Registry delivery workflow verifies the exact revision, applies
-forward-compatible Registry migrations, deploys the Registry before its site gateway, and
-smoke-tests development. Production approval promotes the same revision in the same order. The
-environment-scoped Cloudflare token is available only to the credential check, migration, and
-deploy steps; dependency installation and smoke tests never receive it. Registry OAuth credentials
-remain Worker secrets and are not deployment inputs.
+The Registry and site remain separate Workers. A Registry deploy applies forward-compatible D1
+migrations before uploading that Worker. Site and Registry builds can finish independently, so
+their service contract and each migration remain compatible with the prior deployed version.
+Registry OAuth credentials remain runtime Worker secrets and are not build inputs.
 
-A failed promotion stops before the next environment. Restore the previous verified Worker
-versions when code or routing must roll back; D1 migrations remain forward-only, so recovery repairs
-schema state forward and every migration must remain compatible with the prior Worker. Running
-promotions are never cancelled after effects begin.
+Workers Builds runs from `apps/registry` for Registry Workers and `apps/site` for site Workers.
+Registry projects call `pnpm deploy:dev` or `pnpm deploy:production`; site projects build with
+`pnpm run build` and deploy with the matching Wrangler environment. Production branches track
+`main`, while non-production branch builds remain disabled.
+
+Restore a previous Worker version when code or routing must roll back. D1 migrations remain
+forward-only, so recovery repairs schema state forward.
