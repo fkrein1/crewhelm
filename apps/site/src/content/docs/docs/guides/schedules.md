@@ -72,8 +72,9 @@ instead of silently retargeting it.
 - If a Schedule is busy, inspect it and retry the lifecycle change only after the pending admission
   settles. Do not infer whether its Run started.
 - On a revision conflict, reread both the Agent and Schedule before deciding to update.
-- A referenced Brief cannot be deleted until the Schedule is paused with a new revision that no
-  longer retains it, or the Schedule is deleted.
+- Pause the Schedule or update its current configuration without the Brief to release the recurring
+  reference. Deleting the Brief still fails closed while any admitted Run or Workflow retains the
+  exact revision; inspect that resource and follow its retention lifecycle.
 - Inspect the most recent occurrence and Run before manually replacing delayed work. Late alarms do
   not replay missed intervals.
 - Pausing prevents future occurrences; it cannot undo an external effect from a Run already
