@@ -66,6 +66,14 @@ Skill import and Agent creation has a deterministic child idempotency key, so `r
 same receipt after interruption. The resulting Agent is disabled; Connection choices and operation
 templates remain inert in the receipt until the owner explicitly configures authority or autonomy.
 
+Agent publishing uses a separate browser handoff. The owner control plane derives a verifier for
+one client and idempotency key, while the Registry stores only its challenge. GitHub authentication
+and explicit approval bind that challenge to a publisher namespace. The owner then resolves exact
+next versions, computes a confirmation digest over the public candidate and exclusions, and sends
+the immutable bundle with the same short-lived proof. Production never transfers the Registry
+session cookie or GitHub token to the owner Worker; exact-loopback Registry development substitutes
+only the seeded local publisher.
+
 Optional installation features have three separate states: provider-plan eligibility,
 installation enablement, and Agent enablement. The CLI owns plan checks, explicit activation, and
 infrastructure readiness; MCP reports bounded prerequisite and setup metadata but does not infer

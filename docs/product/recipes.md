@@ -88,6 +88,9 @@ The Registry is a normal public HTTP service, not an owner control plane or runt
 - Public reads are cacheable and rate limited. Publisher GitHub identity, per-publisher daily
   quotas, immutable versions, idempotency, and content checks bound public write abuse; search does
   not persist raw queries or receive installation identity.
+- Agent publishing uses a short-lived, one-publication authorization bound to the owner's
+  idempotency key. The browser keeps the GitHub session at the Registry; the owner instance proves
+  possession of its verifier without receiving the GitHub token or Registry cookie.
 - Public snapshots and change feeds preserve an open read contract for mirrors.
 
 The Registry never holds owner Connections, credentials, Briefs, grants, installation receipts, or

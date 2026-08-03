@@ -1,6 +1,9 @@
+import { registryPublishAuthorizationIdSchema } from "@crewhelm/contracts";
+import { and, eq, gte } from "drizzle-orm";
+
 import type { RegistryEnv } from "./env.js";
 import { publishBundle } from "./registry.js";
-import { publishers, registryDatabase } from "./schema.js";
+import { publishAuthorizations, publishers, registryDatabase } from "./schema.js";
 import { createRegistryServer } from "./server.js";
 import { TESTING_SEED_ARTIFACT_VERSION, testingSeedBundles } from "./testing-seed.js";
 
@@ -40,6 +43,11 @@ function publicRequest(request: Request, prefix: string): Request {
   const url = new URL(request.url);
   if (url.pathname.startsWith(`${prefix}/`)) url.pathname = url.pathname.slice(prefix.length);
   return new Request(url, request);
+}
+
+function internalPath(request: Request, prefix: string): string {
+  const pathname = new URL(request.url).pathname;
+  return pathname.startsWith(`${prefix}/`) ? pathname.slice(prefix.length) : pathname;
 }
 
 function exactLoopback(request: Request, bindings: LocalBindings): boolean {
@@ -89,6 +97,24 @@ export const localRegistry: ExportedHandler<LocalBindings> = {
         }
       }
       return Response.json({ namespace: publisher.namespace, recipes, seeded: recipes.length });
+    }
+    const resolveMatch = internalPath(request, bindings.PUBLIC_API_PREFIX).match(
+      /^\/v1\/publish\/authorizations\/([^/]+)\/resolve$/u,
+    );
+    if (request.method === "POST" && resolveMatch?.[1] !== undefined) {
+      const authorizationId = registryPublishAuthorizationIdSchema.safeParse(resolveMatch[1]);
+      if (authorizationId.success) {
+        const now = Math.floor(Date.now() / 1_000);
+        await registryDatabase(env.REGISTRY_DB)
+          .update(publishAuthorizations)
+          .set({ authorizedAt: now, githubUserId: publisher.githubUserId })
+          .where(
+            and(
+              eq(publishAuthorizations.authorizationId, authorizationId.data),
+              gte(publishAuthorizations.expiresAt, now),
+            ),
+          );
+      }
     }
     return createRegistryServer().fetch(
       publicRequest(request, bindings.PUBLIC_API_PREFIX),

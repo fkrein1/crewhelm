@@ -7,12 +7,21 @@ import {
   recipeRegistryOriginSchema,
   recipeRegistryProjectionSchema,
   registryArtifactVersionEnvelopeSchema,
+  registryCreatePublishAuthorizationSchema,
+  registryPublishAuthorizationSchema,
+  registryPublishBundleSchema,
+  registryPublishResultSchema,
+  registryResolvedPublishAuthorizationSchema,
   registryRecipeSearchResponseSchema,
   registrySkillPackageSchema,
   registrySkillProjectionSchema,
   type RecipePackage,
   type RecipeRegistryProjection,
   type RegistryArtifactCoordinate,
+  type RegistryPublishAuthorization,
+  type RegistryPublishBundle,
+  type RegistryPublishResult,
+  type RegistryResolvedPublishAuthorization,
   type RegistryRecipeSearchResponse,
   type RegistrySkillPackage,
   type RegistrySkillProjection,
@@ -32,7 +41,12 @@ const recipeArtifactResponseSchema = z.strictObject({
 
 export class RecipeRegistryClientError extends Error {
   constructor(
-    readonly code: "artifact_not_found" | "artifact_restricted" | "registry_unavailable",
+    readonly code:
+      | "artifact_not_found"
+      | "artifact_restricted"
+      | "authorization_pending"
+      | "registry_conflict"
+      | "registry_unavailable",
   ) {
     super("Recipe Registry request failed.");
     this.name = "RecipeRegistryClientError";
@@ -176,6 +190,89 @@ export class RecipeRegistryClient {
     );
   }
 
+  async createPublishAuthorization(input: {
+    challenge: string;
+    idempotencyKey: string;
+    installationLabel: string;
+  }): Promise<RegistryPublishAuthorization> {
+    const request = registryCreatePublishAuthorizationSchema.parse(input);
+    return registryPublishAuthorizationSchema.parse(
+      parseJson(await this.#post(this.#url("publish/authorizations"), request, 64 * 1_024)),
+    );
+  }
+
+  async resolvePublishAuthorization(
+    authorizationId: string,
+    verifier: string,
+  ): Promise<RegistryResolvedPublishAuthorization> {
+    const url = this.#url(`publish/authorizations/${encodeURIComponent(authorizationId)}/resolve`);
+    const response = await this.#postResponse(url, { verifier });
+    if (response.status === 401) {
+      throw new RecipeRegistryClientError("authorization_pending");
+    }
+    if (!response.ok) throw new RecipeRegistryClientError("registry_unavailable");
+    return registryResolvedPublishAuthorizationSchema.parse(
+      parseJson(await boundedBytes(response, 64 * 1_024)),
+    );
+  }
+
+  async latestRecipe(namespace: string, name: string): Promise<RecipeRegistryProjection | null> {
+    try {
+      return recipeRegistryProjectionSchema.parse(
+        parseJson(
+          await this.#request(
+            this.#url(`recipes/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`),
+            MAXIMUM_RECIPE_BYTES,
+            true,
+          ),
+        ),
+      );
+    } catch (error) {
+      if (error instanceof RecipeRegistryClientError && error.code === "artifact_not_found") {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async latestSkill(namespace: string, name: string): Promise<RegistrySkillProjection | null> {
+    try {
+      return registrySkillProjectionSchema.parse(
+        parseJson(
+          await this.#request(
+            this.#url(`skills/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`),
+            MAXIMUM_SKILL_PACKAGE_BYTES,
+            true,
+          ),
+        ),
+      );
+    } catch (error) {
+      if (error instanceof RecipeRegistryClientError && error.code === "artifact_not_found") {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async publish(
+    bundle: RegistryPublishBundle,
+    authorization: { id: string; verifier: string },
+  ): Promise<RegistryPublishResult> {
+    const request = registryPublishBundleSchema.parse(bundle);
+    const response = await this.#postResponse(this.#url("publish"), request, {
+      "x-crewhelm-publish-authorization": authorization.id,
+      "x-crewhelm-publish-verifier": authorization.verifier,
+    });
+    if (response.status === 401) {
+      throw new RecipeRegistryClientError("authorization_pending");
+    }
+    if (response.status === 409) throw new RecipeRegistryClientError("registry_conflict");
+    if (!response.ok) throw new RecipeRegistryClientError("registry_unavailable");
+    return registryPublishResultSchema.parse(
+      parseJson(await boundedBytes(response, MAXIMUM_RECIPE_BYTES)),
+    );
+  }
+
   async recipe(target: RegistryArtifactCoordinate & { digest: string }): Promise<{
     package: RecipePackage;
     projection: RecipeRegistryProjection;
@@ -278,7 +375,7 @@ export class RecipeRegistryClient {
     return new URL(`api/registry/v1/${path}`, this.#origin);
   }
 
-  async #request(url: URL, maximumBytes: number): Promise<Uint8Array> {
+  async #request(url: URL, maximumBytes: number, fresh = false): Promise<Uint8Array> {
     if (url.origin !== new URL(this.#origin).origin) {
       throw new RecipeRegistryClientError("registry_unavailable");
     }
@@ -286,7 +383,7 @@ export class RecipeRegistryClient {
     let response: Response;
     try {
       response = await this.#fetch(url, {
-        headers: { accept: "application/json" },
+        headers: { accept: "application/json", ...(fresh ? { "cache-control": "no-cache" } : {}) },
         method: "GET",
         redirect: "manual",
         signal,
@@ -297,6 +394,37 @@ export class RecipeRegistryClient {
     if (response.status === 404) throw new RecipeRegistryClientError("artifact_not_found");
     if (!response.ok) throw new RecipeRegistryClientError("registry_unavailable");
     return boundedBytes(response, maximumBytes);
+  }
+
+  async #post(url: URL, body: unknown, maximumBytes: number): Promise<Uint8Array> {
+    const response = await this.#postResponse(url, body);
+    if (!response.ok) throw new RecipeRegistryClientError("registry_unavailable");
+    return boundedBytes(response, maximumBytes);
+  }
+
+  async #postResponse(
+    url: URL,
+    body: unknown,
+    additionalHeaders: Record<string, string> = {},
+  ): Promise<Response> {
+    if (url.origin !== new URL(this.#origin).origin) {
+      throw new RecipeRegistryClientError("registry_unavailable");
+    }
+    try {
+      return await this.#fetch(url, {
+        body: JSON.stringify(body),
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          ...additionalHeaders,
+        },
+        method: "POST",
+        redirect: "manual",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch {
+      throw new RecipeRegistryClientError("registry_unavailable");
+    }
   }
 }
 

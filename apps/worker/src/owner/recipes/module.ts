@@ -121,7 +121,18 @@ function localSkillPackage(
 }
 
 function registryFailure(error: unknown): RecipeToolResult {
-  return denied(error instanceof RecipeRegistryClientError ? error.code : "registry_unavailable");
+  if (error instanceof RecipeRegistryClientError) {
+    switch (error.code) {
+      case "artifact_not_found":
+      case "artifact_restricted":
+      case "registry_unavailable":
+        return denied(error.code);
+      case "authorization_pending":
+      case "registry_conflict":
+        return denied("registry_unavailable");
+    }
+  }
+  return denied("registry_unavailable");
 }
 
 export class Recipes {

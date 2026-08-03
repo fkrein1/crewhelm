@@ -54,4 +54,18 @@ describe("RecipeRegistryClient", () => {
       new RecipeRegistryClientError("registry_unavailable"),
     );
   });
+
+  it("bypasses public caches when planning the next immutable version", async () => {
+    const fetcher = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () => Response.json({ error: "request_denied" }, { status: 404 }),
+    );
+    const client = new RecipeRegistryClient("https://crewhelm.app/", fetcher);
+
+    await expect(client.latestRecipe("octocat", "research-helper")).resolves.toBeNull();
+    await expect(client.latestSkill("octocat", "evidence-review")).resolves.toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetcher.mock.calls) {
+      expect(init?.headers).toMatchObject({ "cache-control": "no-cache" });
+    }
+  });
 });

@@ -1,11 +1,21 @@
+import {
+  registryCreatePublishAuthorizationSchema,
+  registryPublishAuthorizationIdSchema,
+  registryPublishAuthorizationSchema,
+  registryPublishVerifierSchema,
+  registryResolvedPublishAuthorizationSchema,
+  type RegistryPublishAuthorization,
+  type RegistryResolvedPublishAuthorization,
+} from "@crewhelm/contracts";
 import type { Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
-import { and, eq, gte } from "drizzle-orm";
+import { and, eq, gte, isNull, lt, or } from "drizzle-orm";
 
 import type { RegistryEnv } from "./env.js";
 import { sha256Hex } from "./packages.js";
 import {
   oauthStates,
+  publishAuthorizations,
   publishers,
   publisherSessions,
   registryDatabase,
@@ -19,14 +29,16 @@ const OAUTH_STATE_COOKIE = "crewhelm_registry_oauth_state";
 const SESSION_COOKIE = "crewhelm_registry_session";
 const OAUTH_STATE_SECONDS = 10 * 60;
 const SESSION_SECONDS = 24 * 60 * 60;
+const PUBLISH_AUTHORIZATION_SECONDS = 20 * 60;
 const MAXIMUM_GITHUB_RESPONSE_BYTES = 16 * 1_024;
 
-type Publisher = {
+export type Publisher = {
   displayName: string;
   githubUserId: number;
   namespace: string;
   profileUrl?: string;
 };
+export type AuthorizedPublisher = Publisher & { publishIdempotencyKey: string };
 
 function randomToken(bytes = 32): string {
   const value = crypto.getRandomValues(new Uint8Array(bytes));
@@ -141,6 +153,240 @@ function publicRegistryPath(env: RegistryEnv, path: string): string {
 
 function publicRegistryUrl(env: RegistryEnv, path: string): string {
   return new URL(publicRegistryPath(env, path), env.PUBLIC_ORIGIN).toString();
+}
+
+function publishAuthorizationResult(
+  env: RegistryEnv,
+  authorizationId: string,
+  expiresAt: number,
+): RegistryPublishAuthorization {
+  return registryPublishAuthorizationSchema.parse({
+    authorizationUrl: publicRegistryUrl(env, `/publish/authorizations/${authorizationId}`),
+    expiresAt: new Date(expiresAt * 1_000).toISOString(),
+    id: authorizationId,
+  });
+}
+
+export async function createPublishAuthorization(
+  env: RegistryEnv,
+  input: unknown,
+): Promise<RegistryPublishAuthorization> {
+  const request = registryCreatePublishAuthorizationSchema.parse(input);
+  const now = Math.floor(Date.now() / 1_000);
+  const database = registryDatabase(env.REGISTRY_DB);
+  const [existing] = await database
+    .select({
+      authorizationId: publishAuthorizations.authorizationId,
+      expiresAt: publishAuthorizations.expiresAt,
+    })
+    .from(publishAuthorizations)
+    .where(
+      and(
+        eq(publishAuthorizations.challenge, request.challenge),
+        eq(publishAuthorizations.idempotencyKey, request.idempotencyKey),
+        gte(publishAuthorizations.expiresAt, now),
+      ),
+    )
+    .limit(1);
+  if (existing) {
+    return publishAuthorizationResult(env, existing.authorizationId, existing.expiresAt);
+  }
+
+  await database
+    .delete(publishAuthorizations)
+    .where(
+      and(
+        eq(publishAuthorizations.challenge, request.challenge),
+        eq(publishAuthorizations.idempotencyKey, request.idempotencyKey),
+        lt(publishAuthorizations.expiresAt, now),
+      ),
+    );
+
+  const authorizationId = registryPublishAuthorizationIdSchema.parse(
+    `publish_authorization_${crypto.randomUUID()}`,
+  );
+  const expiresAt = now + PUBLISH_AUTHORIZATION_SECONDS;
+  const [inserted] = await database
+    .insert(publishAuthorizations)
+    .values({
+      authorizationId,
+      challenge: request.challenge,
+      createdAt: now,
+      expiresAt,
+      idempotencyKey: request.idempotencyKey,
+      installationLabel: request.installationLabel,
+    })
+    .onConflictDoNothing()
+    .returning({ authorizationId: publishAuthorizations.authorizationId });
+  if (inserted) return publishAuthorizationResult(env, authorizationId, expiresAt);
+  const [raced] = await database
+    .select({
+      authorizationId: publishAuthorizations.authorizationId,
+      expiresAt: publishAuthorizations.expiresAt,
+    })
+    .from(publishAuthorizations)
+    .where(
+      and(
+        eq(publishAuthorizations.challenge, request.challenge),
+        eq(publishAuthorizations.idempotencyKey, request.idempotencyKey),
+        gte(publishAuthorizations.expiresAt, now),
+      ),
+    )
+    .limit(1);
+  if (!raced) throw new Error("Publishing authorization conflict.");
+  return publishAuthorizationResult(env, raced.authorizationId, raced.expiresAt);
+}
+
+async function publishAuthorizationPublisher(
+  env: RegistryEnv,
+  authorizationId: string,
+  verifier: string,
+): Promise<{
+  authorization: RegistryResolvedPublishAuthorization;
+  publisher: AuthorizedPublisher;
+} | null> {
+  const id = registryPublishAuthorizationIdSchema.safeParse(authorizationId);
+  const proof = registryPublishVerifierSchema.safeParse(verifier);
+  if (!id.success || !proof.success) return null;
+  const now = Math.floor(Date.now() / 1_000);
+  const [row] = await registryDatabase(env.REGISTRY_DB)
+    .select({
+      displayName: publishers.displayName,
+      expiresAt: publishAuthorizations.expiresAt,
+      githubUserId: publishers.githubUserId,
+      idempotencyKey: publishAuthorizations.idempotencyKey,
+      namespace: publishers.namespace,
+      profileUrl: publishers.profileUrl,
+      challenge: publishAuthorizations.challenge,
+    })
+    .from(publishAuthorizations)
+    .innerJoin(publishers, eq(publishers.githubUserId, publishAuthorizations.githubUserId))
+    .where(
+      and(
+        eq(publishAuthorizations.authorizationId, id.data),
+        gte(publishAuthorizations.expiresAt, now),
+        eq(publishers.status, "active"),
+      ),
+    )
+    .limit(1);
+  if (!row || !hashesEqual(row.challenge, await tokenHash(proof.data))) return null;
+  const publisher: AuthorizedPublisher = {
+    displayName: row.displayName,
+    githubUserId: row.githubUserId,
+    namespace: row.namespace,
+    publishIdempotencyKey: row.idempotencyKey,
+    ...(row.profileUrl === null ? {} : { profileUrl: row.profileUrl }),
+  };
+  return {
+    authorization: registryResolvedPublishAuthorizationSchema.parse({
+      expiresAt: new Date(row.expiresAt * 1_000).toISOString(),
+      id: id.data,
+      publisher: {
+        displayName: publisher.displayName,
+        namespace: publisher.namespace,
+        ...(publisher.profileUrl === undefined ? {} : { profileUrl: publisher.profileUrl }),
+      },
+    }),
+    publisher,
+  };
+}
+
+export async function resolvePublishAuthorization(
+  env: RegistryEnv,
+  authorizationId: string,
+  verifier: string,
+): Promise<RegistryResolvedPublishAuthorization | null> {
+  return (
+    (await publishAuthorizationPublisher(env, authorizationId, verifier))?.authorization ?? null
+  );
+}
+
+export async function authenticatePublishAuthorization(
+  env: RegistryEnv,
+  authorizationId: string | undefined,
+  verifier: string | undefined,
+): Promise<AuthorizedPublisher | null> {
+  if (!authorizationId || !verifier) return null;
+  const resolved = await publishAuthorizationPublisher(env, authorizationId, verifier);
+  if (!resolved) return null;
+  return resolved.publisher;
+}
+
+export async function inspectPublishAuthorization(
+  context: Context<{ Bindings: RegistryEnv }>,
+  authorizationId: string,
+): Promise<
+  | {
+      state: "authorized";
+      authorizationId: string;
+      installationLabel: string;
+      publisher: Publisher;
+    }
+  | { state: "login_required"; loginUrl: string }
+  | { state: "unavailable" }
+> {
+  const id = registryPublishAuthorizationIdSchema.safeParse(authorizationId);
+  if (!id.success) return { state: "unavailable" };
+  const now = Math.floor(Date.now() / 1_000);
+  const [request] = await registryDatabase(context.env.REGISTRY_DB)
+    .select({
+      githubUserId: publishAuthorizations.githubUserId,
+      installationLabel: publishAuthorizations.installationLabel,
+    })
+    .from(publishAuthorizations)
+    .where(
+      and(
+        eq(publishAuthorizations.authorizationId, id.data),
+        gte(publishAuthorizations.expiresAt, now),
+      ),
+    )
+    .limit(1);
+  if (!request) return { state: "unavailable" };
+  const publisher = await authenticatePublisher(context);
+  if (!publisher) {
+    const returnTo = publicRegistryPath(context.env, `/publish/authorizations/${id.data}`);
+    return {
+      loginUrl: publicRegistryUrl(
+        context.env,
+        `/auth/github/start?return_to=${encodeURIComponent(returnTo)}`,
+      ),
+      state: "login_required",
+    };
+  }
+  if (request.githubUserId !== null && request.githubUserId !== publisher.githubUserId) {
+    return { state: "unavailable" };
+  }
+  return {
+    authorizationId: id.data,
+    installationLabel: request.installationLabel,
+    publisher,
+    state: "authorized",
+  };
+}
+
+export async function approvePublishAuthorization(
+  context: Context<{ Bindings: RegistryEnv }>,
+  authorizationId: string,
+): Promise<boolean> {
+  const id = registryPublishAuthorizationIdSchema.safeParse(authorizationId);
+  const publisher = await authenticatePublisher(context);
+  if (!id.success || !publisher) return false;
+  const now = Math.floor(Date.now() / 1_000);
+  const rows = await registryDatabase(context.env.REGISTRY_DB)
+    .update(publishAuthorizations)
+    .set({ authorizedAt: now, githubUserId: publisher.githubUserId })
+    .where(
+      and(
+        eq(publishAuthorizations.authorizationId, id.data),
+        gte(publishAuthorizations.expiresAt, now),
+        or(
+          isNull(publishAuthorizations.githubUserId),
+          eq(publishAuthorizations.githubUserId, publisher.githubUserId),
+        ),
+      ),
+    )
+    .returning({ authorizationId: publishAuthorizations.authorizationId });
+  return rows.length === 1;
 }
 
 export async function startGithubAuth(

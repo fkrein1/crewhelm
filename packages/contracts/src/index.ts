@@ -25,6 +25,7 @@ export * from "./remote-mcp.js";
 export * from "./recipes.js";
 export * from "./recipe-registry.js";
 export * from "./recipe-installations.js";
+export * from "./recipe-publications.js";
 export * from "./recipe-projections.js";
 export * from "./run-admission.js";
 export * from "./runtime-tool-execution.js";

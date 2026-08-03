@@ -984,6 +984,29 @@ export async function latestRecipe(
   return row ? parseRecipeProjection(row.projectionJson) : null;
 }
 
+export async function latestSkill(
+  env: RegistryEnv,
+  namespace: string,
+  name: string,
+): Promise<RegistrySkillProjection | null> {
+  const [row] = await registryDatabase(env.REGISTRY_DB)
+    .select({ projectionJson: artifactVersions.projectionJson })
+    .from(artifactVersions)
+    .where(
+      and(
+        eq(artifactVersions.kind, "skill"),
+        eq(artifactVersions.namespace, namespace),
+        eq(artifactVersions.name, name),
+        eq(artifactVersions.lifecycle, "published"),
+      ),
+    )
+    .orderBy(desc(artifactVersions.version))
+    .limit(1);
+  return row
+    ? registrySkillProjectionSchema.parse(JSON.parse(row.projectionJson) as unknown)
+    : null;
+}
+
 export async function artifactVersion(
   env: RegistryEnv,
   kind: "recipe" | "skill",

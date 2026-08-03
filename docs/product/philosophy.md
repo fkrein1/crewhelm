@@ -52,8 +52,8 @@ Choose a demonstrated user problem and set an appetite before designing the solu
 coherent path, cut breadth before quality, and reshape when the implementation reveals unexpected
 concepts or permanent support cost. Routine fixes do not need a product pitch.
 
-Future recipe publishing must be explicit: recipes pin reviewed source and show requested
-authority, and updates never silently widen grants.
+Recipe publishing is explicit: it pins reviewed source, shows requested authority and public
+exclusions, requires a decision for every local Skill, and never silently widens grants.
 
 The product should feel like asking an agent to own an outcome, not programming a workflow graph.
 Use a direct Run for one bounded turn. Use a Workflow when the outcome already has a small ordered

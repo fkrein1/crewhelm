@@ -3748,11 +3748,42 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 </details>
 
+## `crewhelm_recipe_publications`
+
+**Publish Crewhelm Recipe**
+
+Authorize, preview, and publish one Agent revision as an immutable public Recipe. Pass the selected action and its fields as request JSON; confirm the preview digest before publishing.
+
+Attributes: write, destructive, idempotent, open-world.
+
+<details>
+<summary>Input schema</summary>
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "request": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 163840
+    }
+  },
+  "required": [
+    "request"
+  ],
+  "additionalProperties": false
+}
+```
+
+</details>
+
 ## `crewhelm_recipes`
 
-**Discover and install Crewhelm Recipes**
+**Manage Crewhelm Recipes**
 
-Search the public Crewhelm Recipe Registry, progressively inspect exact immutable Recipe or Skill content, preview owner-local consequences, then install only a confirmed digest. Installation imports selected Skills, creates a disabled Agent, retains selected operations, creates no Connections or grants, and starts no work. Use recover with the returned installation ID after an incomplete apply.
+Search, inspect, and install immutable public Recipes and Skills. read_skill uses SKILL.md or a safe relative path. Preview and confirm the exact digest before installation.
 
 Attributes: write, non-destructive, idempotent, open-world.
 
@@ -3774,7 +3805,7 @@ Attributes: write, non-destructive, idempotent, open-world.
         "install",
         "recover"
       ],
-      "description": "search, inspect, read_skill, preview, install(request, expectedConfirmationDigest, idempotencyKey), recover"
+      "description": "install(request, expectedConfirmationDigest, idempotencyKey)"
     },
     "expectedConfirmationDigest": {
       "type": "string",
@@ -3799,8 +3830,7 @@ Attributes: write, non-destructive, idempotent, open-world.
     "path": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 240,
-      "description": "SKILL.md or a relative path under assets/, references/, or scripts/."
+      "maxLength": 240
     },
     "query": {
       "type": "string",
@@ -3964,8 +3994,7 @@ Attributes: write, non-destructive, idempotent, open-world.
             "digest",
             "registry"
           ],
-          "additionalProperties": false,
-          "description": "One exact immutable Recipe version at the configured canonical Registry origin."
+          "additionalProperties": false
         }
       },
       "required": [
@@ -4017,8 +4046,7 @@ Attributes: write, non-destructive, idempotent, open-world.
             "digest",
             "registry"
           ],
-          "additionalProperties": false,
-          "description": "One exact immutable Recipe version at the configured canonical Registry origin."
+          "additionalProperties": false
         },
         {
           "type": "object",

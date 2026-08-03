@@ -32,6 +32,7 @@ export const DOCS_SECTIONS = [
       { label: "Durable Workflows", slug: "docs/guides/workflows" },
       { label: "Briefs and Skills", slug: "docs/guides/briefs-and-skills" },
       { label: "Install a Recipe", slug: "docs/guides/install-recipe" },
+      { label: "Publish a Recipe", slug: "docs/guides/publish-recipe" },
       { label: "Connections", slug: "docs/guides/connections" },
       { label: "Remote MCP", slug: "docs/guides/remote-mcp" },
       { label: "Schedules", slug: "docs/guides/schedules" },

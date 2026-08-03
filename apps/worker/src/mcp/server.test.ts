@@ -45,6 +45,7 @@ import {
   ownerAuthoritySchema,
   publishSkillResultSchema,
   publishAgentBlueprintResultSchema,
+  recipePublicationToolResultSchema,
   recipeToolResultSchema,
   instantiateAgentBlueprintResultSchema,
   retireSkillResultSchema,
@@ -91,6 +92,7 @@ import {
   MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES,
   MCP_DECIDE_RUN_TOOL_APPROVAL_TOOL_NAME,
   MCP_RECONCILE_TOOL_EXECUTION_TOOL_NAME,
+  MCP_RECIPE_PUBLICATIONS_TOOL_NAME,
   MCP_RECIPES_TOOL_NAME,
   MCP_REVOKE_AUTHORITY_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
@@ -292,6 +294,32 @@ describe("authenticated MCP handler", () => {
     fetchMock.mockRestore();
   });
 
+  it("keeps public Recipe publishing on an explicit destructive MCP surface", async () => {
+    const authority = await ownerAuthority("recipe-publication-mcp", [OWNER_WRITE_SCOPE]);
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 1,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { request: "{}" },
+            name: MCP_RECIPE_PUBLICATIONS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload = jsonRpcToolResultSchema.parse(await response.json());
+    expect(payload.result.isError).toBe(true);
+    expect(
+      recipePublicationToolResultSchema.parse(
+        JSON.parse(payload.result.content[0]?.text ?? "") as unknown,
+      ),
+    ).toMatchObject({ error: { code: "invalid_request" }, ok: false });
+  });
+
   it("marks Agent replacement as destructive while keeping creation additive", async () => {
     const authority = await ownerAuthority();
     const response = await handleAuthenticatedMcpRequest(
@@ -338,6 +366,9 @@ describe("authenticated MCP handler", () => {
     );
     const briefsTool = payload.result.tools.find((tool) => tool.name === MCP_BRIEFS_TOOL_NAME);
     const recipesTool = payload.result.tools.find((tool) => tool.name === MCP_RECIPES_TOOL_NAME);
+    const recipePublicationsTool = payload.result.tools.find(
+      (tool) => tool.name === MCP_RECIPE_PUBLICATIONS_TOOL_NAME,
+    );
     const configureScheduleTool = payload.result.tools.find(
       (tool) => tool.name === MCP_CONFIGURE_AGENT_SCHEDULE_TOOL_NAME,
     );
@@ -453,6 +484,12 @@ describe("authenticated MCP handler", () => {
     expect(JSON.stringify(recipesTool?.inputSchema)).toContain(
       "install(request, expectedConfirmationDigest, idempotencyKey)",
     );
+    expect(recipePublicationsTool?.annotations).toMatchObject({
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+      readOnlyHint: false,
+    });
     expect(scheduleReadTools).toHaveLength(3);
     expect(scheduleReadTools.every((tool) => tool.annotations.readOnlyHint)).toBe(true);
     expect(connectionLinkTool?.annotations).toMatchObject({
