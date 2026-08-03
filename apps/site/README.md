@@ -39,10 +39,10 @@ migrations before uploading that Worker. Site and Registry builds can finish ind
 their service contract and each migration remain compatible with the prior deployed version.
 Registry OAuth credentials remain runtime Worker secrets and are not build inputs.
 
-Workers Builds runs from `apps/registry` for Registry Workers and `apps/site` for site Workers.
-Registry projects call `pnpm deploy:dev` or `pnpm deploy:production`; site projects build with
-`pnpm run build` and deploy with the matching Wrangler environment. Production branches track
-`main`, while non-production branch builds remain disabled.
+Workers Builds runs from `apps/registry` for the Registry Worker and `apps/site` for the site
+Worker. Registry deployment calls `pnpm deploy:production`; the site builds with `pnpm run build`
+and deploys with `pnpm exec wrangler deploy --env production`. Both projects track `main`, while
+non-production branch builds remain disabled.
 
 Restore a previous Worker version when code or routing must roll back. D1 migrations remain
 forward-only, so recovery repairs schema state forward.

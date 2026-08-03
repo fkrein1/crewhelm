@@ -1,12 +1,12 @@
 {
   "name": "@crewhelm/cli",
-  "version": "0.1.0-beta.3",
+  "version": "0.1.0-beta.4",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@crewhelm/cli",
-      "version": "0.1.0-beta.3",
+      "version": "0.1.0-beta.4",
       "license": "MIT",
       "dependencies": {
         "wrangler": "4.114.0"
