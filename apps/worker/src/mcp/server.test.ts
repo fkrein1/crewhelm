@@ -318,7 +318,7 @@ function facadeArguments(name: string, input: Record<string, unknown>): Record<s
   } else if (name === "crewhelm_remote_mcp_connection") {
     const action = String(input.action);
     operation = {
-      kind: `${action}_remote_mcp`.replace("connect_remote", "connect_remote"),
+      kind: `${action}_remote_mcp`,
       tool: MCP_CHANGE_CONNECTIONS_TOOL_NAME,
     };
   } else if (name === "crewhelm_list_connections") {
