@@ -14,6 +14,23 @@ const privateIdentifierPatterns = [
   /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/iu,
   /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/iu,
 ] as const;
+const activeHtmlPattern = /<(?:iframe|img|script|style|svg)\b/iu;
+const hiddenCharacterPattern = /[\u200B-\u200F\u2060\uFEFF]/u;
+
+function hasRemoteMarkdownImage(value: string): boolean {
+  let cursor = 0;
+  for (;;) {
+    const imageStart = value.indexOf("![", cursor);
+    if (imageStart === -1) return false;
+    const targetStart = value.indexOf("](", imageStart + 2);
+    if (targetStart === -1) return false;
+    const urlStart = targetStart + 2;
+    if (value.startsWith("http://", urlStart) || value.startsWith("https://", urlStart)) {
+      return true;
+    }
+    cursor = urlStart;
+  }
+}
 
 export function inspectPublicText(value: unknown): {
   suspectedPrivateIdentifiers: boolean;
@@ -82,10 +99,10 @@ export function inspectPublicSkill(
   ];
 
   for (const text of texts) {
-    if (/<(?:iframe|img|script|style|svg)\b|!\[[^\]]*\]\(https?:\/\//iu.test(text)) {
+    if (activeHtmlPattern.test(text) || hasRemoteMarkdownImage(text)) {
       warnings.activeMarkdown += 1;
     }
-    if (/<!--[\s\S]*?-->|[\u200B-\u200F\u2060\uFEFF]/u.test(text)) warnings.hiddenText += 1;
+    if (text.includes("<!--") || hiddenCharacterPattern.test(text)) warnings.hiddenText += 1;
     if (/\b[A-Za-z0-9+/]{160,}={0,2}\b/u.test(text)) warnings.obfuscatedContent += 1;
     if (privateIdentifierPatterns.some((pattern) => pattern.test(text))) {
       warnings.suspectedPrivateIdentifiers += 1;
