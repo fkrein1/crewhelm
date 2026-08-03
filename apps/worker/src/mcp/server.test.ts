@@ -42,6 +42,7 @@ import {
   listAgentBlueprintsResultSchema,
   listUnresolvedToolEffectsResultSchema,
   manageBriefsResultSchema,
+  mcpAuthoringDraftResultSchema,
   ownerAuthoritySchema,
   publishSkillResultSchema,
   publishAgentBlueprintResultSchema,
@@ -94,6 +95,7 @@ import {
   MCP_INSPECT_RECIPES_TOOL_NAME,
   MCP_INSPECT_WORK_TOOL_NAME,
   MCP_MODEL_VISIBLE_CATALOG_SIZE_BUDGET_BYTES,
+  MCP_MODEL_VISIBLE_TOOL_SIZE_BUDGET_BYTES,
   MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES,
   MCP_PUBLISH_RECIPE_TOOL_NAME,
   MCP_REVOKE_AUTHORITY_TOOL_NAME,
@@ -769,10 +771,15 @@ describe("authenticated MCP handler", () => {
     const serializedCatalog = new TextEncoder().encode(
       JSON.stringify({ instructions: MCP_SERVER_INSTRUCTIONS, tools }),
     ).byteLength;
-
     expect(tools.length).toBeLessThanOrEqual(MCP_TOOL_COUNT_BUDGET);
     expect(serializedCatalog).toBeLessThanOrEqual(MCP_MODEL_VISIBLE_CATALOG_SIZE_BUDGET_BYTES);
     expect(serializedSchemas).toBeLessThanOrEqual(MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES);
+    for (const tool of tools) {
+      const bytes = new TextEncoder().encode(JSON.stringify(tool)).byteLength;
+      expect(bytes, `${tool.name} model-visible bytes`).toBeLessThanOrEqual(
+        MCP_MODEL_VISIBLE_TOOL_SIZE_BUDGET_BYTES,
+      );
+    }
   });
 
   it("routes bounded public Recipe discovery through the authenticated MCP surface", async () => {
@@ -850,6 +857,7 @@ describe("authenticated MCP handler", () => {
                 },
                 kind: "prepare",
                 license: "MIT",
+                requestKey: "missing-publication-agent",
               },
             },
             name: MCP_PUBLISH_RECIPE_TOOL_NAME,
@@ -899,6 +907,82 @@ describe("authenticated MCP handler", () => {
       recipe,
       skills: [],
     };
+    const createdDraft = mcpAuthoringDraftResultSchema.parse(
+      await Promise.resolve(
+        env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey).mcpAuthoringDrafts(authority, {
+          action: "create",
+          content: candidate,
+          idempotencyKey: "publication-review-draft",
+          kind: "recipe-publication",
+        }),
+      ),
+    );
+    if (!createdDraft.ok || createdDraft.action === "discard" || createdDraft.action === "read") {
+      throw new Error("Expected a Recipe publication draft.");
+    }
+    let publicationDraft = createdDraft.draft;
+    const inspectSectionResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 2,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              operation: {
+                draft: publicationDraft,
+                kind: "inspect_section",
+                section: "discovery",
+              },
+            },
+            name: MCP_PUBLISH_RECIPE_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const inspectedSection = jsonRpcToolResultSchema.parse(
+      await inspectSectionResponse.json(),
+    ).result;
+    expect(
+      z
+        .looseObject({ ok: z.literal(true), section: z.literal("discovery"), value: z.unknown() })
+        .parse(JSON.parse(inspectedSection.content[0]?.text ?? "")),
+    ).toMatchObject({ section: "discovery", value: recipe.discovery });
+    const setSectionResponse = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 3,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              operation: {
+                draft: publicationDraft,
+                kind: "set_section",
+                requestKey: "publication-discovery-edit",
+                section: "discovery",
+                value: { ...recipe.discovery, description: "A reviewed publication draft." },
+              },
+            },
+            name: MCP_PUBLISH_RECIPE_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const setSection = mcpAuthoringDraftResultSchema.parse(
+      JSON.parse(
+        jsonRpcToolResultSchema.parse(await setSectionResponse.json()).result.content[0]?.text ??
+          "",
+      ),
+    );
+    if (!setSection.ok || setSection.action === "discard" || setSection.action === "read") {
+      throw new Error("Expected an updated Recipe publication draft.");
+    }
+    publicationDraft = setSection.draft;
     const review = async (id: number, expectedConfirmationDigest?: string) => {
       const reviewResponse = await handleAuthenticatedMcpRequest(
         toolRequest(
@@ -910,11 +994,11 @@ describe("authenticated MCP handler", () => {
               arguments: {
                 operation: {
                   authorization: authorized.authorization,
-                  candidate,
+                  draft: publicationDraft,
                   ...(expectedConfirmationDigest === undefined
                     ? {}
                     : { expectedConfirmationDigest }),
-                  kind: "publish",
+                  kind: "preview_or_publish",
                 },
               },
               name: MCP_PUBLISH_RECIPE_TOOL_NAME,
@@ -1009,6 +1093,11 @@ describe("authenticated MCP handler", () => {
     expect(visibleCatalog).toContain('"const":"create"');
     expect(visibleCatalog).toContain('"const":"run"');
     expect(visibleCatalog).toContain('"const":"create_event_trigger"');
+    expect(visibleCatalog).toContain('"pause_event_trigger"');
+    expect(visibleCatalog).toContain('"resume_event_trigger"');
+    expect(visibleCatalog).toContain('"delete_event_trigger"');
+    expect(visibleCatalog).toContain('"list_schedules"');
+    expect(visibleCatalog).toContain('"list_event_triggers"');
     expect(visibleCatalog).not.toContain('"expectedBranchRevision"');
     expect(visibleCatalog).not.toContain('"idempotencyKey"');
     expect(visibleCatalog).not.toContain("crewhelm_get_config");
@@ -1016,10 +1105,36 @@ describe("authenticated MCP handler", () => {
     expect(visibleCatalog).toContain('"conversation"');
     expect(visibleCatalog).toContain('"connection"');
     expect(contextCatalog).not.toContain('"mode":');
+    expect(contextCatalog).not.toContain('"maxAgents":');
+    expect(
+      JSON.stringify(
+        operationCatalogVariant(
+          byName.get(MCP_CHANGE_CONTEXT_TOOL_NAME)?.inputSchema,
+          "retire_skill",
+        ),
+      ),
+    ).not.toContain('"patch":');
     expect(recipeCatalog).not.toContain('"request":');
-    expect(recipeCatalog).toContain('"setup":');
+    expect(recipeCatalog).toContain('"const":"prepare_install"');
+    expect(recipeCatalog).toContain('"const":"set_setup"');
+    expect(recipeCatalog).toContain('"const":"discard_install_draft"');
     expect(recipeReadCatalog).not.toContain('"requestKey":');
+    expect(
+      JSON.stringify(
+        operationCatalogVariant(byName.get(MCP_INSPECT_RECIPES_TOOL_NAME)?.inputSchema, "inspect"),
+      ),
+    ).toContain('"const":"recipe"');
+    expect(
+      JSON.stringify(
+        operationCatalogVariant(
+          byName.get(MCP_INSPECT_RECIPES_TOOL_NAME)?.inputSchema,
+          "read_skill",
+        ),
+      ),
+    ).toContain('"const":"skill"');
     expect(publicationCatalog).not.toContain('"request":');
+    expect(publicationCatalog).toContain('"const":"discard_publish_draft"');
+    expect(contextCatalog).toContain('"const":"discard_package_draft"');
     expect(
       JSON.stringify(
         operationCatalogVariant(
@@ -1029,10 +1144,12 @@ describe("authenticated MCP handler", () => {
       ),
     ).not.toContain('"requestKey":');
     expect(
-      JSON.stringify(
-        operationCatalogVariant(byName.get(MCP_CHANGE_RECIPES_TOOL_NAME)?.inputSchema, "install"),
-      ),
-    ).not.toContain('"requestKey":');
+      z
+        .looseObject({ required: z.array(z.string()).optional() })
+        .parse(
+          operationCatalogVariant(byName.get(MCP_CHANGE_RECIPES_TOOL_NAME)?.inputSchema, "install"),
+        ).required,
+    ).not.toContain("requestKey");
     expect(
       JSON.stringify(
         operationCatalogVariant(
@@ -1456,9 +1573,25 @@ describe("authenticated MCP handler", () => {
       };
     };
 
-    const preview = await call(MCP_CONFIGURE_TOOL_NAME, {
-      mode: "preview",
-      target: { kind: "skill-package", package: skillPackage },
+    const prepared = await call(MCP_CHANGE_CONTEXT_TOOL_NAME, {
+      operation: {
+        kind: "prepare_skill",
+        package: skillPackage,
+        requestKey: "mcp-skill-draft",
+      },
+    });
+    const preparedDraft = mcpAuthoringDraftResultSchema.parse(prepared.result);
+    expect(prepared.isError).toBe(false);
+    if (
+      !preparedDraft.ok ||
+      preparedDraft.action === "discard" ||
+      preparedDraft.action === "read"
+    ) {
+      throw new Error("Expected an MCP Skill draft.");
+    }
+
+    const preview = await call(MCP_CHANGE_CONTEXT_TOOL_NAME, {
+      operation: { draft: preparedDraft.draft, kind: "preview_package" },
     });
 
     expect(preview.isError).toBe(false);
@@ -1469,10 +1602,13 @@ describe("authenticated MCP handler", () => {
       version: 1,
     });
 
-    const publication = await call(MCP_CONFIGURE_TOOL_NAME, {
-      idempotencyKey: "mcp-skill-publish",
-      mode: "apply",
-      target: { kind: "skill-package", package: skillPackage },
+    const publication = await call(MCP_CHANGE_CONTEXT_TOOL_NAME, {
+      operation: {
+        draft: preparedDraft.draft,
+        expectedConfirmationDigest: preparedDraft.draft.digest,
+        kind: "apply_package",
+        requestKey: "mcp-skill-publish",
+      },
     });
     const published = publishSkillResultSchema.parse(publication.result);
 
@@ -1486,8 +1622,13 @@ describe("authenticated MCP handler", () => {
       throw new Error("Expected MCP Skill publication.");
     }
 
-    const catalog = await call(MCP_GET_CONFIGURATION_TOOL_NAME, {
-      target: { kind: "skill-catalog", limit: 25 },
+    const discarded = await call(MCP_CHANGE_CONTEXT_TOOL_NAME, {
+      operation: { draft: preparedDraft.draft, kind: "discard_package_draft" },
+    });
+    expect(discarded.result).toMatchObject({ action: "discard", discarded: true, ok: true });
+
+    const catalog = await call(MCP_INSPECT_CONTEXT_TOOL_NAME, {
+      operation: { kind: "list_skills", limit: 25 },
     });
 
     expect(catalog.isError).toBe(false);
@@ -1498,8 +1639,8 @@ describe("authenticated MCP handler", () => {
     });
     expect(JSON.stringify(catalog.result)).not.toContain("Review provenance and rollback.");
 
-    const exact = await call(MCP_GET_CONFIGURATION_TOOL_NAME, {
-      target: { id: published.skill.id, kind: "skill-package", version: 1 },
+    const exact = await call(MCP_INSPECT_CONTEXT_TOOL_NAME, {
+      operation: { id: published.skill.id, kind: "inspect_skill", version: 1 },
     });
 
     expect(exact.isError).toBe(false);
@@ -1512,13 +1653,12 @@ describe("authenticated MCP handler", () => {
       },
     });
 
-    const retirement = await call(MCP_CONFIGURE_TOOL_NAME, {
-      idempotencyKey: "mcp-skill-retire",
-      mode: "apply",
-      target: {
+    const retirement = await call(MCP_CHANGE_CONTEXT_TOOL_NAME, {
+      operation: {
+        confirm: true,
         expectedVersion: 1,
         id: published.skill.id,
-        kind: "skill-retirement",
+        kind: "retire_skill",
       },
     });
 
@@ -1585,10 +1725,30 @@ describe("authenticated MCP handler", () => {
       };
     };
 
-    const publication = await call(MCP_CONFIGURE_TOOL_NAME, {
-      idempotencyKey: "mcp-blueprint-publish",
-      mode: "apply",
-      target: { kind: "agent-blueprint-package", package: agentBlueprint },
+    const prepared = await call(MCP_CHANGE_CONTEXT_TOOL_NAME, {
+      operation: {
+        kind: "prepare_blueprint",
+        package: agentBlueprint,
+        requestKey: "mcp-blueprint-draft",
+      },
+    });
+    const preparedDraft = mcpAuthoringDraftResultSchema.parse(prepared.result);
+    expect(prepared.isError).toBe(false);
+    if (
+      !preparedDraft.ok ||
+      preparedDraft.action === "discard" ||
+      preparedDraft.action === "read"
+    ) {
+      throw new Error("Expected an MCP Agent blueprint draft.");
+    }
+
+    const publication = await call(MCP_CHANGE_CONTEXT_TOOL_NAME, {
+      operation: {
+        draft: preparedDraft.draft,
+        expectedConfirmationDigest: preparedDraft.draft.digest,
+        kind: "apply_package",
+        requestKey: "mcp-blueprint-publish",
+      },
     });
     const published = publishAgentBlueprintResultSchema.parse(publication.result);
 
@@ -1602,8 +1762,8 @@ describe("authenticated MCP handler", () => {
       throw new Error("Expected MCP Agent blueprint publication.");
     }
 
-    const catalog = await call(MCP_GET_CONFIGURATION_TOOL_NAME, {
-      target: { kind: "agent-blueprint-catalog", limit: 25, tag: "release" },
+    const catalog = await call(MCP_INSPECT_CONTEXT_TOOL_NAME, {
+      operation: { kind: "list_blueprints", limit: 25, tag: "release" },
     });
     expect(listAgentBlueprintsResultSchema.parse(catalog.result)).toMatchObject({
       blueprints: [{ id: published.blueprint.id }],
@@ -1611,10 +1771,10 @@ describe("authenticated MCP handler", () => {
     });
     expect(JSON.stringify(catalog.result)).not.toContain("review a release");
 
-    const exact = await call(MCP_GET_CONFIGURATION_TOOL_NAME, {
-      target: {
+    const exact = await call(MCP_INSPECT_CONTEXT_TOOL_NAME, {
+      operation: {
         id: published.blueprint.id,
-        kind: "agent-blueprint-package",
+        kind: "inspect_blueprint",
         version: 1,
       },
     });
@@ -1629,7 +1789,9 @@ describe("authenticated MCP handler", () => {
       parameters: { audience: "Operator" },
       version: 1,
     };
-    const preview = await call(MCP_CONFIGURE_TOOL_NAME, { mode: "preview", target });
+    const preview = await call(MCP_CHANGE_CONTEXT_TOOL_NAME, {
+      operation: { ...target, confirm: false, kind: "create_from_blueprint" },
+    });
     expect(instantiateAgentBlueprintResultSchema.parse(preview.result)).toMatchObject({
       created: false,
       ok: true,
@@ -1643,10 +1805,8 @@ describe("authenticated MCP handler", () => {
       },
     });
 
-    const creation = await call(MCP_CONFIGURE_TOOL_NAME, {
-      idempotencyKey: "mcp-blueprint-instance",
-      mode: "apply",
-      target,
+    const creation = await call(MCP_CHANGE_CONTEXT_TOOL_NAME, {
+      operation: { ...target, confirm: true, kind: "create_from_blueprint" },
     });
     expect(instantiateAgentBlueprintResultSchema.parse(creation.result)).toMatchObject({
       agent: {
@@ -1657,13 +1817,12 @@ describe("authenticated MCP handler", () => {
       ok: true,
     });
 
-    const retirement = await call(MCP_CONFIGURE_TOOL_NAME, {
-      idempotencyKey: "mcp-blueprint-retire",
-      mode: "apply",
-      target: {
+    const retirement = await call(MCP_CHANGE_CONTEXT_TOOL_NAME, {
+      operation: {
+        confirm: true,
         expectedVersion: 1,
         id: published.blueprint.id,
-        kind: "agent-blueprint-retirement",
+        kind: "retire_blueprint",
       },
     });
     expect(retireAgentBlueprintResultSchema.parse(retirement.result)).toMatchObject({

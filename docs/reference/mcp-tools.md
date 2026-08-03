@@ -96,7 +96,7 @@ operator.
 
 **Change Crewhelm Agents**
 
-Create, replace, or disable Agents after confirming owner intent. Choose one operation; immutable revision and replay controls remain enforced by Crewhelm.
+Create, replace, or disable Agents with immutable revision and replay controls.
 
 Attributes: write, destructive, idempotent, closed-world.
 
@@ -122,253 +122,26 @@ Attributes: write, destructive, idempotent, closed-world.
               "maxItems": 16,
               "type": "array",
               "items": {
-                "type": "object",
-                "properties": {
-                  "configuration": {
-                    "type": "object",
-                    "propertyNames": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 80
-                    },
-                    "additionalProperties": {
-                      "anyOf": [
-                        {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "maxLength": 2048
-                            },
-                            {
-                              "type": "number"
-                            },
-                            {
-                              "type": "boolean"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        {
-                          "maxItems": 64,
-                          "type": "array",
-                          "items": {
-                            "anyOf": [
-                              {
-                                "anyOf": [
-                                  {
-                                    "type": "string",
-                                    "maxLength": 2048
-                                  },
-                                  {
-                                    "type": "number"
-                                  },
-                                  {
-                                    "type": "boolean"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              {
-                                "maxItems": 64,
-                                "type": "array",
-                                "items": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string",
-                                      "maxLength": 2048
-                                    },
-                                    {
-                                      "type": "number"
-                                    },
-                                    {
-                                      "type": "boolean"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                }
-                              },
-                              {
-                                "type": "object",
-                                "propertyNames": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 80
-                                },
-                                "additionalProperties": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string",
-                                      "maxLength": 2048
-                                    },
-                                    {
-                                      "type": "number"
-                                    },
-                                    {
-                                      "type": "boolean"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                }
-                              }
-                            ]
-                          }
-                        },
-                        {
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 80
-                          },
-                          "additionalProperties": {
-                            "anyOf": [
-                              {
-                                "anyOf": [
-                                  {
-                                    "type": "string",
-                                    "maxLength": 2048
-                                  },
-                                  {
-                                    "type": "number"
-                                  },
-                                  {
-                                    "type": "boolean"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              {
-                                "maxItems": 64,
-                                "type": "array",
-                                "items": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string",
-                                      "maxLength": 2048
-                                    },
-                                    {
-                                      "type": "number"
-                                    },
-                                    {
-                                      "type": "boolean"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                }
-                              },
-                              {
-                                "type": "object",
-                                "propertyNames": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 80
-                                },
-                                "additionalProperties": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string",
-                                      "maxLength": 2048
-                                    },
-                                    {
-                                      "type": "number"
-                                    },
-                                    {
-                                      "type": "boolean"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                }
-                              }
-                            ]
-                          }
-                        }
-                      ]
-                    }
-                  },
-                  "id": {
-                    "type": "string",
-                    "minLength": 3,
-                    "maxLength": 80,
-                    "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
-                  },
-                  "schemaVersion": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 1000
-                  }
-                },
-                "required": [
-                  "configuration",
-                  "id",
-                  "schemaVersion"
-                ],
-                "additionalProperties": false
+                "$ref": "#/definitions/S3"
               },
               "description": "Optional capability module configuration. Omit to use the fleet's default inference module."
             },
             "executionLimits": {
-              "type": "object",
-              "properties": {
-                "maxDurationSeconds": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 3600
-                },
-                "maxModelTokens": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 1000000
-                },
-                "maxToolCalls": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 100
-                },
-                "maxTurns": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 100
+              "description": "Optional Agent-specific ceilings. Omit to inherit the current fleet execution defaults.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/CrewhelmAgentExecutionLimits"
                 }
-              },
-              "required": [
-                "maxDurationSeconds",
-                "maxModelTokens",
-                "maxToolCalls",
-                "maxTurns"
-              ],
-              "additionalProperties": false,
-              "description": "Optional Agent-specific ceilings. Omit to inherit the current fleet execution defaults."
+              ]
             },
             "instructions": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 8192
+              "$ref": "#/definitions/S6"
             },
             "name": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 80
+              "$ref": "#/definitions/S7"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -390,271 +163,23 @@ Attributes: write, destructive, idempotent, closed-world.
               "maxItems": 16,
               "type": "array",
               "items": {
-                "type": "object",
-                "properties": {
-                  "configuration": {
-                    "type": "object",
-                    "propertyNames": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 80
-                    },
-                    "additionalProperties": {
-                      "anyOf": [
-                        {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "maxLength": 2048
-                            },
-                            {
-                              "type": "number"
-                            },
-                            {
-                              "type": "boolean"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        {
-                          "maxItems": 64,
-                          "type": "array",
-                          "items": {
-                            "anyOf": [
-                              {
-                                "anyOf": [
-                                  {
-                                    "type": "string",
-                                    "maxLength": 2048
-                                  },
-                                  {
-                                    "type": "number"
-                                  },
-                                  {
-                                    "type": "boolean"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              {
-                                "maxItems": 64,
-                                "type": "array",
-                                "items": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string",
-                                      "maxLength": 2048
-                                    },
-                                    {
-                                      "type": "number"
-                                    },
-                                    {
-                                      "type": "boolean"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                }
-                              },
-                              {
-                                "type": "object",
-                                "propertyNames": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 80
-                                },
-                                "additionalProperties": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string",
-                                      "maxLength": 2048
-                                    },
-                                    {
-                                      "type": "number"
-                                    },
-                                    {
-                                      "type": "boolean"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                }
-                              }
-                            ]
-                          }
-                        },
-                        {
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 80
-                          },
-                          "additionalProperties": {
-                            "anyOf": [
-                              {
-                                "anyOf": [
-                                  {
-                                    "type": "string",
-                                    "maxLength": 2048
-                                  },
-                                  {
-                                    "type": "number"
-                                  },
-                                  {
-                                    "type": "boolean"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              {
-                                "maxItems": 64,
-                                "type": "array",
-                                "items": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string",
-                                      "maxLength": 2048
-                                    },
-                                    {
-                                      "type": "number"
-                                    },
-                                    {
-                                      "type": "boolean"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                }
-                              },
-                              {
-                                "type": "object",
-                                "propertyNames": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 80
-                                },
-                                "additionalProperties": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string",
-                                      "maxLength": 2048
-                                    },
-                                    {
-                                      "type": "number"
-                                    },
-                                    {
-                                      "type": "boolean"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                }
-                              }
-                            ]
-                          }
-                        }
-                      ]
-                    }
-                  },
-                  "id": {
-                    "type": "string",
-                    "minLength": 3,
-                    "maxLength": 80,
-                    "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
-                  },
-                  "schemaVersion": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 1000
-                  }
-                },
-                "required": [
-                  "configuration",
-                  "id",
-                  "schemaVersion"
-                ],
-                "additionalProperties": false
+                "$ref": "#/definitions/S3"
               }
             },
             "executionLimits": {
-              "type": "object",
-              "properties": {
-                "maxDurationSeconds": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 3600
-                },
-                "maxModelTokens": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 1000000
-                },
-                "maxToolCalls": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 100
-                },
-                "maxTurns": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 100
-                }
-              },
-              "required": [
-                "maxDurationSeconds",
-                "maxModelTokens",
-                "maxToolCalls",
-                "maxTurns"
-              ],
-              "additionalProperties": false
+              "$ref": "#/definitions/CrewhelmAgentExecutionLimits"
             },
             "instructions": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 8192
+              "$ref": "#/definitions/S6"
             },
             "name": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 80
+              "$ref": "#/definitions/S7"
             },
             "agent": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {},
-              "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
+              "$ref": "#/definitions/CrewhelmAgentReference"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -679,24 +204,7 @@ Attributes: write, destructive, idempotent, closed-world.
               "maxItems": 25,
               "type": "array",
               "items": {
-                "type": "object",
-                "properties": {
-                  "id": {
-                    "type": "string",
-                    "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                  },
-                  "revision": {
-                    "type": "integer",
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991
-                  }
-                },
-                "required": [
-                  "id",
-                  "revision"
-                ],
-                "additionalProperties": {},
-                "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
+                "$ref": "#/definitions/CrewhelmAgentReference"
               }
             }
           },
@@ -712,7 +220,181 @@ Attributes: write, destructive, idempotent, closed-world.
   "required": [
     "operation"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "definitions": {
+    "S3": {
+      "type": "object",
+      "properties": {
+        "configuration": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/S4"
+              },
+              {
+                "maxItems": 64,
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/S5"
+                }
+              },
+              {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "additionalProperties": {
+                  "$ref": "#/definitions/S5"
+                }
+              }
+            ]
+          }
+        },
+        "id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 80,
+          "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
+        },
+        "schemaVersion": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      },
+      "required": [
+        "configuration",
+        "id",
+        "schemaVersion"
+      ],
+      "additionalProperties": false
+    },
+    "S4": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 2048
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "S5": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/S4"
+        },
+        {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/S4"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "additionalProperties": {
+            "$ref": "#/definitions/S4"
+          }
+        }
+      ]
+    },
+    "CrewhelmAgentExecutionLimits": {
+      "type": "object",
+      "properties": {
+        "maxDurationSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "maxModelTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "maxToolCalls": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "maxTurns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "maxDurationSeconds",
+        "maxModelTokens",
+        "maxToolCalls",
+        "maxTurns"
+      ],
+      "additionalProperties": false
+    },
+    "S6": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "S7": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "S8": {
+      "description": "Optional retry identity. Omit it on the ordinary happy path.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "CrewhelmAgentReference": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/S1"
+        },
+        "revision": {
+          "$ref": "#/definitions/S2"
+        }
+      },
+      "required": [
+        "id",
+        "revision"
+      ],
+      "additionalProperties": {},
+      "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
+    },
+    "S1": {
+      "type": "string",
+      "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S2": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    }
+  }
 }
 ```
 
@@ -744,340 +426,13 @@ Attributes: write, destructive, idempotent, closed-world.
               "const": "create_schedule"
             },
             "schedule": {
-              "type": "object",
-              "properties": {
-                "briefs": {
-                  "maxItems": 8,
-                  "type": "array",
-                  "items": {
-                    "anyOf": [
-                      {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                          },
-                          "revision": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0,
-                            "maximum": 100
-                          }
-                        },
-                        "required": [
-                          "id",
-                          "revision"
-                        ],
-                        "additionalProperties": {}
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "currentRevision": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0,
-                            "maximum": 100
-                          },
-                          "id": {
-                            "type": "string",
-                            "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                          }
-                        },
-                        "required": [
-                          "currentRevision",
-                          "id"
-                        ],
-                        "additionalProperties": {}
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "brief": {
-                            "type": "object",
-                            "properties": {
-                              "currentRevision": {
-                                "type": "integer",
-                                "exclusiveMinimum": 0,
-                                "maximum": 100
-                              },
-                              "id": {
-                                "type": "string",
-                                "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                              }
-                            },
-                            "required": [
-                              "currentRevision",
-                              "id"
-                            ],
-                            "additionalProperties": {}
-                          }
-                        },
-                        "required": [
-                          "brief"
-                        ],
-                        "additionalProperties": {}
-                      }
-                    ],
-                    "description": "Copy-ready Brief reference, summary, or create result returned by Crewhelm."
-                  },
-                  "description": "Copy-ready immutable Briefs returned by Crewhelm."
-                },
-                "name": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 80,
-                  "description": "Short owner-facing name for this scheduled responsibility."
-                },
-                "outputContract": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "const": "markdown"
-                        }
-                      },
-                      "required": [
-                        "kind"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "const": "json"
-                        },
-                        "schema": {
-                          "type": "object",
-                          "properties": {
-                            "jsonSchema": {
-                              "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
-                              "type": "object",
-                              "propertyNames": {
-                                "type": "string"
-                              },
-                              "additionalProperties": {
-                                "$ref": "#/definitions/__schema0"
-                              }
-                            },
-                            "name": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 64,
-                              "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-                            },
-                            "version": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 32,
-                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-                            }
-                          },
-                          "required": [
-                            "name",
-                            "version"
-                          ],
-                          "additionalProperties": false
-                        }
-                      },
-                      "required": [
-                        "kind",
-                        "schema"
-                      ],
-                      "additionalProperties": false
-                    }
-                  ],
-                  "description": "Optional deliverable contract frozen for every scheduled Run."
-                },
-                "prompt": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 16384,
-                  "description": "Bounded Run instruction used for every occurrence."
-                },
-                "trigger": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "intervalSeconds": {
-                          "type": "integer",
-                          "minimum": 60,
-                          "maximum": 604800,
-                          "description": "Elapsed seconds between Runs; the first Run occurs one interval after creation."
-                        },
-                        "type": {
-                          "type": "string",
-                          "const": "interval"
-                        }
-                      },
-                      "required": [
-                        "intervalSeconds",
-                        "type"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "at": {
-                          "type": "string",
-                          "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
-                          "description": "Local wall-clock time in 24-hour HH:mm form."
-                        },
-                        "frequency": {
-                          "type": "string",
-                          "const": "daily"
-                        },
-                        "timeZone": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 128,
-                          "pattern": "^(?:UTC|[A-Za-z0-9._+-]+(?:\\/[A-Za-z0-9._+-]+)+)$",
-                          "description": "IANA time zone used to preserve local wall-clock time across offset changes."
-                        },
-                        "type": {
-                          "type": "string",
-                          "const": "calendar"
-                        }
-                      },
-                      "required": [
-                        "at",
-                        "frequency",
-                        "timeZone",
-                        "type"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "at": {
-                          "type": "string",
-                          "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
-                          "description": "Local wall-clock time in 24-hour HH:mm form."
-                        },
-                        "daysOfWeek": {
-                          "minItems": 1,
-                          "maxItems": 7,
-                          "type": "array",
-                          "items": {
-                            "type": "string",
-                            "enum": [
-                              "monday",
-                              "tuesday",
-                              "wednesday",
-                              "thursday",
-                              "friday",
-                              "saturday",
-                              "sunday"
-                            ]
-                          },
-                          "description": "Execution weekdays, unique and ordered Monday through Sunday."
-                        },
-                        "frequency": {
-                          "type": "string",
-                          "const": "weekly"
-                        },
-                        "timeZone": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 128,
-                          "pattern": "^(?:UTC|[A-Za-z0-9._+-]+(?:\\/[A-Za-z0-9._+-]+)+)$",
-                          "description": "IANA time zone used to preserve local wall-clock time across offset changes."
-                        },
-                        "type": {
-                          "type": "string",
-                          "const": "calendar"
-                        }
-                      },
-                      "required": [
-                        "at",
-                        "daysOfWeek",
-                        "frequency",
-                        "timeZone",
-                        "type"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "at": {
-                          "type": "string",
-                          "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
-                          "description": "Local wall-clock time in 24-hour HH:mm form."
-                        },
-                        "dayOfMonth": {
-                          "type": "integer",
-                          "minimum": 1,
-                          "maximum": 31,
-                          "description": "Local calendar day; months without this day are skipped."
-                        },
-                        "frequency": {
-                          "type": "string",
-                          "const": "monthly"
-                        },
-                        "timeZone": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 128,
-                          "pattern": "^(?:UTC|[A-Za-z0-9._+-]+(?:\\/[A-Za-z0-9._+-]+)+)$",
-                          "description": "IANA time zone used to preserve local wall-clock time across offset changes."
-                        },
-                        "type": {
-                          "type": "string",
-                          "const": "calendar"
-                        }
-                      },
-                      "required": [
-                        "at",
-                        "dayOfMonth",
-                        "frequency",
-                        "timeZone",
-                        "type"
-                      ],
-                      "additionalProperties": false
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "name",
-                "prompt",
-                "trigger"
-              ],
-              "additionalProperties": false
+              "$ref": "#/definitions/S27"
             },
             "agent": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {},
-              "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
+              "$ref": "#/definitions/CrewhelmAgentReference"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -1095,350 +450,13 @@ Attributes: write, destructive, idempotent, closed-world.
               "const": "update_schedule"
             },
             "definition": {
-              "type": "object",
-              "properties": {
-                "briefs": {
-                  "maxItems": 8,
-                  "type": "array",
-                  "items": {
-                    "anyOf": [
-                      {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                          },
-                          "revision": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0,
-                            "maximum": 100
-                          }
-                        },
-                        "required": [
-                          "id",
-                          "revision"
-                        ],
-                        "additionalProperties": {}
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "currentRevision": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0,
-                            "maximum": 100
-                          },
-                          "id": {
-                            "type": "string",
-                            "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                          }
-                        },
-                        "required": [
-                          "currentRevision",
-                          "id"
-                        ],
-                        "additionalProperties": {}
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "brief": {
-                            "type": "object",
-                            "properties": {
-                              "currentRevision": {
-                                "type": "integer",
-                                "exclusiveMinimum": 0,
-                                "maximum": 100
-                              },
-                              "id": {
-                                "type": "string",
-                                "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                              }
-                            },
-                            "required": [
-                              "currentRevision",
-                              "id"
-                            ],
-                            "additionalProperties": {}
-                          }
-                        },
-                        "required": [
-                          "brief"
-                        ],
-                        "additionalProperties": {}
-                      }
-                    ],
-                    "description": "Copy-ready Brief reference, summary, or create result returned by Crewhelm."
-                  },
-                  "description": "Copy-ready immutable Briefs returned by Crewhelm."
-                },
-                "name": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 80,
-                  "description": "Short owner-facing name for this scheduled responsibility."
-                },
-                "outputContract": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "const": "markdown"
-                        }
-                      },
-                      "required": [
-                        "kind"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "const": "json"
-                        },
-                        "schema": {
-                          "type": "object",
-                          "properties": {
-                            "jsonSchema": {
-                              "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
-                              "type": "object",
-                              "propertyNames": {
-                                "type": "string"
-                              },
-                              "additionalProperties": {
-                                "$ref": "#/definitions/__schema0"
-                              }
-                            },
-                            "name": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 64,
-                              "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-                            },
-                            "version": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 32,
-                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-                            }
-                          },
-                          "required": [
-                            "name",
-                            "version"
-                          ],
-                          "additionalProperties": false
-                        }
-                      },
-                      "required": [
-                        "kind",
-                        "schema"
-                      ],
-                      "additionalProperties": false
-                    }
-                  ],
-                  "description": "Optional deliverable contract frozen for every scheduled Run."
-                },
-                "prompt": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 16384,
-                  "description": "Bounded Run instruction used for every occurrence."
-                },
-                "trigger": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "intervalSeconds": {
-                          "type": "integer",
-                          "minimum": 60,
-                          "maximum": 604800,
-                          "description": "Elapsed seconds between Runs; the first Run occurs one interval after creation."
-                        },
-                        "type": {
-                          "type": "string",
-                          "const": "interval"
-                        }
-                      },
-                      "required": [
-                        "intervalSeconds",
-                        "type"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "at": {
-                          "type": "string",
-                          "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
-                          "description": "Local wall-clock time in 24-hour HH:mm form."
-                        },
-                        "frequency": {
-                          "type": "string",
-                          "const": "daily"
-                        },
-                        "timeZone": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 128,
-                          "pattern": "^(?:UTC|[A-Za-z0-9._+-]+(?:\\/[A-Za-z0-9._+-]+)+)$",
-                          "description": "IANA time zone used to preserve local wall-clock time across offset changes."
-                        },
-                        "type": {
-                          "type": "string",
-                          "const": "calendar"
-                        }
-                      },
-                      "required": [
-                        "at",
-                        "frequency",
-                        "timeZone",
-                        "type"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "at": {
-                          "type": "string",
-                          "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
-                          "description": "Local wall-clock time in 24-hour HH:mm form."
-                        },
-                        "daysOfWeek": {
-                          "minItems": 1,
-                          "maxItems": 7,
-                          "type": "array",
-                          "items": {
-                            "type": "string",
-                            "enum": [
-                              "monday",
-                              "tuesday",
-                              "wednesday",
-                              "thursday",
-                              "friday",
-                              "saturday",
-                              "sunday"
-                            ]
-                          },
-                          "description": "Execution weekdays, unique and ordered Monday through Sunday."
-                        },
-                        "frequency": {
-                          "type": "string",
-                          "const": "weekly"
-                        },
-                        "timeZone": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 128,
-                          "pattern": "^(?:UTC|[A-Za-z0-9._+-]+(?:\\/[A-Za-z0-9._+-]+)+)$",
-                          "description": "IANA time zone used to preserve local wall-clock time across offset changes."
-                        },
-                        "type": {
-                          "type": "string",
-                          "const": "calendar"
-                        }
-                      },
-                      "required": [
-                        "at",
-                        "daysOfWeek",
-                        "frequency",
-                        "timeZone",
-                        "type"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "at": {
-                          "type": "string",
-                          "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
-                          "description": "Local wall-clock time in 24-hour HH:mm form."
-                        },
-                        "dayOfMonth": {
-                          "type": "integer",
-                          "minimum": 1,
-                          "maximum": 31,
-                          "description": "Local calendar day; months without this day are skipped."
-                        },
-                        "frequency": {
-                          "type": "string",
-                          "const": "monthly"
-                        },
-                        "timeZone": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 128,
-                          "pattern": "^(?:UTC|[A-Za-z0-9._+-]+(?:\\/[A-Za-z0-9._+-]+)+)$",
-                          "description": "IANA time zone used to preserve local wall-clock time across offset changes."
-                        },
-                        "type": {
-                          "type": "string",
-                          "const": "calendar"
-                        }
-                      },
-                      "required": [
-                        "at",
-                        "dayOfMonth",
-                        "frequency",
-                        "timeZone",
-                        "type"
-                      ],
-                      "additionalProperties": false
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "name",
-                "prompt",
-                "trigger"
-              ],
-              "additionalProperties": false
+              "$ref": "#/definitions/S27"
             },
             "schedule": {
-              "type": "object",
-              "properties": {
-                "agentId": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "agentRevision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "id": {
-                  "type": "string",
-                  "pattern": "^schedule_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "agentId",
-                "agentRevision",
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {}
+              "$ref": "#/definitions/CrewhelmScheduleReference"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -1456,41 +474,10 @@ Attributes: write, destructive, idempotent, closed-world.
               "const": "pause_schedule"
             },
             "schedule": {
-              "type": "object",
-              "properties": {
-                "agentId": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "agentRevision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "id": {
-                  "type": "string",
-                  "pattern": "^schedule_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "agentId",
-                "agentRevision",
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {}
+              "$ref": "#/definitions/CrewhelmScheduleReference"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -1507,250 +494,13 @@ Attributes: write, destructive, idempotent, closed-world.
               "const": "create_event_trigger"
             },
             "eventTrigger": {
-              "type": "object",
-              "properties": {
-                "briefs": {
-                  "maxItems": 8,
-                  "type": "array",
-                  "items": {
-                    "anyOf": [
-                      {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                          },
-                          "revision": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0,
-                            "maximum": 100
-                          }
-                        },
-                        "required": [
-                          "id",
-                          "revision"
-                        ],
-                        "additionalProperties": {}
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "currentRevision": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0,
-                            "maximum": 100
-                          },
-                          "id": {
-                            "type": "string",
-                            "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                          }
-                        },
-                        "required": [
-                          "currentRevision",
-                          "id"
-                        ],
-                        "additionalProperties": {}
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "brief": {
-                            "type": "object",
-                            "properties": {
-                              "currentRevision": {
-                                "type": "integer",
-                                "exclusiveMinimum": 0,
-                                "maximum": 100
-                              },
-                              "id": {
-                                "type": "string",
-                                "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                              }
-                            },
-                            "required": [
-                              "currentRevision",
-                              "id"
-                            ],
-                            "additionalProperties": {}
-                          }
-                        },
-                        "required": [
-                          "brief"
-                        ],
-                        "additionalProperties": {}
-                      }
-                    ],
-                    "description": "Copy-ready Brief reference, summary, or create result returned by Crewhelm."
-                  },
-                  "description": "Copy-ready immutable Briefs returned by Crewhelm."
-                },
-                "connectionId": {
-                  "type": "string",
-                  "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                  "description": "Connected account returned by sources."
-                },
-                "delivery": {
-                  "type": "string",
-                  "enum": [
-                    "provider_polling",
-                    "realtime"
-                  ],
-                  "description": "Delivery returned by sources."
-                },
-                "eventSlug": {
-                  "type": "string",
-                  "pattern": "^[A-Z0-9][A-Z0-9_]{0,255}$",
-                  "description": "Event slug returned by sources."
-                },
-                "eventVersion": {
-                  "type": "string",
-                  "pattern": "^[0-9]{8}_[0-9]{2}$",
-                  "description": "Event version returned by sources."
-                },
-                "filters": {
-                  "type": "object",
-                  "propertyNames": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 128
-                  },
-                  "additionalProperties": {
-                    "anyOf": [
-                      {
-                        "type": "boolean"
-                      },
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "string",
-                        "maxLength": 2048
-                      }
-                    ]
-                  },
-                  "description": "Event filters described by the source."
-                },
-                "integrationSlug": {
-                  "type": "string",
-                  "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$",
-                  "description": "Integration returned by sources."
-                },
-                "instruction": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 16384,
-                  "description": "The Agent's responsibility for each matching event."
-                },
-                "name": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 80,
-                  "description": "Short owner-facing name for this Event Trigger."
-                },
-                "outputContract": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "const": "markdown"
-                        }
-                      },
-                      "required": [
-                        "kind"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "const": "json"
-                        },
-                        "schema": {
-                          "type": "object",
-                          "properties": {
-                            "jsonSchema": {
-                              "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
-                              "type": "object",
-                              "propertyNames": {
-                                "type": "string"
-                              },
-                              "additionalProperties": {
-                                "$ref": "#/definitions/__schema0"
-                              }
-                            },
-                            "name": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 64,
-                              "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-                            },
-                            "version": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 32,
-                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-                            }
-                          },
-                          "required": [
-                            "name",
-                            "version"
-                          ],
-                          "additionalProperties": false
-                        }
-                      },
-                      "required": [
-                        "kind",
-                        "schema"
-                      ],
-                      "additionalProperties": false
-                    }
-                  ],
-                  "description": "Optional output contract for each event Run."
-                }
-              },
-              "required": [
-                "connectionId",
-                "delivery",
-                "eventSlug",
-                "eventVersion",
-                "filters",
-                "integrationSlug",
-                "instruction",
-                "name"
-              ],
-              "additionalProperties": false
+              "$ref": "#/definitions/S27"
             },
             "agent": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {},
-              "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
+              "$ref": "#/definitions/CrewhelmAgentReference"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -1768,261 +518,13 @@ Attributes: write, destructive, idempotent, closed-world.
               "const": "update_event_trigger"
             },
             "definition": {
-              "type": "object",
-              "properties": {
-                "briefs": {
-                  "maxItems": 8,
-                  "type": "array",
-                  "items": {
-                    "anyOf": [
-                      {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                          },
-                          "revision": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0,
-                            "maximum": 100
-                          }
-                        },
-                        "required": [
-                          "id",
-                          "revision"
-                        ],
-                        "additionalProperties": {}
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "currentRevision": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0,
-                            "maximum": 100
-                          },
-                          "id": {
-                            "type": "string",
-                            "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                          }
-                        },
-                        "required": [
-                          "currentRevision",
-                          "id"
-                        ],
-                        "additionalProperties": {}
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "brief": {
-                            "type": "object",
-                            "properties": {
-                              "currentRevision": {
-                                "type": "integer",
-                                "exclusiveMinimum": 0,
-                                "maximum": 100
-                              },
-                              "id": {
-                                "type": "string",
-                                "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                              }
-                            },
-                            "required": [
-                              "currentRevision",
-                              "id"
-                            ],
-                            "additionalProperties": {}
-                          }
-                        },
-                        "required": [
-                          "brief"
-                        ],
-                        "additionalProperties": {}
-                      }
-                    ],
-                    "description": "Copy-ready Brief reference, summary, or create result returned by Crewhelm."
-                  },
-                  "description": "Copy-ready immutable Briefs returned by Crewhelm."
-                },
-                "connectionId": {
-                  "type": "string",
-                  "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                  "description": "Connected account returned by sources."
-                },
-                "delivery": {
-                  "type": "string",
-                  "enum": [
-                    "provider_polling",
-                    "realtime"
-                  ],
-                  "description": "Delivery returned by sources."
-                },
-                "eventSlug": {
-                  "type": "string",
-                  "pattern": "^[A-Z0-9][A-Z0-9_]{0,255}$",
-                  "description": "Event slug returned by sources."
-                },
-                "eventVersion": {
-                  "type": "string",
-                  "pattern": "^[0-9]{8}_[0-9]{2}$",
-                  "description": "Event version returned by sources."
-                },
-                "filters": {
-                  "type": "object",
-                  "propertyNames": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 128
-                  },
-                  "additionalProperties": {
-                    "anyOf": [
-                      {
-                        "type": "boolean"
-                      },
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "string",
-                        "maxLength": 2048
-                      }
-                    ]
-                  },
-                  "description": "Event filters described by the source."
-                },
-                "integrationSlug": {
-                  "type": "string",
-                  "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$",
-                  "description": "Integration returned by sources."
-                },
-                "instruction": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 16384,
-                  "description": "The Agent's responsibility for each matching event."
-                },
-                "name": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 80,
-                  "description": "Short owner-facing name for this Event Trigger."
-                },
-                "outputContract": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "const": "markdown"
-                        }
-                      },
-                      "required": [
-                        "kind"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "const": "json"
-                        },
-                        "schema": {
-                          "type": "object",
-                          "properties": {
-                            "jsonSchema": {
-                              "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
-                              "type": "object",
-                              "propertyNames": {
-                                "type": "string"
-                              },
-                              "additionalProperties": {
-                                "$ref": "#/definitions/__schema0"
-                              }
-                            },
-                            "name": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 64,
-                              "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-                            },
-                            "version": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 32,
-                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-                            }
-                          },
-                          "required": [
-                            "name",
-                            "version"
-                          ],
-                          "additionalProperties": false
-                        }
-                      },
-                      "required": [
-                        "kind",
-                        "schema"
-                      ],
-                      "additionalProperties": false
-                    }
-                  ],
-                  "description": "Optional output contract for each event Run."
-                }
-              },
-              "required": [
-                "connectionId",
-                "delivery",
-                "eventSlug",
-                "eventVersion",
-                "filters",
-                "integrationSlug",
-                "instruction",
-                "name"
-              ],
-              "additionalProperties": false
+              "$ref": "#/definitions/S27"
             },
             "trigger": {
-              "type": "object",
-              "properties": {
-                "agentId": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "agentRevision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "id": {
-                  "type": "string",
-                  "pattern": "^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                  "description": "Opaque Event Trigger identity for exact lifecycle operations."
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "agentId",
-                "agentRevision",
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {}
+              "$ref": "#/definitions/CrewhelmEventTriggerReference"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -2037,149 +539,17 @@ Attributes: write, destructive, idempotent, closed-world.
           "properties": {
             "kind": {
               "type": "string",
-              "const": "pause_event_trigger"
+              "enum": [
+                "pause_event_trigger",
+                "resume_event_trigger",
+                "delete_event_trigger"
+              ]
             },
             "trigger": {
-              "type": "object",
-              "properties": {
-                "agentId": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "agentRevision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "id": {
-                  "type": "string",
-                  "pattern": "^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                  "description": "Opaque Event Trigger identity for exact lifecycle operations."
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "agentId",
-                "agentRevision",
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {}
+              "$ref": "#/definitions/CrewhelmEventTriggerReference"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
-            }
-          },
-          "required": [
-            "kind",
-            "trigger"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "const": "resume_event_trigger"
-            },
-            "trigger": {
-              "type": "object",
-              "properties": {
-                "agentId": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "agentRevision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "id": {
-                  "type": "string",
-                  "pattern": "^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                  "description": "Opaque Event Trigger identity for exact lifecycle operations."
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "agentId",
-                "agentRevision",
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {}
-            },
-            "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
-            }
-          },
-          "required": [
-            "kind",
-            "trigger"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "const": "delete_event_trigger"
-            },
-            "trigger": {
-              "type": "object",
-              "properties": {
-                "agentId": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "agentRevision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "id": {
-                  "type": "string",
-                  "pattern": "^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                  "description": "Opaque Event Trigger identity for exact lifecycle operations."
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "agentId",
-                "agentRevision",
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {}
-            },
-            "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -2196,36 +566,96 @@ Attributes: write, destructive, idempotent, closed-world.
   ],
   "additionalProperties": false,
   "definitions": {
-    "__schema0": {
-      "anyOf": [
-        {
-          "type": "string"
+    "S27": {
+      "description": "One bounded automation definition. Crewhelm validates its exact contract."
+    },
+    "CrewhelmAgentReference": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/S1"
         },
-        {
-          "type": "number"
-        },
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "null"
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/__schema0"
-          }
-        },
-        {
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {
-            "$ref": "#/definitions/__schema0"
-          }
+        "revision": {
+          "$ref": "#/definitions/S2"
         }
-      ]
+      },
+      "required": [
+        "id",
+        "revision"
+      ],
+      "additionalProperties": {},
+      "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
+    },
+    "S1": {
+      "type": "string",
+      "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S2": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "S8": {
+      "description": "Optional retry identity. Omit it on the ordinary happy path.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "CrewhelmScheduleReference": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "$ref": "#/definitions/S1"
+        },
+        "agentRevision": {
+          "$ref": "#/definitions/S2"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^schedule_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "revision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "agentId",
+        "agentRevision",
+        "id",
+        "revision"
+      ],
+      "additionalProperties": {}
+    },
+    "CrewhelmEventTriggerReference": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "$ref": "#/definitions/S1"
+        },
+        "agentRevision": {
+          "$ref": "#/definitions/S2"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "description": "Opaque Event Trigger identity for exact lifecycle operations."
+        },
+        "revision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "agentId",
+        "agentRevision",
+        "id",
+        "revision"
+      ],
+      "additionalProperties": {}
     }
   }
 }
@@ -2237,7 +667,7 @@ Attributes: write, destructive, idempotent, closed-world.
 
 **Change Crewhelm connections**
 
-Connect providers or remote MCP servers and grant their reviewed operations to an Agent. Credentials remain in provider or Crewhelm custody and never enter arguments or results.
+Connect providers or remote MCP servers and grant reviewed operations. Credentials never enter arguments or results.
 
 Attributes: write, destructive, idempotent, open-world.
 
@@ -2259,15 +689,10 @@ Attributes: write, destructive, idempotent, open-world.
               "const": "enable_provider"
             },
             "integrationSlug": {
-              "type": "string",
-              "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$"
+              "$ref": "#/definitions/S29"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -2288,11 +713,7 @@ Attributes: write, destructive, idempotent, open-world.
               "pattern": "^ac_[A-Za-z0-9_-]{1,124}$"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -2309,15 +730,10 @@ Attributes: write, destructive, idempotent, open-world.
               "const": "connect_provider"
             },
             "integrationSlug": {
-              "type": "string",
-              "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$"
+              "$ref": "#/definitions/S29"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -2334,43 +750,7 @@ Attributes: write, destructive, idempotent, open-world.
               "const": "inspect_provider_connection"
             },
             "connection": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "connectionId": {
-                      "type": "string",
-                      "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                    }
-                  },
-                  "required": [
-                    "connectionId"
-                  ],
-                  "additionalProperties": {}
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "connectionLink": {
-                      "type": "object",
-                      "properties": {
-                        "connectionId": {
-                          "type": "string",
-                          "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                        }
-                      },
-                      "required": [
-                        "connectionId"
-                      ],
-                      "additionalProperties": {}
-                    }
-                  },
-                  "required": [
-                    "connectionLink"
-                  ],
-                  "additionalProperties": {}
-                }
-              ]
+              "$ref": "#/definitions/S30"
             }
           },
           "required": [
@@ -2389,58 +769,15 @@ Attributes: write, destructive, idempotent, open-world.
             "expiresAt": {
               "anyOf": [
                 {
-                  "type": "string",
-                  "format": "date-time",
-                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                  "$ref": "#/definitions/S10"
                 },
                 {
                   "type": "null"
                 }
-              ],
-              "description": "Owner-selected authority expiry, or null to retain it until explicit revocation."
+              ]
             },
             "limits": {
-              "type": "object",
-              "properties": {
-                "maxCallsPerRun": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 100,
-                  "description": "Owner-selected per-run call ceiling; choose the smallest useful value."
-                },
-                "maxConcurrency": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 16,
-                  "description": "Owner-selected concurrent-call ceiling; use 1 unless parallel calls are required."
-                },
-                "maxCostMicrousdPerCall": {
-                  "type": "integer",
-                  "minimum": -9007199254740991,
-                  "maximum": 9007199254740991,
-                  "description": "Owner-selected per-call cost ceiling in millionths of one US dollar."
-                },
-                "maxDurationMs": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 300000,
-                  "description": "Owner-selected per-call wall-clock ceiling in milliseconds."
-                },
-                "maxOutputBytes": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 10485760,
-                  "description": "Owner-selected per-call output ceiling in bytes."
-                }
-              },
-              "required": [
-                "maxCallsPerRun",
-                "maxConcurrency",
-                "maxCostMicrousdPerCall",
-                "maxDurationMs",
-                "maxOutputBytes"
-              ],
-              "additionalProperties": false
+              "$ref": "#/definitions/S32"
             },
             "tools": {
               "maxItems": 20,
@@ -2477,70 +814,13 @@ Attributes: write, destructive, idempotent, open-world.
               "description": "Selected integration-search results with owner-chosen authorization, sorted by slug:version."
             },
             "agent": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {},
-              "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
+              "$ref": "#/definitions/CrewhelmAgentReference"
             },
             "connection": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "connectionId": {
-                      "type": "string",
-                      "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                    }
-                  },
-                  "required": [
-                    "connectionId"
-                  ],
-                  "additionalProperties": {}
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "connectionLink": {
-                      "type": "object",
-                      "properties": {
-                        "connectionId": {
-                          "type": "string",
-                          "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                        }
-                      },
-                      "required": [
-                        "connectionId"
-                      ],
-                      "additionalProperties": {}
-                    }
-                  },
-                  "required": [
-                    "connectionLink"
-                  ],
-                  "additionalProperties": {}
-                }
-              ]
+              "$ref": "#/definitions/S30"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -2590,11 +870,7 @@ Attributes: write, destructive, idempotent, open-world.
               }
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -2616,8 +892,7 @@ Attributes: write, destructive, idempotent, open-world.
               "type": "object",
               "properties": {
                 "id": {
-                  "type": "string",
-                  "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                  "$ref": "#/definitions/S31"
                 }
               },
               "required": [
@@ -2643,12 +918,10 @@ Attributes: write, destructive, idempotent, open-world.
               "type": "object",
               "properties": {
                 "id": {
-                  "type": "string",
-                  "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                  "$ref": "#/definitions/S31"
                 },
                 "snapshotDigest": {
-                  "type": "string",
-                  "pattern": "^[0-9a-f]{64}$"
+                  "$ref": "#/definitions/S33"
                 }
               },
               "required": [
@@ -2658,11 +931,7 @@ Attributes: write, destructive, idempotent, open-world.
               "additionalProperties": {}
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -2682,12 +951,10 @@ Attributes: write, destructive, idempotent, open-world.
               "type": "object",
               "properties": {
                 "id": {
-                  "type": "string",
-                  "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                  "$ref": "#/definitions/S31"
                 },
                 "snapshotDigest": {
-                  "type": "string",
-                  "pattern": "^[0-9a-f]{64}$"
+                  "$ref": "#/definitions/S33"
                 }
               },
               "required": [
@@ -2697,11 +964,7 @@ Attributes: write, destructive, idempotent, open-world.
               "additionalProperties": {}
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -2728,9 +991,7 @@ Attributes: write, destructive, idempotent, open-world.
             "expiresAt": {
               "anyOf": [
                 {
-                  "type": "string",
-                  "format": "date-time",
-                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                  "$ref": "#/definitions/S10"
                 },
                 {
                   "type": "null"
@@ -2738,78 +999,19 @@ Attributes: write, destructive, idempotent, open-world.
               ]
             },
             "limits": {
-              "type": "object",
-              "properties": {
-                "maxCallsPerRun": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 100,
-                  "description": "Owner-selected per-run call ceiling; choose the smallest useful value."
-                },
-                "maxConcurrency": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 16,
-                  "description": "Owner-selected concurrent-call ceiling; use 1 unless parallel calls are required."
-                },
-                "maxCostMicrousdPerCall": {
-                  "type": "integer",
-                  "minimum": -9007199254740991,
-                  "maximum": 9007199254740991,
-                  "description": "Owner-selected per-call cost ceiling in millionths of one US dollar."
-                },
-                "maxDurationMs": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 300000,
-                  "description": "Owner-selected per-call wall-clock ceiling in milliseconds."
-                },
-                "maxOutputBytes": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 10485760,
-                  "description": "Owner-selected per-call output ceiling in bytes."
-                }
-              },
-              "required": [
-                "maxCallsPerRun",
-                "maxConcurrency",
-                "maxCostMicrousdPerCall",
-                "maxDurationMs",
-                "maxOutputBytes"
-              ],
-              "additionalProperties": false
+              "$ref": "#/definitions/S32"
             },
             "agent": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {},
-              "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
+              "$ref": "#/definitions/CrewhelmAgentReference"
             },
             "connection": {
               "type": "object",
               "properties": {
                 "id": {
-                  "type": "string",
-                  "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                  "$ref": "#/definitions/S31"
                 },
                 "snapshotDigest": {
-                  "type": "string",
-                  "pattern": "^[0-9a-f]{64}$"
+                  "$ref": "#/definitions/S33"
                 }
               },
               "required": [
@@ -2819,11 +1021,7 @@ Attributes: write, destructive, idempotent, open-world.
               "additionalProperties": {}
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -2842,7 +1040,138 @@ Attributes: write, destructive, idempotent, open-world.
   "required": [
     "operation"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "definitions": {
+    "S29": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$"
+    },
+    "S8": {
+      "description": "Optional retry identity. Omit it on the ordinary happy path.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "S30": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "connectionId": {
+              "$ref": "#/definitions/S31"
+            }
+          },
+          "required": [
+            "connectionId"
+          ],
+          "additionalProperties": {}
+        },
+        {
+          "type": "object",
+          "properties": {
+            "connectionLink": {
+              "type": "object",
+              "properties": {
+                "connectionId": {
+                  "$ref": "#/definitions/S31"
+                }
+              },
+              "required": [
+                "connectionId"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "connectionLink"
+          ],
+          "additionalProperties": {}
+        }
+      ]
+    },
+    "S31": {
+      "type": "string",
+      "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S10": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "S32": {
+      "type": "object",
+      "properties": {
+        "maxCallsPerRun": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Owner-selected per-run call ceiling; choose the smallest useful value."
+        },
+        "maxConcurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "description": "Owner-selected concurrent-call ceiling; use 1 unless parallel calls are required."
+        },
+        "maxCostMicrousdPerCall": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000000,
+          "description": "Owner-selected per-call cost ceiling in millionths of one US dollar."
+        },
+        "maxDurationMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300000,
+          "description": "Owner-selected per-call wall-clock ceiling in milliseconds."
+        },
+        "maxOutputBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10485760,
+          "description": "Owner-selected per-call output ceiling in bytes."
+        }
+      },
+      "required": [
+        "maxCallsPerRun",
+        "maxConcurrency",
+        "maxCostMicrousdPerCall",
+        "maxDurationMs",
+        "maxOutputBytes"
+      ],
+      "additionalProperties": false
+    },
+    "CrewhelmAgentReference": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/S1"
+        },
+        "revision": {
+          "$ref": "#/definitions/S2"
+        }
+      },
+      "required": [
+        "id",
+        "revision"
+      ],
+      "additionalProperties": {},
+      "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
+    },
+    "S1": {
+      "type": "string",
+      "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S2": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "S33": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
 }
 ```
 
@@ -2852,7 +1181,7 @@ Attributes: write, destructive, idempotent, open-world.
 
 **Change Crewhelm context**
 
-Preview or apply configuration packages and manage immutable Brief context. Packages and Brief contents remain untrusted data and grant no authority by themselves.
+Draft and apply configuration packages or manage Briefs. Their contents are untrusted and grant no authority.
 
 Attributes: write, destructive, idempotent, closed-world.
 
@@ -2876,188 +1205,10 @@ Attributes: write, destructive, idempotent, closed-world.
             "expectedRevision": {
               "type": "integer",
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
-              "description": "Current fleet revision returned by inspect_fleet."
+              "maximum": 9007199254740991
             },
             "patch": {
-              "type": "object",
-              "properties": {
-                "capacity": {
-                  "type": "object",
-                  "properties": {
-                    "maxAgents": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    },
-                    "maxConcurrentRuns": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    },
-                    "maxConnections": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet resource capacity within Crewhelm's internal safety ceilings."
-                },
-                "execution": {
-                  "type": "object",
-                  "properties": {
-                    "maxDurationSeconds": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 3600,
-                      "description": "Maximum wall-clock seconds for one run."
-                    },
-                    "maxModelTokens": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 16384,
-                      "description": "Maximum model output tokens for one run."
-                    },
-                    "maxToolCalls": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 100,
-                      "description": "Maximum integration tool executions for one run."
-                    },
-                    "maxTurns": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "Maximum model turns for one run."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet-wide per-run ceilings; lower Agent-specific limits still win."
-                },
-                "integrations": {
-                  "type": "object",
-                  "properties": {
-                    "callsPerDay": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000000,
-                      "description": "New maximum integration executions across the fleet in a rolling day."
-                    },
-                    "callsPerThirtyDays": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000000,
-                      "description": "New maximum integration executions across the fleet in a rolling thirty-day window."
-                    },
-                    "duplicateToolCallLimit": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum executions of identical tool arguments within one run; bounds accidental loops."
-                    },
-                    "maxCallsPerRun": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum integration executions across all tools in one run."
-                    },
-                    "maxCallsPerToolPerRun": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum executions of one granted integration tool in one run."
-                    },
-                    "maxConcurrencyPerGrant": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 16,
-                      "description": "New maximum simultaneous executions using one tool grant."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Integration usage and loop controls."
-                },
-                "models": {
-                  "type": "object",
-                  "properties": {
-                    "allowed": {
-                      "minItems": 1,
-                      "maxItems": 12,
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "enum": [
-                          "@cf/ibm-granite/granite-4.0-h-micro",
-                          "@cf/meta/llama-4-scout-17b-16e-instruct",
-                          "@cf/moonshotai/kimi-k2.6",
-                          "@cf/moonshotai/kimi-k2.7-code",
-                          "@cf/openai/gpt-oss-20b",
-                          "@cf/openai/gpt-oss-120b",
-                          "@cf/qwen/qwen3-30b-a3b-fp8",
-                          "@cf/zai-org/glm-4.7-flash",
-                          "@cf/zai-org/glm-5.2",
-                          "openai/gpt-5.6-luna",
-                          "openai/gpt-5.6-sol",
-                          "openai/gpt-5.6-terra"
-                        ]
-                      },
-                      "description": "Allowed supported model IDs, unique and sorted in ascending order."
-                    },
-                    "default": {
-                      "type": "string",
-                      "enum": [
-                        "@cf/ibm-granite/granite-4.0-h-micro",
-                        "@cf/meta/llama-4-scout-17b-16e-instruct",
-                        "@cf/moonshotai/kimi-k2.6",
-                        "@cf/moonshotai/kimi-k2.7-code",
-                        "@cf/openai/gpt-oss-20b",
-                        "@cf/openai/gpt-oss-120b",
-                        "@cf/qwen/qwen3-30b-a3b-fp8",
-                        "@cf/zai-org/glm-4.7-flash",
-                        "@cf/zai-org/glm-5.2",
-                        "openai/gpt-5.6-luna",
-                        "openai/gpt-5.6-sol",
-                        "openai/gpt-5.6-terra"
-                      ],
-                      "description": "New inference model used when Agent creation omits capability configuration."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet model selection defaults and allowlist."
-                },
-                "retention": {
-                  "type": "object",
-                  "properties": {
-                    "inboxSeconds": {
-                      "type": "integer",
-                      "minimum": 3600,
-                      "maximum": 31536000
-                    },
-                    "runSeconds": {
-                      "type": "integer",
-                      "minimum": 3600,
-                      "maximum": 31536000
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Run-detail and operational-inbox retention in seconds."
-                },
-                "schedules": {
-                  "type": "object",
-                  "properties": {
-                    "minimumIntervalSeconds": {
-                      "type": "integer",
-                      "minimum": 60,
-                      "maximum": 604800,
-                      "description": "New minimum interval in seconds for recurring Agent schedules."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Recurring schedule controls."
-                }
-              },
-              "additionalProperties": false
+              "description": "One bounded fleet patch. Crewhelm validates its exact contract."
             }
           },
           "required": [
@@ -3072,326 +1223,34 @@ Attributes: write, destructive, idempotent, closed-world.
           "properties": {
             "kind": {
               "type": "string",
-              "const": "publish_skill"
-            },
-            "expectedRevision": {
-              "description": "Current Skill revision returned by inspect_skill.",
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "patch": {
-              "description": "Required only for a fleet preview; omit for every other target.",
-              "type": "object",
-              "properties": {
-                "capacity": {
-                  "type": "object",
-                  "properties": {
-                    "maxAgents": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    },
-                    "maxConcurrentRuns": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    },
-                    "maxConnections": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet resource capacity within Crewhelm's internal safety ceilings."
-                },
-                "execution": {
-                  "type": "object",
-                  "properties": {
-                    "maxDurationSeconds": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 3600,
-                      "description": "Maximum wall-clock seconds for one run."
-                    },
-                    "maxModelTokens": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 16384,
-                      "description": "Maximum model output tokens for one run."
-                    },
-                    "maxToolCalls": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 100,
-                      "description": "Maximum integration tool executions for one run."
-                    },
-                    "maxTurns": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "Maximum model turns for one run."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet-wide per-run ceilings; lower Agent-specific limits still win."
-                },
-                "integrations": {
-                  "type": "object",
-                  "properties": {
-                    "callsPerDay": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000000,
-                      "description": "New maximum integration executions across the fleet in a rolling day."
-                    },
-                    "callsPerThirtyDays": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000000,
-                      "description": "New maximum integration executions across the fleet in a rolling thirty-day window."
-                    },
-                    "duplicateToolCallLimit": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum executions of identical tool arguments within one run; bounds accidental loops."
-                    },
-                    "maxCallsPerRun": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum integration executions across all tools in one run."
-                    },
-                    "maxCallsPerToolPerRun": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum executions of one granted integration tool in one run."
-                    },
-                    "maxConcurrencyPerGrant": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 16,
-                      "description": "New maximum simultaneous executions using one tool grant."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Integration usage and loop controls."
-                },
-                "models": {
-                  "type": "object",
-                  "properties": {
-                    "allowed": {
-                      "minItems": 1,
-                      "maxItems": 12,
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "enum": [
-                          "@cf/ibm-granite/granite-4.0-h-micro",
-                          "@cf/meta/llama-4-scout-17b-16e-instruct",
-                          "@cf/moonshotai/kimi-k2.6",
-                          "@cf/moonshotai/kimi-k2.7-code",
-                          "@cf/openai/gpt-oss-20b",
-                          "@cf/openai/gpt-oss-120b",
-                          "@cf/qwen/qwen3-30b-a3b-fp8",
-                          "@cf/zai-org/glm-4.7-flash",
-                          "@cf/zai-org/glm-5.2",
-                          "openai/gpt-5.6-luna",
-                          "openai/gpt-5.6-sol",
-                          "openai/gpt-5.6-terra"
-                        ]
-                      },
-                      "description": "Allowed supported model IDs, unique and sorted in ascending order."
-                    },
-                    "default": {
-                      "type": "string",
-                      "enum": [
-                        "@cf/ibm-granite/granite-4.0-h-micro",
-                        "@cf/meta/llama-4-scout-17b-16e-instruct",
-                        "@cf/moonshotai/kimi-k2.6",
-                        "@cf/moonshotai/kimi-k2.7-code",
-                        "@cf/openai/gpt-oss-20b",
-                        "@cf/openai/gpt-oss-120b",
-                        "@cf/qwen/qwen3-30b-a3b-fp8",
-                        "@cf/zai-org/glm-4.7-flash",
-                        "@cf/zai-org/glm-5.2",
-                        "openai/gpt-5.6-luna",
-                        "openai/gpt-5.6-sol",
-                        "openai/gpt-5.6-terra"
-                      ],
-                      "description": "New inference model used when Agent creation omits capability configuration."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet model selection defaults and allowlist."
-                },
-                "retention": {
-                  "type": "object",
-                  "properties": {
-                    "inboxSeconds": {
-                      "type": "integer",
-                      "minimum": 3600,
-                      "maximum": 31536000
-                    },
-                    "runSeconds": {
-                      "type": "integer",
-                      "minimum": 3600,
-                      "maximum": 31536000
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Run-detail and operational-inbox retention in seconds."
-                },
-                "schedules": {
-                  "type": "object",
-                  "properties": {
-                    "minimumIntervalSeconds": {
-                      "type": "integer",
-                      "minimum": 60,
-                      "maximum": 604800,
-                      "description": "New minimum interval in seconds for recurring Agent schedules."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Recurring schedule controls."
-                }
-              },
-              "additionalProperties": false
+              "const": "prepare_skill"
             },
             "expectedVersion": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S36"
+                }
+              ]
             },
             "id": {
-              "type": "string",
-              "pattern": "^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S34"
+                }
+              ]
             },
             "package": {
-              "type": "object",
-              "properties": {
-                "description": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 320
-                },
-                "files": {
-                  "minItems": 1,
-                  "maxItems": 64,
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "content": {
-                        "type": "string",
-                        "maxLength": 65536
-                      },
-                      "path": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 240,
-                        "description": "SKILL.md or a relative path under assets/, references/, or scripts/."
-                      }
-                    },
-                    "required": [
-                      "content",
-                      "path"
-                    ],
-                    "additionalProperties": false,
-                    "description": "One UTF-8 Skill file up to 64 KiB. Binary assets are not accepted."
-                  }
-                },
-                "name": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 80,
-                  "pattern": "^[a-z][a-z0-9-]*$"
-                },
-                "provenance": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "const": "authored"
-                        }
-                      },
-                      "required": [
-                        "kind"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "commit": {
-                          "type": "string",
-                          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
-                        },
-                        "kind": {
-                          "type": "string",
-                          "const": "repository"
-                        },
-                        "source": {
-                          "type": "string",
-                          "maxLength": 2048,
-                          "format": "uri",
-                          "description": "HTTPS attribution URL without credentials, query, or fragment."
-                        }
-                      },
-                      "required": [
-                        "commit",
-                        "kind",
-                        "source"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "const": "web"
-                        },
-                        "source": {
-                          "type": "string",
-                          "maxLength": 2048,
-                          "format": "uri",
-                          "description": "HTTPS attribution URL without credentials, query, or fragment."
-                        }
-                      },
-                      "required": [
-                        "kind",
-                        "source"
-                      ],
-                      "additionalProperties": false
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "description",
-                "files",
-                "name",
-                "provenance"
-              ],
-              "additionalProperties": false,
-              "description": "A UTF-8 package up to 128 KiB with one required SKILL.md file."
+              "$ref": "#/definitions/CrewhelmConfigurationPackage"
             },
             "repairVersion": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
-              "description": "Exact stored version to restore without changing Skill lifecycle."
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S36"
+                }
+              ]
             },
-            "confirm": {
-              "default": false,
-              "description": "Leave false to preview. Repeat the unchanged operation with true to apply it.",
-              "type": "boolean"
+            "requestKey": {
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -3407,206 +1266,14 @@ Attributes: write, destructive, idempotent, closed-world.
               "type": "string",
               "const": "retire_skill"
             },
-            "expectedRevision": {
-              "description": "Current Skill revision returned by inspect_skill.",
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "patch": {
-              "description": "Required only for a fleet preview; omit for every other target.",
-              "type": "object",
-              "properties": {
-                "capacity": {
-                  "type": "object",
-                  "properties": {
-                    "maxAgents": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    },
-                    "maxConcurrentRuns": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    },
-                    "maxConnections": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet resource capacity within Crewhelm's internal safety ceilings."
-                },
-                "execution": {
-                  "type": "object",
-                  "properties": {
-                    "maxDurationSeconds": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 3600,
-                      "description": "Maximum wall-clock seconds for one run."
-                    },
-                    "maxModelTokens": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 16384,
-                      "description": "Maximum model output tokens for one run."
-                    },
-                    "maxToolCalls": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 100,
-                      "description": "Maximum integration tool executions for one run."
-                    },
-                    "maxTurns": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "Maximum model turns for one run."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet-wide per-run ceilings; lower Agent-specific limits still win."
-                },
-                "integrations": {
-                  "type": "object",
-                  "properties": {
-                    "callsPerDay": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000000,
-                      "description": "New maximum integration executions across the fleet in a rolling day."
-                    },
-                    "callsPerThirtyDays": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000000,
-                      "description": "New maximum integration executions across the fleet in a rolling thirty-day window."
-                    },
-                    "duplicateToolCallLimit": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum executions of identical tool arguments within one run; bounds accidental loops."
-                    },
-                    "maxCallsPerRun": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum integration executions across all tools in one run."
-                    },
-                    "maxCallsPerToolPerRun": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum executions of one granted integration tool in one run."
-                    },
-                    "maxConcurrencyPerGrant": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 16,
-                      "description": "New maximum simultaneous executions using one tool grant."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Integration usage and loop controls."
-                },
-                "models": {
-                  "type": "object",
-                  "properties": {
-                    "allowed": {
-                      "minItems": 1,
-                      "maxItems": 12,
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "enum": [
-                          "@cf/ibm-granite/granite-4.0-h-micro",
-                          "@cf/meta/llama-4-scout-17b-16e-instruct",
-                          "@cf/moonshotai/kimi-k2.6",
-                          "@cf/moonshotai/kimi-k2.7-code",
-                          "@cf/openai/gpt-oss-20b",
-                          "@cf/openai/gpt-oss-120b",
-                          "@cf/qwen/qwen3-30b-a3b-fp8",
-                          "@cf/zai-org/glm-4.7-flash",
-                          "@cf/zai-org/glm-5.2",
-                          "openai/gpt-5.6-luna",
-                          "openai/gpt-5.6-sol",
-                          "openai/gpt-5.6-terra"
-                        ]
-                      },
-                      "description": "Allowed supported model IDs, unique and sorted in ascending order."
-                    },
-                    "default": {
-                      "type": "string",
-                      "enum": [
-                        "@cf/ibm-granite/granite-4.0-h-micro",
-                        "@cf/meta/llama-4-scout-17b-16e-instruct",
-                        "@cf/moonshotai/kimi-k2.6",
-                        "@cf/moonshotai/kimi-k2.7-code",
-                        "@cf/openai/gpt-oss-20b",
-                        "@cf/openai/gpt-oss-120b",
-                        "@cf/qwen/qwen3-30b-a3b-fp8",
-                        "@cf/zai-org/glm-4.7-flash",
-                        "@cf/zai-org/glm-5.2",
-                        "openai/gpt-5.6-luna",
-                        "openai/gpt-5.6-sol",
-                        "openai/gpt-5.6-terra"
-                      ],
-                      "description": "New inference model used when Agent creation omits capability configuration."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet model selection defaults and allowlist."
-                },
-                "retention": {
-                  "type": "object",
-                  "properties": {
-                    "inboxSeconds": {
-                      "type": "integer",
-                      "minimum": 3600,
-                      "maximum": 31536000
-                    },
-                    "runSeconds": {
-                      "type": "integer",
-                      "minimum": 3600,
-                      "maximum": 31536000
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Run-detail and operational-inbox retention in seconds."
-                },
-                "schedules": {
-                  "type": "object",
-                  "properties": {
-                    "minimumIntervalSeconds": {
-                      "type": "integer",
-                      "minimum": 60,
-                      "maximum": 604800,
-                      "description": "New minimum interval in seconds for recurring Agent schedules."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Recurring schedule controls."
-                }
-              },
-              "additionalProperties": false
-            },
             "expectedVersion": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
+              "$ref": "#/definitions/S36"
             },
             "id": {
-              "type": "string",
-              "pattern": "^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S34"
             },
             "confirm": {
-              "default": false,
-              "description": "Leave false to preview. Repeat the unchanged operation with true to apply it.",
-              "type": "boolean"
+              "$ref": "#/definitions/S37"
             }
           },
           "required": [
@@ -3621,694 +1288,27 @@ Attributes: write, destructive, idempotent, closed-world.
           "properties": {
             "kind": {
               "type": "string",
-              "const": "publish_blueprint"
-            },
-            "expectedRevision": {
-              "description": "Current blueprint revision returned by inspect_blueprint.",
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "patch": {
-              "description": "Required only for a fleet preview; omit for every other target.",
-              "type": "object",
-              "properties": {
-                "capacity": {
-                  "type": "object",
-                  "properties": {
-                    "maxAgents": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    },
-                    "maxConcurrentRuns": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    },
-                    "maxConnections": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet resource capacity within Crewhelm's internal safety ceilings."
-                },
-                "execution": {
-                  "type": "object",
-                  "properties": {
-                    "maxDurationSeconds": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 3600,
-                      "description": "Maximum wall-clock seconds for one run."
-                    },
-                    "maxModelTokens": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 16384,
-                      "description": "Maximum model output tokens for one run."
-                    },
-                    "maxToolCalls": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 100,
-                      "description": "Maximum integration tool executions for one run."
-                    },
-                    "maxTurns": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "Maximum model turns for one run."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet-wide per-run ceilings; lower Agent-specific limits still win."
-                },
-                "integrations": {
-                  "type": "object",
-                  "properties": {
-                    "callsPerDay": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000000,
-                      "description": "New maximum integration executions across the fleet in a rolling day."
-                    },
-                    "callsPerThirtyDays": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000000,
-                      "description": "New maximum integration executions across the fleet in a rolling thirty-day window."
-                    },
-                    "duplicateToolCallLimit": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum executions of identical tool arguments within one run; bounds accidental loops."
-                    },
-                    "maxCallsPerRun": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum integration executions across all tools in one run."
-                    },
-                    "maxCallsPerToolPerRun": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum executions of one granted integration tool in one run."
-                    },
-                    "maxConcurrencyPerGrant": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 16,
-                      "description": "New maximum simultaneous executions using one tool grant."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Integration usage and loop controls."
-                },
-                "models": {
-                  "type": "object",
-                  "properties": {
-                    "allowed": {
-                      "minItems": 1,
-                      "maxItems": 12,
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "enum": [
-                          "@cf/ibm-granite/granite-4.0-h-micro",
-                          "@cf/meta/llama-4-scout-17b-16e-instruct",
-                          "@cf/moonshotai/kimi-k2.6",
-                          "@cf/moonshotai/kimi-k2.7-code",
-                          "@cf/openai/gpt-oss-20b",
-                          "@cf/openai/gpt-oss-120b",
-                          "@cf/qwen/qwen3-30b-a3b-fp8",
-                          "@cf/zai-org/glm-4.7-flash",
-                          "@cf/zai-org/glm-5.2",
-                          "openai/gpt-5.6-luna",
-                          "openai/gpt-5.6-sol",
-                          "openai/gpt-5.6-terra"
-                        ]
-                      },
-                      "description": "Allowed supported model IDs, unique and sorted in ascending order."
-                    },
-                    "default": {
-                      "type": "string",
-                      "enum": [
-                        "@cf/ibm-granite/granite-4.0-h-micro",
-                        "@cf/meta/llama-4-scout-17b-16e-instruct",
-                        "@cf/moonshotai/kimi-k2.6",
-                        "@cf/moonshotai/kimi-k2.7-code",
-                        "@cf/openai/gpt-oss-20b",
-                        "@cf/openai/gpt-oss-120b",
-                        "@cf/qwen/qwen3-30b-a3b-fp8",
-                        "@cf/zai-org/glm-4.7-flash",
-                        "@cf/zai-org/glm-5.2",
-                        "openai/gpt-5.6-luna",
-                        "openai/gpt-5.6-sol",
-                        "openai/gpt-5.6-terra"
-                      ],
-                      "description": "New inference model used when Agent creation omits capability configuration."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet model selection defaults and allowlist."
-                },
-                "retention": {
-                  "type": "object",
-                  "properties": {
-                    "inboxSeconds": {
-                      "type": "integer",
-                      "minimum": 3600,
-                      "maximum": 31536000
-                    },
-                    "runSeconds": {
-                      "type": "integer",
-                      "minimum": 3600,
-                      "maximum": 31536000
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Run-detail and operational-inbox retention in seconds."
-                },
-                "schedules": {
-                  "type": "object",
-                  "properties": {
-                    "minimumIntervalSeconds": {
-                      "type": "integer",
-                      "minimum": 60,
-                      "maximum": 604800,
-                      "description": "New minimum interval in seconds for recurring Agent schedules."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Recurring schedule controls."
-                }
-              },
-              "additionalProperties": false
+              "const": "prepare_blueprint"
             },
             "expectedVersion": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S38"
+                }
+              ]
             },
             "id": {
-              "type": "string",
-              "pattern": "^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S35"
+                }
+              ]
             },
             "package": {
-              "type": "object",
-              "properties": {
-                "agent": {
-                  "type": "object",
-                  "properties": {
-                    "capabilities": {
-                      "minItems": 1,
-                      "maxItems": 16,
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "configuration": {
-                            "type": "object",
-                            "propertyNames": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 80
-                            },
-                            "additionalProperties": {
-                              "anyOf": [
-                                {
-                                  "anyOf": [
-                                    {
-                                      "type": "string",
-                                      "maxLength": 2048
-                                    },
-                                    {
-                                      "type": "number"
-                                    },
-                                    {
-                                      "type": "boolean"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                {
-                                  "maxItems": 64,
-                                  "type": "array",
-                                  "items": {
-                                    "anyOf": [
-                                      {
-                                        "anyOf": [
-                                          {
-                                            "type": "string",
-                                            "maxLength": 2048
-                                          },
-                                          {
-                                            "type": "number"
-                                          },
-                                          {
-                                            "type": "boolean"
-                                          },
-                                          {
-                                            "type": "null"
-                                          }
-                                        ]
-                                      },
-                                      {
-                                        "maxItems": 64,
-                                        "type": "array",
-                                        "items": {
-                                          "anyOf": [
-                                            {
-                                              "type": "string",
-                                              "maxLength": 2048
-                                            },
-                                            {
-                                              "type": "number"
-                                            },
-                                            {
-                                              "type": "boolean"
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        }
-                                      },
-                                      {
-                                        "type": "object",
-                                        "propertyNames": {
-                                          "type": "string",
-                                          "minLength": 1,
-                                          "maxLength": 80
-                                        },
-                                        "additionalProperties": {
-                                          "anyOf": [
-                                            {
-                                              "type": "string",
-                                              "maxLength": 2048
-                                            },
-                                            {
-                                              "type": "number"
-                                            },
-                                            {
-                                              "type": "boolean"
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        }
-                                      }
-                                    ]
-                                  }
-                                },
-                                {
-                                  "type": "object",
-                                  "propertyNames": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "maxLength": 80
-                                  },
-                                  "additionalProperties": {
-                                    "anyOf": [
-                                      {
-                                        "anyOf": [
-                                          {
-                                            "type": "string",
-                                            "maxLength": 2048
-                                          },
-                                          {
-                                            "type": "number"
-                                          },
-                                          {
-                                            "type": "boolean"
-                                          },
-                                          {
-                                            "type": "null"
-                                          }
-                                        ]
-                                      },
-                                      {
-                                        "maxItems": 64,
-                                        "type": "array",
-                                        "items": {
-                                          "anyOf": [
-                                            {
-                                              "type": "string",
-                                              "maxLength": 2048
-                                            },
-                                            {
-                                              "type": "number"
-                                            },
-                                            {
-                                              "type": "boolean"
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        }
-                                      },
-                                      {
-                                        "type": "object",
-                                        "propertyNames": {
-                                          "type": "string",
-                                          "minLength": 1,
-                                          "maxLength": 80
-                                        },
-                                        "additionalProperties": {
-                                          "anyOf": [
-                                            {
-                                              "type": "string",
-                                              "maxLength": 2048
-                                            },
-                                            {
-                                              "type": "number"
-                                            },
-                                            {
-                                              "type": "boolean"
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        }
-                                      }
-                                    ]
-                                  }
-                                }
-                              ]
-                            }
-                          },
-                          "id": {
-                            "type": "string",
-                            "minLength": 3,
-                            "maxLength": 80,
-                            "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
-                          },
-                          "schemaVersion": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 1000
-                          }
-                        },
-                        "required": [
-                          "configuration",
-                          "id",
-                          "schemaVersion"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "executionLimits": {
-                      "type": "object",
-                      "properties": {
-                        "maxDurationSeconds": {
-                          "type": "integer",
-                          "minimum": 1,
-                          "maximum": 3600
-                        },
-                        "maxModelTokens": {
-                          "type": "integer",
-                          "minimum": 1,
-                          "maximum": 1000000
-                        },
-                        "maxToolCalls": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 100
-                        },
-                        "maxTurns": {
-                          "type": "integer",
-                          "minimum": 1,
-                          "maximum": 100
-                        }
-                      },
-                      "required": [
-                        "maxDurationSeconds",
-                        "maxModelTokens",
-                        "maxToolCalls",
-                        "maxTurns"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "instructions": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 8192
-                    },
-                    "name": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 80
-                    }
-                  },
-                  "required": [
-                    "capabilities",
-                    "instructions",
-                    "name"
-                  ],
-                  "additionalProperties": false
-                },
-                "description": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 320
-                },
-                "name": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 80,
-                  "pattern": "^[a-z][a-z0-9-]*$"
-                },
-                "parameters": {
-                  "maxItems": 16,
-                  "type": "array",
-                  "items": {
-                    "oneOf": [
-                      {
-                        "type": "object",
-                        "properties": {
-                          "default": {
-                            "type": "string",
-                            "maxLength": 1024
-                          },
-                          "description": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 160
-                          },
-                          "name": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 40,
-                            "pattern": "^[a-z][a-z0-9-]*$"
-                          },
-                          "type": {
-                            "type": "string",
-                            "const": "string"
-                          }
-                        },
-                        "required": [
-                          "description",
-                          "name",
-                          "type"
-                        ],
-                        "additionalProperties": false
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "default": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          "description": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 160
-                          },
-                          "maximum": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          "minimum": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          "name": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 40,
-                            "pattern": "^[a-z][a-z0-9-]*$"
-                          },
-                          "type": {
-                            "type": "string",
-                            "const": "integer"
-                          }
-                        },
-                        "required": [
-                          "description",
-                          "name",
-                          "type"
-                        ],
-                        "additionalProperties": false
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "default": {
-                            "type": "boolean"
-                          },
-                          "description": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 160
-                          },
-                          "name": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 40,
-                            "pattern": "^[a-z][a-z0-9-]*$"
-                          },
-                          "type": {
-                            "type": "string",
-                            "const": "boolean"
-                          }
-                        },
-                        "required": [
-                          "description",
-                          "name",
-                          "type"
-                        ],
-                        "additionalProperties": false
-                      }
-                    ]
-                  }
-                },
-                "provenance": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "const": "authored"
-                        }
-                      },
-                      "required": [
-                        "kind"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "commit": {
-                          "type": "string",
-                          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
-                        },
-                        "kind": {
-                          "type": "string",
-                          "const": "repository"
-                        },
-                        "source": {
-                          "type": "string",
-                          "maxLength": 2048,
-                          "format": "uri",
-                          "description": "HTTPS attribution URL without credentials, query, or fragment."
-                        }
-                      },
-                      "required": [
-                        "commit",
-                        "kind",
-                        "source"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "const": "web"
-                        },
-                        "source": {
-                          "type": "string",
-                          "maxLength": 2048,
-                          "format": "uri",
-                          "description": "HTTPS attribution URL without credentials, query, or fragment."
-                        }
-                      },
-                      "required": [
-                        "kind",
-                        "source"
-                      ],
-                      "additionalProperties": false
-                    }
-                  ]
-                },
-                "publisher": {
-                  "type": "object",
-                  "properties": {
-                    "name": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 80
-                    },
-                    "url": {
-                      "type": "string",
-                      "maxLength": 2048,
-                      "format": "uri"
-                    }
-                  },
-                  "required": [
-                    "name"
-                  ],
-                  "additionalProperties": false
-                },
-                "schemaVersion": {
-                  "type": "number",
-                  "const": 1
-                },
-                "tags": {
-                  "maxItems": 12,
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 40,
-                    "pattern": "^[a-z][a-z0-9-]*$"
-                  }
-                }
-              },
-              "required": [
-                "agent",
-                "description",
-                "name",
-                "parameters",
-                "provenance",
-                "publisher",
-                "schemaVersion",
-                "tags"
-              ],
-              "additionalProperties": false,
-              "description": "A bounded, untrusted Agent blueprint package. Parameters use {{name}} tokens."
+              "$ref": "#/definitions/CrewhelmConfigurationPackage"
             },
-            "confirm": {
-              "default": false,
-              "description": "Leave false to preview. Repeat the unchanged operation with true to apply it.",
-              "type": "boolean"
+            "requestKey": {
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -4324,206 +1324,14 @@ Attributes: write, destructive, idempotent, closed-world.
               "type": "string",
               "const": "retire_blueprint"
             },
-            "expectedRevision": {
-              "description": "Current blueprint revision returned by inspect_blueprint.",
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "patch": {
-              "description": "Required only for a fleet preview; omit for every other target.",
-              "type": "object",
-              "properties": {
-                "capacity": {
-                  "type": "object",
-                  "properties": {
-                    "maxAgents": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    },
-                    "maxConcurrentRuns": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    },
-                    "maxConnections": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet resource capacity within Crewhelm's internal safety ceilings."
-                },
-                "execution": {
-                  "type": "object",
-                  "properties": {
-                    "maxDurationSeconds": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 3600,
-                      "description": "Maximum wall-clock seconds for one run."
-                    },
-                    "maxModelTokens": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 16384,
-                      "description": "Maximum model output tokens for one run."
-                    },
-                    "maxToolCalls": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 100,
-                      "description": "Maximum integration tool executions for one run."
-                    },
-                    "maxTurns": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "Maximum model turns for one run."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet-wide per-run ceilings; lower Agent-specific limits still win."
-                },
-                "integrations": {
-                  "type": "object",
-                  "properties": {
-                    "callsPerDay": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000000,
-                      "description": "New maximum integration executions across the fleet in a rolling day."
-                    },
-                    "callsPerThirtyDays": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000000,
-                      "description": "New maximum integration executions across the fleet in a rolling thirty-day window."
-                    },
-                    "duplicateToolCallLimit": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum executions of identical tool arguments within one run; bounds accidental loops."
-                    },
-                    "maxCallsPerRun": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum integration executions across all tools in one run."
-                    },
-                    "maxCallsPerToolPerRun": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum executions of one granted integration tool in one run."
-                    },
-                    "maxConcurrencyPerGrant": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 16,
-                      "description": "New maximum simultaneous executions using one tool grant."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Integration usage and loop controls."
-                },
-                "models": {
-                  "type": "object",
-                  "properties": {
-                    "allowed": {
-                      "minItems": 1,
-                      "maxItems": 12,
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "enum": [
-                          "@cf/ibm-granite/granite-4.0-h-micro",
-                          "@cf/meta/llama-4-scout-17b-16e-instruct",
-                          "@cf/moonshotai/kimi-k2.6",
-                          "@cf/moonshotai/kimi-k2.7-code",
-                          "@cf/openai/gpt-oss-20b",
-                          "@cf/openai/gpt-oss-120b",
-                          "@cf/qwen/qwen3-30b-a3b-fp8",
-                          "@cf/zai-org/glm-4.7-flash",
-                          "@cf/zai-org/glm-5.2",
-                          "openai/gpt-5.6-luna",
-                          "openai/gpt-5.6-sol",
-                          "openai/gpt-5.6-terra"
-                        ]
-                      },
-                      "description": "Allowed supported model IDs, unique and sorted in ascending order."
-                    },
-                    "default": {
-                      "type": "string",
-                      "enum": [
-                        "@cf/ibm-granite/granite-4.0-h-micro",
-                        "@cf/meta/llama-4-scout-17b-16e-instruct",
-                        "@cf/moonshotai/kimi-k2.6",
-                        "@cf/moonshotai/kimi-k2.7-code",
-                        "@cf/openai/gpt-oss-20b",
-                        "@cf/openai/gpt-oss-120b",
-                        "@cf/qwen/qwen3-30b-a3b-fp8",
-                        "@cf/zai-org/glm-4.7-flash",
-                        "@cf/zai-org/glm-5.2",
-                        "openai/gpt-5.6-luna",
-                        "openai/gpt-5.6-sol",
-                        "openai/gpt-5.6-terra"
-                      ],
-                      "description": "New inference model used when Agent creation omits capability configuration."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet model selection defaults and allowlist."
-                },
-                "retention": {
-                  "type": "object",
-                  "properties": {
-                    "inboxSeconds": {
-                      "type": "integer",
-                      "minimum": 3600,
-                      "maximum": 31536000
-                    },
-                    "runSeconds": {
-                      "type": "integer",
-                      "minimum": 3600,
-                      "maximum": 31536000
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Run-detail and operational-inbox retention in seconds."
-                },
-                "schedules": {
-                  "type": "object",
-                  "properties": {
-                    "minimumIntervalSeconds": {
-                      "type": "integer",
-                      "minimum": 60,
-                      "maximum": 604800,
-                      "description": "New minimum interval in seconds for recurring Agent schedules."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Recurring schedule controls."
-                }
-              },
-              "additionalProperties": false
-            },
             "expectedVersion": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
+              "$ref": "#/definitions/S38"
             },
             "id": {
-              "type": "string",
-              "pattern": "^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S35"
             },
             "confirm": {
-              "default": false,
-              "description": "Leave false to preview. Repeat the unchanged operation with true to apply it.",
-              "type": "boolean"
+              "$ref": "#/definitions/S37"
             }
           },
           "required": [
@@ -4540,196 +1348,8 @@ Attributes: write, destructive, idempotent, closed-world.
               "type": "string",
               "const": "create_from_blueprint"
             },
-            "expectedRevision": {
-              "description": "Current blueprint revision returned by inspect_blueprint.",
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "patch": {
-              "description": "Required only for a fleet preview; omit for every other target.",
-              "type": "object",
-              "properties": {
-                "capacity": {
-                  "type": "object",
-                  "properties": {
-                    "maxAgents": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    },
-                    "maxConcurrentRuns": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    },
-                    "maxConnections": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet resource capacity within Crewhelm's internal safety ceilings."
-                },
-                "execution": {
-                  "type": "object",
-                  "properties": {
-                    "maxDurationSeconds": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 3600,
-                      "description": "Maximum wall-clock seconds for one run."
-                    },
-                    "maxModelTokens": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 16384,
-                      "description": "Maximum model output tokens for one run."
-                    },
-                    "maxToolCalls": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 100,
-                      "description": "Maximum integration tool executions for one run."
-                    },
-                    "maxTurns": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "Maximum model turns for one run."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet-wide per-run ceilings; lower Agent-specific limits still win."
-                },
-                "integrations": {
-                  "type": "object",
-                  "properties": {
-                    "callsPerDay": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000000,
-                      "description": "New maximum integration executions across the fleet in a rolling day."
-                    },
-                    "callsPerThirtyDays": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000000,
-                      "description": "New maximum integration executions across the fleet in a rolling thirty-day window."
-                    },
-                    "duplicateToolCallLimit": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum executions of identical tool arguments within one run; bounds accidental loops."
-                    },
-                    "maxCallsPerRun": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum integration executions across all tools in one run."
-                    },
-                    "maxCallsPerToolPerRun": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100,
-                      "description": "New maximum executions of one granted integration tool in one run."
-                    },
-                    "maxConcurrencyPerGrant": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 16,
-                      "description": "New maximum simultaneous executions using one tool grant."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Integration usage and loop controls."
-                },
-                "models": {
-                  "type": "object",
-                  "properties": {
-                    "allowed": {
-                      "minItems": 1,
-                      "maxItems": 12,
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "enum": [
-                          "@cf/ibm-granite/granite-4.0-h-micro",
-                          "@cf/meta/llama-4-scout-17b-16e-instruct",
-                          "@cf/moonshotai/kimi-k2.6",
-                          "@cf/moonshotai/kimi-k2.7-code",
-                          "@cf/openai/gpt-oss-20b",
-                          "@cf/openai/gpt-oss-120b",
-                          "@cf/qwen/qwen3-30b-a3b-fp8",
-                          "@cf/zai-org/glm-4.7-flash",
-                          "@cf/zai-org/glm-5.2",
-                          "openai/gpt-5.6-luna",
-                          "openai/gpt-5.6-sol",
-                          "openai/gpt-5.6-terra"
-                        ]
-                      },
-                      "description": "Allowed supported model IDs, unique and sorted in ascending order."
-                    },
-                    "default": {
-                      "type": "string",
-                      "enum": [
-                        "@cf/ibm-granite/granite-4.0-h-micro",
-                        "@cf/meta/llama-4-scout-17b-16e-instruct",
-                        "@cf/moonshotai/kimi-k2.6",
-                        "@cf/moonshotai/kimi-k2.7-code",
-                        "@cf/openai/gpt-oss-20b",
-                        "@cf/openai/gpt-oss-120b",
-                        "@cf/qwen/qwen3-30b-a3b-fp8",
-                        "@cf/zai-org/glm-4.7-flash",
-                        "@cf/zai-org/glm-5.2",
-                        "openai/gpt-5.6-luna",
-                        "openai/gpt-5.6-sol",
-                        "openai/gpt-5.6-terra"
-                      ],
-                      "description": "New inference model used when Agent creation omits capability configuration."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Fleet model selection defaults and allowlist."
-                },
-                "retention": {
-                  "type": "object",
-                  "properties": {
-                    "inboxSeconds": {
-                      "type": "integer",
-                      "minimum": 3600,
-                      "maximum": 31536000
-                    },
-                    "runSeconds": {
-                      "type": "integer",
-                      "minimum": 3600,
-                      "maximum": 31536000
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Run-detail and operational-inbox retention in seconds."
-                },
-                "schedules": {
-                  "type": "object",
-                  "properties": {
-                    "minimumIntervalSeconds": {
-                      "type": "integer",
-                      "minimum": 60,
-                      "maximum": 604800,
-                      "description": "New minimum interval in seconds for recurring Agent schedules."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "description": "Recurring schedule controls."
-                }
-              },
-              "additionalProperties": false
-            },
             "id": {
-              "type": "string",
-              "pattern": "^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S35"
             },
             "parameters": {
               "default": {},
@@ -4758,14 +1378,14 @@ Attributes: write, destructive, idempotent, closed-world.
               }
             },
             "version": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S38"
+                }
+              ]
             },
             "confirm": {
-              "default": false,
-              "description": "Leave false to preview. Repeat the unchanged operation with true to apply it.",
-              "type": "boolean"
+              "$ref": "#/definitions/S37"
             }
           },
           "required": [
@@ -4779,21 +1399,71 @@ Attributes: write, destructive, idempotent, closed-world.
           "properties": {
             "kind": {
               "type": "string",
+              "const": "preview_package"
+            },
+            "draft": {
+              "$ref": "#/definitions/CrewhelmConfigurationDraftLocator"
+            }
+          },
+          "required": [
+            "kind",
+            "draft"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "apply_package"
+            },
+            "draft": {
+              "$ref": "#/definitions/CrewhelmConfigurationDraftLocator"
+            },
+            "expectedConfirmationDigest": {
+              "$ref": "#/definitions/S39"
+            },
+            "requestKey": {
+              "$ref": "#/definitions/S8"
+            }
+          },
+          "required": [
+            "kind",
+            "draft",
+            "expectedConfirmationDigest"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "discard_package_draft"
+            },
+            "draft": {
+              "$ref": "#/definitions/CrewhelmConfigurationDraftLocator"
+            }
+          },
+          "required": [
+            "kind",
+            "draft"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
               "const": "create_brief"
             },
             "content": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 32768,
-              "description": "UTF-8 text without control characters, unpaired surrogates, or a leading BOM; maximum 32768 encoded bytes."
+              "$ref": "#/definitions/S40"
             },
             "mediaType": {
-              "type": "string",
-              "enum": [
-                "application/json",
-                "text/markdown",
-                "text/plain"
-              ]
+              "$ref": "#/definitions/S41"
             },
             "name": {
               "type": "string",
@@ -4802,11 +1472,7 @@ Attributes: write, destructive, idempotent, closed-world.
               "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]*$"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -4825,96 +1491,16 @@ Attributes: write, destructive, idempotent, closed-world.
               "const": "revise_brief"
             },
             "content": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 32768,
-              "description": "UTF-8 text without control characters, unpaired surrogates, or a leading BOM; maximum 32768 encoded bytes."
+              "$ref": "#/definitions/S40"
             },
             "mediaType": {
-              "type": "string",
-              "enum": [
-                "application/json",
-                "text/markdown",
-                "text/plain"
-              ]
+              "$ref": "#/definitions/S41"
             },
             "brief": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                    },
-                    "revision": {
-                      "type": "integer",
-                      "exclusiveMinimum": 0,
-                      "maximum": 100
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "revision"
-                  ],
-                  "additionalProperties": {}
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "currentRevision": {
-                      "type": "integer",
-                      "exclusiveMinimum": 0,
-                      "maximum": 100
-                    },
-                    "id": {
-                      "type": "string",
-                      "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                    }
-                  },
-                  "required": [
-                    "currentRevision",
-                    "id"
-                  ],
-                  "additionalProperties": {}
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "brief": {
-                      "type": "object",
-                      "properties": {
-                        "currentRevision": {
-                          "type": "integer",
-                          "exclusiveMinimum": 0,
-                          "maximum": 100
-                        },
-                        "id": {
-                          "type": "string",
-                          "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                        }
-                      },
-                      "required": [
-                        "currentRevision",
-                        "id"
-                      ],
-                      "additionalProperties": {}
-                    }
-                  },
-                  "required": [
-                    "brief"
-                  ],
-                  "additionalProperties": {}
-                }
-              ],
-              "description": "Copy-ready Brief reference, summary, or create result returned by Crewhelm."
+              "$ref": "#/definitions/CrewhelmBriefReference"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -4933,82 +1519,10 @@ Attributes: write, destructive, idempotent, closed-world.
               "const": "delete_brief"
             },
             "brief": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                    },
-                    "revision": {
-                      "type": "integer",
-                      "exclusiveMinimum": 0,
-                      "maximum": 100
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "revision"
-                  ],
-                  "additionalProperties": {}
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "currentRevision": {
-                      "type": "integer",
-                      "exclusiveMinimum": 0,
-                      "maximum": 100
-                    },
-                    "id": {
-                      "type": "string",
-                      "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                    }
-                  },
-                  "required": [
-                    "currentRevision",
-                    "id"
-                  ],
-                  "additionalProperties": {}
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "brief": {
-                      "type": "object",
-                      "properties": {
-                        "currentRevision": {
-                          "type": "integer",
-                          "exclusiveMinimum": 0,
-                          "maximum": 100
-                        },
-                        "id": {
-                          "type": "string",
-                          "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                        }
-                      },
-                      "required": [
-                        "currentRevision",
-                        "id"
-                      ],
-                      "additionalProperties": {}
-                    }
-                  },
-                  "required": [
-                    "brief"
-                  ],
-                  "additionalProperties": {}
-                }
-              ],
-              "description": "Copy-ready Brief reference, summary, or create result returned by Crewhelm."
+              "$ref": "#/definitions/CrewhelmBriefReference"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -5023,7 +1537,152 @@ Attributes: write, destructive, idempotent, closed-world.
   "required": [
     "operation"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "definitions": {
+    "S36": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "S34": {
+      "type": "string",
+      "pattern": "^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "CrewhelmConfigurationPackage": {
+      "description": "One bounded package. Crewhelm validates its exact contract."
+    },
+    "S8": {
+      "description": "Optional retry identity. Omit it on the ordinary happy path.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "S37": {
+      "default": false,
+      "description": "Leave false to preview. Repeat the unchanged operation with true to apply it.",
+      "type": "boolean"
+    },
+    "S38": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "S35": {
+      "type": "string",
+      "pattern": "^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "CrewhelmConfigurationDraftLocator": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "$ref": "#/definitions/S39"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "agent-blueprint-package",
+            "skill-package"
+          ]
+        },
+        "revision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "digest",
+        "id",
+        "kind",
+        "revision"
+      ],
+      "additionalProperties": {}
+    },
+    "S39": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "S40": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32768,
+      "description": "UTF-8 text without control characters, unpaired surrogates, or a leading BOM; maximum 32768 encoded bytes."
+    },
+    "S41": {
+      "type": "string",
+      "enum": [
+        "application/json",
+        "text/markdown",
+        "text/plain"
+      ]
+    },
+    "CrewhelmBriefReference": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/S19"
+            },
+            "revision": {
+              "$ref": "#/definitions/S20"
+            }
+          },
+          "required": [
+            "id",
+            "revision"
+          ],
+          "additionalProperties": {}
+        },
+        {
+          "$ref": "#/definitions/S21"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "brief": {
+              "$ref": "#/definitions/S21"
+            }
+          },
+          "required": [
+            "brief"
+          ],
+          "additionalProperties": {}
+        }
+      ],
+      "description": "Copy-ready Brief reference, summary, or create result returned by Crewhelm."
+    },
+    "S19": {
+      "type": "string",
+      "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S20": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 100
+    },
+    "S21": {
+      "type": "object",
+      "properties": {
+        "currentRevision": {
+          "$ref": "#/definitions/S20"
+        },
+        "id": {
+          "$ref": "#/definitions/S19"
+        }
+      },
+      "required": [
+        "currentRevision",
+        "id"
+      ],
+      "additionalProperties": {}
+    }
+  }
 }
 ```
 
@@ -5033,7 +1692,7 @@ Attributes: write, destructive, idempotent, closed-world.
 
 **Change Crewhelm Recipes**
 
-Preview, install, or recover one immutable public Recipe. Preview with owner-local bindings and confirm the unchanged digest before installation.
+Draft, preview, install, or recover one immutable Recipe with owner-local bindings.
 
 Attributes: write, destructive, idempotent, open-world.
 
@@ -5052,135 +1711,10 @@ Attributes: write, destructive, idempotent, open-world.
           "properties": {
             "kind": {
               "type": "string",
-              "const": "preview_install"
+              "const": "prepare_install"
             },
-            "briefBindings": {
-              "default": [],
-              "maxItems": 16,
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "brief": {
-                    "type": "object",
-                    "properties": {
-                      "id": {
-                        "type": "string",
-                        "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                      },
-                      "revision": {
-                        "type": "integer",
-                        "exclusiveMinimum": 0,
-                        "maximum": 100
-                      }
-                    },
-                    "required": [
-                      "id",
-                      "revision"
-                    ],
-                    "additionalProperties": false
-                  },
-                  "inputName": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 40,
-                    "pattern": "^[a-z][a-z0-9-]*$"
-                  }
-                },
-                "required": [
-                  "brief",
-                  "inputName"
-                ],
-                "additionalProperties": false
-              }
-            },
-            "connectionBindings": {
-              "default": [],
-              "maxItems": 8,
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "connectionId": {
-                    "type": "string",
-                    "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                  },
-                  "slot": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 40
-                  }
-                },
-                "required": [
-                  "connectionId",
-                  "slot"
-                ],
-                "additionalProperties": false
-              }
-            },
-            "operations": {
-              "default": {
-                "eventTriggers": [],
-                "schedules": []
-              },
-              "type": "object",
-              "properties": {
-                "eventTriggers": {
-                  "default": [],
-                  "maxItems": 8,
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 80,
-                    "pattern": "^[a-z][a-z0-9-]*$"
-                  }
-                },
-                "schedules": {
-                  "default": [],
-                  "maxItems": 8,
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 80,
-                    "pattern": "^[a-z][a-z0-9-]*$"
-                  }
-                },
-                "timeZone": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 120
-                }
-              },
-              "additionalProperties": false
-            },
-            "optionalSkills": {
-              "default": [],
-              "maxItems": 8,
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 80,
-                    "pattern": "^[a-z][a-z0-9-]*$"
-                  },
-                  "namespace": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 39,
-                    "pattern": "^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
-                  }
-                },
-                "required": [
-                  "name",
-                  "namespace"
-                ],
-                "additionalProperties": false
-              }
+            "requestKey": {
+              "$ref": "#/definitions/S8"
             },
             "target": {
               "type": "object",
@@ -5190,30 +1724,19 @@ Attributes: write, destructive, idempotent, open-world.
                   "const": "recipe"
                 },
                 "name": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 80,
-                  "pattern": "^[a-z][a-z0-9-]*$"
+                  "$ref": "#/definitions/S42"
                 },
                 "namespace": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 39,
-                  "pattern": "^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+                  "$ref": "#/definitions/S43"
                 },
                 "version": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
+                  "$ref": "#/definitions/S44"
                 },
                 "digest": {
-                  "type": "string",
-                  "pattern": "^[0-9a-f]{64}$"
+                  "$ref": "#/definitions/S39"
                 },
                 "registry": {
-                  "type": "string",
-                  "maxLength": 2048,
-                  "format": "uri"
+                  "$ref": "#/definitions/S45"
                 }
               },
               "required": [
@@ -5226,31 +1749,6 @@ Attributes: write, destructive, idempotent, open-world.
               ],
               "additionalProperties": false,
               "description": "One exact immutable Recipe version at the configured canonical Registry origin."
-            },
-            "setup": {
-              "default": {},
-              "description": "Typed setup values declared by this Recipe. Never put credentials here.",
-              "type": "object",
-              "propertyNames": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 40,
-                "pattern": "^[a-z][a-z0-9-]*$"
-              },
-              "additionalProperties": {
-                "anyOf": [
-                  {
-                    "type": "string",
-                    "maxLength": 2048
-                  },
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "boolean"
-                  }
-                ]
-              }
             }
           },
           "required": [
@@ -5264,71 +1762,145 @@ Attributes: write, destructive, idempotent, open-world.
           "properties": {
             "kind": {
               "type": "string",
-              "const": "install"
+              "const": "set_setup"
             },
-            "briefBindings": {
-              "default": [],
-              "maxItems": 16,
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "brief": {
-                    "type": "object",
-                    "properties": {
-                      "id": {
-                        "type": "string",
-                        "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                      },
-                      "revision": {
-                        "type": "integer",
-                        "exclusiveMinimum": 0,
-                        "maximum": 100
-                      }
-                    },
-                    "required": [
-                      "id",
-                      "revision"
-                    ],
-                    "additionalProperties": false
-                  },
-                  "inputName": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 40,
-                    "pattern": "^[a-z][a-z0-9-]*$"
-                  }
-                },
-                "required": [
-                  "brief",
-                  "inputName"
-                ],
-                "additionalProperties": false
-              }
+            "draft": {
+              "$ref": "#/definitions/CrewhelmRecipeInstallationDraftLocator"
             },
-            "connectionBindings": {
-              "default": [],
-              "maxItems": 8,
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "connectionId": {
-                    "type": "string",
-                    "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                  },
-                  "slot": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 40
-                  }
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40,
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "requestKey": {
+              "$ref": "#/definitions/S8"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
                 },
-                "required": [
-                  "connectionId",
-                  "slot"
-                ],
-                "additionalProperties": false
-              }
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "draft",
+            "name",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "bind_connection"
+            },
+            "draft": {
+              "$ref": "#/definitions/CrewhelmRecipeInstallationDraftLocator"
+            },
+            "connection": {
+              "$ref": "#/definitions/S30"
+            },
+            "requestKey": {
+              "$ref": "#/definitions/S8"
+            },
+            "slot": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            }
+          },
+          "required": [
+            "kind",
+            "draft",
+            "connection",
+            "slot"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "bind_brief"
+            },
+            "draft": {
+              "$ref": "#/definitions/CrewhelmRecipeInstallationDraftLocator"
+            },
+            "brief": {
+              "$ref": "#/definitions/CrewhelmBriefReference"
+            },
+            "inputName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40,
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "requestKey": {
+              "$ref": "#/definitions/S8"
+            }
+          },
+          "required": [
+            "kind",
+            "draft",
+            "brief",
+            "inputName"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "select_optional_skill"
+            },
+            "draft": {
+              "$ref": "#/definitions/CrewhelmRecipeInstallationDraftLocator"
+            },
+            "name": {
+              "$ref": "#/definitions/S42"
+            },
+            "namespace": {
+              "$ref": "#/definitions/S43"
+            },
+            "requestKey": {
+              "$ref": "#/definitions/S8"
+            },
+            "selected": {
+              "default": true,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "draft",
+            "name",
+            "namespace"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "select_operations"
+            },
+            "draft": {
+              "$ref": "#/definitions/CrewhelmRecipeInstallationDraftLocator"
             },
             "operations": {
               "default": {
@@ -5342,10 +1914,7 @@ Attributes: write, destructive, idempotent, open-world.
                   "maxItems": 8,
                   "type": "array",
                   "items": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 80,
-                    "pattern": "^[a-z][a-z0-9-]*$"
+                    "$ref": "#/definitions/S47"
                   }
                 },
                 "schedules": {
@@ -5353,10 +1922,7 @@ Attributes: write, destructive, idempotent, open-world.
                   "maxItems": 8,
                   "type": "array",
                   "items": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 80,
-                    "pattern": "^[a-z][a-z0-9-]*$"
+                    "$ref": "#/definitions/S47"
                   }
                 },
                 "timeZone": {
@@ -5367,112 +1933,71 @@ Attributes: write, destructive, idempotent, open-world.
               },
               "additionalProperties": false
             },
-            "optionalSkills": {
-              "default": [],
-              "maxItems": 8,
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 80,
-                    "pattern": "^[a-z][a-z0-9-]*$"
-                  },
-                  "namespace": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 39,
-                    "pattern": "^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
-                  }
-                },
-                "required": [
-                  "name",
-                  "namespace"
-                ],
-                "additionalProperties": false
-              }
-            },
-            "target": {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "recipe"
-                },
-                "name": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 80,
-                  "pattern": "^[a-z][a-z0-9-]*$"
-                },
-                "namespace": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 39,
-                  "pattern": "^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
-                },
-                "version": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "digest": {
-                  "type": "string",
-                  "pattern": "^[0-9a-f]{64}$"
-                },
-                "registry": {
-                  "type": "string",
-                  "maxLength": 2048,
-                  "format": "uri"
-                }
-              },
-              "required": [
-                "kind",
-                "name",
-                "namespace",
-                "version",
-                "digest",
-                "registry"
-              ],
-              "additionalProperties": false,
-              "description": "One exact immutable Recipe version at the configured canonical Registry origin."
-            },
-            "setup": {
-              "default": {},
-              "description": "Typed setup values declared by this Recipe. Never put credentials here.",
-              "type": "object",
-              "propertyNames": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 40,
-                "pattern": "^[a-z][a-z0-9-]*$"
-              },
-              "additionalProperties": {
-                "anyOf": [
-                  {
-                    "type": "string",
-                    "maxLength": 2048
-                  },
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "boolean"
-                  }
-                ]
-              }
-            },
-            "expectedConfirmationDigest": {
-              "type": "string",
-              "pattern": "^[0-9a-f]{64}$"
+            "requestKey": {
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
             "kind",
-            "target",
+            "draft"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "preview_install"
+            },
+            "draft": {
+              "$ref": "#/definitions/CrewhelmRecipeInstallationDraftLocator"
+            }
+          },
+          "required": [
+            "kind",
+            "draft"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "install"
+            },
+            "draft": {
+              "$ref": "#/definitions/CrewhelmRecipeInstallationDraftLocator"
+            },
+            "expectedConfirmationDigest": {
+              "$ref": "#/definitions/S39"
+            },
+            "requestKey": {
+              "$ref": "#/definitions/S8"
+            }
+          },
+          "required": [
+            "kind",
+            "draft",
             "expectedConfirmationDigest"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "discard_install_draft"
+            },
+            "draft": {
+              "$ref": "#/definitions/CrewhelmRecipeInstallationDraftLocator"
+            }
+          },
+          "required": [
+            "kind",
+            "draft"
           ],
           "additionalProperties": false
         },
@@ -5500,7 +2025,178 @@ Attributes: write, destructive, idempotent, open-world.
   "required": [
     "operation"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "definitions": {
+    "S8": {
+      "description": "Optional retry identity. Omit it on the ordinary happy path.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "S42": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "S43": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 39,
+      "pattern": "^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+    },
+    "S44": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "S39": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "S45": {
+      "type": "string",
+      "maxLength": 2048,
+      "format": "uri"
+    },
+    "CrewhelmRecipeInstallationDraftLocator": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "$ref": "#/definitions/S39"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "recipe-installation"
+        },
+        "revision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "digest",
+        "id",
+        "kind",
+        "revision"
+      ],
+      "additionalProperties": {}
+    },
+    "S30": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "connectionId": {
+              "$ref": "#/definitions/S31"
+            }
+          },
+          "required": [
+            "connectionId"
+          ],
+          "additionalProperties": {}
+        },
+        {
+          "type": "object",
+          "properties": {
+            "connectionLink": {
+              "type": "object",
+              "properties": {
+                "connectionId": {
+                  "$ref": "#/definitions/S31"
+                }
+              },
+              "required": [
+                "connectionId"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "connectionLink"
+          ],
+          "additionalProperties": {}
+        }
+      ]
+    },
+    "S31": {
+      "type": "string",
+      "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "CrewhelmBriefReference": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/S19"
+            },
+            "revision": {
+              "$ref": "#/definitions/S20"
+            }
+          },
+          "required": [
+            "id",
+            "revision"
+          ],
+          "additionalProperties": {}
+        },
+        {
+          "$ref": "#/definitions/S21"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "brief": {
+              "$ref": "#/definitions/S21"
+            }
+          },
+          "required": [
+            "brief"
+          ],
+          "additionalProperties": {}
+        }
+      ],
+      "description": "Copy-ready Brief reference, summary, or create result returned by Crewhelm."
+    },
+    "S19": {
+      "type": "string",
+      "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S20": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 100
+    },
+    "S21": {
+      "type": "object",
+      "properties": {
+        "currentRevision": {
+          "$ref": "#/definitions/S20"
+        },
+        "id": {
+          "$ref": "#/definitions/S19"
+        }
+      },
+      "required": [
+        "currentRevision",
+        "id"
+      ],
+      "additionalProperties": {}
+    },
+    "S47": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    }
+  }
 }
 ```
 
@@ -5532,95 +2228,21 @@ Attributes: write, destructive, idempotent, closed-world.
               "const": "run"
             },
             "briefs": {
-              "maxItems": 8,
-              "type": "array",
-              "items": {
-                "anyOf": [
-                  {
-                    "type": "object",
-                    "properties": {
-                      "id": {
-                        "type": "string",
-                        "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                      },
-                      "revision": {
-                        "type": "integer",
-                        "exclusiveMinimum": 0,
-                        "maximum": 100
-                      }
-                    },
-                    "required": [
-                      "id",
-                      "revision"
-                    ],
-                    "additionalProperties": {}
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "currentRevision": {
-                        "type": "integer",
-                        "exclusiveMinimum": 0,
-                        "maximum": 100
-                      },
-                      "id": {
-                        "type": "string",
-                        "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                      }
-                    },
-                    "required": [
-                      "currentRevision",
-                      "id"
-                    ],
-                    "additionalProperties": {}
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "brief": {
-                        "type": "object",
-                        "properties": {
-                          "currentRevision": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0,
-                            "maximum": 100
-                          },
-                          "id": {
-                            "type": "string",
-                            "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                          }
-                        },
-                        "required": [
-                          "currentRevision",
-                          "id"
-                        ],
-                        "additionalProperties": {}
-                      }
-                    },
-                    "required": [
-                      "brief"
-                    ],
-                    "additionalProperties": {}
-                  }
-                ],
-                "description": "Copy-ready Brief reference, summary, or create result returned by Crewhelm."
-              },
-              "description": "Copy-ready immutable Briefs returned by Crewhelm."
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S18"
+                }
+              ]
             },
             "conversation": {
               "description": "Copy-ready conversation returned by Crewhelm. Omit it to start a new conversation.",
               "type": "object",
               "properties": {
                 "expectedRevision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991,
-                  "description": "Exact conversation revision previously returned by Crewhelm."
+                  "$ref": "#/definitions/S22"
                 },
                 "id": {
-                  "type": "string",
-                  "pattern": "^session_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                  "description": "Stable owner-private conversation identity."
+                  "$ref": "#/definitions/S23"
                 }
               },
               "required": [
@@ -5630,68 +2252,11 @@ Attributes: write, destructive, idempotent, closed-world.
               "additionalProperties": false
             },
             "outputContract": {
-              "oneOf": [
+              "allOf": [
                 {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "const": "markdown"
-                    }
-                  },
-                  "required": [
-                    "kind"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "const": "json"
-                    },
-                    "schema": {
-                      "type": "object",
-                      "properties": {
-                        "jsonSchema": {
-                          "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {
-                            "$ref": "#/definitions/__schema0"
-                          }
-                        },
-                        "name": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 64,
-                          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-                        },
-                        "version": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 32,
-                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-                        }
-                      },
-                      "required": [
-                        "name",
-                        "version"
-                      ],
-                      "additionalProperties": false
-                    }
-                  },
-                  "required": [
-                    "kind",
-                    "schema"
-                  ],
-                  "additionalProperties": false
+                  "$ref": "#/definitions/S25"
                 }
-              ],
-              "description": "Optional final deliverable contract. Omit to preserve Markdown output."
+              ]
             },
             "message": {
               "type": "string",
@@ -5699,31 +2264,10 @@ Attributes: write, destructive, idempotent, closed-world.
               "maxLength": 16384
             },
             "agent": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {},
-              "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
+              "$ref": "#/definitions/CrewhelmAgentReference"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -5741,8 +2285,7 @@ Attributes: write, destructive, idempotent, closed-world.
               "const": "cancel_run"
             },
             "runId": {
-              "type": "string",
-              "pattern": "^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S9"
             }
           },
           "required": [
@@ -5772,8 +2315,7 @@ Attributes: write, destructive, idempotent, closed-world.
               "pattern": "^[A-Za-z0-9._:~-]+$"
             },
             "runId": {
-              "type": "string",
-              "pattern": "^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S9"
             }
           },
           "required": [
@@ -5798,9 +2340,12 @@ Attributes: write, destructive, idempotent, closed-world.
               "pattern": "^inbox_(?:run_[0-9a-f-]{36}|deferred_[0-9a-f-]{36})$"
             },
             "version": {
-              "type": "string",
-              "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              "description": "Exact item version returned by Crewhelm to acknowledge.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S10"
+                }
+              ]
             }
           },
           "required": [
@@ -5818,80 +2363,11 @@ Attributes: write, destructive, idempotent, closed-world.
               "const": "start_workflow"
             },
             "briefs": {
-              "maxItems": 8,
-              "type": "array",
-              "items": {
-                "anyOf": [
-                  {
-                    "type": "object",
-                    "properties": {
-                      "id": {
-                        "type": "string",
-                        "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                      },
-                      "revision": {
-                        "type": "integer",
-                        "exclusiveMinimum": 0,
-                        "maximum": 100
-                      }
-                    },
-                    "required": [
-                      "id",
-                      "revision"
-                    ],
-                    "additionalProperties": {}
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "currentRevision": {
-                        "type": "integer",
-                        "exclusiveMinimum": 0,
-                        "maximum": 100
-                      },
-                      "id": {
-                        "type": "string",
-                        "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                      }
-                    },
-                    "required": [
-                      "currentRevision",
-                      "id"
-                    ],
-                    "additionalProperties": {}
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "brief": {
-                        "type": "object",
-                        "properties": {
-                          "currentRevision": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0,
-                            "maximum": 100
-                          },
-                          "id": {
-                            "type": "string",
-                            "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                          }
-                        },
-                        "required": [
-                          "currentRevision",
-                          "id"
-                        ],
-                        "additionalProperties": {}
-                      }
-                    },
-                    "required": [
-                      "brief"
-                    ],
-                    "additionalProperties": {}
-                  }
-                ],
-                "description": "Copy-ready Brief reference, summary, or create result returned by Crewhelm."
-              },
-              "description": "Copy-ready immutable Briefs returned by Crewhelm."
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S18"
+                }
+              ]
             },
             "objective": {
               "type": "string",
@@ -5899,66 +2375,9 @@ Attributes: write, destructive, idempotent, closed-world.
               "maxLength": 4096
             },
             "outputContract": {
-              "description": "For start, optional final deliverable contract. Omit for Markdown.",
-              "oneOf": [
+              "allOf": [
                 {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "const": "markdown"
-                    }
-                  },
-                  "required": [
-                    "kind"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "const": "json"
-                    },
-                    "schema": {
-                      "type": "object",
-                      "properties": {
-                        "jsonSchema": {
-                          "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {
-                            "$ref": "#/definitions/__schema0"
-                          }
-                        },
-                        "name": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 64,
-                          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-                        },
-                        "version": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 32,
-                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-                        }
-                      },
-                      "required": [
-                        "name",
-                        "version"
-                      ],
-                      "additionalProperties": false
-                    }
-                  },
-                  "required": [
-                    "kind",
-                    "schema"
-                  ],
-                  "additionalProperties": false
+                  "$ref": "#/definitions/S25"
                 }
               ]
             },
@@ -5990,31 +2409,10 @@ Attributes: write, destructive, idempotent, closed-world.
               }
             },
             "agent": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {},
-              "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
+              "$ref": "#/definitions/CrewhelmAgentReference"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -6033,23 +2431,7 @@ Attributes: write, destructive, idempotent, closed-world.
               "const": "cancel_workflow"
             },
             "workflow": {
-              "type": "object",
-              "properties": {
-                "workflowId": {
-                  "type": "string",
-                  "pattern": "^workflow_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "workflowId",
-                "revision"
-              ],
-              "additionalProperties": {}
+              "$ref": "#/definitions/CrewhelmWorkflowReference"
             }
           },
           "required": [
@@ -6066,30 +2448,10 @@ Attributes: write, destructive, idempotent, closed-world.
               "const": "delete_workflow"
             },
             "workflow": {
-              "type": "object",
-              "properties": {
-                "workflowId": {
-                  "type": "string",
-                  "pattern": "^workflow_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "workflowId",
-                "revision"
-              ],
-              "additionalProperties": {}
+              "$ref": "#/definitions/CrewhelmWorkflowReference"
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -6106,22 +2468,16 @@ Attributes: write, destructive, idempotent, closed-world.
               "const": "delete_conversation"
             },
             "agentId": {
-              "type": "string",
-              "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S1"
             },
             "conversation": {
               "type": "object",
               "properties": {
                 "expectedRevision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991,
-                  "description": "Exact conversation revision previously returned by Crewhelm."
+                  "$ref": "#/definitions/S22"
                 },
                 "id": {
-                  "type": "string",
-                  "pattern": "^session_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                  "description": "Stable owner-private conversation identity."
+                  "$ref": "#/definitions/S23"
                 }
               },
               "required": [
@@ -6132,11 +2488,7 @@ Attributes: write, destructive, idempotent, closed-world.
               "description": "Copy-ready conversation returned by Crewhelm Run or conversation inspection."
             },
             "requestKey": {
-              "description": "Optional retry identity. Omit it on the ordinary happy path.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9._~-]+$"
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
@@ -6154,36 +2506,158 @@ Attributes: write, destructive, idempotent, closed-world.
   ],
   "additionalProperties": false,
   "definitions": {
-    "__schema0": {
+    "S18": {
+      "maxItems": 8,
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/CrewhelmBriefReference"
+      },
+      "description": "Copy-ready immutable Briefs returned by Crewhelm."
+    },
+    "CrewhelmBriefReference": {
       "anyOf": [
         {
-          "type": "string"
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/S19"
+            },
+            "revision": {
+              "$ref": "#/definitions/S20"
+            }
+          },
+          "required": [
+            "id",
+            "revision"
+          ],
+          "additionalProperties": {}
         },
         {
-          "type": "number"
-        },
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "null"
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/__schema0"
-          }
+          "$ref": "#/definitions/S21"
         },
         {
           "type": "object",
-          "propertyNames": {
-            "type": "string"
+          "properties": {
+            "brief": {
+              "$ref": "#/definitions/S21"
+            }
           },
-          "additionalProperties": {
-            "$ref": "#/definitions/__schema0"
-          }
+          "required": [
+            "brief"
+          ],
+          "additionalProperties": {}
+        }
+      ],
+      "description": "Copy-ready Brief reference, summary, or create result returned by Crewhelm."
+    },
+    "S19": {
+      "type": "string",
+      "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S20": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 100
+    },
+    "S21": {
+      "type": "object",
+      "properties": {
+        "currentRevision": {
+          "$ref": "#/definitions/S20"
+        },
+        "id": {
+          "$ref": "#/definitions/S19"
+        }
+      },
+      "required": [
+        "currentRevision",
+        "id"
+      ],
+      "additionalProperties": {}
+    },
+    "S22": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Exact conversation revision previously returned by Crewhelm."
+    },
+    "S23": {
+      "description": "Stable owner-private conversation identity.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/S11"
         }
       ]
+    },
+    "S11": {
+      "type": "string",
+      "pattern": "^session_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S25": {
+      "description": "Optional bounded output contract. Crewhelm validates its exact contract."
+    },
+    "CrewhelmAgentReference": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/S1"
+        },
+        "revision": {
+          "$ref": "#/definitions/S2"
+        }
+      },
+      "required": [
+        "id",
+        "revision"
+      ],
+      "additionalProperties": {},
+      "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
+    },
+    "S1": {
+      "type": "string",
+      "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S2": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "S8": {
+      "description": "Optional retry identity. Omit it on the ordinary happy path.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "S9": {
+      "type": "string",
+      "pattern": "^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S10": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "CrewhelmWorkflowReference": {
+      "type": "object",
+      "properties": {
+        "workflowId": {
+          "$ref": "#/definitions/S12"
+        },
+        "revision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "workflowId",
+        "revision"
+      ],
+      "additionalProperties": {}
+    },
+    "S12": {
+      "type": "string",
+      "pattern": "^workflow_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     }
   }
 }
@@ -6195,7 +2669,7 @@ Attributes: write, destructive, idempotent, closed-world.
 
 **Inspect Crewhelm Agents**
 
-Find and inspect Agents through one read surface. Choose one operation; Crewhelm returns exact immutable coordinates when later work needs them.
+Find and inspect Agents. Results include exact immutable coordinates for later work.
 
 Attributes: read-only, non-destructive, idempotent, closed-world.
 
@@ -6217,8 +2691,11 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "list"
             },
             "cursor": {
-              "type": "string",
-              "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S1"
+                }
+              ]
             },
             "limit": {
               "default": 25,
@@ -6235,9 +2712,11 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
             },
             "name": {
               "description": "Return Agents whose names contain this value, case-insensitively for ASCII characters.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 80
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S7"
+                }
+              ]
             },
             "status": {
               "description": "Return Agents in this lifecycle state.",
@@ -6261,8 +2740,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "inspect"
             },
             "id": {
-              "type": "string",
-              "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S1"
             }
           },
           "required": [
@@ -6279,13 +2757,14 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "list_revisions"
             },
             "cursor": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S2"
+                }
+              ]
             },
             "id": {
-              "type": "string",
-              "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S1"
             },
             "limit": {
               "default": 25,
@@ -6308,13 +2787,10 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "inspect_revision"
             },
             "id": {
-              "type": "string",
-              "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S1"
             },
             "revision": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
+              "$ref": "#/definitions/S2"
             }
           },
           "required": [
@@ -6330,7 +2806,23 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
   "required": [
     "operation"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "definitions": {
+    "S1": {
+      "type": "string",
+      "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S7": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "S2": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    }
+  }
 }
 ```
 
@@ -6340,7 +2832,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 **Inspect Crewhelm automations**
 
-Inspect time-based responsibilities. Event-source discovery and Event Trigger history are available from the change surface because their provider lifecycle is one atomic control-plane operation.
+Inspect time-based responsibilities, event sources, and Event Trigger history without changing them.
 
 Attributes: read-only, non-destructive, idempotent, closed-world.
 
@@ -6359,27 +2851,23 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
           "properties": {
             "kind": {
               "type": "string",
-              "const": "list_schedules"
+              "enum": [
+                "list_schedules",
+                "list_event_triggers"
+              ]
             },
             "agent": {
               "type": "object",
               "properties": {
                 "id": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
+                  "$ref": "#/definitions/S1"
                 }
               },
               "required": [
-                "id",
-                "revision"
+                "id"
               ],
               "additionalProperties": {},
-              "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
+              "description": "Copy-ready Agent identity returned by Crewhelm."
             }
           },
           "required": [
@@ -6399,29 +2887,16 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "type": "object",
               "properties": {
                 "agentId": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "agentRevision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
+                  "$ref": "#/definitions/S1"
                 },
                 "id": {
                   "type": "string",
                   "pattern": "^schedule_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
                 }
               },
               "required": [
                 "agentId",
-                "agentRevision",
-                "id",
-                "revision"
+                "id"
               ],
               "additionalProperties": {}
             }
@@ -6443,8 +2918,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "type": "object",
               "properties": {
                 "connectionId": {
-                  "type": "string",
-                  "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                  "$ref": "#/definitions/S31"
                 }
               },
               "required": [
@@ -6464,72 +2938,10 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
           "properties": {
             "kind": {
               "type": "string",
-              "const": "list_event_triggers"
-            },
-            "agent": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {},
-              "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
-            }
-          },
-          "required": [
-            "kind",
-            "agent"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
               "const": "inspect_event_trigger"
             },
             "trigger": {
-              "type": "object",
-              "properties": {
-                "agentId": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "agentRevision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "id": {
-                  "type": "string",
-                  "pattern": "^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                  "description": "Opaque Event Trigger identity for exact lifecycle operations."
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "agentId",
-                "agentRevision",
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {}
+              "$ref": "#/definitions/S26"
             }
           },
           "required": [
@@ -6551,35 +2963,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "maximum": 20
             },
             "trigger": {
-              "type": "object",
-              "properties": {
-                "agentId": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "agentRevision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "id": {
-                  "type": "string",
-                  "pattern": "^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-                  "description": "Opaque Event Trigger identity for exact lifecycle operations."
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "agentId",
-                "agentRevision",
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {}
+              "$ref": "#/definitions/S26"
             }
           },
           "required": [
@@ -6594,7 +2978,35 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
   "required": [
     "operation"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "definitions": {
+    "S1": {
+      "type": "string",
+      "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S31": {
+      "type": "string",
+      "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S26": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "$ref": "#/definitions/S1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "description": "Opaque Event Trigger identity for exact lifecycle operations."
+        }
+      },
+      "required": [
+        "agentId",
+        "id"
+      ],
+      "additionalProperties": {}
+    }
+  }
 }
 ```
 
@@ -6626,9 +3038,11 @@ Attributes: read-only, non-destructive, idempotent, open-world.
               "const": "search_providers"
             },
             "cursor": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 2048
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S28"
+                }
+              ]
             },
             "limit": {
               "default": 20,
@@ -6655,14 +3069,19 @@ Attributes: read-only, non-destructive, idempotent, open-world.
               "const": "search_actions"
             },
             "cursor": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 2048
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S28"
+                }
+              ]
             },
             "integrationSlug": {
               "description": "Limit action discovery to an already selected or connected integration.",
-              "type": "string",
-              "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S29"
+                }
+              ]
             },
             "limit": {
               "default": 10,
@@ -6712,13 +3131,14 @@ Attributes: read-only, non-destructive, idempotent, open-world.
               "const": "list_auth"
             },
             "cursor": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 2048
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S28"
+                }
+              ]
             },
             "integrationSlug": {
-              "type": "string",
-              "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$"
+              "$ref": "#/definitions/S29"
             },
             "limit": {
               "default": 20,
@@ -6752,8 +3172,11 @@ Attributes: read-only, non-destructive, idempotent, open-world.
               ]
             },
             "cursor": {
-              "type": "string",
-              "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S31"
+                }
+              ]
             },
             "integration": {
               "description": "Return connections created for this enabled integration.",
@@ -6788,7 +3211,22 @@ Attributes: read-only, non-destructive, idempotent, open-world.
   "required": [
     "operation"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "definitions": {
+    "S28": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "S29": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$"
+    },
+    "S31": {
+      "type": "string",
+      "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    }
+  }
 }
 ```
 
@@ -6852,8 +3290,11 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "list_skills"
             },
             "cursor": {
-              "type": "string",
-              "pattern": "^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S34"
+                }
+              ]
             },
             "limit": {
               "default": 25,
@@ -6889,13 +3330,14 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "inspect_skill"
             },
             "id": {
-              "type": "string",
-              "pattern": "^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S34"
             },
             "version": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S36"
+                }
+              ]
             }
           },
           "required": [
@@ -6912,8 +3354,11 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "list_blueprints"
             },
             "cursor": {
-              "type": "string",
-              "pattern": "^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S35"
+                }
+              ]
             },
             "limit": {
               "default": 25,
@@ -6953,13 +3398,14 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "inspect_blueprint"
             },
             "id": {
-              "type": "string",
-              "pattern": "^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S35"
             },
             "version": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S38"
+                }
+              ]
             }
           },
           "required": [
@@ -6976,8 +3422,11 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "list_briefs"
             },
             "cursor": {
-              "type": "string",
-              "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S19"
+                }
+              ]
             },
             "limit": {
               "type": "integer",
@@ -7004,8 +3453,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "inspect_brief"
             },
             "id": {
-              "type": "string",
-              "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S19"
             }
           },
           "required": [
@@ -7022,75 +3470,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "inspect_brief_revision"
             },
             "brief": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                    },
-                    "revision": {
-                      "type": "integer",
-                      "exclusiveMinimum": 0,
-                      "maximum": 100
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "revision"
-                  ],
-                  "additionalProperties": {}
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "currentRevision": {
-                      "type": "integer",
-                      "exclusiveMinimum": 0,
-                      "maximum": 100
-                    },
-                    "id": {
-                      "type": "string",
-                      "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                    }
-                  },
-                  "required": [
-                    "currentRevision",
-                    "id"
-                  ],
-                  "additionalProperties": {}
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "brief": {
-                      "type": "object",
-                      "properties": {
-                        "currentRevision": {
-                          "type": "integer",
-                          "exclusiveMinimum": 0,
-                          "maximum": 100
-                        },
-                        "id": {
-                          "type": "string",
-                          "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                        }
-                      },
-                      "required": [
-                        "currentRevision",
-                        "id"
-                      ],
-                      "additionalProperties": {}
-                    }
-                  },
-                  "required": [
-                    "brief"
-                  ],
-                  "additionalProperties": {}
-                }
-              ],
-              "description": "Copy-ready Brief reference, summary, or create result returned by Crewhelm."
+              "$ref": "#/definitions/CrewhelmBriefReference"
             }
           },
           "required": [
@@ -7107,75 +3487,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "read_brief"
             },
             "brief": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                    },
-                    "revision": {
-                      "type": "integer",
-                      "exclusiveMinimum": 0,
-                      "maximum": 100
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "revision"
-                  ],
-                  "additionalProperties": {}
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "currentRevision": {
-                      "type": "integer",
-                      "exclusiveMinimum": 0,
-                      "maximum": 100
-                    },
-                    "id": {
-                      "type": "string",
-                      "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                    }
-                  },
-                  "required": [
-                    "currentRevision",
-                    "id"
-                  ],
-                  "additionalProperties": {}
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "brief": {
-                      "type": "object",
-                      "properties": {
-                        "currentRevision": {
-                          "type": "integer",
-                          "exclusiveMinimum": 0,
-                          "maximum": 100
-                        },
-                        "id": {
-                          "type": "string",
-                          "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                        }
-                      },
-                      "required": [
-                        "currentRevision",
-                        "id"
-                      ],
-                      "additionalProperties": {}
-                    }
-                  },
-                  "required": [
-                    "brief"
-                  ],
-                  "additionalProperties": {}
-                }
-              ],
-              "description": "Copy-ready Brief reference, summary, or create result returned by Crewhelm."
+              "$ref": "#/definitions/CrewhelmBriefReference"
             }
           },
           "required": [
@@ -7190,7 +3502,88 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
   "required": [
     "operation"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "definitions": {
+    "S34": {
+      "type": "string",
+      "pattern": "^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S36": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "S35": {
+      "type": "string",
+      "pattern": "^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S38": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "S19": {
+      "type": "string",
+      "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "CrewhelmBriefReference": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/S19"
+            },
+            "revision": {
+              "$ref": "#/definitions/S20"
+            }
+          },
+          "required": [
+            "id",
+            "revision"
+          ],
+          "additionalProperties": {}
+        },
+        {
+          "$ref": "#/definitions/S21"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "brief": {
+              "$ref": "#/definitions/S21"
+            }
+          },
+          "required": [
+            "brief"
+          ],
+          "additionalProperties": {}
+        }
+      ],
+      "description": "Copy-ready Brief reference, summary, or create result returned by Crewhelm."
+    },
+    "S20": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 100
+    },
+    "S21": {
+      "type": "object",
+      "properties": {
+        "currentRevision": {
+          "$ref": "#/definitions/S20"
+        },
+        "id": {
+          "$ref": "#/definitions/S19"
+        }
+      },
+      "required": [
+        "currentRevision",
+        "id"
+      ],
+      "additionalProperties": {}
+    }
+  }
 }
 ```
 
@@ -7247,96 +3640,38 @@ Attributes: read-only, non-destructive, idempotent, open-world.
               "const": "inspect"
             },
             "target": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "const": "recipe"
-                    },
-                    "name": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 80,
-                      "pattern": "^[a-z][a-z0-9-]*$"
-                    },
-                    "namespace": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 39,
-                      "pattern": "^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
-                    },
-                    "version": {
-                      "type": "integer",
-                      "exclusiveMinimum": 0,
-                      "maximum": 9007199254740991
-                    },
-                    "digest": {
-                      "type": "string",
-                      "pattern": "^[0-9a-f]{64}$"
-                    },
-                    "registry": {
-                      "type": "string",
-                      "maxLength": 2048,
-                      "format": "uri"
-                    }
-                  },
-                  "required": [
-                    "kind",
-                    "name",
-                    "namespace",
-                    "version",
-                    "digest",
-                    "registry"
-                  ],
-                  "additionalProperties": false
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "recipe"
                 },
-                {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "const": "skill"
-                    },
-                    "name": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 80,
-                      "pattern": "^[a-z][a-z0-9-]*$"
-                    },
-                    "namespace": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 39,
-                      "pattern": "^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
-                    },
-                    "version": {
-                      "type": "integer",
-                      "exclusiveMinimum": 0,
-                      "maximum": 9007199254740991
-                    },
-                    "digest": {
-                      "type": "string",
-                      "pattern": "^[0-9a-f]{64}$"
-                    },
-                    "registry": {
-                      "type": "string",
-                      "maxLength": 2048,
-                      "format": "uri"
-                    }
-                  },
-                  "required": [
-                    "kind",
-                    "name",
-                    "namespace",
-                    "version",
-                    "digest",
-                    "registry"
-                  ],
-                  "additionalProperties": false
+                "name": {
+                  "$ref": "#/definitions/S42"
+                },
+                "namespace": {
+                  "$ref": "#/definitions/S43"
+                },
+                "version": {
+                  "$ref": "#/definitions/S44"
+                },
+                "digest": {
+                  "$ref": "#/definitions/S39"
+                },
+                "registry": {
+                  "$ref": "#/definitions/S45"
                 }
-              ]
+              },
+              "required": [
+                "kind",
+                "name",
+                "namespace",
+                "version",
+                "digest",
+                "registry"
+              ],
+              "additionalProperties": false,
+              "description": "One exact immutable Recipe version at the configured canonical Registry origin."
             }
           },
           "required": [
@@ -7355,99 +3690,41 @@ Attributes: read-only, non-destructive, idempotent, open-world.
             "path": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 240
+              "maxLength": 240,
+              "description": "SKILL.md or a relative path under assets/, references/, or scripts/."
             },
             "target": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "const": "recipe"
-                    },
-                    "name": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 80,
-                      "pattern": "^[a-z][a-z0-9-]*$"
-                    },
-                    "namespace": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 39,
-                      "pattern": "^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
-                    },
-                    "version": {
-                      "type": "integer",
-                      "exclusiveMinimum": 0,
-                      "maximum": 9007199254740991
-                    },
-                    "digest": {
-                      "type": "string",
-                      "pattern": "^[0-9a-f]{64}$"
-                    },
-                    "registry": {
-                      "type": "string",
-                      "maxLength": 2048,
-                      "format": "uri"
-                    }
-                  },
-                  "required": [
-                    "kind",
-                    "name",
-                    "namespace",
-                    "version",
-                    "digest",
-                    "registry"
-                  ],
-                  "additionalProperties": false
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "skill"
                 },
-                {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "const": "skill"
-                    },
-                    "name": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 80,
-                      "pattern": "^[a-z][a-z0-9-]*$"
-                    },
-                    "namespace": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 39,
-                      "pattern": "^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
-                    },
-                    "version": {
-                      "type": "integer",
-                      "exclusiveMinimum": 0,
-                      "maximum": 9007199254740991
-                    },
-                    "digest": {
-                      "type": "string",
-                      "pattern": "^[0-9a-f]{64}$"
-                    },
-                    "registry": {
-                      "type": "string",
-                      "maxLength": 2048,
-                      "format": "uri"
-                    }
-                  },
-                  "required": [
-                    "kind",
-                    "name",
-                    "namespace",
-                    "version",
-                    "digest",
-                    "registry"
-                  ],
-                  "additionalProperties": false
+                "name": {
+                  "$ref": "#/definitions/S42"
+                },
+                "namespace": {
+                  "$ref": "#/definitions/S43"
+                },
+                "version": {
+                  "$ref": "#/definitions/S44"
+                },
+                "digest": {
+                  "$ref": "#/definitions/S39"
+                },
+                "registry": {
+                  "$ref": "#/definitions/S45"
                 }
-              ]
+              },
+              "required": [
+                "kind",
+                "name",
+                "namespace",
+                "version",
+                "digest",
+                "registry"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [
@@ -7463,7 +3740,35 @@ Attributes: read-only, non-destructive, idempotent, open-world.
   "required": [
     "operation"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "definitions": {
+    "S42": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "S43": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 39,
+      "pattern": "^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+    },
+    "S44": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "S39": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "S45": {
+      "type": "string",
+      "maxLength": 2048,
+      "format": "uri"
+    }
+  }
 }
 ```
 
@@ -7554,13 +3859,12 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "type": "boolean"
             },
             "runId": {
-              "type": "string",
-              "pattern": "^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S9"
             },
             "timelineCursor": {
               "default": 0,
               "type": "integer",
-              "minimum": -9007199254740991,
+              "minimum": 0,
               "maximum": 9007199254740991
             },
             "timelineLimit": {
@@ -7585,24 +3889,34 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
             },
             "agentId": {
               "description": "Return runs for one exact Agent.",
-              "type": "string",
-              "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S1"
+                }
+              ]
             },
             "createdAfter": {
               "description": "Return runs created at or after this time.",
-              "type": "string",
-              "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S10"
+                }
+              ]
             },
             "createdBefore": {
               "description": "Return runs created at or before this time.",
-              "type": "string",
-              "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S10"
+                }
+              ]
             },
             "cursor": {
-              "type": "string",
-              "pattern": "^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S9"
+                }
+              ]
             },
             "limit": {
               "default": 10,
@@ -7654,8 +3968,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "list_approvals"
             },
             "runId": {
-              "type": "string",
-              "pattern": "^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S9"
             }
           },
           "required": [
@@ -7672,12 +3985,14 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "list_conversations"
             },
             "agentId": {
-              "type": "string",
-              "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S1"
             },
             "cursor": {
-              "type": "string",
-              "pattern": "^session_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S11"
+                }
+              ]
             },
             "limit": {
               "type": "integer",
@@ -7699,12 +4014,10 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "inspect_conversation"
             },
             "agentId": {
-              "type": "string",
-              "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S1"
             },
             "sessionId": {
-              "type": "string",
-              "pattern": "^session_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S11"
             }
           },
           "required": [
@@ -7723,13 +4036,19 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
             },
             "agentId": {
               "description": "Required for start; optional as an exact list filter.",
-              "type": "string",
-              "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S1"
+                }
+              ]
             },
             "cursor": {
               "description": "For list, continue after this workflowId.",
-              "type": "string",
-              "pattern": "^workflow_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S12"
+                }
+              ]
             },
             "limit": {
               "description": "For list, bounded page size; defaults to 10.",
@@ -7780,8 +4099,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "type": "boolean"
             },
             "workflowId": {
-              "type": "string",
-              "pattern": "^workflow_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S12"
             }
           },
           "required": [
@@ -7798,52 +4116,27 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "list_inbox"
             },
             "agentId": {
-              "description": "Return items for one exact Agent.",
-              "type": "string",
-              "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S13"
             },
             "includeAcknowledged": {
-              "description": "Include acknowledged items; defaults to false.",
-              "type": "boolean"
+              "$ref": "#/definitions/S14"
             },
             "kinds": {
-              "description": "Return only these inbox kinds.",
-              "minItems": 1,
-              "maxItems": 4,
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": [
-                  "action_required",
-                  "deferred",
-                  "exception",
-                  "outcome"
-                ]
-              }
+              "$ref": "#/definitions/S15"
             },
             "needsAction": {
-              "description": "Return only items that do or do not require an owner action.",
-              "type": "boolean"
+              "$ref": "#/definitions/S16"
             },
             "occurredAfter": {
               "description": "Return items occurring after this time.",
-              "type": "string",
-              "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S10"
+                }
+              ]
             },
             "severities": {
-              "description": "Return only these deterministic severity classes.",
-              "minItems": 1,
-              "maxItems": 3,
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": [
-                  "attention_required",
-                  "info",
-                  "warning"
-                ]
-              }
+              "$ref": "#/definitions/S17"
             },
             "cursor": {
               "description": "Continue a list request after this opaque inbox item.",
@@ -7872,52 +4165,27 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
               "const": "inbox_overview"
             },
             "agentId": {
-              "description": "Return items for one exact Agent.",
-              "type": "string",
-              "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              "$ref": "#/definitions/S13"
             },
             "includeAcknowledged": {
-              "description": "Include acknowledged items; defaults to false.",
-              "type": "boolean"
+              "$ref": "#/definitions/S14"
             },
             "kinds": {
-              "description": "Return only these inbox kinds.",
-              "minItems": 1,
-              "maxItems": 4,
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": [
-                  "action_required",
-                  "deferred",
-                  "exception",
-                  "outcome"
-                ]
-              }
+              "$ref": "#/definitions/S15"
             },
             "needsAction": {
-              "description": "Return only items that do or do not require an owner action.",
-              "type": "boolean"
+              "$ref": "#/definitions/S16"
             },
             "occurredAfter": {
               "description": "Return items occurring after this time.",
-              "type": "string",
-              "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S10"
+                }
+              ]
             },
             "severities": {
-              "description": "Return only these deterministic severity classes.",
-              "minItems": 1,
-              "maxItems": 3,
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": [
-                  "attention_required",
-                  "info",
-                  "warning"
-                ]
-              }
+              "$ref": "#/definitions/S17"
             }
           },
           "required": [
@@ -7931,7 +4199,74 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
   "required": [
     "operation"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "definitions": {
+    "S9": {
+      "type": "string",
+      "pattern": "^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S1": {
+      "type": "string",
+      "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S10": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "S11": {
+      "type": "string",
+      "pattern": "^session_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S12": {
+      "type": "string",
+      "pattern": "^workflow_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S13": {
+      "description": "Return items for one exact Agent.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/S1"
+        }
+      ]
+    },
+    "S14": {
+      "description": "Include acknowledged items; defaults to false.",
+      "type": "boolean"
+    },
+    "S15": {
+      "description": "Return only these inbox kinds.",
+      "minItems": 1,
+      "maxItems": 4,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "action_required",
+          "deferred",
+          "exception",
+          "outcome"
+        ]
+      }
+    },
+    "S16": {
+      "description": "Return only items that do or do not require an owner action.",
+      "type": "boolean"
+    },
+    "S17": {
+      "description": "Return only these deterministic severity classes.",
+      "minItems": 1,
+      "maxItems": 3,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "attention_required",
+          "info",
+          "warning"
+        ]
+      }
+    }
+  }
 }
 ```
 
@@ -7941,7 +4276,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 **Publish Crewhelm Recipe**
 
-Prepare one live Agent revision as a reviewable Recipe candidate, authorize publication, then preview or publish it. Pass returned candidates unchanged and add a confirmation digest only after review.
+Draft one Agent revision as a Recipe, authorize it, then preview or publish the exact digest.
 
 Attributes: write, destructive, idempotent, open-world.
 
@@ -7963,24 +4298,7 @@ Attributes: write, destructive, idempotent, open-world.
               "const": "prepare"
             },
             "agent": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                }
-              },
-              "required": [
-                "id",
-                "revision"
-              ],
-              "additionalProperties": {},
-              "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
+              "$ref": "#/definitions/CrewhelmAgentReference"
             },
             "eventTriggers": {
               "default": [],
@@ -7989,40 +4307,20 @@ Attributes: write, destructive, idempotent, open-world.
               "items": {
                 "type": "object",
                 "properties": {
-                  "agentId": {
-                    "type": "string",
-                    "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                  },
-                  "agentRevision": {
-                    "type": "integer",
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991
-                  },
                   "id": {
                     "type": "string",
                     "pattern": "^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                     "description": "Opaque Event Trigger identity for exact lifecycle operations."
-                  },
-                  "revision": {
-                    "type": "integer",
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991
                   }
                 },
                 "required": [
-                  "agentId",
-                  "agentRevision",
-                  "id",
-                  "revision"
+                  "id"
                 ],
                 "additionalProperties": {}
               }
             },
             "license": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 160,
-              "pattern": "^[A-Za-z0-9().+ -]+$"
+              "$ref": "#/definitions/S48"
             },
             "schedules": {
               "default": [],
@@ -8031,39 +4329,224 @@ Attributes: write, destructive, idempotent, open-world.
               "items": {
                 "type": "object",
                 "properties": {
-                  "agentId": {
-                    "type": "string",
-                    "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                  },
-                  "agentRevision": {
-                    "type": "integer",
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991
-                  },
                   "id": {
                     "type": "string",
                     "pattern": "^schedule_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                  },
-                  "revision": {
-                    "type": "integer",
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991
                   }
                 },
                 "required": [
-                  "agentId",
-                  "agentRevision",
-                  "id",
-                  "revision"
+                  "id"
                 ],
                 "additionalProperties": {}
               }
+            },
+            "requestKey": {
+              "$ref": "#/definitions/S8"
             }
           },
           "required": [
             "kind",
             "agent",
             "license"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "inspect_section"
+            },
+            "draft": {
+              "$ref": "#/definitions/CrewhelmRecipePublicationDraftLocator"
+            },
+            "section": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "connections",
+                "discovery",
+                "inputs",
+                "name",
+                "operations",
+                "responsibility",
+                "sampleDeliverable",
+                "setupParameters",
+                "skills"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "draft",
+            "section"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "set_section"
+            },
+            "draft": {
+              "$ref": "#/definitions/CrewhelmRecipePublicationDraftLocator"
+            },
+            "requestKey": {
+              "$ref": "#/definitions/S8"
+            },
+            "section": {
+              "type": "string",
+              "enum": [
+                "connections",
+                "discovery",
+                "inputs",
+                "name",
+                "operations",
+                "responsibility",
+                "sampleDeliverable",
+                "setupParameters"
+              ]
+            },
+            "value": {
+              "description": "One replacement section. Crewhelm validates the exact Recipe contract."
+            }
+          },
+          "required": [
+            "kind",
+            "draft",
+            "section",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "set_skill_decision"
+            },
+            "decision": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "decision": {
+                      "type": "string",
+                      "const": "publish"
+                    },
+                    "license": {
+                      "$ref": "#/definitions/S48"
+                    },
+                    "local": {
+                      "$ref": "#/definitions/S49"
+                    },
+                    "requirement": {
+                      "type": "string",
+                      "enum": [
+                        "optional",
+                        "required"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "decision",
+                    "license",
+                    "local",
+                    "requirement"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "decision": {
+                      "type": "string",
+                      "const": "reference"
+                    },
+                    "local": {
+                      "$ref": "#/definitions/S49"
+                    },
+                    "requirement": {
+                      "type": "string",
+                      "enum": [
+                        "optional",
+                        "required"
+                      ]
+                    },
+                    "target": {
+                      "type": "object",
+                      "properties": {
+                        "digest": {
+                          "$ref": "#/definitions/S39"
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 80,
+                          "pattern": "^[a-z][a-z0-9-]*$"
+                        },
+                        "namespace": {
+                          "$ref": "#/definitions/S43"
+                        },
+                        "registry": {
+                          "$ref": "#/definitions/S45"
+                        },
+                        "version": {
+                          "$ref": "#/definitions/S44"
+                        }
+                      },
+                      "required": [
+                        "digest",
+                        "name",
+                        "namespace",
+                        "registry",
+                        "version"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "decision",
+                    "local",
+                    "requirement",
+                    "target"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "decision": {
+                      "type": "string",
+                      "const": "remove"
+                    },
+                    "local": {
+                      "$ref": "#/definitions/S49"
+                    }
+                  },
+                  "required": [
+                    "decision",
+                    "local"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "draft": {
+              "$ref": "#/definitions/CrewhelmRecipePublicationDraftLocator"
+            },
+            "requestKey": {
+              "$ref": "#/definitions/S8"
+            }
+          },
+          "required": [
+            "kind",
+            "decision",
+            "draft"
           ],
           "additionalProperties": false
         },
@@ -8091,20 +4574,20 @@ Attributes: write, destructive, idempotent, open-world.
           "properties": {
             "kind": {
               "type": "string",
-              "const": "publish"
+              "const": "preview_or_publish"
             },
             "authorization": {
               "type": "object",
               "properties": {
                 "attemptId": {
                   "type": "string",
-                  "format": "uuid",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
-                  "description": "A UUID that identifies one immutable Registry publication attempt."
+                  "minLength": 1,
+                  "maxLength": 128
                 },
                 "id": {
                   "type": "string",
-                  "pattern": "^publish_authorization_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                  "minLength": 1,
+                  "maxLength": 128
                 }
               },
               "required": [
@@ -8113,1752 +4596,38 @@ Attributes: write, destructive, idempotent, open-world.
               ],
               "additionalProperties": {}
             },
-            "candidate": {
-              "type": "object",
-              "properties": {
-                "agent": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                    },
-                    "revision": {
-                      "type": "integer",
-                      "exclusiveMinimum": 0,
-                      "maximum": 9007199254740991
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "revision"
-                  ],
-                  "additionalProperties": false
-                },
-                "recipe": {
-                  "type": "object",
-                  "properties": {
-                    "agent": {
-                      "type": "object",
-                      "properties": {
-                        "capabilities": {
-                          "minItems": 1,
-                          "maxItems": 16,
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "configuration": {
-                                "type": "object",
-                                "propertyNames": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 80
-                                },
-                                "additionalProperties": {
-                                  "anyOf": [
-                                    {
-                                      "anyOf": [
-                                        {
-                                          "type": "string",
-                                          "maxLength": 2048
-                                        },
-                                        {
-                                          "type": "number"
-                                        },
-                                        {
-                                          "type": "boolean"
-                                        },
-                                        {
-                                          "type": "null"
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "maxItems": 64,
-                                      "type": "array",
-                                      "items": {
-                                        "anyOf": [
-                                          {
-                                            "anyOf": [
-                                              {
-                                                "type": "string",
-                                                "maxLength": 2048
-                                              },
-                                              {
-                                                "type": "number"
-                                              },
-                                              {
-                                                "type": "boolean"
-                                              },
-                                              {
-                                                "type": "null"
-                                              }
-                                            ]
-                                          },
-                                          {
-                                            "maxItems": 64,
-                                            "type": "array",
-                                            "items": {
-                                              "anyOf": [
-                                                {
-                                                  "type": "string",
-                                                  "maxLength": 2048
-                                                },
-                                                {
-                                                  "type": "number"
-                                                },
-                                                {
-                                                  "type": "boolean"
-                                                },
-                                                {
-                                                  "type": "null"
-                                                }
-                                              ]
-                                            }
-                                          },
-                                          {
-                                            "type": "object",
-                                            "propertyNames": {
-                                              "type": "string",
-                                              "minLength": 1,
-                                              "maxLength": 80
-                                            },
-                                            "additionalProperties": {
-                                              "anyOf": [
-                                                {
-                                                  "type": "string",
-                                                  "maxLength": 2048
-                                                },
-                                                {
-                                                  "type": "number"
-                                                },
-                                                {
-                                                  "type": "boolean"
-                                                },
-                                                {
-                                                  "type": "null"
-                                                }
-                                              ]
-                                            }
-                                          }
-                                        ]
-                                      }
-                                    },
-                                    {
-                                      "type": "object",
-                                      "propertyNames": {
-                                        "type": "string",
-                                        "minLength": 1,
-                                        "maxLength": 80
-                                      },
-                                      "additionalProperties": {
-                                        "anyOf": [
-                                          {
-                                            "anyOf": [
-                                              {
-                                                "type": "string",
-                                                "maxLength": 2048
-                                              },
-                                              {
-                                                "type": "number"
-                                              },
-                                              {
-                                                "type": "boolean"
-                                              },
-                                              {
-                                                "type": "null"
-                                              }
-                                            ]
-                                          },
-                                          {
-                                            "maxItems": 64,
-                                            "type": "array",
-                                            "items": {
-                                              "anyOf": [
-                                                {
-                                                  "type": "string",
-                                                  "maxLength": 2048
-                                                },
-                                                {
-                                                  "type": "number"
-                                                },
-                                                {
-                                                  "type": "boolean"
-                                                },
-                                                {
-                                                  "type": "null"
-                                                }
-                                              ]
-                                            }
-                                          },
-                                          {
-                                            "type": "object",
-                                            "propertyNames": {
-                                              "type": "string",
-                                              "minLength": 1,
-                                              "maxLength": 80
-                                            },
-                                            "additionalProperties": {
-                                              "anyOf": [
-                                                {
-                                                  "type": "string",
-                                                  "maxLength": 2048
-                                                },
-                                                {
-                                                  "type": "number"
-                                                },
-                                                {
-                                                  "type": "boolean"
-                                                },
-                                                {
-                                                  "type": "null"
-                                                }
-                                              ]
-                                            }
-                                          }
-                                        ]
-                                      }
-                                    }
-                                  ]
-                                }
-                              },
-                              "id": {
-                                "type": "string",
-                                "minLength": 3,
-                                "maxLength": 80,
-                                "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
-                              },
-                              "schemaVersion": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": 1000
-                              }
-                            },
-                            "required": [
-                              "configuration",
-                              "id",
-                              "schemaVersion"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "executionLimits": {
-                          "type": "object",
-                          "properties": {
-                            "maxDurationSeconds": {
-                              "type": "integer",
-                              "minimum": 1,
-                              "maximum": 3600
-                            },
-                            "maxModelTokens": {
-                              "type": "integer",
-                              "minimum": 1,
-                              "maximum": 1000000
-                            },
-                            "maxToolCalls": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 100
-                            },
-                            "maxTurns": {
-                              "type": "integer",
-                              "minimum": 1,
-                              "maximum": 100
-                            }
-                          },
-                          "required": [
-                            "maxDurationSeconds",
-                            "maxModelTokens",
-                            "maxToolCalls",
-                            "maxTurns"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "instructions": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 8192
-                        },
-                        "suggestedName": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 80
-                        }
-                      },
-                      "required": [
-                        "capabilities",
-                        "executionLimits",
-                        "instructions",
-                        "suggestedName"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "connections": {
-                      "maxItems": 8,
-                      "type": "array",
-                      "items": {
-                        "oneOf": [
-                          {
-                            "type": "object",
-                            "properties": {
-                              "expiresAfterSeconds": {
-                                "anyOf": [
-                                  {
-                                    "type": "integer",
-                                    "minimum": 60,
-                                    "maximum": 31536000
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "limits": {
-                                "type": "object",
-                                "properties": {
-                                  "maxCallsPerRun": {
-                                    "type": "integer",
-                                    "minimum": 1,
-                                    "maximum": 100,
-                                    "description": "Owner-selected per-run call ceiling; choose the smallest useful value."
-                                  },
-                                  "maxConcurrency": {
-                                    "type": "integer",
-                                    "minimum": 1,
-                                    "maximum": 16,
-                                    "description": "Owner-selected concurrent-call ceiling; use 1 unless parallel calls are required."
-                                  },
-                                  "maxCostMicrousdPerCall": {
-                                    "type": "integer",
-                                    "minimum": -9007199254740991,
-                                    "maximum": 9007199254740991,
-                                    "description": "Owner-selected per-call cost ceiling in millionths of one US dollar."
-                                  },
-                                  "maxDurationMs": {
-                                    "type": "integer",
-                                    "minimum": 1,
-                                    "maximum": 300000,
-                                    "description": "Owner-selected per-call wall-clock ceiling in milliseconds."
-                                  },
-                                  "maxOutputBytes": {
-                                    "type": "integer",
-                                    "minimum": 1,
-                                    "maximum": 10485760,
-                                    "description": "Owner-selected per-call output ceiling in bytes."
-                                  }
-                                },
-                                "required": [
-                                  "maxCallsPerRun",
-                                  "maxConcurrency",
-                                  "maxCostMicrousdPerCall",
-                                  "maxDurationMs",
-                                  "maxOutputBytes"
-                                ],
-                                "additionalProperties": false
-                              },
-                              "description": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 240
-                              },
-                              "integration": {
-                                "type": "string",
-                                "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$"
-                              },
-                              "kind": {
-                                "type": "string",
-                                "const": "composio"
-                              },
-                              "slot": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 40,
-                                "pattern": "^[a-z][a-z0-9-]*$"
-                              },
-                              "tools": {
-                                "maxItems": 20,
-                                "type": "array",
-                                "items": {
-                                  "type": "object",
-                                  "properties": {
-                                    "authorization": {
-                                      "type": "string",
-                                      "enum": [
-                                        "approval_required",
-                                        "standing"
-                                      ]
-                                    },
-                                    "effect": {
-                                      "type": "string",
-                                      "enum": [
-                                        "read",
-                                        "write",
-                                        "destructive"
-                                      ]
-                                    },
-                                    "slug": {
-                                      "type": "string",
-                                      "pattern": "^[A-Z0-9][A-Z0-9_]{0,255}$"
-                                    },
-                                    "version": {
-                                      "type": "string",
-                                      "pattern": "^[0-9]{8}_[0-9]{2}$"
-                                    }
-                                  },
-                                  "required": [
-                                    "authorization",
-                                    "effect",
-                                    "slug",
-                                    "version"
-                                  ],
-                                  "additionalProperties": false
-                                }
-                              }
-                            },
-                            "required": [
-                              "expiresAfterSeconds",
-                              "limits",
-                              "description",
-                              "integration",
-                              "kind",
-                              "slot",
-                              "tools"
-                            ],
-                            "additionalProperties": false
-                          },
-                          {
-                            "type": "object",
-                            "properties": {
-                              "expiresAfterSeconds": {
-                                "anyOf": [
-                                  {
-                                    "type": "integer",
-                                    "minimum": 60,
-                                    "maximum": 31536000
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "limits": {
-                                "type": "object",
-                                "properties": {
-                                  "maxCallsPerRun": {
-                                    "type": "integer",
-                                    "minimum": 1,
-                                    "maximum": 100,
-                                    "description": "Owner-selected per-run call ceiling; choose the smallest useful value."
-                                  },
-                                  "maxConcurrency": {
-                                    "type": "integer",
-                                    "minimum": 1,
-                                    "maximum": 16,
-                                    "description": "Owner-selected concurrent-call ceiling; use 1 unless parallel calls are required."
-                                  },
-                                  "maxCostMicrousdPerCall": {
-                                    "type": "integer",
-                                    "minimum": -9007199254740991,
-                                    "maximum": 9007199254740991,
-                                    "description": "Owner-selected per-call cost ceiling in millionths of one US dollar."
-                                  },
-                                  "maxDurationMs": {
-                                    "type": "integer",
-                                    "minimum": 1,
-                                    "maximum": 300000,
-                                    "description": "Owner-selected per-call wall-clock ceiling in milliseconds."
-                                  },
-                                  "maxOutputBytes": {
-                                    "type": "integer",
-                                    "minimum": 1,
-                                    "maximum": 10485760,
-                                    "description": "Owner-selected per-call output ceiling in bytes."
-                                  }
-                                },
-                                "required": [
-                                  "maxCallsPerRun",
-                                  "maxConcurrency",
-                                  "maxCostMicrousdPerCall",
-                                  "maxDurationMs",
-                                  "maxOutputBytes"
-                                ],
-                                "additionalProperties": false
-                              },
-                              "authKind": {
-                                "type": "string",
-                                "enum": [
-                                  "public",
-                                  "bearer",
-                                  "oauth"
-                                ]
-                              },
-                              "authorization": {
-                                "type": "string",
-                                "enum": [
-                                  "approval_required",
-                                  "standing"
-                                ]
-                              },
-                              "description": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 240
-                              },
-                              "endpoint": {
-                                "type": "string",
-                                "maxLength": 2048,
-                                "format": "uri"
-                              },
-                              "kind": {
-                                "type": "string",
-                                "const": "remote_mcp"
-                              },
-                              "oauthScopes": {
-                                "maxItems": 32,
-                                "type": "array",
-                                "items": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 128,
-                                  "pattern": "^[\\x21\\x23-\\x5b\\x5d-\\x7e]+$"
-                                }
-                              },
-                              "requiredTools": {
-                                "minItems": 1,
-                                "maxItems": 100,
-                                "type": "array",
-                                "items": {
-                                  "type": "object",
-                                  "properties": {
-                                    "effect": {
-                                      "type": "string",
-                                      "enum": [
-                                        "write",
-                                        "destructive"
-                                      ]
-                                    },
-                                    "name": {
-                                      "type": "string",
-                                      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$"
-                                    }
-                                  },
-                                  "required": [
-                                    "effect",
-                                    "name"
-                                  ],
-                                  "additionalProperties": false
-                                }
-                              },
-                              "reviewedSnapshotDigest": {
-                                "type": "string",
-                                "pattern": "^[0-9a-f]{64}$"
-                              },
-                              "reviewedToolCount": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": 100
-                              },
-                              "slot": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 40,
-                                "pattern": "^[a-z][a-z0-9-]*$"
-                              }
-                            },
-                            "required": [
-                              "expiresAfterSeconds",
-                              "limits",
-                              "authKind",
-                              "authorization",
-                              "description",
-                              "endpoint",
-                              "kind",
-                              "oauthScopes",
-                              "requiredTools",
-                              "reviewedSnapshotDigest",
-                              "reviewedToolCount",
-                              "slot"
-                            ],
-                            "additionalProperties": false
-                          }
-                        ]
-                      }
-                    },
-                    "discovery": {
-                      "type": "object",
-                      "properties": {
-                        "description": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 320
-                        },
-                        "license": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 160,
-                          "pattern": "^[A-Za-z0-9().+ -]+$"
-                        },
-                        "provenance": {
-                          "oneOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "kind": {
-                                  "type": "string",
-                                  "const": "authored"
-                                }
-                              },
-                              "required": [
-                                "kind"
-                              ],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "commit": {
-                                  "type": "string",
-                                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
-                                },
-                                "kind": {
-                                  "type": "string",
-                                  "const": "repository"
-                                },
-                                "source": {
-                                  "type": "string",
-                                  "maxLength": 2048,
-                                  "format": "uri",
-                                  "description": "HTTPS attribution URL without credentials, query, or fragment."
-                                }
-                              },
-                              "required": [
-                                "commit",
-                                "kind",
-                                "source"
-                              ],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "kind": {
-                                  "type": "string",
-                                  "const": "web"
-                                },
-                                "source": {
-                                  "type": "string",
-                                  "maxLength": 2048,
-                                  "format": "uri",
-                                  "description": "HTTPS attribution URL without credentials, query, or fragment."
-                                }
-                              },
-                              "required": [
-                                "kind",
-                                "source"
-                              ],
-                              "additionalProperties": false
-                            }
-                          ]
-                        },
-                        "tags": {
-                          "maxItems": 12,
-                          "type": "array",
-                          "items": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 40,
-                            "pattern": "^[a-z][a-z0-9-]*$"
-                          }
-                        }
-                      },
-                      "required": [
-                        "description",
-                        "license",
-                        "provenance",
-                        "tags"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "inputs": {
-                      "maxItems": 16,
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "description": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 240
-                          },
-                          "kind": {
-                            "type": "string",
-                            "enum": [
-                              "brief",
-                              "invocation"
-                            ]
-                          },
-                          "name": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 40,
-                            "pattern": "^[a-z][a-z0-9-]*$"
-                          },
-                          "required": {
-                            "type": "boolean"
-                          }
-                        },
-                        "required": [
-                          "description",
-                          "kind",
-                          "name",
-                          "required"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "name": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 80,
-                      "pattern": "^[a-z][a-z0-9-]*$"
-                    },
-                    "operations": {
-                      "type": "object",
-                      "properties": {
-                        "eventTriggers": {
-                          "maxItems": 8,
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "briefInputNames": {
-                                "maxItems": 16,
-                                "type": "array",
-                                "items": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 40,
-                                  "pattern": "^[a-z][a-z0-9-]*$"
-                                }
-                              },
-                              "connectionSlot": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 40,
-                                "pattern": "^[a-z][a-z0-9-]*$"
-                              },
-                              "delivery": {
-                                "type": "string",
-                                "enum": [
-                                  "provider_polling",
-                                  "realtime"
-                                ]
-                              },
-                              "eventSlug": {
-                                "type": "string",
-                                "pattern": "^[A-Z0-9][A-Z0-9_]{0,255}$"
-                              },
-                              "eventVersion": {
-                                "type": "string",
-                                "pattern": "^[0-9]{8}_[0-9]{2}$"
-                              },
-                              "filters": {
-                                "type": "object",
-                                "propertyNames": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 128
-                                },
-                                "additionalProperties": {
-                                  "anyOf": [
-                                    {
-                                      "type": "boolean"
-                                    },
-                                    {
-                                      "type": "number"
-                                    },
-                                    {
-                                      "type": "string",
-                                      "maxLength": 2048
-                                    },
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "parameter": {
-                                          "type": "string",
-                                          "minLength": 1,
-                                          "maxLength": 40,
-                                          "pattern": "^[a-z][a-z0-9-]*$"
-                                        }
-                                      },
-                                      "required": [
-                                        "parameter"
-                                      ],
-                                      "additionalProperties": false
-                                    }
-                                  ]
-                                }
-                              },
-                              "instruction": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 16384
-                              },
-                              "integration": {
-                                "type": "string",
-                                "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$"
-                              },
-                              "name": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 80,
-                                "pattern": "^[a-z][a-z0-9-]*$"
-                              },
-                              "outputContract": {
-                                "oneOf": [
-                                  {
-                                    "type": "object",
-                                    "properties": {
-                                      "kind": {
-                                        "type": "string",
-                                        "const": "markdown"
-                                      }
-                                    },
-                                    "required": [
-                                      "kind"
-                                    ],
-                                    "additionalProperties": false
-                                  },
-                                  {
-                                    "type": "object",
-                                    "properties": {
-                                      "kind": {
-                                        "type": "string",
-                                        "const": "json"
-                                      },
-                                      "schema": {
-                                        "type": "object",
-                                        "properties": {
-                                          "jsonSchema": {
-                                            "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
-                                            "type": "object",
-                                            "propertyNames": {
-                                              "type": "string"
-                                            },
-                                            "additionalProperties": {
-                                              "$ref": "#/definitions/__schema0"
-                                            }
-                                          },
-                                          "name": {
-                                            "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 64,
-                                            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-                                          },
-                                          "version": {
-                                            "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 32,
-                                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-                                          }
-                                        },
-                                        "required": [
-                                          "name",
-                                          "version"
-                                        ],
-                                        "additionalProperties": false
-                                      }
-                                    },
-                                    "required": [
-                                      "kind",
-                                      "schema"
-                                    ],
-                                    "additionalProperties": false
-                                  }
-                                ]
-                              }
-                            },
-                            "required": [
-                              "connectionSlot",
-                              "delivery",
-                              "eventSlug",
-                              "eventVersion",
-                              "filters",
-                              "instruction",
-                              "integration",
-                              "name",
-                              "outputContract"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "primary": {
-                          "oneOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "inputNames": {
-                                  "maxItems": 16,
-                                  "type": "array",
-                                  "items": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "maxLength": 40,
-                                    "pattern": "^[a-z][a-z0-9-]*$"
-                                  }
-                                },
-                                "kind": {
-                                  "type": "string",
-                                  "const": "run"
-                                },
-                                "name": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 80,
-                                  "pattern": "^[a-z][a-z0-9-]*$"
-                                },
-                                "outputContract": {
-                                  "oneOf": [
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "kind": {
-                                          "type": "string",
-                                          "const": "markdown"
-                                        }
-                                      },
-                                      "required": [
-                                        "kind"
-                                      ],
-                                      "additionalProperties": false
-                                    },
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "kind": {
-                                          "type": "string",
-                                          "const": "json"
-                                        },
-                                        "schema": {
-                                          "type": "object",
-                                          "properties": {
-                                            "jsonSchema": {
-                                              "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
-                                              "type": "object",
-                                              "propertyNames": {
-                                                "type": "string"
-                                              },
-                                              "additionalProperties": {
-                                                "$ref": "#/definitions/__schema0"
-                                              }
-                                            },
-                                            "name": {
-                                              "type": "string",
-                                              "minLength": 1,
-                                              "maxLength": 64,
-                                              "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-                                            },
-                                            "version": {
-                                              "type": "string",
-                                              "minLength": 1,
-                                              "maxLength": 32,
-                                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-                                            }
-                                          },
-                                          "required": [
-                                            "name",
-                                            "version"
-                                          ],
-                                          "additionalProperties": false
-                                        }
-                                      },
-                                      "required": [
-                                        "kind",
-                                        "schema"
-                                      ],
-                                      "additionalProperties": false
-                                    }
-                                  ]
-                                },
-                                "prompt": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 16384
-                                }
-                              },
-                              "required": [
-                                "inputNames",
-                                "kind",
-                                "name",
-                                "outputContract",
-                                "prompt"
-                              ],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "inputNames": {
-                                  "maxItems": 16,
-                                  "type": "array",
-                                  "items": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "maxLength": 40,
-                                    "pattern": "^[a-z][a-z0-9-]*$"
-                                  }
-                                },
-                                "kind": {
-                                  "type": "string",
-                                  "const": "workflow"
-                                },
-                                "name": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 80,
-                                  "pattern": "^[a-z][a-z0-9-]*$"
-                                },
-                                "objective": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 4096
-                                },
-                                "outputContract": {
-                                  "oneOf": [
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "kind": {
-                                          "type": "string",
-                                          "const": "markdown"
-                                        }
-                                      },
-                                      "required": [
-                                        "kind"
-                                      ],
-                                      "additionalProperties": false
-                                    },
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "kind": {
-                                          "type": "string",
-                                          "const": "json"
-                                        },
-                                        "schema": {
-                                          "type": "object",
-                                          "properties": {
-                                            "jsonSchema": {
-                                              "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
-                                              "type": "object",
-                                              "propertyNames": {
-                                                "type": "string"
-                                              },
-                                              "additionalProperties": {
-                                                "$ref": "#/definitions/__schema0"
-                                              }
-                                            },
-                                            "name": {
-                                              "type": "string",
-                                              "minLength": 1,
-                                              "maxLength": 64,
-                                              "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-                                            },
-                                            "version": {
-                                              "type": "string",
-                                              "minLength": 1,
-                                              "maxLength": 32,
-                                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-                                            }
-                                          },
-                                          "required": [
-                                            "name",
-                                            "version"
-                                          ],
-                                          "additionalProperties": false
-                                        }
-                                      },
-                                      "required": [
-                                        "kind",
-                                        "schema"
-                                      ],
-                                      "additionalProperties": false
-                                    }
-                                  ]
-                                },
-                                "stages": {
-                                  "minItems": 2,
-                                  "maxItems": 8,
-                                  "type": "array",
-                                  "items": {
-                                    "type": "object",
-                                    "properties": {
-                                      "name": {
-                                        "type": "string",
-                                        "minLength": 1,
-                                        "maxLength": 80,
-                                        "description": "Short progress label for one ordered stage."
-                                      },
-                                      "prompt": {
-                                        "type": "string",
-                                        "minLength": 1,
-                                        "maxLength": 11264,
-                                        "description": "One bounded Run instruction. Crewhelm admits it with the shared objective and exact durable Session produced by the prior stage."
-                                      }
-                                    },
-                                    "required": [
-                                      "name",
-                                      "prompt"
-                                    ],
-                                    "additionalProperties": false
-                                  }
-                                }
-                              },
-                              "required": [
-                                "inputNames",
-                                "kind",
-                                "name",
-                                "objective",
-                                "outputContract",
-                                "stages"
-                              ],
-                              "additionalProperties": false
-                            }
-                          ]
-                        },
-                        "schedules": {
-                          "maxItems": 8,
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "briefInputNames": {
-                                "maxItems": 16,
-                                "type": "array",
-                                "items": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 40,
-                                  "pattern": "^[a-z][a-z0-9-]*$"
-                                }
-                              },
-                              "instruction": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 16384
-                              },
-                              "name": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 80,
-                                "pattern": "^[a-z][a-z0-9-]*$"
-                              },
-                              "outputContract": {
-                                "oneOf": [
-                                  {
-                                    "type": "object",
-                                    "properties": {
-                                      "kind": {
-                                        "type": "string",
-                                        "const": "markdown"
-                                      }
-                                    },
-                                    "required": [
-                                      "kind"
-                                    ],
-                                    "additionalProperties": false
-                                  },
-                                  {
-                                    "type": "object",
-                                    "properties": {
-                                      "kind": {
-                                        "type": "string",
-                                        "const": "json"
-                                      },
-                                      "schema": {
-                                        "type": "object",
-                                        "properties": {
-                                          "jsonSchema": {
-                                            "description": "Restricted object-root JSON Schema: scalar, array, and nested object types; required, enum, and basic bounds; additionalProperties must be false. Remote references, recursion, patterns, and composition are unsupported.",
-                                            "type": "object",
-                                            "propertyNames": {
-                                              "type": "string"
-                                            },
-                                            "additionalProperties": {
-                                              "$ref": "#/definitions/__schema0"
-                                            }
-                                          },
-                                          "name": {
-                                            "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 64,
-                                            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-                                          },
-                                          "version": {
-                                            "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 32,
-                                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-                                          }
-                                        },
-                                        "required": [
-                                          "name",
-                                          "version"
-                                        ],
-                                        "additionalProperties": false
-                                      }
-                                    },
-                                    "required": [
-                                      "kind",
-                                      "schema"
-                                    ],
-                                    "additionalProperties": false
-                                  }
-                                ]
-                              },
-                              "trigger": {
-                                "anyOf": [
-                                  {
-                                    "type": "object",
-                                    "properties": {
-                                      "intervalSeconds": {
-                                        "type": "integer",
-                                        "minimum": 60,
-                                        "maximum": 604800
-                                      },
-                                      "type": {
-                                        "type": "string",
-                                        "const": "interval"
-                                      }
-                                    },
-                                    "required": [
-                                      "intervalSeconds",
-                                      "type"
-                                    ],
-                                    "additionalProperties": false
-                                  },
-                                  {
-                                    "type": "object",
-                                    "properties": {
-                                      "at": {
-                                        "type": "string",
-                                        "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"
-                                      },
-                                      "frequency": {
-                                        "type": "string",
-                                        "const": "daily"
-                                      },
-                                      "timeZone": {
-                                        "type": "string",
-                                        "const": "owner-selected"
-                                      },
-                                      "type": {
-                                        "type": "string",
-                                        "const": "calendar"
-                                      }
-                                    },
-                                    "required": [
-                                      "at",
-                                      "frequency",
-                                      "timeZone",
-                                      "type"
-                                    ],
-                                    "additionalProperties": false
-                                  },
-                                  {
-                                    "type": "object",
-                                    "properties": {
-                                      "at": {
-                                        "type": "string",
-                                        "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"
-                                      },
-                                      "daysOfWeek": {
-                                        "minItems": 1,
-                                        "maxItems": 7,
-                                        "type": "array",
-                                        "items": {
-                                          "type": "string",
-                                          "enum": [
-                                            "monday",
-                                            "tuesday",
-                                            "wednesday",
-                                            "thursday",
-                                            "friday",
-                                            "saturday",
-                                            "sunday"
-                                          ]
-                                        }
-                                      },
-                                      "frequency": {
-                                        "type": "string",
-                                        "const": "weekly"
-                                      },
-                                      "timeZone": {
-                                        "type": "string",
-                                        "const": "owner-selected"
-                                      },
-                                      "type": {
-                                        "type": "string",
-                                        "const": "calendar"
-                                      }
-                                    },
-                                    "required": [
-                                      "at",
-                                      "daysOfWeek",
-                                      "frequency",
-                                      "timeZone",
-                                      "type"
-                                    ],
-                                    "additionalProperties": false
-                                  },
-                                  {
-                                    "type": "object",
-                                    "properties": {
-                                      "at": {
-                                        "type": "string",
-                                        "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"
-                                      },
-                                      "dayOfMonth": {
-                                        "type": "integer",
-                                        "minimum": 1,
-                                        "maximum": 31
-                                      },
-                                      "frequency": {
-                                        "type": "string",
-                                        "const": "monthly"
-                                      },
-                                      "timeZone": {
-                                        "type": "string",
-                                        "const": "owner-selected"
-                                      },
-                                      "type": {
-                                        "type": "string",
-                                        "const": "calendar"
-                                      }
-                                    },
-                                    "required": [
-                                      "at",
-                                      "dayOfMonth",
-                                      "frequency",
-                                      "timeZone",
-                                      "type"
-                                    ],
-                                    "additionalProperties": false
-                                  }
-                                ]
-                              }
-                            },
-                            "required": [
-                              "instruction",
-                              "name",
-                              "outputContract",
-                              "trigger"
-                            ],
-                            "additionalProperties": false
-                          }
-                        }
-                      },
-                      "required": [
-                        "eventTriggers",
-                        "primary",
-                        "schedules"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "responsibility": {
-                      "type": "object",
-                      "properties": {
-                        "boundaries": {
-                          "maxItems": 16,
-                          "type": "array",
-                          "items": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 320
-                          }
-                        },
-                        "outcome": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 2048
-                        },
-                        "summary": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 320
-                        },
-                        "title": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 80
-                        }
-                      },
-                      "required": [
-                        "boundaries",
-                        "outcome",
-                        "summary",
-                        "title"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "sampleDeliverable": {
-                      "oneOf": [
-                        {
-                          "type": "object",
-                          "properties": {
-                            "content": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 16384
-                            },
-                            "kind": {
-                              "type": "string",
-                              "const": "markdown"
-                            }
-                          },
-                          "required": [
-                            "content",
-                            "kind"
-                          ],
-                          "additionalProperties": false
-                        },
-                        {
-                          "type": "object",
-                          "properties": {
-                            "content": {
-                              "allOf": [
-                                {
-                                  "$ref": "#/definitions/__schema1"
-                                }
-                              ]
-                            },
-                            "kind": {
-                              "type": "string",
-                              "const": "json"
-                            }
-                          },
-                          "required": [
-                            "kind"
-                          ],
-                          "additionalProperties": false
-                        }
-                      ]
-                    },
-                    "schemaVersion": {
-                      "type": "number",
-                      "const": 1
-                    },
-                    "setupParameters": {
-                      "maxItems": 16,
-                      "type": "array",
-                      "items": {
-                        "oneOf": [
-                          {
-                            "type": "object",
-                            "properties": {
-                              "default": {
-                                "type": "string",
-                                "maxLength": 1024
-                              },
-                              "description": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 160
-                              },
-                              "name": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 40,
-                                "pattern": "^[a-z][a-z0-9-]*$"
-                              },
-                              "type": {
-                                "type": "string",
-                                "const": "string"
-                              }
-                            },
-                            "required": [
-                              "description",
-                              "name",
-                              "type"
-                            ],
-                            "additionalProperties": false
-                          },
-                          {
-                            "type": "object",
-                            "properties": {
-                              "default": {
-                                "type": "integer",
-                                "minimum": -9007199254740991,
-                                "maximum": 9007199254740991
-                              },
-                              "description": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 160
-                              },
-                              "maximum": {
-                                "type": "integer",
-                                "minimum": -9007199254740991,
-                                "maximum": 9007199254740991
-                              },
-                              "minimum": {
-                                "type": "integer",
-                                "minimum": -9007199254740991,
-                                "maximum": 9007199254740991
-                              },
-                              "name": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 40,
-                                "pattern": "^[a-z][a-z0-9-]*$"
-                              },
-                              "type": {
-                                "type": "string",
-                                "const": "integer"
-                              }
-                            },
-                            "required": [
-                              "description",
-                              "name",
-                              "type"
-                            ],
-                            "additionalProperties": false
-                          },
-                          {
-                            "type": "object",
-                            "properties": {
-                              "default": {
-                                "type": "boolean"
-                              },
-                              "description": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 160
-                              },
-                              "name": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 40,
-                                "pattern": "^[a-z][a-z0-9-]*$"
-                              },
-                              "type": {
-                                "type": "string",
-                                "const": "boolean"
-                              }
-                            },
-                            "required": [
-                              "description",
-                              "name",
-                              "type"
-                            ],
-                            "additionalProperties": false
-                          }
-                        ]
-                      }
-                    }
-                  },
-                  "required": [
-                    "agent",
-                    "connections",
-                    "discovery",
-                    "inputs",
-                    "name",
-                    "operations",
-                    "responsibility",
-                    "sampleDeliverable",
-                    "schemaVersion",
-                    "setupParameters"
-                  ],
-                  "additionalProperties": false
-                },
-                "skills": {
-                  "maxItems": 8,
-                  "type": "array",
-                  "items": {
-                    "oneOf": [
-                      {
-                        "type": "object",
-                        "properties": {
-                          "decision": {
-                            "type": "string",
-                            "const": "publish"
-                          },
-                          "license": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 160,
-                            "pattern": "^[A-Za-z0-9().+ -]+$"
-                          },
-                          "local": {
-                            "type": "object",
-                            "properties": {
-                              "id": {
-                                "type": "string",
-                                "pattern": "^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                              },
-                              "version": {
-                                "type": "integer",
-                                "exclusiveMinimum": 0,
-                                "maximum": 9007199254740991
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "version"
-                            ],
-                            "additionalProperties": false
-                          },
-                          "requirement": {
-                            "type": "string",
-                            "enum": [
-                              "optional",
-                              "required"
-                            ]
-                          }
-                        },
-                        "required": [
-                          "decision",
-                          "license",
-                          "local",
-                          "requirement"
-                        ],
-                        "additionalProperties": false
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "decision": {
-                            "type": "string",
-                            "const": "reference"
-                          },
-                          "local": {
-                            "type": "object",
-                            "properties": {
-                              "id": {
-                                "type": "string",
-                                "pattern": "^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                              },
-                              "version": {
-                                "type": "integer",
-                                "exclusiveMinimum": 0,
-                                "maximum": 9007199254740991
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "version"
-                            ],
-                            "additionalProperties": false
-                          },
-                          "requirement": {
-                            "type": "string",
-                            "enum": [
-                              "optional",
-                              "required"
-                            ]
-                          },
-                          "target": {
-                            "type": "object",
-                            "properties": {
-                              "digest": {
-                                "type": "string",
-                                "pattern": "^[0-9a-f]{64}$"
-                              },
-                              "name": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 80,
-                                "pattern": "^[a-z][a-z0-9-]*$"
-                              },
-                              "namespace": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 39,
-                                "pattern": "^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
-                              },
-                              "registry": {
-                                "type": "string",
-                                "maxLength": 2048,
-                                "format": "uri"
-                              },
-                              "version": {
-                                "type": "integer",
-                                "exclusiveMinimum": 0,
-                                "maximum": 9007199254740991
-                              }
-                            },
-                            "required": [
-                              "digest",
-                              "name",
-                              "namespace",
-                              "registry",
-                              "version"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "required": [
-                          "decision",
-                          "local",
-                          "requirement",
-                          "target"
-                        ],
-                        "additionalProperties": false
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "decision": {
-                            "type": "string",
-                            "const": "remove"
-                          },
-                          "local": {
-                            "type": "object",
-                            "properties": {
-                              "id": {
-                                "type": "string",
-                                "pattern": "^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                              },
-                              "version": {
-                                "type": "integer",
-                                "exclusiveMinimum": 0,
-                                "maximum": 9007199254740991
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "version"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "required": [
-                          "decision",
-                          "local"
-                        ],
-                        "additionalProperties": false
-                      }
-                    ]
-                  }
-                }
-              },
-              "required": [
-                "agent",
-                "recipe",
-                "skills"
-              ],
-              "additionalProperties": false
+            "draft": {
+              "$ref": "#/definitions/CrewhelmRecipePublicationDraftLocator"
             },
             "expectedConfirmationDigest": {
-              "type": "string",
-              "pattern": "^[0-9a-f]{64}$"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/S39"
+                }
+              ]
             }
           },
           "required": [
             "kind",
             "authorization",
-            "candidate"
+            "draft"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "discard_publish_draft"
+            },
+            "draft": {
+              "$ref": "#/definitions/CrewhelmRecipePublicationDraftLocator"
+            }
+          },
+          "required": [
+            "kind",
+            "draft"
           ],
           "additionalProperties": false
         }
@@ -9870,67 +4639,117 @@ Attributes: write, destructive, idempotent, open-world.
   ],
   "additionalProperties": false,
   "definitions": {
-    "__schema0": {
-      "anyOf": [
-        {
-          "type": "string"
+    "CrewhelmAgentReference": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/S1"
         },
-        {
-          "type": "number"
-        },
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "null"
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/__schema0"
-          }
-        },
-        {
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {
-            "$ref": "#/definitions/__schema0"
-          }
+        "revision": {
+          "$ref": "#/definitions/S2"
         }
-      ]
+      },
+      "required": [
+        "id",
+        "revision"
+      ],
+      "additionalProperties": {},
+      "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
     },
-    "__schema1": {
-      "anyOf": [
-        {
-          "type": "string"
+    "S1": {
+      "type": "string",
+      "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S2": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "S48": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9().+ -]+$"
+    },
+    "S8": {
+      "description": "Optional retry identity. Omit it on the ordinary happy path.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "CrewhelmRecipePublicationDraftLocator": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "$ref": "#/definitions/S39"
         },
-        {
-          "type": "number"
+        "id": {
+          "type": "string",
+          "pattern": "^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
         },
-        {
-          "type": "boolean"
+        "kind": {
+          "type": "string",
+          "const": "recipe-publication"
         },
-        {
-          "type": "null"
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/__schema1"
-          }
-        },
-        {
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {
-            "$ref": "#/definitions/__schema1"
-          }
+        "revision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
         }
-      ]
+      },
+      "required": [
+        "digest",
+        "id",
+        "kind",
+        "revision"
+      ],
+      "additionalProperties": {}
+    },
+    "S39": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "S49": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/S34"
+        },
+        "version": {
+          "$ref": "#/definitions/S36"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "S34": {
+      "type": "string",
+      "pattern": "^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S36": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "S43": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 39,
+      "pattern": "^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+    },
+    "S45": {
+      "type": "string",
+      "maxLength": 2048,
+      "format": "uri"
+    },
+    "S44": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
     }
   }
 }
@@ -10002,21 +4821,14 @@ Attributes: write, destructive, idempotent, closed-world.
               "type": "object",
               "properties": {
                 "id": {
-                  "type": "string",
-                  "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-                },
-                "revision": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
+                  "$ref": "#/definitions/S1"
                 }
               },
               "required": [
-                "id",
-                "revision"
+                "id"
               ],
               "additionalProperties": {},
-              "description": "Copy-ready Agent identity and immutable revision returned by Crewhelm."
+              "description": "Copy-ready Agent identity returned by Crewhelm."
             }
           },
           "required": [
@@ -10038,8 +4850,7 @@ Attributes: write, destructive, idempotent, closed-world.
                   "type": "object",
                   "properties": {
                     "id": {
-                      "type": "string",
-                      "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                      "$ref": "#/definitions/S31"
                     }
                   },
                   "required": [
@@ -10051,8 +4862,7 @@ Attributes: write, destructive, idempotent, closed-world.
                   "type": "object",
                   "properties": {
                     "connectionId": {
-                      "type": "string",
-                      "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                      "$ref": "#/definitions/S31"
                     }
                   },
                   "required": [
@@ -10102,7 +4912,17 @@ Attributes: write, destructive, idempotent, closed-world.
   "required": [
     "operation"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "definitions": {
+    "S1": {
+      "type": "string",
+      "pattern": "^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "S31": {
+      "type": "string",
+      "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    }
+  }
 }
 ```
 
@@ -10112,7 +4932,7 @@ Attributes: write, destructive, idempotent, closed-world.
 
 **Crewhelm status**
 
-Start here. Return a cheap owner-local fleet dashboard with usage, inbox attention, diagnostics, and at most three bounded next-step suggestions. Suggestions are advisory and never grant authority.
+Start here for an owner-local dashboard, diagnostics, and at most three advisory next steps.
 
 Attributes: read-only, non-destructive, idempotent, closed-world.
 

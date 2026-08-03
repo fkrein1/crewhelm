@@ -132,6 +132,9 @@ Installation durably records that exact plan, imports or reuses each selected pi
 creates a disabled Agent with the resulting local Skill references. Selected Connection bindings,
 Brief bindings, the primary operation, Schedules, and Event Triggers remain inert in the
 installation receipt.
+MCP builds the plan as a short-lived owner-local draft: prepare the exact public target, update
+setup values and bindings one decision at a time, preview the stored draft, then install that exact
+draft and confirmation digest. Large plans are not copied through every MCP turn.
 Granting Connection authority or activating an operation is a separate explicit owner action. If a
 write is interrupted, the returned installation ID resumes deterministic child writes from the same
 stored plan; it does not fetch a changed public plan or duplicate completed imports.

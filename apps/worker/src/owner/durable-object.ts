@@ -141,6 +141,7 @@ import {
 } from "./agent-channel/index.js";
 import { AgentRegistry, deniedAgent, deniedConnectionAttachment } from "./agents/index.js";
 import { AgentBlueprints, deniedAgentBlueprint } from "./agent-blueprints/index.js";
+import { McpAuthoringDrafts, deniedMcpAuthoringDraft } from "./authoring-drafts/index.js";
 import {
   Connections,
   deniedConnectionAuthorizationReturn,
@@ -322,6 +323,7 @@ export class OwnerControlPlane extends DurableObject {
   readonly #briefs: Briefs;
   readonly #recipes: Recipes;
   readonly #recipePublications: RecipePublications;
+  readonly #mcpAuthoringDrafts: McpAuthoringDrafts;
   readonly #workflows: AgentWorkflows;
 
   constructor(state: DurableObjectState, environment: Cloudflare.Env) {
@@ -439,6 +441,7 @@ export class OwnerControlPlane extends DurableObject {
       this.#agentEventTriggers,
       environment.BETTER_AUTH_SECRET,
     );
+    this.#mcpAuthoringDrafts = new McpAuthoringDrafts(this.#database);
     this.#composioWebhookIngress = new ComposioWebhookIngress(
       this.#database,
       this.#storage,
@@ -719,6 +722,13 @@ export class OwnerControlPlane extends DurableObject {
     return authorization.ok
       ? this.#recipePublications.handle(authorization.authority, request.data)
       : deniedRecipePublication(authorization.code);
+  }
+
+  async mcpAuthoringDrafts(authorityInput: unknown, input: unknown): Promise<unknown> {
+    const authorization = this.#authorize(authorityInput, OWNER_WRITE_SCOPE);
+    return authorization.ok
+      ? this.#mcpAuthoringDrafts.handle(authorization.authority, input)
+      : deniedMcpAuthoringDraft(authorization.code);
   }
 
   async createRunAdmission(

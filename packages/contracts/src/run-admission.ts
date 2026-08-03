@@ -464,7 +464,7 @@ export const inspectRunInputSchema = z.strictObject({
     .default(true)
     .describe("Include compact admitted and consumed run usage."),
   runId: runIdSchema,
-  timelineCursor: z.number().int().nonnegative().safe().default(0),
+  timelineCursor: z.number().int().safe().nonnegative().default(0),
   timelineLimit: z.number().int().min(1).max(MAXIMUM_RUN_TIMELINE_PAGE_ITEMS).default(20),
 });
 

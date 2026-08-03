@@ -27,14 +27,15 @@ owner-local IDs, history, or runtime telemetry.
 ## Prepare and review the candidate
 
 1. Call `crewhelm_publish_recipe` with `operation.kind: "prepare"`, the returned Agent, license, and
-   selected Schedule and Event Trigger objects.
-2. Review the returned candidate. Crewhelm copies the Agent instructions, limits, portable
+   selected Schedule and Event Trigger objects. Keep the returned draft reference unchanged.
+2. Inspect only the candidate sections you need with `operation.kind: "inspect_section"`. Crewhelm copies the Agent instructions, limits, portable
    capabilities, and local Skill coordinates; converts selected recurring operations and attached
    Connections into portable declarations; and replaces exact recurring Brief references with
    named public inputs.
-3. Edit public discovery copy, responsibility boundaries, tags, sample deliverable, operation
-   presentation, Connection requirements, Brief input descriptions, and Skill decisions where
-   needed. Keep the copied Agent executable definition exact.
+3. Replace one editable section at a time with `operation.kind: "set_section"`. Use
+   `set_skill_decision` separately for each local Skill. Every edit returns a new draft revision;
+   use that returned reference for the next edit. Keep the copied Agent executable definition
+   exact.
 
 Preparation is owner-local and has no public effect. Exact Brief and Connection IDs remain local.
 
@@ -48,8 +49,8 @@ Preparation is owner-local and has no public effect. Exact Brief and Connection 
 
 ## Make every Skill decision
 
-For every exact local Skill ID and version attached to the Agent, choose one action in the
-publication candidate:
+Inspect the `skills` section, then use `operation.kind: "set_skill_decision"` for every exact local
+Skill ID and version attached to the Agent:
 
 - `publish`: publish the same bounded text files as a new public Skill version and declare its
   license and whether it is required or optional.
@@ -62,19 +63,21 @@ Skill Markdown stays inert public package content and grants no authority.
 
 ## Preview and publish
 
-1. Call `crewhelm_publish_recipe` with `operation.kind: "publish"`, the returned authorization, and
-   the reviewed candidate. Omit `expectedConfirmationDigest` to preview.
+1. Call `crewhelm_publish_recipe` with `operation.kind: "preview_or_publish"`, the returned
+   authorization, and latest draft. Omit `expectedConfirmationDigest` to preview.
 2. Confirm `ready: true`. Review the publisher namespace, exact next Recipe and Skill versions,
    public digests, file paths, Skill provenance and warning counts, requested authority, operations,
    limits, and the complete exclusions list.
-3. Preserve `confirmationDigest`, then repeat the same operation with the authorization and
-   candidate unchanged plus `expectedConfirmationDigest` to publish.
+3. Preserve `confirmationDigest`, then repeat the same operation with the authorization and draft
+   unchanged plus `expectedConfirmationDigest` to publish.
+4. After a confirmed publication, or when abandoning the candidate, call
+   `operation.kind: "discard_publish_draft"` with the latest draft reference.
 
 The Registry independently revalidates the package, sensitive-content checks, namespace, exact
 next versions, daily quotas, and immutable object writes. A concurrent publication can make a
 preview stale; request a new preview and confirm its new digest.
 
-Retry an uncertain response with the same authorization object and unchanged candidate. The
+Retry an uncertain response with the same authorization object and unchanged draft. The
 authorization carries the publication attempt identity; callers do not construct or copy a
 separate retry key.
 

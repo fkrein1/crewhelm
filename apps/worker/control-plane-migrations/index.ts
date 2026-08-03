@@ -32,6 +32,7 @@ import migration30 from "./0030_mixed_corsair.sql";
 import migration31 from "./0031_freezing_master_chief.sql";
 import migration32 from "./0032_panoramic_speed_demon.sql";
 import migration33 from "./0033_safe_sir_ram.sql";
+import migration34 from "./0034_compact_misty_knight.sql";
 
 export const controlPlaneMigrations = [
   {
@@ -203,6 +204,11 @@ export const controlPlaneMigrations = [
     name: "0033_safe_sir_ram",
     sql: migration33,
     version: 34,
+  },
+  {
+    name: "0034_compact_misty_knight",
+    sql: migration34,
+    version: 35,
   },
 ] as const;
 

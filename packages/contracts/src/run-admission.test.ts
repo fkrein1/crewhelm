@@ -1,8 +1,10 @@
+import * as z from "zod";
 import { describe, expect, it } from "vitest";
 
 import {
   MAXIMUM_RUN_TIMELINE_EVENTS,
   createRunAdmissionInputSchema,
+  inspectRunInputSchema,
   startRunInputSchema,
 } from "./run-admission.js";
 
@@ -11,6 +13,12 @@ const branchId = "branch_00000000-0000-4000-8000-000000000001";
 const sessionId = "session_00000000-0000-4000-8000-000000000001";
 
 describe("run timeline budget", () => {
+  it("emits the nonnegative timeline cursor bound", () => {
+    expect(z.toJSONSchema(inspectRunInputSchema).properties?.timelineCursor).toMatchObject({
+      minimum: 0,
+    });
+  });
+
   it("retains the legal worst-case run envelope", () => {
     const runStateEvents = 4;
     const inferenceEvents = 100;

@@ -55,13 +55,12 @@ describe("MCP first-use guidance", () => {
   it("keeps initialization guidance compact and centered on bounded discovery", () => {
     expect(new TextEncoder().encode(MCP_SERVER_INSTRUCTIONS).byteLength).toBeLessThanOrEqual(1_536);
     expect(MCP_SERVER_INSTRUCTIONS).toContain("Start with crewhelm_status");
-    expect(MCP_SERVER_INSTRUCTIONS).toContain("Choose one typed intent operation");
-    expect(MCP_SERVER_INSTRUCTIONS).toContain("Attach returned Brief objects");
-    expect(MCP_SERVER_INSTRUCTIONS).toContain("Preserve returned Agent, conversation, Workflow");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("Choose one intent operation");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("Pass returned Crewhelm references unchanged");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("Attach returned Briefs");
     expect(MCP_SERVER_INSTRUCTIONS).toContain("start_workflow");
-    expect(MCP_SERVER_INSTRUCTIONS).toContain("tools.web-search");
-    expect(MCP_SERVER_INSTRUCTIONS).toContain("authenticated providers");
-    expect(MCP_SERVER_INSTRUCTIONS).toContain("Never guess or blindly retry");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("owner-scoped drafts");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("owner verifies it with the provider");
   });
 
   it("asks for owner intent instead of inventing an Agent on an empty fleet", () => {

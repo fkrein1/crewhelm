@@ -46,7 +46,7 @@ export const recipeInstallationIdSchema = z
     "Expected an opaque Recipe installation ID.",
   );
 
-const recipeTargetSchema = registryArtifactCoordinateSchema
+export const recipeTargetSchema = registryArtifactCoordinateSchema
   .extend({
     digest: sha256DigestSchema,
     kind: z.literal("recipe"),
@@ -54,7 +54,7 @@ const recipeTargetSchema = registryArtifactCoordinateSchema
   })
   .describe("One exact immutable Recipe version at the configured canonical Registry origin.");
 
-const skillTargetSchema = registryArtifactCoordinateSchema.extend({
+export const skillTargetSchema = registryArtifactCoordinateSchema.extend({
   digest: sha256DigestSchema,
   kind: z.literal("skill"),
   registry: recipeRegistryOriginSchema,

@@ -262,6 +262,14 @@
     {
       "evidence": {
         "definitionVersion": 2,
+        "testFiles": ["apps/worker/src/mcp/server.test.ts"]
+      },
+      "id": "owner-authoring-drafts",
+      "pathPrefixes": ["apps/worker/src/owner/authoring-drafts/"]
+    },
+    {
+      "evidence": {
+        "definitionVersion": 2,
         "testFiles": [
           "apps/worker/src/agent/admitted-runs/module.test.ts",
           "apps/worker/src/owner/durable-object.test.ts"

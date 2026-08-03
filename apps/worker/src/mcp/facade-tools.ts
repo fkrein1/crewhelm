@@ -1,5 +1,6 @@
 import {
   agentConversationSchema,
+  agentExecutionLimitsSchema,
   agentEventTriggerToolDefinitionSchema,
   agentIdSchema,
   agentRevisionNumberSchema,
@@ -15,9 +16,23 @@ import {
   enableIntegrationResultSchema,
   recipePublicationToolResultSchema,
   recipePublicationToolInputSchema,
-  recipePreviewRequestSchema,
   remoteMcpConnectionSchema,
   sha256DigestSchema,
+  agentBlueprintIdSchema,
+  agentBlueprintVersionSchema,
+  mcpAuthoringDraftLocatorSchema,
+  mcpAuthoringDraftResultSchema,
+  recipeBriefBindingSchema,
+  recipeNameSchema,
+  recipePreviewRequestSchema,
+  recipePublisherNamespaceSchema,
+  recipeTargetSchema,
+  recipePublicationCandidateSchema,
+  recipePublicationSkillDecisionSchema,
+  skillIdSchema,
+  skillFilePathSchema,
+  skillTargetSchema,
+  skillVersionSchema,
   toolCallIdSchema,
 } from "@crewhelm/contracts";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -25,6 +40,7 @@ import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/
 import * as z from "zod";
 
 import type { PrivateToolCatalog } from "./private-tool-catalog.js";
+import { validatedToolResult } from "./tool-result.js";
 
 export const MCP_INSPECT_AGENTS_TOOL_NAME = "crewhelm_inspect_agents";
 export const MCP_CHANGE_AGENTS_TOOL_NAME = "crewhelm_change_agents";
@@ -47,22 +63,43 @@ const agentReferenceSchema = z
     id: agentIdSchema,
     revision: agentRevisionNumberSchema,
   })
-  .describe("Copy-ready Agent identity and immutable revision returned by Crewhelm.");
-const workflowReferenceSchema = z.looseObject({
-  workflowId: agentWorkflowIdSchema,
-  revision: z.number().int().positive().safe(),
+  .describe("Copy-ready Agent identity and immutable revision returned by Crewhelm.")
+  .meta({ id: "CrewhelmAgentReference" });
+const agentLocatorSchema = z
+  .looseObject({ id: agentIdSchema })
+  .describe("Copy-ready Agent identity returned by Crewhelm.");
+const modelVisibleAgentExecutionLimitsSchema = agentExecutionLimitsSchema.meta({
+  id: "CrewhelmAgentExecutionLimits",
 });
-const scheduleReferenceSchema = z.looseObject({
+const workflowReferenceSchema = z
+  .looseObject({
+    workflowId: agentWorkflowIdSchema,
+    revision: z.number().int().positive().safe(),
+  })
+  .meta({ id: "CrewhelmWorkflowReference" });
+const scheduleReferenceSchema = z
+  .looseObject({
+    agentId: agentIdSchema,
+    agentRevision: agentRevisionNumberSchema,
+    id: agentScheduleIdSchema,
+    revision: agentScheduleRevisionNumberSchema,
+  })
+  .meta({ id: "CrewhelmScheduleReference" });
+const eventTriggerReferenceSchema = z
+  .looseObject({
+    agentId: agentIdSchema,
+    agentRevision: agentRevisionNumberSchema,
+    id: agentEventTriggerIdSchema,
+    revision: agentEventTriggerRevisionNumberSchema,
+  })
+  .meta({ id: "CrewhelmEventTriggerReference" });
+const scheduleLocatorSchema = z.looseObject({
   agentId: agentIdSchema,
-  agentRevision: agentRevisionNumberSchema,
   id: agentScheduleIdSchema,
-  revision: agentScheduleRevisionNumberSchema,
 });
-const eventTriggerReferenceSchema = z.looseObject({
+const eventTriggerLocatorSchema = z.looseObject({
   agentId: agentIdSchema,
-  agentRevision: agentRevisionNumberSchema,
   id: agentEventTriggerIdSchema,
-  revision: agentEventTriggerRevisionNumberSchema,
 });
 const revocableConnectionSchema = z.union([
   z.looseObject({ id: connectionIdSchema }),
@@ -82,7 +119,8 @@ const copyReadyBriefReferenceSchema = z
     briefSummaryReferenceSchema,
     z.looseObject({ brief: briefSummaryReferenceSchema }),
   ])
-  .describe("Copy-ready Brief reference, summary, or create result returned by Crewhelm.");
+  .describe("Copy-ready Brief reference, summary, or create result returned by Crewhelm.")
+  .meta({ id: "CrewhelmBriefReference" });
 const copyReadyBriefReferencesSchema = z
   .array(copyReadyBriefReferenceSchema)
   .max(8)
@@ -98,10 +136,21 @@ function definitionWithCopyReadyBriefs(schema: z.ZodType): z.ZodObject {
 
 const copyReadyScheduleDefinitionSchema = definitionWithCopyReadyBriefs(
   agentScheduleDefinitionSchema,
-);
+).meta({ id: "CrewhelmScheduleDefinition" });
 const copyReadyEventTriggerDefinitionSchema = definitionWithCopyReadyBriefs(
   agentEventTriggerToolDefinitionSchema,
-);
+).meta({ id: "CrewhelmEventTriggerDefinition" });
+const boundedAutomationDefinitionSchema = z
+  .unknown()
+  .describe("One bounded automation definition. Crewhelm validates its exact contract.");
+const boundedOutputContractSchema = z
+  .unknown()
+  .describe("Optional bounded output contract. Crewhelm validates its exact contract.");
+const compactDateTimeSchema = z.string().meta({ format: "date-time" });
+const confirmationSchema = z
+  .boolean()
+  .default(false)
+  .describe("Leave false to preview. Repeat the unchanged operation with true to apply it.");
 
 function briefReference(value: unknown) {
   const result = z.looseObject({ brief: briefSummaryReferenceSchema }).safeParse(value);
@@ -180,6 +229,8 @@ interface FacadeOperation {
   required?: readonly string[];
   rename?: Readonly<Record<string, string>>;
   retryKey?: boolean;
+  schemaAlias?: string;
+  schemaKinds?: readonly [string, ...string[]];
   targetKind?: string;
   toPrivate?: (input: Record<string, unknown>, extra: unknown) => Record<string, unknown>;
   publicFields?: Readonly<Record<string, z.ZodType>>;
@@ -192,6 +243,47 @@ interface FacadeToolDefinition {
   name: string;
   operations: readonly FacadeOperation[];
   title: string;
+}
+
+const sharedSchemaIds = new WeakMap<object, string>();
+let nextSharedSchemaId = 1;
+
+function registerLocalSchemaReferences(root: z.ZodType): void {
+  const counts = new Map<z.ZodType, number>();
+  const expanded = new Set<z.ZodType>();
+
+  function visit(value: unknown): void {
+    if (value instanceof z.ZodType) {
+      counts.set(value, (counts.get(value) ?? 0) + 1);
+      if (expanded.has(value)) return;
+      expanded.add(value);
+      const internals: unknown = Reflect.get(value, "_zod");
+      if (typeof internals === "object" && internals !== null) {
+        visit(Reflect.get(internals, "def"));
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (typeof value === "object" && value !== null) {
+      for (const nested of Object.values(value)) visit(nested);
+    }
+  }
+
+  visit(root);
+  for (const [schema, count] of counts) {
+    const metadata = z.globalRegistry.get(schema);
+    if (count < 2 || metadata?.id !== undefined) continue;
+    let id = sharedSchemaIds.get(schema);
+    if (id === undefined) {
+      id = `S${nextSharedSchemaId}`;
+      nextSharedSchemaId += 1;
+      sharedSchemaIds.set(schema, id);
+    }
+    z.globalRegistry.add(schema, { ...metadata, id });
+  }
 }
 
 const CLOSED_READ: ToolAnnotations = {
@@ -217,11 +309,103 @@ const requestKeySchema = z
   .optional()
   .describe("Optional retry identity. Omit it on the ordinary happy path.");
 
-const recipeInstallationPlanSchema = recipePreviewRequestSchema.omit({ parameters: true }).extend({
-  setup: recipePreviewRequestSchema.shape.parameters.describe(
-    "Typed setup values declared by this Recipe. Never put credentials here.",
-  ),
-});
+const authoringDraftReferenceSchema = mcpAuthoringDraftLocatorSchema
+  .extend({ kind: z.enum(["agent-blueprint-package", "skill-package"]) })
+  .meta({ id: "CrewhelmConfigurationDraftLocator" });
+const recipeInstallationDraftReferenceSchema = mcpAuthoringDraftLocatorSchema
+  .extend({ kind: z.literal("recipe-installation") })
+  .meta({ id: "CrewhelmRecipeInstallationDraftLocator" });
+const recipePublicationDraftReferenceSchema = mcpAuthoringDraftLocatorSchema
+  .extend({ kind: z.literal("recipe-publication") })
+  .meta({ id: "CrewhelmRecipePublicationDraftLocator" });
+
+function parsedPrivateResult<Result>(result: CallToolResult, schema: z.ZodType<Result>) {
+  const text = result.content.find((content) => content.type === "text")?.text;
+  if (text === undefined) return null;
+
+  try {
+    const parsed = schema.safeParse(JSON.parse(text) as unknown);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readAuthoringDraft(catalog: PrivateToolCatalog, draft: unknown, extra: unknown) {
+  const result = await catalog.dispatch(
+    "crewhelm_authoring_drafts",
+    { request: JSON.stringify({ action: "read", draft }) },
+    extra,
+  );
+  const parsed = parsedPrivateResult(result, mcpAuthoringDraftResultSchema);
+  return parsed?.ok === true && parsed.action === "read" ? { parsed, result } : { result };
+}
+
+function invalidAuthoringDraftResult(): CallToolResult {
+  return validatedToolResult(
+    {
+      error: { code: "invalid_request", message: "MCP authoring draft request denied." },
+      ok: false,
+    },
+    mcpAuthoringDraftResultSchema,
+  );
+}
+
+async function createAuthoringDraft(
+  catalog: PrivateToolCatalog,
+  kind: "agent-blueprint-package" | "recipe-installation" | "recipe-publication" | "skill-package",
+  content: unknown,
+  extra: unknown,
+  requestKey?: unknown,
+): Promise<CallToolResult> {
+  return catalog.dispatch(
+    "crewhelm_authoring_drafts",
+    {
+      request: JSON.stringify({
+        action: "create",
+        content,
+        idempotencyKey:
+          typeof requestKey === "string" ? requestKey : `${derivedRequestKey(extra)}-${kind}`,
+        kind,
+      }),
+    },
+    extra,
+  );
+}
+
+async function discardAuthoringDraft(
+  catalog: PrivateToolCatalog,
+  input: Record<string, unknown>,
+  extra: unknown,
+): Promise<CallToolResult> {
+  return catalog.dispatch(
+    "crewhelm_authoring_drafts",
+    { request: JSON.stringify({ action: "discard", draft: input.draft }) },
+    extra,
+  );
+}
+
+async function replaceAuthoringDraft(
+  catalog: PrivateToolCatalog,
+  draft: unknown,
+  content: unknown,
+  extra: unknown,
+  requestKey?: unknown,
+): Promise<CallToolResult> {
+  return catalog.dispatch(
+    "crewhelm_authoring_drafts",
+    {
+      request: JSON.stringify({
+        action: "replace",
+        content,
+        draft,
+        idempotencyKey:
+          typeof requestKey === "string" ? requestKey : `${derivedRequestKey(extra)}-edit`,
+      }),
+    },
+    extra,
+  );
+}
 
 type PublicationAction = "prepare_publish" | "authorize_publish" | "preview_publish" | "publish";
 
@@ -241,22 +425,131 @@ function publicationVariant(action: "authorize_publish") {
   return object.omit({ action: true, idempotencyKey: true });
 }
 
-function recipeInstallationInput(input: Record<string, unknown>, extra: unknown) {
-  const {
-    expectedConfirmationDigest,
-    kind: _kind,
-    requestKey: _requestKey,
-    setup,
-    ...plan
-  } = input;
+const recipeInstallationDraftPrepareSchema = z.strictObject({
+  requestKey: requestKeySchema,
+  target: recipePreviewRequestSchema.shape.target,
+});
+const recipeInstallationDraftSchema = z.strictObject({
+  draft: recipeInstallationDraftReferenceSchema,
+});
 
-  return {
-    ...(expectedConfirmationDigest === undefined ? {} : { expectedConfirmationDigest }),
-    ...(expectedConfirmationDigest === undefined
-      ? {}
-      : { idempotencyKey: derivedRequestKey(extra) }),
-    request: { ...plan, parameters: setup },
-  };
+async function prepareInstallationDraft(
+  catalog: PrivateToolCatalog,
+  input: Record<string, unknown>,
+  extra: unknown,
+): Promise<CallToolResult> {
+  return createAuthoringDraft(
+    catalog,
+    "recipe-installation",
+    {
+      briefBindings: [],
+      connectionBindings: [],
+      operations: { eventTriggers: [], schedules: [] },
+      optionalSkills: [],
+      parameters: {},
+      target: input.target,
+    },
+    extra,
+    input.requestKey,
+  );
+}
+
+async function editInstallationDraft(
+  catalog: PrivateToolCatalog,
+  input: Record<string, unknown>,
+  extra: unknown,
+): Promise<CallToolResult> {
+  const read = await readAuthoringDraft(catalog, input.draft, extra);
+  if (read.parsed === undefined) return read.result;
+  const request = recipePreviewRequestSchema.safeParse(read.parsed.content);
+  if (!request.success) return invalidAuthoringDraftResult();
+  let content = request.data;
+
+  switch (input.kind) {
+    case "set_setup":
+      content = {
+        ...content,
+        parameters: {
+          ...content.parameters,
+          [z.string().parse(input.name)]: z
+            .union([z.string(), z.number().finite(), z.boolean()])
+            .parse(input.value),
+        },
+      };
+      break;
+    case "bind_connection": {
+      const slot = z.string().parse(input.slot);
+      const binding = { connectionId: providerConnectionId(input.connection), slot };
+      content = {
+        ...content,
+        connectionBindings: [
+          ...content.connectionBindings.filter((candidate) => candidate.slot !== slot),
+          binding,
+        ],
+      };
+      break;
+    }
+    case "bind_brief": {
+      const inputName = recipeBriefBindingSchema.shape.inputName.parse(input.inputName);
+      const binding = { brief: briefReference(input.brief), inputName };
+      content = {
+        ...content,
+        briefBindings: [
+          ...content.briefBindings.filter((candidate) => candidate.inputName !== inputName),
+          binding,
+        ],
+      };
+      break;
+    }
+    case "select_optional_skill": {
+      const target = {
+        name: z.string().parse(input.name),
+        namespace: z.string().parse(input.namespace),
+      };
+      const optionalSkills = content.optionalSkills.filter(
+        ({ name, namespace }) => name !== target.name || namespace !== target.namespace,
+      );
+      content = {
+        ...content,
+        optionalSkills: input.selected === false ? optionalSkills : [...optionalSkills, target],
+      };
+      break;
+    }
+    case "select_operations":
+      content = {
+        ...content,
+        operations: recipePreviewRequestSchema.shape.operations.parse(input.operations),
+      };
+      break;
+    default:
+      return invalidAuthoringDraftResult();
+  }
+
+  return replaceAuthoringDraft(catalog, read.parsed.draft, content, extra, input.requestKey);
+}
+
+async function useInstallationDraft(
+  catalog: PrivateToolCatalog,
+  input: Record<string, unknown>,
+  extra: unknown,
+): Promise<CallToolResult> {
+  const read = await readAuthoringDraft(catalog, input.draft, extra);
+  if (read.parsed === undefined) return read.result;
+  const request = recipePreviewRequestSchema.safeParse(read.parsed.content);
+  if (!request.success) return invalidAuthoringDraftResult();
+  return catalog.dispatch(
+    "crewhelm_recipes",
+    input.kind === "install"
+      ? {
+          action: "install",
+          expectedConfirmationDigest: input.expectedConfirmationDigest,
+          idempotencyKey:
+            typeof input.requestKey === "string" ? input.requestKey : derivedRequestKey(extra),
+          request: request.data,
+        }
+      : { action: "preview", request: request.data },
+    extra,
+  );
 }
 
 function publicationPreparationSchema() {
@@ -267,16 +560,24 @@ function publicationPreparationSchema() {
 
   return z.strictObject({
     agent: agentReferenceSchema,
-    eventTriggers: z.array(eventTriggerReferenceSchema).max(8).default([]),
+    eventTriggers: z
+      .array(z.looseObject({ id: agentEventTriggerIdSchema }))
+      .max(8)
+      .default([]),
     license,
-    schedules: z.array(scheduleReferenceSchema).max(8).default([]),
+    schedules: z
+      .array(z.looseObject({ id: agentScheduleIdSchema }))
+      .max(8)
+      .default([]),
   });
 }
 
 function publicationPreparationInput(input: Record<string, unknown>) {
   const agent = agentReferenceSchema.parse(input.agent);
-  const eventTriggers = z.array(eventTriggerReferenceSchema).parse(input.eventTriggers);
-  const schedules = z.array(scheduleReferenceSchema).parse(input.schedules);
+  const eventTriggers = z
+    .array(z.looseObject({ id: agentEventTriggerIdSchema }))
+    .parse(input.eventTriggers);
+  const schedules = z.array(z.looseObject({ id: agentScheduleIdSchema })).parse(input.schedules);
 
   return {
     request: JSON.stringify({
@@ -314,38 +615,254 @@ function publicationReviewSchema() {
   const publish = publicationObject("publish");
   const expectedConfirmationDigest = publish.shape.expectedConfirmationDigest;
   const authorizationId = preview.shape.authorizationId;
-  const candidate = preview.shape.candidate;
   const attemptId = preview.shape.idempotencyKey;
 
   if (
     expectedConfirmationDigest === undefined ||
     authorizationId === undefined ||
-    candidate === undefined ||
     attemptId === undefined
   ) {
     throw new Error("Recipe publication review is missing its confirmation digest.");
   }
 
   return z.strictObject({
-    authorization: z.looseObject({ attemptId, id: authorizationId }),
-    candidate,
+    authorization: z.looseObject({
+      attemptId: z.string().min(1).max(128),
+      id: z.string().min(1).max(128),
+    }),
+    draft: recipePublicationDraftReferenceSchema,
     expectedConfirmationDigest: expectedConfirmationDigest.optional(),
   });
 }
 
-function publicationReviewInput(input: Record<string, unknown>) {
+async function preparePublicationDraft(
+  catalog: PrivateToolCatalog,
+  input: Record<string, unknown>,
+  extra: unknown,
+): Promise<CallToolResult> {
+  const prepared = await catalog.dispatch(
+    "crewhelm_recipe_publications",
+    publicationPreparationInput(input),
+    extra,
+  );
+  const result = parsedPrivateResult(prepared, recipePublicationToolResultSchema);
+  if (result?.ok !== true || result.action !== "prepare_publish") return prepared;
+  return createAuthoringDraft(
+    catalog,
+    "recipe-publication",
+    result.candidate,
+    extra,
+    input.requestKey,
+  );
+}
+
+async function editPublicationSkill(
+  catalog: PrivateToolCatalog,
+  input: Record<string, unknown>,
+  extra: unknown,
+): Promise<CallToolResult> {
+  const read = await readAuthoringDraft(catalog, input.draft, extra);
+  if (read.parsed === undefined) return read.result;
+  const candidate = recipePublicationCandidateSchema.safeParse(read.parsed.content);
+  const decision = recipePublicationSkillDecisionSchema.safeParse(input.decision);
+  if (!candidate.success || !decision.success) {
+    return invalidAuthoringDraftResult();
+  }
+  const index = candidate.data.skills.findIndex(
+    ({ local }) =>
+      local.id === decision.data.local.id && local.version === decision.data.local.version,
+  );
+  if (index < 0) return invalidAuthoringDraftResult();
+  const skills = [...candidate.data.skills];
+  skills[index] = decision.data;
+  return replaceAuthoringDraft(
+    catalog,
+    read.parsed.draft,
+    { ...candidate.data, skills },
+    extra,
+    input.requestKey,
+  );
+}
+
+const publicationDraftSectionSchema = z.enum([
+  "agent",
+  "connections",
+  "discovery",
+  "inputs",
+  "name",
+  "operations",
+  "responsibility",
+  "sampleDeliverable",
+  "setupParameters",
+  "skills",
+]);
+const editablePublicationDraftSectionSchema = z.enum([
+  "connections",
+  "discovery",
+  "inputs",
+  "name",
+  "operations",
+  "responsibility",
+  "sampleDeliverable",
+  "setupParameters",
+]);
+const publicationDraftSectionResultSchema = z.strictObject({
+  draft: recipePublicationDraftReferenceSchema,
+  ok: z.literal(true),
+  section: publicationDraftSectionSchema,
+  value: z.unknown(),
+});
+
+async function inspectPublicationDraftSection(
+  catalog: PrivateToolCatalog,
+  input: Record<string, unknown>,
+  extra: unknown,
+): Promise<CallToolResult> {
+  const read = await readAuthoringDraft(catalog, input.draft, extra);
+  if (read.parsed === undefined) return read.result;
+  const candidate = recipePublicationCandidateSchema.safeParse(read.parsed.content);
+  const section = publicationDraftSectionSchema.safeParse(input.section);
+  if (!candidate.success || !section.success) return invalidAuthoringDraftResult();
+  const value =
+    section.data === "agent" || section.data === "skills"
+      ? candidate.data[section.data]
+      : candidate.data.recipe[section.data];
+  return validatedToolResult(
+    { draft: read.parsed.draft, ok: true, section: section.data, value },
+    publicationDraftSectionResultSchema,
+  );
+}
+
+async function editPublicationDraftSection(
+  catalog: PrivateToolCatalog,
+  input: Record<string, unknown>,
+  extra: unknown,
+): Promise<CallToolResult> {
+  const read = await readAuthoringDraft(catalog, input.draft, extra);
+  if (read.parsed === undefined) return read.result;
+  const candidate = recipePublicationCandidateSchema.safeParse(read.parsed.content);
+  const section = editablePublicationDraftSectionSchema.safeParse(input.section);
+  if (!candidate.success || !section.success) return invalidAuthoringDraftResult();
+  const updated = recipePublicationCandidateSchema.safeParse({
+    ...candidate.data,
+    recipe: { ...candidate.data.recipe, [section.data]: input.value },
+  });
+  if (!updated.success) {
+    return invalidAuthoringDraftResult();
+  }
+  return replaceAuthoringDraft(catalog, read.parsed.draft, updated.data, extra, input.requestKey);
+}
+
+async function reviewPublicationDraft(
+  catalog: PrivateToolCatalog,
+  input: Record<string, unknown>,
+  extra: unknown,
+): Promise<CallToolResult> {
   const { kind: _kind, ...fields } = input;
   const review = publicationReviewSchema().parse(fields);
+  const read = await readAuthoringDraft(catalog, review.draft, extra);
+  if (read.parsed === undefined) return read.result;
+  const candidate = recipePublicationCandidateSchema.safeParse(read.parsed.content);
+  if (!candidate.success) return invalidAuthoringDraftResult();
+  return catalog.dispatch(
+    "crewhelm_recipe_publications",
+    {
+      request: JSON.stringify({
+        action: review.expectedConfirmationDigest === undefined ? "preview_publish" : "publish",
+        authorizationId: review.authorization.id,
+        candidate: candidate.data,
+        ...(review.expectedConfirmationDigest === undefined
+          ? {}
+          : { expectedConfirmationDigest: review.expectedConfirmationDigest }),
+        idempotencyKey: review.authorization.attemptId,
+      }),
+    },
+    extra,
+  );
+}
+
+const boundedConfigurationPackageSchema = z
+  .unknown()
+  .describe("One bounded package. Crewhelm validates its exact contract.")
+  .meta({ id: "CrewhelmConfigurationPackage" });
+const prepareSkillDraftSchema = z.strictObject({
+  expectedVersion: skillVersionSchema.optional(),
+  id: skillIdSchema.optional(),
+  package: boundedConfigurationPackageSchema,
+  repairVersion: skillVersionSchema.optional(),
+  requestKey: requestKeySchema,
+});
+const prepareBlueprintDraftSchema = z.strictObject({
+  expectedVersion: agentBlueprintVersionSchema.optional(),
+  id: agentBlueprintIdSchema.optional(),
+  package: boundedConfigurationPackageSchema,
+  requestKey: requestKeySchema,
+});
+
+async function prepareConfigurationDraft(
+  catalog: PrivateToolCatalog,
+  input: Record<string, unknown>,
+  extra: unknown,
+): Promise<CallToolResult> {
+  const { kind, requestKey, ...target } = input;
+  return createAuthoringDraft(
+    catalog,
+    kind === "prepare_skill" ? "skill-package" : "agent-blueprint-package",
+    {
+      ...target,
+      kind: kind === "prepare_skill" ? "skill-package" : "agent-blueprint-package",
+    },
+    extra,
+    requestKey,
+  );
+}
+
+async function useConfigurationDraft(
+  catalog: PrivateToolCatalog,
+  input: Record<string, unknown>,
+  extra: unknown,
+): Promise<CallToolResult> {
+  const read = await readAuthoringDraft(catalog, input.draft, extra);
+  if (read.parsed === undefined) return read.result;
+  if (
+    input.kind === "apply_package" &&
+    input.expectedConfirmationDigest !== read.parsed.draft.digest
+  ) {
+    return validatedToolResult(
+      {
+        error: { code: "revision_conflict", message: "MCP authoring draft request denied." },
+        ok: false,
+      },
+      mcpAuthoringDraftResultSchema,
+    );
+  }
+  return catalog.dispatch(
+    "crewhelm_configure",
+    {
+      ...(input.kind === "apply_package"
+        ? {
+            idempotencyKey:
+              typeof input.requestKey === "string" ? input.requestKey : derivedRequestKey(extra),
+          }
+        : {}),
+      mode: input.kind === "apply_package" ? "apply" : "preview",
+      target: read.parsed.content,
+    },
+    extra,
+  );
+}
+
+const previewFleetChangeSchema = z.strictObject({
+  expectedRevision: z.number().int().positive().safe(),
+  patch: z.unknown().describe("One bounded fleet patch. Crewhelm validates its exact contract."),
+});
+
+function previewFleetChangeInput(input: Record<string, unknown>) {
   return {
-    request: JSON.stringify({
-      action: review.expectedConfirmationDigest === undefined ? "preview_publish" : "publish",
-      authorizationId: review.authorization.id,
-      candidate: review.candidate,
-      ...(review.expectedConfirmationDigest === undefined
-        ? {}
-        : { expectedConfirmationDigest: review.expectedConfirmationDigest }),
-      idempotencyKey: review.authorization.attemptId,
-    }),
+    expectedRevision: input.expectedRevision,
+    mode: "preview",
+    patch: input.patch,
+    target: { kind: "fleet" },
   };
 }
 
@@ -443,7 +960,7 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
   {
     annotations: CLOSED_READ,
     description:
-      "Find and inspect Agents through one read surface. Choose one operation; Crewhelm returns exact immutable coordinates when later work needs them.",
+      "Find and inspect Agents. Results include exact immutable coordinates for later work.",
     name: MCP_INSPECT_AGENTS_TOOL_NAME,
     operations: [
       { kind: "list", privateTool: "crewhelm_list_agents" },
@@ -455,15 +972,25 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
   },
   {
     annotations: CLOSED_CHANGE,
-    description:
-      "Create, replace, or disable Agents after confirming owner intent. Choose one operation; immutable revision and replay controls remain enforced by Crewhelm.",
+    description: "Create, replace, or disable Agents with immutable revision and replay controls.",
     name: MCP_CHANGE_AGENTS_TOOL_NAME,
     operations: [
-      { kind: "create", privateTool: "crewhelm_create_agent" },
+      {
+        kind: "create",
+        privateTool: "crewhelm_create_agent",
+        publicFields: {
+          executionLimits: modelVisibleAgentExecutionLimitsSchema
+            .optional()
+            .describe(
+              "Optional Agent-specific ceilings. Omit to inherit the current fleet execution defaults.",
+            ),
+        },
+      },
       {
         agentCoordinates: { id: "id", revision: "expectedRevision" },
         kind: "replace",
         privateTool: "crewhelm_update_agent",
+        publicFields: { executionLimits: modelVisibleAgentExecutionLimitsSchema },
       },
       {
         kind: "disable",
@@ -489,7 +1016,18 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
     name: MCP_INSPECT_WORK_TOOL_NAME,
     operations: [
       { kind: "inspect_run", privateTool: "crewhelm_inspect_run" },
-      { kind: "list_runs", privateTool: "crewhelm_list_agent_runs" },
+      {
+        kind: "list_runs",
+        privateTool: "crewhelm_list_agent_runs",
+        publicFields: {
+          createdAfter: compactDateTimeSchema
+            .optional()
+            .describe("Return runs created at or after this time."),
+          createdBefore: compactDateTimeSchema
+            .optional()
+            .describe("Return runs created at or before this time."),
+        },
+      },
       { kind: "list_approvals", privateTool: "crewhelm_list_run_tool_approvals" },
       {
         action: "list",
@@ -533,6 +1071,11 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
           "severities",
         ],
         privateTool: "crewhelm_agent_inbox",
+        publicFields: {
+          occurredAfter: compactDateTimeSchema
+            .optional()
+            .describe("Return items occurring after this time."),
+        },
       },
       {
         action: "overview",
@@ -546,6 +1089,11 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
           "severities",
         ],
         privateTool: "crewhelm_agent_inbox",
+        publicFields: {
+          occurredAfter: compactDateTimeSchema
+            .optional()
+            .describe("Return items occurring after this time."),
+        },
       },
     ],
     title: "Inspect Crewhelm work",
@@ -565,7 +1113,10 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
         kind: "run",
         omit: ["continuation"],
         privateTool: "crewhelm_start_run",
-        publicFields: { briefs: copyReadyBriefReferencesSchema.optional() },
+        publicFields: {
+          briefs: copyReadyBriefReferencesSchema.optional(),
+          outputContract: boundedOutputContractSchema.optional(),
+        },
         rename: { prompt: "message" },
         transformFields: { briefs: briefReferences },
       },
@@ -576,6 +1127,11 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
         kind: "acknowledge_inbox",
         only: ["itemId", "version"],
         privateTool: "crewhelm_agent_inbox",
+        publicFields: {
+          version: compactDateTimeSchema.describe(
+            "Exact item version returned by Crewhelm to acknowledge.",
+          ),
+        },
         required: ["itemId", "version"],
       },
       {
@@ -592,7 +1148,10 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
           "outputContract",
         ],
         privateTool: "crewhelm_agent_workflows",
-        publicFields: { briefs: copyReadyBriefReferencesSchema.optional() },
+        publicFields: {
+          briefs: copyReadyBriefReferencesSchema.optional(),
+          outputContract: boundedOutputContractSchema.optional(),
+        },
         required: ["objective", "stages"],
         transformFields: { briefs: briefReferences },
       },
@@ -641,13 +1200,14 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
   {
     annotations: CLOSED_READ,
     description:
-      "Inspect time-based responsibilities. Event-source discovery and Event Trigger history are available from the change surface because their provider lifecycle is one atomic control-plane operation.",
+      "Inspect time-based responsibilities, event sources, and Event Trigger history without changing them.",
     name: MCP_INSPECT_AUTOMATIONS_TOOL_NAME,
     operations: [
       {
         kind: "list_schedules",
         privateTool: "crewhelm_list_agent_schedules",
-        references: [{ fields: { agentId: "id" }, name: "agent", schema: agentReferenceSchema }],
+        references: [{ fields: { agentId: "id" }, name: "agent", schema: agentLocatorSchema }],
+        schemaKinds: ["list_schedules", "list_event_triggers"],
       },
       {
         kind: "inspect_schedule",
@@ -656,7 +1216,7 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
           {
             fields: { agentId: "agentId", scheduleId: "id" },
             name: "schedule",
-            schema: scheduleReferenceSchema,
+            schema: scheduleLocatorSchema,
           },
         ],
       },
@@ -678,7 +1238,8 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
         kind: "list_event_triggers",
         only: ["agentId"],
         privateTool: "crewhelm_agent_event_triggers",
-        references: [{ fields: { agentId: "id" }, name: "agent", schema: agentReferenceSchema }],
+        references: [{ fields: { agentId: "id" }, name: "agent", schema: agentLocatorSchema }],
+        schemaAlias: "list_schedules",
       },
       {
         action: "inspect",
@@ -689,7 +1250,7 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
           {
             fields: { agentId: "agentId", eventTriggerId: "id" },
             name: "trigger",
-            schema: eventTriggerReferenceSchema,
+            schema: eventTriggerLocatorSchema,
           },
         ],
       },
@@ -702,7 +1263,7 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
           {
             fields: { agentId: "agentId", eventTriggerId: "id" },
             name: "trigger",
-            schema: eventTriggerReferenceSchema,
+            schema: eventTriggerLocatorSchema,
           },
         ],
       },
@@ -722,7 +1283,7 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
         only: ["agentId", "expectedAgentRevision", "idempotencyKey", "schedule"],
         privateDefaults: { expectedScheduleRevision: null, scheduleId: null },
         privateTool: "crewhelm_configure_agent_schedule",
-        publicFields: { schedule: copyReadyScheduleDefinitionSchema },
+        publicFields: { schedule: boundedAutomationDefinitionSchema },
         required: ["schedule"],
         transformFields: {
           schedule: definitionBriefReferences(copyReadyScheduleDefinitionSchema),
@@ -739,7 +1300,7 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
           "scheduleId",
         ],
         privateTool: "crewhelm_configure_agent_schedule",
-        publicFields: { definition: copyReadyScheduleDefinitionSchema },
+        publicFields: { definition: boundedAutomationDefinitionSchema },
         references: [
           {
             fields: {
@@ -789,7 +1350,7 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
         kind: "create_event_trigger",
         only: ["agentId", "expectedAgentRevision", "idempotencyKey", "eventTrigger"],
         privateTool: "crewhelm_agent_event_triggers",
-        publicFields: { eventTrigger: copyReadyEventTriggerDefinitionSchema },
+        publicFields: { eventTrigger: boundedAutomationDefinitionSchema },
         required: ["eventTrigger"],
         transformFields: {
           eventTrigger: definitionBriefReferences(copyReadyEventTriggerDefinitionSchema),
@@ -808,10 +1369,21 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
         ],
         omit: action === "update" ? [] : ["eventTrigger"],
         privateTool: "crewhelm_agent_event_triggers",
+        ...(action === "pause"
+          ? {
+              schemaKinds: [
+                "pause_event_trigger",
+                "resume_event_trigger",
+                "delete_event_trigger",
+              ] as [string, ...string[]],
+            }
+          : action === "resume" || action === "delete"
+            ? { schemaAlias: "pause_event_trigger" }
+            : {}),
         ...(action === "update" ? { rename: { eventTrigger: "definition" } } : {}),
         ...(action === "update"
           ? {
-              publicFields: { definition: copyReadyEventTriggerDefinitionSchema },
+              publicFields: { definition: boundedAutomationDefinitionSchema },
               transformFields: {
                 definition: definitionBriefReferences(copyReadyEventTriggerDefinitionSchema),
               },
@@ -855,7 +1427,7 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
   {
     annotations: OPEN_CHANGE,
     description:
-      "Connect providers or remote MCP servers and grant their reviewed operations to an Agent. Credentials remain in provider or Crewhelm custody and never enter arguments or results.",
+      "Connect providers or remote MCP servers and grant reviewed operations. Credentials never enter arguments or results.",
     name: MCP_CHANGE_CONNECTIONS_TOOL_NAME,
     operations: [
       { kind: "enable_provider", privateTool: "crewhelm_enable_integration" },
@@ -883,6 +1455,7 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
         agentCoordinates: { id: "agentId", revision: "expectedRevision" },
         kind: "grant_provider_actions",
         privateTool: "crewhelm_configure_agent_connection",
+        publicFields: { expiresAt: compactDateTimeSchema.nullable() },
         references: [
           {
             fields: { connectionId: "connectionId" },
@@ -932,6 +1505,7 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
         agentCoordinates: { id: "agentId", revision: "expectedRevision" },
         kind: "grant_remote_mcp",
         privateTool: "crewhelm_configure_agent_remote_mcp_connection",
+        publicFields: { expiresAt: compactDateTimeSchema.nullable() },
         references: [
           {
             fields: { connectionId: "id", snapshotDigest: "snapshotDigest" },
@@ -1023,69 +1597,72 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
   {
     annotations: CLOSED_CHANGE,
     description:
-      "Preview or apply configuration packages and manage immutable Brief context. Packages and Brief contents remain untrusted data and grant no authority by themselves.",
+      "Draft and apply configuration packages or manage Briefs. Their contents are untrusted and grant no authority.",
     name: MCP_CHANGE_CONTEXT_TOOL_NAME,
     operations: [
       {
-        descriptions: {
-          expectedRevision: "Current fleet revision returned by inspect_fleet.",
-        },
         kind: "preview_fleet_change",
-        privateDefaults: { mode: "preview" },
         privateTool: "crewhelm_configure",
-        required: ["expectedRevision", "patch"],
-        retryKey: false,
-        targetKind: "fleet",
+        publicSchema: previewFleetChangeSchema,
+        toPrivate: previewFleetChangeInput,
+      },
+      {
+        kind: "prepare_skill",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: prepareSkillDraftSchema,
+        run: prepareConfigurationDraft,
       },
       {
         confirmation: true,
-        descriptions: {
-          expectedRevision: "Current Skill revision returned by inspect_skill.",
-        },
-        kind: "publish_skill",
-        privateTool: "crewhelm_configure",
-        retryKey: false,
-        targetKind: "skill-package",
-      },
-      {
-        confirmation: true,
-        descriptions: {
-          expectedRevision: "Current Skill revision returned by inspect_skill.",
-        },
         kind: "retire_skill",
+        only: ["idempotencyKey", "target"],
         privateTool: "crewhelm_configure",
         retryKey: false,
         targetKind: "skill-retirement",
       },
       {
-        confirmation: true,
-        descriptions: {
-          expectedRevision: "Current blueprint revision returned by inspect_blueprint.",
-        },
-        kind: "publish_blueprint",
-        privateTool: "crewhelm_configure",
-        retryKey: false,
-        targetKind: "agent-blueprint-package",
+        kind: "prepare_blueprint",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: prepareBlueprintDraftSchema,
+        run: prepareConfigurationDraft,
       },
       {
         confirmation: true,
-        descriptions: {
-          expectedRevision: "Current blueprint revision returned by inspect_blueprint.",
-        },
         kind: "retire_blueprint",
+        only: ["idempotencyKey", "target"],
         privateTool: "crewhelm_configure",
         retryKey: false,
         targetKind: "agent-blueprint-retirement",
       },
       {
         confirmation: true,
-        descriptions: {
-          expectedRevision: "Current blueprint revision returned by inspect_blueprint.",
-        },
         kind: "create_from_blueprint",
+        only: ["idempotencyKey", "target"],
         privateTool: "crewhelm_configure",
         retryKey: false,
         targetKind: "agent-blueprint-instance",
+      },
+      {
+        kind: "preview_package",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: z.strictObject({ draft: authoringDraftReferenceSchema }),
+        run: useConfigurationDraft,
+      },
+      {
+        kind: "apply_package",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: z.strictObject({
+          draft: authoringDraftReferenceSchema,
+          expectedConfirmationDigest: sha256DigestSchema,
+          requestKey: requestKeySchema,
+        }),
+        run: useConfigurationDraft,
+      },
+      {
+        kind: "discard_package_draft",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: z.strictObject({ draft: authoringDraftReferenceSchema }),
+        run: discardAuthoringDraft,
       },
       {
         action: "create",
@@ -1142,16 +1719,14 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
       {
         action: "inspect",
         kind: "inspect",
-        only: ["target"],
         privateTool: "crewhelm_recipes",
-        required: ["target"],
+        publicSchema: z.strictObject({ target: recipeTargetSchema }),
       },
       {
         action: "read_skill",
         kind: "read_skill",
-        only: ["path", "target"],
         privateTool: "crewhelm_recipes",
-        required: ["path", "target"],
+        publicSchema: z.strictObject({ path: skillFilePathSchema, target: skillTargetSchema }),
       },
     ],
     title: "Inspect Crewhelm Recipes",
@@ -1159,24 +1734,89 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
   {
     annotations: OPEN_CHANGE,
     description:
-      "Preview, install, or recover one immutable public Recipe. Preview with owner-local bindings and confirm the unchanged digest before installation.",
+      "Draft, preview, install, or recover one immutable Recipe with owner-local bindings.",
     name: MCP_CHANGE_RECIPES_TOOL_NAME,
     operations: [
       {
-        action: "preview",
-        kind: "preview_install",
-        privateTool: "crewhelm_recipes",
-        publicSchema: recipeInstallationPlanSchema,
-        toPrivate: recipeInstallationInput,
+        kind: "prepare_install",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: recipeInstallationDraftPrepareSchema,
+        run: prepareInstallationDraft,
       },
       {
-        action: "install",
-        kind: "install",
-        privateTool: "crewhelm_recipes",
-        publicSchema: recipeInstallationPlanSchema.extend({
-          expectedConfirmationDigest: sha256DigestSchema,
+        kind: "set_setup",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: recipeInstallationDraftSchema.extend({
+          name: z
+            .string()
+            .min(1)
+            .max(40)
+            .regex(/^[a-z][a-z0-9-]*$/),
+          requestKey: requestKeySchema,
+          value: z.union([z.string().max(2_048), z.number().finite(), z.boolean()]),
         }),
-        toPrivate: recipeInstallationInput,
+        run: editInstallationDraft,
+      },
+      {
+        kind: "bind_connection",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: recipeInstallationDraftSchema.extend({
+          connection: providerConnectionReferenceSchema,
+          requestKey: requestKeySchema,
+          slot: z.string().min(1).max(40),
+        }),
+        run: editInstallationDraft,
+      },
+      {
+        kind: "bind_brief",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: recipeInstallationDraftSchema.extend({
+          brief: copyReadyBriefReferenceSchema,
+          inputName: recipeBriefBindingSchema.shape.inputName,
+          requestKey: requestKeySchema,
+        }),
+        run: editInstallationDraft,
+      },
+      {
+        kind: "select_optional_skill",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: recipeInstallationDraftSchema.extend({
+          name: recipeNameSchema,
+          namespace: recipePublisherNamespaceSchema,
+          requestKey: requestKeySchema,
+          selected: z.boolean().default(true),
+        }),
+        run: editInstallationDraft,
+      },
+      {
+        kind: "select_operations",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: recipeInstallationDraftSchema.extend({
+          operations: recipePreviewRequestSchema.shape.operations,
+          requestKey: requestKeySchema,
+        }),
+        run: editInstallationDraft,
+      },
+      {
+        kind: "preview_install",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: recipeInstallationDraftSchema,
+        run: useInstallationDraft,
+      },
+      {
+        kind: "install",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: recipeInstallationDraftSchema.extend({
+          expectedConfirmationDigest: sha256DigestSchema,
+          requestKey: requestKeySchema,
+        }),
+        run: useInstallationDraft,
+      },
+      {
+        kind: "discard_install_draft",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: z.strictObject({ draft: recipeInstallationDraftReferenceSchema }),
+        run: discardAuthoringDraft,
       },
       {
         action: "recover",
@@ -1191,14 +1831,46 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
   {
     annotations: OPEN_CHANGE,
     description:
-      "Prepare one live Agent revision as a reviewable Recipe candidate, authorize publication, then preview or publish it. Pass returned candidates unchanged and add a confirmation digest only after review.",
+      "Draft one Agent revision as a Recipe, authorize it, then preview or publish the exact digest.",
     name: MCP_PUBLISH_RECIPE_TOOL_NAME,
     operations: [
       {
         kind: "prepare",
-        privateTool: "crewhelm_recipe_publications",
-        publicSchema: publicationPreparationSchema(),
-        toPrivate: publicationPreparationInput,
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: publicationPreparationSchema().extend({ requestKey: requestKeySchema }),
+        run: preparePublicationDraft,
+      },
+      {
+        kind: "inspect_section",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: z.strictObject({
+          draft: recipePublicationDraftReferenceSchema,
+          section: publicationDraftSectionSchema,
+        }),
+        run: inspectPublicationDraftSection,
+      },
+      {
+        kind: "set_section",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: z.strictObject({
+          draft: recipePublicationDraftReferenceSchema,
+          requestKey: requestKeySchema,
+          section: editablePublicationDraftSectionSchema,
+          value: z
+            .unknown()
+            .describe("One replacement section. Crewhelm validates the exact Recipe contract."),
+        }),
+        run: editPublicationDraftSection,
+      },
+      {
+        kind: "set_skill_decision",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: z.strictObject({
+          decision: recipePublicationSkillDecisionSchema,
+          draft: recipePublicationDraftReferenceSchema,
+          requestKey: requestKeySchema,
+        }),
+        run: editPublicationSkill,
       },
       {
         kind: "authorize",
@@ -1207,10 +1879,16 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
         run: authorizePublication,
       },
       {
-        kind: "publish",
-        privateTool: "crewhelm_recipe_publications",
+        kind: "preview_or_publish",
+        privateTool: "crewhelm_authoring_drafts",
         publicSchema: publicationReviewSchema(),
-        toPrivate: publicationReviewInput,
+        run: reviewPublicationDraft,
+      },
+      {
+        kind: "discard_publish_draft",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: z.strictObject({ draft: recipePublicationDraftReferenceSchema }),
+        run: discardAuthoringDraft,
       },
     ],
     title: "Publish Crewhelm Recipe",
@@ -1247,9 +1925,9 @@ const DEFINITIONS: readonly FacadeToolDefinition[] = [
       {
         kind: "disable_agent",
         privateTool: "crewhelm_revoke_authority",
-        publicSchema: z.strictObject({ agent: agentReferenceSchema }),
+        publicSchema: z.strictObject({ agent: agentLocatorSchema }),
         toPrivate: (input) => ({
-          agentId: agentReferenceSchema.parse(input.agent).id,
+          agentId: agentLocatorSchema.parse(input.agent).id,
           target: "agent",
         }),
       },
@@ -1339,8 +2017,11 @@ function publicFieldSchema(schema: z.ZodType, required: boolean, description?: s
 }
 
 function operationSchema(catalog: PrivateToolCatalog, operation: FacadeOperation) {
+  const kindSchema =
+    operation.schemaKinds === undefined ? z.literal(operation.kind) : z.enum(operation.schemaKinds);
+
   if (operation.publicSchema !== undefined) {
-    return z.strictObject({ kind: z.literal(operation.kind), ...operation.publicSchema.shape });
+    return z.strictObject({ kind: kindSchema, ...operation.publicSchema.shape });
   }
 
   const privateShape: z.ZodRawShape = { ...objectSchema(catalog, operation).shape };
@@ -1400,10 +2081,7 @@ function operationSchema(catalog: PrivateToolCatalog, operation: FacadeOperation
   }
 
   if (operation.confirmation === true) {
-    publicShape.confirm = z
-      .boolean()
-      .default(false)
-      .describe("Leave false to preview. Repeat the unchanged operation with true to apply it.");
+    publicShape.confirm = confirmationSchema;
   }
 
   if (
@@ -1414,11 +2092,13 @@ function operationSchema(catalog: PrivateToolCatalog, operation: FacadeOperation
     publicShape.requestKey = requestKeySchema;
   }
 
-  return z.strictObject({ kind: z.literal(operation.kind), ...publicShape });
+  return z.strictObject({ kind: kindSchema, ...publicShape });
 }
 
 function facadeInputSchema(catalog: PrivateToolCatalog, operations: readonly FacadeOperation[]) {
-  const schemas = operations.map((operation) => operationSchema(catalog, operation));
+  const schemas = operations
+    .filter((operation) => operation.schemaAlias === undefined)
+    .map((operation) => operationSchema(catalog, operation));
   const first = schemas.at(0);
 
   if (first === undefined) throw new Error("Crewhelm facade tool has no operations.");
@@ -1426,7 +2106,9 @@ function facadeInputSchema(catalog: PrivateToolCatalog, operations: readonly Fac
   const second = schemas.at(1);
   const operation = second === undefined ? first : z.union([first, second, ...schemas.slice(2)]);
 
-  return z.strictObject({ operation });
+  const schema = z.strictObject({ operation });
+  registerLocalSchemaReferences(schema);
+  return schema;
 }
 
 function derivedRequestKey(extra: unknown): string {
@@ -1563,13 +2245,20 @@ export function registerFacadeTools(server: McpServer, catalog: PrivateToolCatal
           };
         }
 
-        return selected.run === undefined
-          ? catalog.dispatch(
-              selected.privateTool,
-              privateInput(catalog, selected, operation, extra),
-              extra,
-            )
-          : selected.run(catalog, operation, extra);
+        try {
+          return selected.run === undefined
+            ? await catalog.dispatch(
+                selected.privateTool,
+                privateInput(catalog, selected, operation, extra),
+                extra,
+              )
+            : await selected.run(catalog, operation, extra);
+        } catch {
+          return {
+            content: [{ text: "Invalid Crewhelm operation.", type: "text" }],
+            isError: true,
+          };
+        }
       },
     );
   }

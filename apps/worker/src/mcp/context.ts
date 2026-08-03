@@ -51,6 +51,7 @@ export interface OwnerControlPlaneClient {
   listRunToolApprovals(authorityInput: unknown, input: unknown): Promise<unknown>;
   lookupAgentConnectionConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
   lookupRemoteMcpConnectionCreation?(authorityInput: unknown, input: unknown): Promise<unknown>;
+  mcpAuthoringDrafts?(authorityInput: unknown, input: unknown): Promise<unknown>;
   reserveConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;
   reserveRemoteMcpOAuthSetup?(authorityInput: unknown, input: unknown): Promise<unknown>;
   recipes?(authorityInput: unknown, input: unknown): Promise<unknown>;
