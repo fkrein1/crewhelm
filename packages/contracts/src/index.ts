@@ -18,6 +18,7 @@ export * from "./fleet-configuration.js";
 export * from "./fleet-capacity.js";
 export * from "./health.js";
 export * from "./integrations.js";
+export * from "./mcp-authoring-drafts.js";
 export * from "./inference.js";
 export * from "./output-contracts.js";
 export * from "./recovery.js";

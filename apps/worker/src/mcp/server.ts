@@ -18,6 +18,7 @@ import { availableAgentCapabilityPrerequisites } from "../agent-capabilities/reg
 import { readBoundedPostRequest } from "../http/request-body.js";
 import { recordIntegrationProviderResponse } from "../observability/integrations.js";
 import { registerAgentTools } from "./agent-tools.js";
+import { registerAuthoringDraftTools } from "./authoring-draft-tools.js";
 import { MCP_BRIEFS_TOOL_NAME, registerBriefTools } from "./brief-tools.js";
 import { registerConnectionTools } from "./connection-tools.js";
 import { registerConnectionAttachmentTools } from "./connection-attachment-tools.js";
@@ -147,8 +148,9 @@ export {
 };
 
 const MAX_MCP_BODY_BYTES = 512 * 1024;
-export const MCP_MODEL_VISIBLE_CATALOG_SIZE_BUDGET_BYTES = 160 * 1_024;
-export const MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES = 152 * 1_024;
+export const MCP_MODEL_VISIBLE_CATALOG_SIZE_BUDGET_BYTES = 80 * 1_024;
+export const MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES = 74 * 1_024;
+export const MCP_MODEL_VISIBLE_TOOL_SIZE_BUDGET_BYTES = 10 * 1_024;
 export const MCP_TOOL_COUNT_BUDGET = MCP_FACADE_TOOL_COUNT;
 const MCP_SERVER_INFO = {
   name: "crewhelm",
@@ -242,6 +244,7 @@ function createMcpServer(
   const privateTools = createPrivateToolCatalog((privateServer) => {
     registerConfigurationTools(privateServer, context);
     registerAgentTools(privateServer, context);
+    registerAuthoringDraftTools(privateServer, context);
     registerBriefTools(privateServer, context);
     registerRunTools(privateServer, context);
     registerSessionTools(privateServer, context);
@@ -304,7 +307,7 @@ function createMcpServer(
         readOnlyHint: true,
       },
       description:
-        "Start here. Return a cheap owner-local fleet dashboard with usage, inbox attention, diagnostics, and at most three bounded next-step suggestions. Suggestions are advisory and never grant authority.",
+        "Start here for an owner-local dashboard, diagnostics, and at most three advisory next steps.",
       inputSchema: controlPlaneStatusInputSchema,
       title: "Crewhelm status",
     },

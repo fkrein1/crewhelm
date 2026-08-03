@@ -36,22 +36,22 @@ conversation. A Cloudflare `AgentTaskWorkflow` may coordinate one frozen ordered
 owner control plane to admit each stage as a normal Run. Retained pre-session runs remain readable
 through the Agent object during migration.
 
-| State owner          | Authoritative facts                                                                                                                                                                                                 |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Worker               | Authenticated request context only                                                                                                                                                                                  |
-| Auth D1              | OAuth state, signing keys, rotating refresh tokens, and token revocation                                                                                                                                            |
-| `OwnerControlPlane`  | Agent and connection lifecycle, grants, Briefs, Recipe installation receipts, Event Triggers and Schedules, Workflow plans and projections, Run admission, owner inbox, approvals, effect reconciliation, and audit |
-| Owner content R2     | Immutable Skill files, versioned Brief content, and final Workflow deliverables; owner-local SQLite holds metadata, digests, provenance, and lifecycle                                                              |
-| `CrewAgent`          | Workflow and Session discovery, branch revisions, retention, deletion, and exact event and Run routing                                                                                                              |
-| `AgentTaskWorkflow`  | Durable ordering of identifiers and stage events; no prompts, bearer authority, provider access, or policy decisions                                                                                                |
-| `CrewSession`        | One conversation's Think transcript, submissions, output, deadlines, and approval waits                                                                                                                             |
-| Sandbox container    | One runtime-tool call's ephemeral process and filesystem; never owner authority or credentials; its backing Durable Object is purged after teardown                                                                 |
-| Search/fetch adapter | Bounded public evidence reads; provider credentials stay in the Worker and exact source handles expire with their Run                                                                                               |
-| Cloudflare AI        | Direct model execution through the Workers AI binding when no dedicated Gateway is configured                                                                                                                       |
-| AI Gateway           | Optional installation-wide hard spend ceiling and model-call cost metadata                                                                                                                                          |
-| Composio             | Connected-account credentials and refresh                                                                                                                                                                           |
-| Remote MCP server    | Untrusted tool catalog and tool results; Crewhelm retains encrypted bearer or OAuth credentials                                                                                                                     |
-| Recipe Registry      | Public immutable Recipe and Skill packages plus discovery projections; never owner credentials, grants, installation identity, or runtime state                                                                     |
+| State owner          | Authoritative facts                                                                                                                                                                                                                               |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Worker               | Authenticated request context only                                                                                                                                                                                                                |
+| Auth D1              | OAuth state, signing keys, rotating refresh tokens, and token revocation                                                                                                                                                                          |
+| `OwnerControlPlane`  | Agent and connection lifecycle, grants, Briefs, bounded MCP authoring drafts, Recipe installation receipts, Event Triggers and Schedules, Workflow plans and projections, Run admission, owner inbox, approvals, effect reconciliation, and audit |
+| Owner content R2     | Immutable Skill files, versioned Brief content, and final Workflow deliverables; owner-local SQLite holds metadata, digests, provenance, and lifecycle                                                                                            |
+| `CrewAgent`          | Workflow and Session discovery, branch revisions, retention, deletion, and exact event and Run routing                                                                                                                                            |
+| `AgentTaskWorkflow`  | Durable ordering of identifiers and stage events; no prompts, bearer authority, provider access, or policy decisions                                                                                                                              |
+| `CrewSession`        | One conversation's Think transcript, submissions, output, deadlines, and approval waits                                                                                                                                                           |
+| Sandbox container    | One runtime-tool call's ephemeral process and filesystem; never owner authority or credentials; its backing Durable Object is purged after teardown                                                                                               |
+| Search/fetch adapter | Bounded public evidence reads; provider credentials stay in the Worker and exact source handles expire with their Run                                                                                                                             |
+| Cloudflare AI        | Direct model execution through the Workers AI binding when no dedicated Gateway is configured                                                                                                                                                     |
+| AI Gateway           | Optional installation-wide hard spend ceiling and model-call cost metadata                                                                                                                                                                        |
+| Composio             | Connected-account credentials and refresh                                                                                                                                                                                                         |
+| Remote MCP server    | Untrusted tool catalog and tool results; Crewhelm retains encrypted bearer or OAuth credentials                                                                                                                                                   |
+| Recipe Registry      | Public immutable Recipe and Skill packages plus discovery projections; never owner credentials, grants, installation identity, or runtime state                                                                                                   |
 
 The control plane owns admission and administration; the Agent directory owns conversation
 lifecycle; each session owns execution. Cross-object calls
@@ -78,6 +78,11 @@ Before that handoff, publication preparation reads one exact Agent revision and 
 Schedule and Event Trigger revisions. It derives the public Agent definition, Skill decisions,
 portable Connection requirements, and named Brief inputs locally. Exact Brief references and
 Connection IDs never enter the public candidate.
+
+Complex MCP authoring candidates remain in owner-local SQLite as client-bound, expiring drafts.
+The model passes compact revision-and-digest references between focused edits, inspection,
+preview, and confirmation. This storage is coordination state only: the normal publication,
+installation, Skill, and blueprint handlers revalidate the complete package and retain authority.
 
 Optional installation features have three separate states: provider-plan eligibility,
 installation enablement, and Agent enablement. The CLI owns plan checks, explicit activation, and

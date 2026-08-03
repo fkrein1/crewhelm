@@ -78,16 +78,34 @@ Each private step still validates scopes and persists replay state independently
 credentials remain in provider or Crewhelm custody and never enter MCP arguments, results, logs, or
 Agent context.
 
+Complex authoring uses owner-scoped durable drafts instead of carrying complete candidates through
+every model turn. `prepare_*` operations store one validated Recipe installation, Recipe
+publication, Skill, or Agent-blueprint package in `OwnerControlPlane` SQLite and return a compact
+reference containing its kind, revision, digest, and expiry. Small operations replace one setup
+value, binding, optional Skill choice, recurring-operation selection, publication section, or Skill
+decision at a time. Preview and apply or publish resolve the exact current draft; confirmation
+digests still bind the reviewed plan.
+
+Publication sections are inspected on demand, so the model need not ingest or resend the whole
+candidate merely to review one decision. Drafts are bound to the authenticated owner and OAuth
+client, expire after 24 hours, and are limited to eight drafts of 160 KiB each. Every edit uses an
+exact revision and digest plus replay identity. Draft references are coordination coordinates, not
+authority, and cannot bypass the private handler's validation or scope checks. Each authoring
+surface exposes an explicit discard operation so completed or abandoned drafts need not consume
+the bounded quota until expiry.
+
 ## Catalog and collection bounds
 
 Growing collections use bounded list operations followed by exact inspection. Fleet lists return
 at most 25 compact summaries and stay within their response budgets. Exact reads retain detailed
 configuration, grants, prompts, outputs, and timelines only when requested.
 
-The authenticated catalog has explicit CI ceilings for tool count, serialized schemas, and the
-complete model-visible payload including server instructions. These are review ceilings, not MCP
-protocol limits. Schema growth must represent a typed owner decision or domain object; internal
-coordination fields do not justify public catalog growth.
+The authenticated catalog has explicit CI ceilings of 16 tools, 74 KiB of serialized input
+schemas, 80 KiB for the complete model-visible payload including server instructions, and 10 KiB
+for any one complete tool definition. These are review ceilings, not MCP protocol limits. Shared local JSON Schema
+definitions use `$ref` rather than repeating common references and contracts. Schema growth must
+represent a typed owner decision or domain object; internal coordination fields do not justify
+public catalog growth.
 
 Large provider action catalogs remain progressively discoverable: search a provider only when it
 is unknown, search its actions only when needed, then grant exact versions to one Agent revision.

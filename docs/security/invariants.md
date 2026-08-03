@@ -128,6 +128,14 @@ always require approval, and dispatch uncertainty remains an unresolved external
 Remote input schemas are compiled before persistence and admit only a bounded non-regex subset;
 unsupported keywords, references, conditionals, and excessive composition fail closed.
 
+An MCP authoring draft is bounded coordination state, not authority or approval. It is scoped to
+one authenticated owner and OAuth client, stores only a contract-valid Recipe installation,
+Recipe publication, Skill package, or Agent-blueprint package, and expires after 24 hours. Reads
+and edits require the exact kind, revision, digest, and current scope; stale or cross-client
+references fail closed. Preview and mutation resolve the server-held content again, and confirmed
+operations remain bound to their independent confirmation digest. At most eight 160 KiB drafts
+are retained per owner, with expired rows removed before new capacity is admitted.
+
 Public Recipe and Skill packages are immutable hostile supply-chain input, never authority. A
 Recipe pins exact Registry origin, publisher namespace, name, version, and digest for every Skill;
 the owner instance fetches and verifies authoritative bytes from a canonical public HTTPS origin

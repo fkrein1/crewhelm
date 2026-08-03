@@ -255,9 +255,9 @@ export const composioToolLimitsSchema = z.strictObject({
   maxCostMicrousdPerCall: z
     .number()
     .int()
+    .safe()
     .min(0)
     .max(MAXIMUM_COST_MICROUSD)
-    .safe()
     .describe("Owner-selected per-call cost ceiling in millionths of one US dollar."),
   maxDurationMs: z
     .number()

@@ -44,19 +44,24 @@ Setup parameters are stored in the owner-local installation plan. Do not use the
 
 ## Preview and install
 
-1. Call `crewhelm_change_recipes` with `operation.kind: "preview_install"`, the exact Recipe target,
-   `setup` values, optional Skill choices, existing
-   Connection bindings, exact Brief bindings, selected operation templates, and a time zone when a
-   selected calendar Schedule requires one.
-2. Confirm `ready: true`. Review the rendered Agent, every pinned Skill, Connection compatibility,
+1. Call `crewhelm_change_recipes` with `operation.kind: "prepare_install"`, the exact Recipe target,
+   and a `requestKey`. Keep the returned draft reference unchanged.
+2. Update the draft one decision at a time. Use `set_setup` for each setup value,
+   `bind_connection` for each existing Connection, `bind_brief` for exact Brief revisions,
+   `select_optional_skill` for optional Skills, and `select_operations` for retained Schedules and
+   Event Triggers. Each edit returns a new draft revision; use that returned reference for the next
+   edit. Include a time zone when a selected calendar Schedule requires one.
+3. Call `operation.kind: "preview_install"` with the latest draft. Confirm `ready: true`. Review the rendered Agent, every pinned Skill, Connection compatibility,
    Brief availability, requested authority, execution limits, and retained operations. A selected
    operation with a missing required Brief slot keeps the plan unready; a missing optional slot does
    not. Bindings that exceed the combined Brief context limit are reported as
    `combination_unavailable` and also keep the plan unready.
-3. Preserve the returned `confirmationDigest`. If any local fact or public artifact changes, run a
+4. Preserve the returned `confirmationDigest`. If any local fact or public artifact changes, run a
    new preview instead of approving a different plan implicitly.
-4. Repeat the same flat plan with `operation.kind: "install"` and the confirmation digest. Do not
-   wrap the plan in a `request` object.
+5. Call `operation.kind: "install"` with the latest draft and confirmation digest. Crewhelm resolves
+   the stored plan; do not resend it.
+6. After a confirmed installation, or when abandoning the plan, call
+   `operation.kind: "discard_install_draft"` with the latest draft reference.
 
 ## Verify the result
 

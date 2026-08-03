@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import * as z from "zod";
 
-import { classifyRemoteMcpToolEffect } from "./capabilities.js";
+import { classifyRemoteMcpToolEffect, composioToolLimitsSchema } from "./capabilities.js";
 
 describe("remote MCP capability classification", () => {
   it.each([
@@ -25,5 +26,11 @@ describe("remote MCP capability classification", () => {
       classifyRemoteMcpToolEffect({ annotations: { destructiveHint: true }, name: "mutate" }),
     ).toBe("destructive");
     expect(classifyRemoteMcpToolEffect({ name: "getUser" })).toBe("write");
+  });
+
+  it("advertises the non-negative provider cost limit enforced at runtime", () => {
+    expect(
+      z.toJSONSchema(composioToolLimitsSchema).properties?.maxCostMicrousdPerCall,
+    ).toMatchObject({ minimum: 0 });
   });
 });

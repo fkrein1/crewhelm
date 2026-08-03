@@ -23,6 +23,8 @@ import type {
   SkillProvenance,
   SkillWarning,
   WorkflowDeliverable,
+  JsonValue,
+  McpAuthoringDraftKind,
 } from "@crewhelm/contracts";
 import {
   check,
@@ -1422,6 +1424,58 @@ export const recipeInstallations = sqliteTable(
   ],
 );
 
+export const mcpAuthoringDrafts = sqliteTable(
+  "mcp_authoring_drafts",
+  {
+    draftId: text("draft_id").primaryKey(),
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    kind: text("kind", {
+      enum: [
+        "agent-blueprint-package",
+        "recipe-installation",
+        "recipe-publication",
+        "skill-package",
+      ],
+    })
+      .$type<McpAuthoringDraftKind>()
+      .notNull(),
+    revision: integer("revision").notNull(),
+    content: text("content", { mode: "json" }).$type<JsonValue>().notNull(),
+    contentDigest: text("content_digest").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    lastIdempotencyKey: text("last_idempotency_key"),
+    lastRequestDigest: text("last_request_digest"),
+    expiresAt: integer("expires_at").notNull(),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("mcp_authoring_drafts_client_idempotency").on(table.clientId, table.idempotencyKey),
+    index("mcp_authoring_drafts_client_expiry").on(table.clientId, table.expiresAt),
+    check("mcp_authoring_drafts_request_digest_length", sql`length(${table.requestDigest}) = 64`),
+    check(
+      "mcp_authoring_drafts_kind",
+      sql`${table.kind} IN ('agent-blueprint-package', 'recipe-installation', 'recipe-publication', 'skill-package')`,
+    ),
+    check("mcp_authoring_drafts_revision_positive", sql`${table.revision} > 0`),
+    check("mcp_authoring_drafts_content_json", sql`json_valid(${table.content})`),
+    check("mcp_authoring_drafts_content_digest_length", sql`length(${table.contentDigest}) = 64`),
+    check("mcp_authoring_drafts_size", sql`${table.sizeBytes} BETWEEN 2 AND 163840`),
+    check(
+      "mcp_authoring_drafts_last_request_digest",
+      sql`${table.lastRequestDigest} IS NULL OR length(${table.lastRequestDigest}) = 64`,
+    ),
+    check("mcp_authoring_drafts_expires_at_positive", sql`${table.expiresAt} > 0`),
+    check("mcp_authoring_drafts_created_at_positive", sql`${table.createdAt} > 0`),
+    check(
+      "mcp_authoring_drafts_updated_after_creation",
+      sql`${table.updatedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
 export const runAdmissions = sqliteTable(
   "run_admissions",
   {
@@ -2270,6 +2324,7 @@ export const controlPlaneSchema = {
   fleetConfigurationUpdates,
   integrationUsageEvents,
   integrationEnablementRequests,
+  mcpAuthoringDrafts,
   runAdmissions,
   runtimeToolExecutions,
   skillMutations,

@@ -131,6 +131,7 @@ function rewindControlPlaneMigrations(
   firstRemovedVersion: number,
 ): void {
   storage.sql.exec("PRAGMA foreign_keys=OFF");
+  storage.sql.exec("DROP TABLE IF EXISTS mcp_authoring_drafts");
   storage.sql.exec("DROP TABLE IF EXISTS recipe_installations");
   storage.sql.exec("DROP TABLE IF EXISTS remote_mcp_oauth_requests");
   storage.sql.exec("DROP TABLE IF EXISTS remote_mcp_connection_mutations");
@@ -431,6 +432,11 @@ describe("OwnerControlPlane", () => {
           name: "0033_safe_sir_ram",
           version: 34,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0034_compact_misty_knight",
+          version: 35,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });
@@ -510,9 +516,10 @@ describe("OwnerControlPlane", () => {
       );
       state.storage.sql.exec("DROP TABLE remote_mcp_oauth_requests");
       state.storage.sql.exec("DROP TABLE recipe_installations");
+      state.storage.sql.exec("DROP TABLE mcp_authoring_drafts");
       state.storage.sql.exec(
         "DELETE FROM control_plane_migrations WHERE version >= ?",
-        CONTROL_PLANE_SCHEMA_VERSION - 1,
+        CONTROL_PLANE_SCHEMA_VERSION - 2,
       );
       await state.storage.sync();
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
@@ -1915,6 +1922,7 @@ describe("OwnerControlPlane", () => {
         { version: 32 },
         { version: 33 },
         { version: 34 },
+        { version: 35 },
       ]);
     });
   });
@@ -2228,7 +2236,7 @@ describe("OwnerControlPlane", () => {
       admission: { run_id: admission.permit.runId, trigger: "manual" },
       foreignKeys: [],
       migration: {
-        name: "0033_safe_sir_ram",
+        name: "0034_compact_misty_knight",
         version: CONTROL_PLANE_SCHEMA_VERSION,
       },
       workflow: {

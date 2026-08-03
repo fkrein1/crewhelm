@@ -7,7 +7,7 @@ export const MAXIMUM_OUTPUT_SCHEMA_DEPTH = 8;
 export const MAXIMUM_OUTPUT_SCHEMA_NODES = 128;
 export const MAXIMUM_OUTPUT_VALIDATION_ISSUES = 8;
 
-const jsonValueSchema = z.json();
+export const jsonValueSchema = z.json();
 const outputSchemaNameSchema = z
   .string()
   .min(1)
