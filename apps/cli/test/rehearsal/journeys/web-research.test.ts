@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import * as z from "zod";
 
+import { commandFixtureCall } from "../facade-fixtures.js";
+
 import {
   hasExactWebResearchToolSequence,
   includesOfficialCloudflareDevelopersUrl,
@@ -159,14 +161,11 @@ describe("Web research feature rehearsal", () => {
       }
       if (request.method === "tools/list") {
         const required = [
-          "crewhelm_batch_disable_agents",
-          "crewhelm_cancel_run",
-          "crewhelm_create_agent",
-          "crewhelm_get_config",
-          "crewhelm_get_agent",
-          "crewhelm_inspect_run",
-          "crewhelm_list_agent_runs",
-          "crewhelm_start_run",
+          "crewhelm_change_agents",
+          "crewhelm_change_work",
+          "crewhelm_inspect_agents",
+          "crewhelm_inspect_context",
+          "crewhelm_inspect_work",
           "crewhelm_status",
         ];
         return Response.json({
@@ -190,8 +189,12 @@ describe("Web research feature rehearsal", () => {
         });
       }
 
-      const name = request.params.name;
-      const toolArguments = request.params.arguments ?? {};
+      const fixtureCall = commandFixtureCall({
+        arguments: request.params.arguments ?? {},
+        name: String(request.params.name),
+      });
+      const name = fixtureCall.name;
+      const toolArguments = z.looseObject({}).parse(fixtureCall.arguments);
       if (name === "crewhelm_get_config") {
         const target = z.looseObject({ id: z.string() }).parse(toolArguments.target);
         return toolResult(request.id, {

@@ -19,7 +19,7 @@ should continue even if the MCP conversation disconnects.
 ## Prerequisites
 
 - Use agents or Full control access.
-- An active Agent ID and exact revision with the required Skills and Connections.
+- An active Agent returned by Crewhelm with the required Skills and Connections.
 - One objective and two to eight short, ordered stages.
 - Exact Brief revisions needed across all stages.
 
@@ -36,20 +36,20 @@ cannot be continued or deleted as an ordinary Agent conversation.
 ## Start the Workflow
 
 1. Confirm that each stage has one distinct purpose and that later stages depend on earlier output.
-2. Call `crewhelm_agent_workflows` with `action: "start"`, the exact Agent revision, a fresh
-   idempotency key, one objective, and the ordered stages.
+2. Call `crewhelm_change_work` with `operation.kind: "start_workflow"`, the returned Agent object,
+   one objective, and the ordered stages.
 3. Add exact Brief revisions without reading and resending their content.
 4. Omit `outputContract` for a Markdown deliverable. If software requires JSON, provide one bounded
    object-root schema; it applies only to the final stage.
-5. Retain the returned `workflowId` and `revision`.
+5. Keep the returned Workflow object unchanged.
 
 Use a direct Run instead when the plan is not yet known. A Workflow is not a general graph or a way
 to ask the model to invent future authority.
 
 ## Inspect progress
 
-1. List active Workflows with a small limit for compact progress.
-2. Inspect the selected Workflow by exact ID.
+1. Call `crewhelm_inspect_work` with `operation.kind: "list_workflows"` and a small limit.
+2. Inspect the selected Workflow with `operation.kind: "inspect_workflow"`.
 3. Keep `includePrompts` false unless debugging the frozen plan.
 4. After completion, inspect compact deliverable metadata first. Request deliverable content only
    when it is needed.
@@ -63,11 +63,13 @@ to ask the model to invent future authority.
 
 ## Recover safely
 
-- Cancel active work with `action: "cancel"` and the Workflow's current revision. Cancellation
+- Cancel active work through `crewhelm_change_work` with `operation.kind: "cancel_workflow"` and
+  the returned Workflow object. Cancellation
   prevents later stages but cannot undo an already-dispatched external effect.
 - Inspect a failed Workflow before starting a replacement. Do not assume a stage made no external
   change merely because coordination failed.
-- Delete only a terminal Workflow after owner confirmation and with Full control access. Terminal
+- Delete only a terminal Workflow with `operation.kind: "delete_workflow"`, the returned Workflow
+  object, owner confirmation, and Full control access. Terminal
   deletion also removes the Workflow-owned Session, retained execution data, prompts, and
   deliverable.
 - On a revision conflict, inspect the current Workflow and use its returned revision.

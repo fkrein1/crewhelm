@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import * as z from "zod";
 
+import { commandFixtureCall } from "../facade-fixtures.js";
+
 import { runWorkflowRehearsal } from "../../../src/rehearsal/journeys/workflow.js";
 
 const origin = "https://crewhelm-testing.example";
@@ -258,12 +260,12 @@ describe("Workflow feature rehearsal", () => {
           jsonrpc: "2.0",
           result: {
             tools: [
-              "crewhelm_agent_workflows",
-              "crewhelm_batch_disable_agents",
-              "crewhelm_briefs",
-              "crewhelm_create_agent",
-              "crewhelm_get_agent",
-              "crewhelm_list_agents",
+              "crewhelm_change_agents",
+              "crewhelm_change_context",
+              "crewhelm_change_work",
+              "crewhelm_inspect_agents",
+              "crewhelm_inspect_context",
+              "crewhelm_inspect_work",
               "crewhelm_status",
               ...Array.from({ length: 27 }, (_, index) => `crewhelm_fixture_${index}`),
             ].map((name) => ({
@@ -280,8 +282,12 @@ describe("Workflow feature rehearsal", () => {
         });
       }
 
-      const name = request.params.name;
-      const toolArguments = request.params.arguments ?? {};
+      const fixtureCall = commandFixtureCall({
+        arguments: request.params.arguments ?? {},
+        name: String(request.params.name),
+      });
+      const name = fixtureCall.name;
+      const toolArguments = z.looseObject({}).parse(fixtureCall.arguments);
       if (name === "crewhelm_status") return toolResult(request.id, status(activeAgents));
       if (name === "crewhelm_create_agent") {
         agentCreates += 1;
@@ -424,11 +430,10 @@ describe("Workflow feature rehearsal", () => {
           jsonrpc: "2.0",
           result: {
             tools: [
-              "crewhelm_agent_workflows",
-              "crewhelm_batch_disable_agents",
-              "crewhelm_create_agent",
-              "crewhelm_get_agent",
-              "crewhelm_list_agents",
+              "crewhelm_change_agents",
+              "crewhelm_change_work",
+              "crewhelm_inspect_agents",
+              "crewhelm_inspect_work",
               "crewhelm_status",
             ].map((name) => ({
               annotations: {
@@ -444,8 +449,12 @@ describe("Workflow feature rehearsal", () => {
         });
       }
 
-      const name = request.params.name;
-      const toolArguments = request.params.arguments ?? {};
+      const fixtureCall = commandFixtureCall({
+        arguments: request.params.arguments ?? {},
+        name: String(request.params.name),
+      });
+      const name = fixtureCall.name;
+      const toolArguments = z.looseObject({}).parse(fixtureCall.arguments);
       if (name === "crewhelm_status") return toolResult(request.id, status(activeAgents));
       if (name === "crewhelm_create_agent") {
         activeAgents += 1;

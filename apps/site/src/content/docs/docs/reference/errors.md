@@ -48,22 +48,22 @@ content. Follow the named `nextAction`; do not infer recovery from omitted detai
 
 ## Recovery reads
 
-- `crewhelm_inspect_run`: diagnosis, retention, optional usage, and paged timeline.
-- `crewhelm_list_run_tool_approvals`: pending and expired approvals.
-- `crewhelm_list_unresolved_tool_effects`: effects requiring independent verification.
-- `crewhelm_list_connections` with an exact Connection ID: lifecycle and next action.
+- `crewhelm_inspect_work` with `inspect_run` or `list_approvals`: Run diagnosis and owner decisions.
+- `crewhelm_inspect_recovery` with `unresolved_effects`: effects requiring independent verification.
+- `crewhelm_inspect_connections` and exact provider inspection through
+  `crewhelm_change_connections`: lifecycle and next action.
 - `crewhelm_status` with recent audit enabled: bounded owner-local mutation history.
-- `crewhelm_get_agent_schedule`: one exact Schedule's latest dispatch or deferral.
-- `crewhelm_agent_event_triggers`: source discovery, lifecycle, and bounded occurrence history.
+- `crewhelm_inspect_automations`: Schedule state, event-source discovery, Event Trigger lifecycle,
+  and bounded occurrence history.
 
 ## Ambiguous writes
 
 Unknown integration or Connection writes may return `reservationId`, `recoverAfter`, and
-`retry_same_request`. Preserve the original request and idempotency key. Before `recoverAfter`,
-Crewhelm does not redispatch. Afterward, retry only the same request.
+`retry_same_request`. Preserve the original facade request. Before `recoverAfter`, Crewhelm does
+not redispatch. Afterward, retry only that request and preserve any explicit `requestKey`.
 
 An unknown provider tool effect is different: verify it in the provider's authoritative UI or API
-before calling `crewhelm_reconcile_tool_execution`. Only a proven `not_applied` result permits an
-equivalent mutation to be retried.
+before calling `crewhelm_recover` with `operation.kind: "reconcile_effect"`. Only a proven
+`not_applied` result permits an equivalent mutation to be retried.
 
 See [Diagnose and recover](/docs/guides/diagnose-and-recover/) for the full operator procedure.

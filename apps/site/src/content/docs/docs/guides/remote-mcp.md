@@ -36,11 +36,12 @@ encrypts them at rest and never places them in MCP tool arguments or Agent conte
 
 ## Connect and review the server
 
-1. Call `crewhelm_remote_mcp_connection` with `action: "connect"`, a name, the exact endpoint,
-   authentication kind, requested OAuth scopes when applicable, and a fresh idempotency key.
+1. Call `crewhelm_change_connections` with `operation.kind: "connect_remote_mcp"`, a name, the exact
+   endpoint, authentication kind, and requested OAuth scopes when applicable.
 2. For public authentication, inspect the returned Connection directly. For bearer or OAuth,
    complete the returned browser setup yourself.
-3. Call the same tool with `action: "inspect"` and the exact Connection ID.
+3. Pass the returned Connection unchanged to the same tool with
+   `operation.kind: "inspect_remote_mcp"`.
 4. Review every discovered tool, its effect classification, input schema, and the frozen
    `snapshotDigest`.
 5. Stop if the catalog contains a tool you are not prepared to expose. Attachment is for the whole
@@ -51,8 +52,8 @@ redirects, unsupported schema features, and oversized catalogs.
 
 ## Attach the catalog
 
-1. Call `crewhelm_configure_agent_remote_mcp_connection` with the exact Agent revision, Connection
-   ID, inspected snapshot digest, one authorization mode, an optional expiry, and the smallest
+1. Call `crewhelm_change_connections` with `operation.kind: "grant_remote_mcp"`, the returned Agent
+   and inspected Connection objects, one authorization mode, an optional expiry, and the smallest
    useful limits.
 2. Prefer `approval_required`. Use standing authority only after reviewing the full catalog and
    intended effects.
@@ -70,12 +71,14 @@ default to writes; destructive tools always require approval.
 
 ## Recover safely
 
-- If OAuth refresh fails, use `action: "reauthenticate"` on the same Connection so existing
-  attachments remain tied to its identity. Reauthentication cannot widen the frozen scope set.
+- If OAuth refresh fails, use `operation.kind: "reauthenticate_remote_mcp"` with the returned
+  Connection object so existing attachments remain tied to its identity. Reauthentication cannot
+  widen the frozen scope set.
 - If the remote catalog changes, create and review a new Connection snapshot; Crewhelm does not
   silently refresh it.
-- Delete the Connection to clear local encrypted credentials and attempt advertised OAuth token
-  revocation. Deletion does not prove the remote server reversed an already-applied effect.
+- Use `operation.kind: "delete_remote_mcp"` with the returned Connection to clear local encrypted
+  credentials and attempt advertised OAuth token revocation. Deletion does not prove the remote
+  server reversed an already-applied effect.
 - Treat a post-dispatch transport failure as an unresolved external effect until independently
   verified.
 

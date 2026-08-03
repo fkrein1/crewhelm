@@ -32,11 +32,10 @@ const POLL_INTERVAL_MS = 5_000;
 const TERMINAL_WORKFLOW_STATUSES = ["cancelled", "completed", "failed"] as const;
 type TerminalWorkflowStatus = (typeof TERMINAL_WORKFLOW_STATUSES)[number];
 const REQUIRED_TOOLS = [
-  "crewhelm_agent_workflows",
-  "crewhelm_batch_disable_agents",
-  "crewhelm_create_agent",
-  "crewhelm_get_agent",
-  "crewhelm_list_agents",
+  "crewhelm_change_agents",
+  "crewhelm_change_work",
+  "crewhelm_inspect_agents",
+  "crewhelm_inspect_work",
   "crewhelm_status",
 ] as const;
 const AGENT_LIMITS = {

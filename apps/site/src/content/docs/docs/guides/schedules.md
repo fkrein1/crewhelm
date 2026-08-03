@@ -19,7 +19,7 @@ revision at an elapsed interval or a daily, weekly, or monthly wall-clock time.
 ## Prerequisites
 
 - Full control access.
-- An active Agent ID and exact revision.
+- An active Agent returned by Crewhelm.
 - A bounded recurring instruction.
 - Any exact Brief revisions the recurring responsibility needs.
 - A trigger: interval, or calendar time with an IANA time zone.
@@ -37,32 +37,35 @@ replaying a backlog.
 
 ## Create a Schedule
 
-1. Call `crewhelm_list_agent_schedules` for the Agent to review existing responsibilities and
-   available capacity.
-2. Call `crewhelm_configure_agent_schedule` with the exact Agent revision, `scheduleId: null`,
-   `expectedScheduleRevision: null`, a fresh idempotency key, and the schedule definition.
+1. Call `crewhelm_inspect_automations` with `operation.kind: "list_schedules"` and the returned
+   Agent object to review existing responsibilities and available capacity.
+2. Call `crewhelm_change_automations` with `operation.kind: "create_schedule"`, that Agent, and the
+   schedule definition.
 3. For an interval, choose from 60 seconds through 7 days. The first Run occurs one interval after
    creation.
 4. For calendar timing, provide `HH:mm`, an IANA time zone, and the required daily, weekly, or
    monthly selector. A monthly day that does not exist in a month is skipped.
 5. Omit the output contract for Markdown, or freeze one bounded JSON contract for every scheduled
    Run.
-6. Add only the exact Brief `{id, revision}` references needed for this recurring responsibility.
+6. Add only the returned Brief objects needed for this recurring responsibility. Crewhelm keeps
+   their exact immutable revisions internally.
    Crewhelm validates them without requiring the MCP client to read and resend their content.
-7. Retain the returned Schedule ID and revision.
+7. Keep the returned Schedule object unchanged.
 
 ## Verify the Schedule
 
-1. Call `crewhelm_get_agent_schedule` with the Agent and exact Schedule ID.
+1. Call `crewhelm_inspect_automations` with `operation.kind: "inspect_schedule"` and the returned
+   Schedule object.
 2. Confirm its status, frozen Agent revision, trigger, and next dispatch time.
 3. After an occurrence, inspect its most recent scheduled Run.
 
 ## Pause or update
 
-- Pause one exact Schedule through `crewhelm_configure_agent_schedule` with its current revisions
-  and a null schedule definition.
-- Update a paused Schedule with a new exact definition to reuse that Schedule's bounded slot.
-- Reread the Schedule before every lifecycle mutation and use the returned revisions.
+- Pause one exact Schedule through `crewhelm_change_automations` with
+  `operation.kind: "pause_schedule"` and the returned Schedule object.
+- Update a paused Schedule with `operation.kind: "update_schedule"`, that Schedule object, and a
+  new `definition` to reuse its bounded slot.
+- Inspect the Schedule before every lifecycle mutation and pass back the newly returned object.
 
 An Agent revision change makes the bound revision stale. Crewhelm pauses or skips the Schedule
 instead of silently retargeting it.
@@ -71,7 +74,7 @@ instead of silently retargeting it.
 
 - If a Schedule is busy, inspect it and retry the lifecycle change only after the pending admission
   settles. Do not infer whether its Run started.
-- On a revision conflict, reread both the Agent and Schedule before deciding to update.
+- On a revision conflict, inspect the Schedule again before deciding to update.
 - Pause the Schedule or update its current configuration without the Brief to release the recurring
   reference. Deleting the Brief still fails closed while any admitted Run or Workflow retains the
   exact revision; inspect that resource and follow its retention lifecycle.

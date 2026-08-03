@@ -13,24 +13,21 @@ sources:
   - packages/contracts/src/recipe-publications.ts
 ---
 
-Use `crewhelm_recipe_publications` to publish one exact Agent revision as a new immutable Recipe
+Use `crewhelm_publish_recipe` to publish one exact Agent revision as a new immutable Recipe
 version. Publishing is an external public action. It never includes credentials, grants, Briefs,
 owner-local IDs, history, or runtime telemetry.
-
-The tool accepts one `request` JSON string. Encode the selected `action` and that action's fields
-inside it; the owner control plane decodes and validates the full typed request before doing work.
 
 ## Before you begin
 
 - Full control access to the Crewhelm installation.
-- The exact Agent ID and revision to publish.
+- The exact Agent object returned by Crewhelm.
 - A declared license.
-- The exact IDs of any current Schedules and Event Triggers to include.
+- The current Schedule and Event Trigger objects to include.
 
 ## Prepare and review the candidate
 
-1. Call `prepare_publish` with the exact Agent `{id, revision}`, license, and selected Schedule and
-   Event Trigger IDs.
+1. Call `crewhelm_publish_recipe` with `operation.kind: "prepare"`, the returned Agent, license, and
+   selected Schedule and Event Trigger objects.
 2. Review the returned candidate. Crewhelm copies the Agent instructions, limits, portable
    capabilities, and local Skill coordinates; converts selected recurring operations and attached
    Connections into portable declarations; and replaces exact recurring Brief references with
@@ -43,13 +40,11 @@ Preparation is owner-local and has no public effect. Exact Brief and Connection 
 
 ## Authorize this publication
 
-1. Generate one UUID idempotency key and keep it unchanged through authorization, preview, and
-   publish.
-2. Call `authorize_publish` with that key and a recognizable installation label.
-3. Open the returned URL. Sign in with GitHub if needed, verify the publisher namespace, and choose
-   **Authorize publishing**.
-4. Return to the MCP client. The short-lived authorization is scoped to that one idempotency key;
-   Crewhelm does not receive the GitHub token or Registry session cookie.
+1. Call `crewhelm_publish_recipe` with `operation.kind: "authorize"` and a recognizable
+   installation label. Crewhelm derives retry identity for ordinary calls.
+2. Keep the returned authorization object unchanged, then open its URL. Sign in with GitHub if
+   needed, verify the publisher namespace, and choose **Authorize publishing**.
+3. Return to the MCP client. Crewhelm does not receive the GitHub token or Registry session cookie.
 
 ## Make every Skill decision
 
@@ -67,24 +62,25 @@ Skill Markdown stays inert public package content and grants no authority.
 
 ## Preview and publish
 
-1. Call `preview_publish`. Its `request` JSON contains the action, authorization ID, reviewed
-   candidate, and original idempotency key.
+1. Call `crewhelm_publish_recipe` with `operation.kind: "publish"`, the returned authorization, and
+   the reviewed candidate. Omit `expectedConfirmationDigest` to preview.
 2. Confirm `ready: true`. Review the publisher namespace, exact next Recipe and Skill versions,
    public digests, file paths, Skill provenance and warning counts, requested authority, operations,
    limits, and the complete exclusions list.
-3. Preserve `confirmationDigest`, then call `publish` with the unchanged candidate, authorization,
-   idempotency key, and expected confirmation digest.
+3. Preserve `confirmationDigest`, then repeat the same operation with the authorization and
+   candidate unchanged plus `expectedConfirmationDigest` to publish.
 
 The Registry independently revalidates the package, sensitive-content checks, namespace, exact
 next versions, daily quotas, and immutable object writes. A concurrent publication can make a
 preview stale; request a new preview and confirm its new digest.
 
-Retry an uncertain response with the same idempotency key and unchanged candidate. Never generate
-a new key merely because the response was interrupted.
+Retry an uncertain response with the same authorization object and unchanged candidate. The
+authorization carries the publication attempt identity; callers do not construct or copy a
+separate retry key.
 
 ## Verify the result
 
 The result returns the immutable Recipe projection and every published artifact coordinate and
-digest. Inspect the public Recipe through `crewhelm_recipes`, then search for its intended outcome
-to verify discovery. The published package remains unreviewed and untrusted even when its publisher
-identity is known.
+digest. Inspect the public Recipe through `crewhelm_inspect_recipes`, then search for its intended
+outcome to verify discovery. The published package remains unreviewed and untrusted even when its
+publisher identity is known.

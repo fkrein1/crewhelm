@@ -6,6 +6,7 @@ import {
   standingIntegrationRehearsalReportSchema,
 } from "../../../src/rehearsal/public/standing-integration.js";
 import { parseDeploymentOrigin } from "../../../src/doctor.js";
+import { commandFixtureCall } from "../facade-fixtures.js";
 
 const origin = "https://crewhelm.example";
 const clientId = "integration-rehearsal-client";
@@ -19,86 +20,68 @@ const grantId = "grant_44444444-4444-4444-8444-444444444444";
 const toolCallId = "tool_call_55555555-5555-4555-8555-555555555555";
 const timestamp = "2026-07-29T12:00:00.000Z";
 const toolAnnotations = {
-  crewhelm_agent_inbox: {
-    destructiveHint: false,
-    idempotentHint: true,
-    openWorldHint: false,
-    readOnlyHint: false,
-  },
-  crewhelm_batch_disable_agents: {
+  crewhelm_change_agents: {
     destructiveHint: true,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: false,
   },
-  crewhelm_configure_agent_connection: {
+  crewhelm_change_automations: {
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+    readOnlyHint: false,
+  },
+  crewhelm_change_connections: {
     destructiveHint: true,
     idempotentHint: true,
     openWorldHint: true,
     readOnlyHint: false,
   },
-  crewhelm_configure_agent_schedule: {
+  crewhelm_change_work: {
     destructiveHint: true,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: false,
   },
-  crewhelm_create_agent: {
-    destructiveHint: false,
-    idempotentHint: true,
-    openWorldHint: false,
-    readOnlyHint: false,
-  },
-  crewhelm_get_agent: {
+  crewhelm_inspect_agents: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: true,
   },
-  crewhelm_get_agent_schedule: {
+  crewhelm_inspect_automations: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: true,
   },
-  crewhelm_get_config: {
-    destructiveHint: false,
-    idempotentHint: true,
-    openWorldHint: false,
-    readOnlyHint: true,
-  },
-  crewhelm_inspect_integration_tool: {
+  crewhelm_inspect_connections: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: true,
     readOnlyHint: true,
   },
-  crewhelm_inspect_run: {
+  crewhelm_inspect_context: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: true,
   },
-  crewhelm_list_connections: {
+  crewhelm_inspect_recovery: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: true,
   },
-  crewhelm_list_unresolved_tool_effects: {
+  crewhelm_inspect_work: {
     destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: true,
   },
-  crewhelm_revoke_authority: {
+  crewhelm_recover: {
     destructiveHint: true,
-    idempotentHint: true,
-    openWorldHint: false,
-    readOnlyHint: false,
-  },
-  crewhelm_start_run: {
-    destructiveHint: false,
     idempotentHint: true,
     openWorldHint: false,
     readOnlyHint: false,
@@ -506,9 +489,9 @@ function rehearsalHarness(options: HarnessOptions = {}): Harness {
       });
     }
 
-    const params = z
-      .strictObject({ arguments: z.unknown(), name: z.string() })
-      .parse(request.params);
+    const params = commandFixtureCall(
+      z.strictObject({ arguments: z.unknown(), name: z.string() }).parse(request.params),
+    );
     toolCalls.push(params);
     let payload: unknown;
 

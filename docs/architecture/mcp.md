@@ -1,112 +1,112 @@
 # MCP architecture
 
-MCP exposes product operations, not internal modules or every provider action. Deterministic modules
-retain authority.
+Crewhelm's MCP surface presents owner intent, not control-plane command plumbing. Deterministic
+modules retain authority, validation, state transitions, and recovery.
 
-## Rules
+## Public facade and private commands
 
-- Keep common jobs first-class; discover uncommon capabilities progressively.
-- Scope external tools to an Agent revision. Never expose one Crewhelm MCP tool per provider action.
-- Read growing collections through **overview**, bounded **list**, and exact **inspect** operations.
-  Use opaque cursors and owner-local projections; never fan out across Agents while listing.
-- Projections support discovery, not authority. Validate Agent updates against admitted runs.
-- Keep writes exact and replay-safe, limits bounded, and fleet capacity configurable. Test
-  pagination, payload size, filters, fleet scale, and MCP schema size.
-- Treat errors as first-class results: stable codes; bounded diagnosis and recovery fields; opaque
-  log-correlation IDs for dependency failures.
-- Keep defaults compact. Put bounded recovery detail behind optional fields and exact reads.
-- Report unavailable optional capabilities with their missing prerequisites and concise setup or
-  plan requirements. One unavailable capability never blocks discovery or use of unrelated core
-  operations.
+The worker builds two catalogs:
 
-Growing fleet lists return at most 25 compact summaries and stay within a 16 KiB serialized
-response budget. Exact get and inspect tools retain detailed configuration, grants, prompts,
-outputs, and timelines. The authenticated MCP catalog is also held to explicit CI budgets for tool
-count, serialized input-schema size, and the complete model-visible catalog including server
-instructions and tool descriptions. These are review ceilings rather than protocol limits.
+1. A private command catalog contains the exact handlers used by the control plane. These schemas
+   retain revision checks, replay identities, provider snapshots, lifecycle actions, and other
+   coordination fields.
+2. A public facade groups those commands into a small set of read and change surfaces for Agents,
+   Work, Automations, Connections, Context, Recipes, and Recovery.
 
-Crewhelm keeps its bounded, security-sensitive product operations as directly callable tools.
-Names and descriptions carry task vocabulary for host-side progressive discovery, while compact
-server instructions explain when to search for the surface. Compound lifecycle tools advertise a
-plain object with an `action` field whose description gives the exact per-action field signatures;
-runtime validation rejects fields from the wrong action. This deliberately avoids requiring JSON
-Schema composition support from every MCP-to-model adapter.
+The private catalog is not returned by `tools/list`. A facade operation validates its public typed
+input, reconstructs the exact private request, and dispatches through the existing handler. The
+control plane therefore receives the same bounded request and enforces the same authority as it
+would for a direct command.
 
-Progressive discovery is primarily a host concern: an MCP host can fetch `tools/list`, retain the
-catalog outside model context, and inject only relevant definitions. Crewhelm therefore optimizes
-for this path without making it mandatory. The 38-tool, 64 KiB input-schema, and 82 KiB complete
-catalog ceilings remain explicit, and increases require evidence that the extra surface improves
-selection or execution accuracy. Schedules own time-based starts. One Event Trigger lifecycle lets
-owners describe connected-app events without programming webhook or bearer-token plumbing; later
-resource sources extend the same tool rather than adding provider-specific surfaces. See the
-MCP guidance on
-[progressive discovery](https://modelcontextprotocol.io/docs/develop/clients/client-best-practices).
+## Selection model
 
-Server-side search and code execution are reserved for mechanically large API surfaces where a
-fixed catalog cannot fit in context and a sandbox can enforce network and authorization boundaries.
-They do not replace deterministic Crewhelm handlers for durable or authority-changing operations.
-The external integration journey already applies progressive disclosure: search providers, search
-their actions, attach exact versions to one Agent revision, then execute through the admitted Agent
-runtime. This follows the useful part of Cloudflare's
-[search-and-execute pattern](https://developers.cloudflare.com/agents/model-context-protocol/codemode/)
-without exposing arbitrary code execution for the Crewhelm control plane.
-Native web search and fetch follow the same catalog discipline: MCP discovers them as bounded Agent
-capability modules, and only an admitted Run receives their exact runtime tools.
+Every public domain uses the same sequence:
 
-Remote MCP uses two product operations rather than mirroring a remote catalog into Crewhelm's
-control-plane catalog. One Connection lifecycle operation discovers and freezes all tools from one
-public HTTPS Streamable HTTP server; one attachment operation adds that whole reviewed snapshot to
-an Agent revision. Multiple Connections may be attached. Catalog and fleet bounds protect storage,
-transport, and execution safety rather than attempting to optimize the owner's Agent design.
-Public, bearer, and OAuth servers are supported through the same owner-side adapter. Bearer
-material enters through a signed browser setup handoff. OAuth uses standards discovery,
-authorization code with PKCE, URL client IDs or dynamic registration, encrypted token storage,
-lazy refresh, same-Connection reauthentication, and best-effort provider revocation. Credentials
-never pass through model-visible MCP arguments. Resources, prompts, subscriptions, persistent
-sessions, custom headers, and catalog refresh remain separate future slices.
-Tool input schemas must fit Crewhelm's bounded, runtime-compatible JSON Schema subset. Defaults,
-regex, references, conditionals, unevaluated-property rules, and schemas beyond the depth, node,
-property, or byte ceilings are rejected when the Connection is created.
+1. Start with `crewhelm_status` when the next task is unknown.
+2. Choose a read or change tool from the domain name and annotations.
+3. Choose one operation by its `kind`.
+4. Pass only that operation's typed fields.
+5. Retain returned resource objects and pass them unchanged to later operations.
 
-Recovery detail is opt-in and bounded: run inspection pages its timeline and can include usage;
-exact connection reads include lifecycle events; status can include recent audit events. Ambiguous
-writes return `recoverAfter` and pin the idempotency key until the same request can safely renew
-the reservation. Existing tools carry this detail, preserving the explicit catalog limit.
+Read and change tools remain separate even when they use the same private lifecycle handler. This
+keeps `readOnlyHint`, `destructiveHint`, and `openWorldHint` truthful before a client inspects the
+operation schema. Recipes follow the same boundary: discovery is read-only; preview, installation,
+and recovery use the change surface; publication remains an explicit destructive open-world tool.
 
-The MCP initialization response provides a compact operating model and identifies fleet status as
-the first read. Status derives at most three advisory next steps from counts already in its bounded
-projection, including active durable Workflows. Guidance never grants authority or replaces
-validation, and clients may call exact tools directly. Primary operation results return
-input-shaped handoffs: `crewhelm_start_run` returns a small owner-private conversation handle that
-can be passed unchanged with the next message, while a Workflow returns its stable ID and revision
-for compact list, exact inspection, cancellation, or terminal deletion. Each conversation message
-is still one bounded Run; the handle resolves server-side to the exact Session branch coordinates,
-so the simpler MCP journey does not weaken replay safety or concurrent-write detection. Exact
-conversation inspection recovers a lost handle. The lower-level continuation remains in results
-and inputs for compatibility with existing clients.
+Common operations are named by outcome: `run`, `start_workflow`, `create_schedule`,
+`create_event_trigger`, `connect_provider`, `create_brief`, and `prepare`. Compound private action
+enums do not cross the facade.
 
-Agent revisions answer how work is performed: Skills and integration grants are configured there.
-Brief revisions answer which owner-provided context is admitted to one Run or Workflow. The single
-`crewhelm_briefs` lifecycle tool returns compact metadata for discovery and requires an exact ID and
-revision to read content. Attaching a Brief never requires the MCP client to fetch and resend it.
+## Copy-ready handoffs
 
-One `crewhelm_agent_workflows` tool groups the small Workflow lifecycle instead of exposing
-coordinator internals. Its start action accepts one objective and two to eight ordered bounded
-stages. List and default inspection omit frozen prompts; exact inspection includes them only when
-explicitly requested. This makes durable multi-step work discoverable without turning the MCP
-catalog into a graph-building API or forcing clients to fetch every Run transcript.
-Completed Workflow inspection similarly returns compact final-deliverable metadata by default and
-includes content only when `includeDeliverable` is explicitly requested.
+Resource identity includes whatever the control plane needs to reject stale or mismatched work.
+The public surface represents that identity as one copy-ready object instead of unrelated fields.
+Examples include an Agent, Workflow, conversation, Schedule, Event Trigger, Brief, Connection,
+unresolved effect, or capability grant.
 
-The owner inbox is the polling surface for operational attention; Crewhelm neither broadcasts nor
-model-classifies its events. Fleet status exposes attention counts and age so clients can avoid
-unnecessary inbox reads. Inbox severity and actionability derive from persisted state, and responses
-include a polling interval hint.
+Reference schemas accept the full bounded object returned by Crewhelm and read only the required
+coordinates. A Schedule or Event Trigger already identifies its Agent revision, so update, pause,
+resume, and delete operations do not also ask for a separate Agent reference. A Workflow exposes
+`workflowId` and `revision`; a conversation carries its branch revision; a remote MCP Connection
+carries its frozen snapshot digest.
 
-Fleet mutations remain explicit rather than selector-driven. Bounded Agent shutdown accepts at
-most 25 unique Agent IDs with exact expected revisions, applies owner-local changes in one durable
-transaction, and returns one compact ordered receipt per input. Revision conflicts and missing
-Agents do not prevent safe targets in the same request from being disabled.
+This is presentation simplification, not weaker concurrency control. The facade reconstructs the
+same expected revisions and snapshot digests before private validation and dispatch.
 
-Fleet capacity is revisioned owner configuration. Defaults are 100 Agents, 100 connections, and 25
-concurrent runs.
+## Replay and confirmation
+
+Ordinary callers do not manufacture idempotency keys. The facade derives a bounded replay identity
+from the MCP request ID. Callers may provide `requestKey` only when they need a stable identity
+across distinct MCP requests. Multi-command happy paths derive a separate child identity for each
+private effect.
+
+Configuration packages preview by default. Repeating the unchanged operation with `confirm: true`
+applies it. Recipe installation and publication retain their confirmation digests because those
+digests prove the reviewed plan is unchanged; the facade does not replace meaningful owner
+confirmation with a boolean.
+
+## Server-owned orchestration
+
+The facade may compose private commands when the intermediate value has no owner decision:
+
+- `connect_provider` enables managed provider authentication, retains the returned auth
+  configuration internally, and creates the owner authorization link.
+- Recipe `prepare` ports an exact live Agent revision plus selected returned Schedules and Event
+  Triggers into a reviewable public candidate.
+
+Each private step still validates scopes and persists replay state independently. Provider
+credentials remain in provider or Crewhelm custody and never enter MCP arguments, results, logs, or
+Agent context.
+
+## Catalog and collection bounds
+
+Growing collections use bounded list operations followed by exact inspection. Fleet lists return
+at most 25 compact summaries and stay within their response budgets. Exact reads retain detailed
+configuration, grants, prompts, outputs, and timelines only when requested.
+
+The authenticated catalog has explicit CI ceilings for tool count, serialized schemas, and the
+complete model-visible payload including server instructions. These are review ceilings, not MCP
+protocol limits. Schema growth must represent a typed owner decision or domain object; internal
+coordination fields do not justify public catalog growth.
+
+Large provider action catalogs remain progressively discoverable: search a provider only when it
+is unknown, search its actions only when needed, then grant exact versions to one Agent revision.
+Crewhelm never exposes one control-plane tool per provider action or arbitrary code execution for
+administration.
+
+## Authority, external effects, and recovery
+
+The facade changes no trust boundary. Tool and transcript text remains untrusted. Every private
+handler rechecks owner, scope, resource identity, revision, bounds, and policy. Tool visibility is
+not authority, and Recipe or Brief content grants none.
+
+Ambiguous provider writes remain pinned to their replay identity. Recovery accepts the unresolved
+effect returned by Crewhelm, but reconciliation is allowed only after independent verification in
+the provider's authoritative UI or API. Only a proven `not_applied` result permits an equivalent
+mutation to be retried. Connections and capability grants remain explicitly revocable.
+
+Remote MCP keeps discovery, credential setup, frozen catalog validation, Agent attachment, and
+execution-time authorization in their existing owners. Public, bearer, and OAuth servers use the
+same owner-side adapter. Bearer material enters through a signed browser setup handoff; OAuth uses
+standards discovery, authorization code with PKCE, encrypted token storage, lazy refresh, and
+best-effort provider revocation. Remote content remains untrusted and bounded.

@@ -21,7 +21,7 @@ webhook URL or bearer token.
 
 - Full control access.
 - An active Composio [Connection](/docs/guides/connections/).
-- An active Agent ID and exact revision.
+- An active Agent returned by Crewhelm.
 - Capacity in the Agent's eight shared recurring-start slots for Event Triggers and Schedules.
 - A clear event, supported filters, and bounded instruction for each occurrence.
 - Any exact Brief revisions the recurring responsibility needs.
@@ -39,21 +39,24 @@ identity.
 
 ## Discover and create the Event Trigger
 
-1. Call `crewhelm_agent_event_triggers` with `action: "sources"` and the exact active Connection
-   ID.
+1. Call `crewhelm_inspect_automations` with `operation.kind: "event_sources"` and the active
+   Connection object.
 2. Review the returned event slug, event version, delivery kind, and supported filters.
-3. Call the tool with `action: "create"`, the exact Agent revision, a fresh idempotency key, and an
-   Event Trigger definition using those returned source fields.
+3. Call `crewhelm_change_automations` with `operation.kind: "create_event_trigger"`, the returned
+   Agent object, and an Event Trigger definition using those source fields.
 4. Write the instruction as the Agent's responsibility for each matching event.
 5. Omit the output contract for Markdown, or freeze one bounded JSON contract for every event Run.
-6. Add only the exact Brief `{id, revision}` references needed for every matching event.
-7. Retain the Event Trigger ID and revision.
+6. Add only the returned Brief objects needed for every matching event. Crewhelm keeps their exact
+   immutable revisions internally.
+7. Keep the returned Event Trigger object unchanged.
 
 ## Verify delivery
 
-1. Call `action: "inspect"` for the exact Agent and Event Trigger.
+1. Call `crewhelm_inspect_automations` with `operation.kind: "inspect_event_trigger"` and the
+   returned Event Trigger object.
 2. Confirm the Connection, source identity, filters, frozen Agent revision, and lifecycle state.
-3. Call `action: "history"` to review bounded pending, dispatched, and skipped occurrences.
+3. Call the same tool with `operation.kind: "event_history"` and that Event Trigger to review
+   bounded pending, dispatched, and skipped occurrences.
 4. Inspect the Run ID recorded for a dispatched occurrence.
 
 Crewhelm retains the latest 100 terminal occurrences per Event Trigger. It bounds each trigger to
@@ -62,8 +65,9 @@ silently accepted.
 
 ## Pause, resume, update, or delete
 
-- Use the exact current Agent and Event Trigger revisions for `pause`, `resume`, `update`, and
-  `delete` actions.
+- Call `crewhelm_change_automations` with the matching `pause_event_trigger`,
+  `resume_event_trigger`, `update_event_trigger`, or `delete_event_trigger` operation and the
+  returned Event Trigger object.
 - Update only with source values returned for the intended active Connection.
 - Delete only after confirming no future event should start work. Deletion removes the provider
   trigger, redacts prior definitions, retains an auditable tombstone, and releases the shared slot.
@@ -73,7 +77,7 @@ silently accepted.
 - `event_trigger_busy` means one exact occurrence is still being admitted or recovered. Inspect
   history and retry the lifecycle change after it settles.
 - If a provider lifecycle operation is unknown, inspect the exact Event Trigger and follow its
-  recovery state. Do not create a duplicate trigger with a new idempotency key.
+  recovery state. Do not create a duplicate trigger.
 - A stale Agent revision pauses or skips the trigger rather than retargeting it.
 - Update the Event Trigger without the Brief, or complete Event Trigger deletion, to release the
   recurring reference. Deleting the Brief still fails closed while any admitted Run or Workflow
