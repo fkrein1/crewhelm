@@ -18,7 +18,7 @@ export const CREWHELM_SITE = {
     alt: "Crewhelm wordmark with the message Give Agents a mandate. Not a master key.",
     height: 640,
     mimeType: "image/png",
-    url: "/crewhelm-social-preview.png",
+    url: "/crewhelm-social-preview-v2.png",
     width: 1280,
   } satisfies SocialImage,
   title: "Crewhelm — Open-source control plane for AI Agents",
