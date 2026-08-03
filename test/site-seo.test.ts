@@ -35,7 +35,7 @@ describe("Crewhelm site discovery foundation", () => {
 
   it("publishes a large social card from the production origin", () => {
     expect(absoluteSiteUrl(CREWHELM_SITE.socialImage.url)).toBe(
-      "https://crewhelm.app/crewhelm-social-preview.png",
+      "https://crewhelm.app/crewhelm-social-preview-v2.png",
     );
     expect(CREWHELM_SITE.socialImage).toMatchObject({
       height: 640,

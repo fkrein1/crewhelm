@@ -17,5 +17,5 @@ The `crewhelm-readme-header-{light,dark}.svg` lockups reuse the unchanged mark g
 wordmark and product promise for the repository landing page.
 
 `crewhelm-social-preview.svg` is the editable 1280×640 source for the repository and website social
-preview. Its PNG export is served from `apps/site/public/crewhelm-social-preview.png` and uploaded
+preview. Its PNG export is served from `apps/site/public/crewhelm-social-preview-v2.png` and uploaded
 in the repository settings.
