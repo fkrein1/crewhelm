@@ -15,6 +15,47 @@ export const MAXIMUM_REGISTRY_SEARCH_QUERY_CHARACTERS = 256;
 export const MAXIMUM_REGISTRY_SEARCH_RESULTS = 25;
 export const MAXIMUM_REGISTRY_PUBLISH_SKILLS = 8;
 
+export const registryPublishAuthorizationIdSchema = z
+  .string()
+  .regex(
+    /^publish_authorization_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    "Expected an opaque Registry publishing authorization ID.",
+  );
+export const registryPublishVerifierSchema = z
+  .string()
+  .min(43)
+  .max(128)
+  .regex(/^[A-Za-z0-9_-]+$/, "Expected a base64url publishing verifier.");
+export const registryPublishChallengeSchema = z
+  .string()
+  .length(64)
+  .regex(/^[0-9a-f]+$/, "Expected a lowercase SHA-256 publishing challenge.");
+export const registryPublishIdempotencyKeySchema = z
+  .uuid()
+  .describe("A UUID that identifies one immutable Registry publication attempt.");
+
+export const registryCreatePublishAuthorizationSchema = z.strictObject({
+  challenge: registryPublishChallengeSchema,
+  idempotencyKey: registryPublishIdempotencyKeySchema,
+  installationLabel: z.string().trim().min(1).max(120),
+});
+
+export const registryPublishAuthorizationSchema = z.strictObject({
+  authorizationUrl: z.url().max(2_048),
+  expiresAt: z.iso.datetime(),
+  id: registryPublishAuthorizationIdSchema,
+});
+
+export const registryResolvePublishAuthorizationSchema = z.strictObject({
+  verifier: registryPublishVerifierSchema,
+});
+
+export const registryResolvedPublishAuthorizationSchema = z.strictObject({
+  expiresAt: z.iso.datetime(),
+  id: registryPublishAuthorizationIdSchema,
+  publisher: recipeRegistryProjectionSchema.shape.publisher,
+});
+
 export const registrySearchQuerySchema = z.strictObject({
   limit: z.number().int().min(1).max(MAXIMUM_REGISTRY_SEARCH_RESULTS).default(10),
   query: z.string().trim().min(2).max(MAXIMUM_REGISTRY_SEARCH_QUERY_CHARACTERS),
@@ -54,7 +95,7 @@ export const registryPublishSkillSchema = z.strictObject({
 
 export const registryPublishBundleSchema = z
   .strictObject({
-    idempotencyKey: z.uuid(),
+    idempotencyKey: registryPublishIdempotencyKeySchema,
     namespace: recipePublisherNamespaceSchema,
     recipe: registryPublishRecipeSchema,
     skills: z.array(registryPublishSkillSchema).max(MAXIMUM_REGISTRY_PUBLISH_SKILLS),
@@ -91,7 +132,11 @@ export const registryArtifactPathSchema = z.strictObject({
 });
 
 export type RegistryPublishBundle = z.infer<typeof registryPublishBundleSchema>;
+export type RegistryPublishAuthorization = z.infer<typeof registryPublishAuthorizationSchema>;
 export type RegistryPublishResult = z.infer<typeof registryPublishResultSchema>;
+export type RegistryResolvedPublishAuthorization = z.infer<
+  typeof registryResolvedPublishAuthorizationSchema
+>;
 export type RegistryRecipeSearchResponse = z.infer<typeof registryRecipeSearchResponseSchema>;
 export type RegistryRecipeSearchResult = z.infer<typeof registryRecipeSearchResultSchema>;
 export type RegistrySearchQuery = z.infer<typeof registrySearchQuerySchema>;

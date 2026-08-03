@@ -93,6 +93,11 @@ export const recipePreviewRequestSchema = z.strictObject({
   target: recipeTargetSchema,
 });
 
+const recipeToolMcpPreviewRequestSchema = z.strictObject({
+  ...recipePreviewRequestSchema.shape,
+  target: recipeTargetSchema.meta({ description: undefined }),
+});
+
 const recipeSourceSchema = z.strictObject({
   digest: sha256DigestSchema,
   registry: recipeRegistryOriginSchema,
@@ -217,17 +222,17 @@ export const recipeToolMcpInputSchema = z
   .strictObject({
     action: z
       .enum(["search", "inspect", "read_skill", "preview", "install", "recover"])
-      .describe(
-        "search, inspect, read_skill, preview, install(request, expectedConfirmationDigest, idempotencyKey), recover",
-      ),
+      .describe("install(request, expectedConfirmationDigest, idempotencyKey)"),
     expectedConfirmationDigest: sha256DigestSchema.optional(),
     idempotencyKey: agentCreationIdempotencyKeySchema.optional(),
     installationId: recipeInstallationIdSchema.optional(),
     limit: registrySearchQuerySchema.shape.limit.removeDefault().optional().meta({ default: 10 }),
-    path: skillFilePathSchema.optional(),
+    path: skillFilePathSchema.meta({ description: undefined }).optional(),
     query: registrySearchQuerySchema.shape.query.optional(),
-    request: recipePreviewRequestSchema.optional(),
-    target: z.union([recipeTargetSchema, skillTargetSchema]).optional(),
+    request: recipeToolMcpPreviewRequestSchema.optional(),
+    target: z
+      .union([recipeTargetSchema.meta({ description: undefined }), skillTargetSchema])
+      .optional(),
   })
   .superRefine((input, context) => {
     if (recipeToolInputSchema.safeParse(input).success) return;

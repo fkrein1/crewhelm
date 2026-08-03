@@ -90,6 +90,7 @@ export function llmsText(): string {
     `- [Install Crewhelm](${CREWHELM_SITE.url}/docs/start/install/): Bring up an owner-controlled Crewhelm installation.`,
     `- [Create your first Agent](${CREWHELM_SITE.url}/docs/start/first-agent/): Configure an Agent and complete a bounded first Run.`,
     `- [Install a Recipe](${CREWHELM_SITE.url}/docs/guides/install-recipe/): Discover, inspect, preview, and install an immutable public Recipe without granting authority or starting work.`,
+    `- [Publish a Recipe](${CREWHELM_SITE.url}/docs/guides/publish-recipe/): Publish one confirmed Agent revision and explicitly selected Skills as immutable public packages.`,
     `- [Authority and custody](${CREWHELM_SITE.url}/docs/concepts/authority-and-custody/): Understand where identity, credentials, policy, and execution live.`,
     `- [Diagnose and recover](${CREWHELM_SITE.url}/docs/guides/diagnose-and-recover/): Inspect failures and choose bounded recovery actions.`,
     `- [MCP tool reference](${CREWHELM_SITE.url}/docs/reference/mcp-tools/): Inspect Crewhelm's authenticated MCP surface.`,

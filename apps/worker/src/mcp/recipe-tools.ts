@@ -18,9 +18,9 @@ export function registerRecipeTools(server: McpServer, context: McpToolContext):
         readOnlyHint: false,
       },
       description:
-        "Search the public Crewhelm Recipe Registry, progressively inspect exact immutable Recipe or Skill content, preview owner-local consequences, then install only a confirmed digest. Installation imports selected Skills, creates a disabled Agent, retains selected operations, creates no Connections or grants, and starts no work. Use recover with the returned installation ID after an incomplete apply.",
+        "Search, inspect, and install immutable public Recipes and Skills. read_skill uses SKILL.md or a safe relative path. Preview and confirm the exact digest before installation.",
       inputSchema: recipeToolMcpInputSchema,
-      title: "Discover and install Crewhelm Recipes",
+      title: "Manage Crewhelm Recipes",
     },
     async (input) =>
       controlPlaneToolResult(

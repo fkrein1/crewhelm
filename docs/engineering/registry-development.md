@@ -15,6 +15,12 @@ representative Recipe and Skill packages. Local search uses deterministic lexica
 is isolated to the worktree under `.wrangler/`; no MCP, OAuth flow, tunnel, or Cloudflare resource
 is involved.
 
+The exact-loopback Registry auto-authorizes its seeded `crewhelm-labs` publisher only when the
+owner publishing client resolves a one-time authorization. This permits local Agent-to-Recipe
+preview and publication without GitHub OAuth. The bypass exists only in `src/local.ts`; production
+always requires the browser GitHub authorization, and the dedicated testing Registry keeps
+publisher authorization disabled.
+
 Seed artifacts are immutable and their versions are contiguous. When a seed package changes,
 append a complete definition snapshot and its frozen package digests. Reconciliation verifies the
 historical bytes, then publishes every Recipe-and-Skill version in order before the latest set.

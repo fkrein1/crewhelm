@@ -26,6 +26,7 @@ import {
   startRunInputSchema,
   ownerAuthoritySchema,
   recipeToolInputSchema,
+  recipePublicationToolInputSchema,
   type ControlPlaneStatusResult,
   type AgentInboxDeferredReason,
   type AgentInboxResult,
@@ -112,6 +113,7 @@ import {
   type ReadBriefResult,
   type DeleteBriefResult,
   type RecipeToolResult,
+  type RecipePublicationToolResult,
 } from "@crewhelm/contracts";
 import {
   createComposioEventCatalog,
@@ -190,7 +192,9 @@ import { Briefs, R2OwnerContentObjectStore, deniedBrief } from "./briefs/index.j
 import {
   configuredRecipeRegistryOrigin,
   deniedRecipe,
+  deniedRecipePublication,
   RecipeRegistryClient,
+  RecipePublications,
   Recipes,
 } from "./recipes/index.js";
 
@@ -317,6 +321,7 @@ export class OwnerControlPlane extends DurableObject {
   readonly #skills: Skills;
   readonly #briefs: Briefs;
   readonly #recipes: Recipes;
+  readonly #recipePublications: RecipePublications;
   readonly #workflows: AgentWorkflows;
 
   constructor(state: DurableObjectState, environment: Cloudflare.Env) {
@@ -390,16 +395,16 @@ export class OwnerControlPlane extends DurableObject {
     );
     this.#authorityControls = new AuthorityControls(this.#database);
     const recipeRegistry = environment.RECIPE_REGISTRY;
-    this.#recipes = new Recipes(
-      this.#database,
-      new RecipeRegistryClient(
-        configuredRecipeRegistryOrigin(environment),
-        recipeRegistry === undefined
-          ? undefined
-          : (input, init) => recipeRegistry.fetch(input, init),
-      ),
+    const recipeRegistryClient = new RecipeRegistryClient(
+      configuredRecipeRegistryOrigin(environment),
+      recipeRegistry === undefined ? undefined : (input, init) => recipeRegistry.fetch(input, init),
+    );
+    this.#recipes = new Recipes(this.#database, recipeRegistryClient, this.#agents, this.#skills);
+    this.#recipePublications = new RecipePublications(
+      recipeRegistryClient,
       this.#agents,
       this.#skills,
+      environment.BETTER_AUTH_SECRET,
     );
     this.#agentSchedules = new AgentSchedules(this.#database, this.#storage, () =>
       this.#fleetConfigurations.currentData(),
@@ -688,6 +693,18 @@ export class OwnerControlPlane extends DurableObject {
     return authorization.ok
       ? this.#recipes.handle(authorization.authority, request.data)
       : deniedRecipe(authorization.code);
+  }
+
+  async recipePublications(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<RecipePublicationToolResult> {
+    const request = recipePublicationToolInputSchema.safeParse(input);
+    if (!request.success) return deniedRecipePublication("invalid_request");
+    const authorization = this.#authorize(authorityInput, OWNER_WRITE_SCOPE);
+    return authorization.ok
+      ? this.#recipePublications.handle(authorization.authority, request.data)
+      : deniedRecipePublication(authorization.code);
   }
 
   async createRunAdmission(

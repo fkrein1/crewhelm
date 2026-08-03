@@ -43,6 +43,27 @@ export const publisherSessions = sqliteTable(
   (table) => [index("publisher_sessions_expiry_idx").on(table.expiresAt)],
 );
 
+export const publishAuthorizations = sqliteTable(
+  "publish_authorizations",
+  {
+    authorizationId: text("authorization_id").primaryKey(),
+    challenge: text("challenge").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    installationLabel: text("installation_label").notNull(),
+    githubUserId: integer("github_user_id").references(() => publishers.githubUserId),
+    expiresAt: integer("expires_at").notNull(),
+    createdAt: integer("created_at").notNull(),
+    authorizedAt: integer("authorized_at"),
+  },
+  (table) => [
+    unique("publish_authorizations_challenge_idempotency_unique").on(
+      table.challenge,
+      table.idempotencyKey,
+    ),
+    index("publish_authorizations_expiry_idx").on(table.expiresAt),
+  ],
+);
+
 export const artifactVersions = sqliteTable(
   "artifact_versions",
   {
@@ -217,6 +238,7 @@ export const registrySchema = {
   artifactDependencies,
   artifactVersions,
   oauthStates,
+  publishAuthorizations,
   publishMutations,
   publisherDailyUsage,
   publishers,

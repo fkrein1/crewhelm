@@ -1,6 +1,7 @@
 import {
   MAXIMUM_RECIPE_BYTES,
   MAXIMUM_SKILL_PACKAGE_BYTES,
+  registryResolvePublishAuthorizationSchema,
   registryArtifactPathSchema,
   registrySearchQuerySchema,
 } from "@crewhelm/contracts";
@@ -8,14 +9,20 @@ import { Hono, type Context } from "hono";
 
 import {
   authenticatePublisher,
+  authenticatePublishAuthorization,
+  approvePublishAuthorization,
+  createPublishAuthorization,
   endPublisherSession,
   finishGithubAuth,
+  inspectPublishAuthorization,
+  resolvePublishAuthorization,
   startGithubAuth,
 } from "./auth.js";
 import type { RegistryEnv } from "./env.js";
 import {
   artifactVersion,
   latestRecipe,
+  latestSkill,
   publishBundle,
   RegistryConflictError,
   RegistryDeniedError,
@@ -24,6 +31,7 @@ import {
 
 const MAXIMUM_PUBLISH_BODY_BYTES =
   MAXIMUM_RECIPE_BYTES + 8 * MAXIMUM_SKILL_PACKAGE_BYTES + 64 * 1_024;
+const MAXIMUM_PUBLISH_AUTHORIZATION_BODY_BYTES = 16 * 1_024;
 
 type App = Hono<{ Bindings: RegistryEnv }>;
 
@@ -47,6 +55,30 @@ function compactError(context: Context, status: 400 | 401 | 403 | 404 | 409 | 41
 
 function sameOrigin(context: Context<{ Bindings: RegistryEnv }>): boolean {
   return context.req.header("origin") === new URL(context.env.PUBLIC_ORIGIN).origin;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function publishAuthorizationPage(
+  context: Context,
+  input: { body: string; heading: string; status?: 200 | 400; submit?: boolean },
+): Response {
+  context.header("cache-control", "no-store");
+  context.header(
+    "content-security-policy",
+    "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; style-src 'unsafe-inline'",
+  );
+  return context.html(
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(input.heading)}</title><style>:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0e13;color:#f5f1e8;font:16px/1.6 system-ui,sans-serif}main{width:min(36rem,calc(100% - 2rem));padding:2.5rem;border:1px solid #303641;border-radius:1rem;background:#151922;box-shadow:0 1.5rem 5rem #0008}small{display:block;margin-bottom:2rem;color:#d7a84d;font-weight:700;letter-spacing:.12em;text-transform:uppercase}h1{margin:0 0 1rem;font-size:clamp(1.8rem,6vw,2.5rem);line-height:1.1}p{margin:0;color:#c7cbd3}form{margin-top:2rem}button{border:0;border-radius:.65rem;padding:.8rem 1.1rem;background:#e1ae48;color:#171208;font:inherit;font-weight:750;cursor:pointer}button:focus-visible{outline:3px solid #fff;outline-offset:3px}</style></head><body><main><small>Crewhelm Registry</small><h1>${escapeHtml(input.heading)}</h1><p>${escapeHtml(input.body)}</p>${input.submit === true ? '<form method="post"><button type="submit">Authorize publishing</button></form>' : ""}</main></body></html>`,
+    input.status ?? 200,
+  );
 }
 
 async function boundedJson(context: Context, maximumBytes: number): Promise<unknown> {
@@ -130,11 +162,18 @@ export function createRegistryServer(): App {
       await next();
       return context.res;
     }
+    const bypassCache = context.req.header("cache-control") === "no-cache";
     const key = publicCacheKey(context.req.raw);
-    const cached = await caches.default.match(key);
-    if (cached) return cached;
+    if (!bypassCache) {
+      const cached = await caches.default.match(key);
+      if (cached) return cached;
+    }
     await next();
-    if (context.res.ok && context.res.headers.get("cache-control")?.includes("public")) {
+    if (
+      !bypassCache &&
+      context.res.ok &&
+      context.res.headers.get("cache-control")?.includes("public")
+    ) {
       context.executionCtx.waitUntil(caches.default.put(key, context.res.clone()));
     }
     return context.res;
@@ -165,6 +204,106 @@ export function createRegistryServer(): App {
     return finishGithubAuth(context);
   });
 
+  app.post("/v1/publish/authorizations", async (context) => {
+    context.header("cache-control", "no-store");
+    if (!(await allow(context.env.PUBLISH_RATE_LIMIT, clientKey(context)))) {
+      return compactError(context, 429);
+    }
+    try {
+      return context.json(
+        await createPublishAuthorization(
+          context.env,
+          await boundedJson(context, MAXIMUM_PUBLISH_AUTHORIZATION_BODY_BYTES),
+        ),
+        201,
+      );
+    } catch (error) {
+      if (error instanceof RegistryRequestTooLargeError) return compactError(context, 413);
+      if (error instanceof SyntaxError) return compactError(context, 400);
+      if (typeof error === "object" && error !== null && "issues" in error) {
+        return compactError(context, 400);
+      }
+      return compactError(context, 500);
+    }
+  });
+
+  app.post("/v1/publish/authorizations/:authorizationId/resolve", async (context) => {
+    context.header("cache-control", "no-store");
+    if (!(await allow(context.env.PUBLISH_RATE_LIMIT, clientKey(context)))) {
+      return compactError(context, 429);
+    }
+    try {
+      const request = registryResolvePublishAuthorizationSchema.parse(
+        await boundedJson(context, MAXIMUM_PUBLISH_AUTHORIZATION_BODY_BYTES),
+      );
+      const authorization = await resolvePublishAuthorization(
+        context.env,
+        context.req.param("authorizationId"),
+        request.verifier,
+      );
+      return authorization ? context.json(authorization) : compactError(context, 401);
+    } catch (error) {
+      if (error instanceof RegistryRequestTooLargeError) return compactError(context, 413);
+      if (error instanceof SyntaxError) return compactError(context, 400);
+      if (typeof error === "object" && error !== null && "issues" in error) {
+        return compactError(context, 400);
+      }
+      return compactError(context, 500);
+    }
+  });
+
+  app.get("/publish/authorizations/:authorizationId", async (context) => {
+    if (!(await allow(context.env.PUBLISH_RATE_LIMIT, clientKey(context)))) {
+      return compactError(context, 429);
+    }
+    const authorization = await inspectPublishAuthorization(
+      context,
+      context.req.param("authorizationId"),
+    );
+    if (authorization.state === "unavailable") {
+      return publishAuthorizationPage(context, {
+        body: "Request a new publishing link from your MCP client.",
+        heading: "Publishing authorization unavailable",
+        status: 400,
+      });
+    }
+    if (authorization.state === "login_required") {
+      return context.redirect(authorization.loginUrl, 302);
+    }
+    return publishAuthorizationPage(context, {
+      body: `${authorization.installationLabel} is requesting one-time permission to publish as ${authorization.publisher.namespace}. No Crewhelm owner data or credentials will be shared with the Registry.`,
+      heading: "Authorize Recipe publishing",
+      submit: true,
+    });
+  });
+
+  app.post("/publish/authorizations/:authorizationId", async (context) => {
+    if (!(await allow(context.env.PUBLISH_RATE_LIMIT, clientKey(context)))) {
+      return compactError(context, 429);
+    }
+    if (!sameOrigin(context)) {
+      return publishAuthorizationPage(context, {
+        body: "Request a new publishing link from your MCP client.",
+        heading: "Publishing authorization denied",
+        status: 400,
+      });
+    }
+    const approved = await approvePublishAuthorization(
+      context,
+      context.req.param("authorizationId"),
+    );
+    return approved
+      ? publishAuthorizationPage(context, {
+          body: "Return to your MCP client to preview and confirm the exact public package.",
+          heading: "Publishing authorized",
+        })
+      : publishAuthorizationPage(context, {
+          body: "Request a new publishing link from your MCP client.",
+          heading: "Publishing authorization denied",
+          status: 400,
+        });
+  });
+
   app.get("/v1/publisher", async (context) => {
     context.header("cache-control", "no-store");
     const publisher = await authenticatePublisher(context);
@@ -179,18 +318,28 @@ export function createRegistryServer(): App {
 
   app.post("/v1/publish", async (context) => {
     context.header("cache-control", "no-store");
-    if (!sameOrigin(context)) return compactError(context, 403);
-    const publisher = await authenticatePublisher(context);
+    const authorizationId = context.req.header("x-crewhelm-publish-authorization");
+    const authorizationVerifier = context.req.header("x-crewhelm-publish-verifier");
+    const publisher = await authenticatePublishAuthorization(
+      context.env,
+      authorizationId,
+      authorizationVerifier,
+    );
     if (!publisher) return compactError(context, 401);
     if (!(await allow(context.env.PUBLISH_RATE_LIMIT, `publisher:${publisher.githubUserId}`))) {
       return compactError(context, 429);
     }
     try {
-      const result = await publishBundle(
-        context.env,
-        publisher,
-        await boundedJson(context, MAXIMUM_PUBLISH_BODY_BYTES),
-      );
+      const body = await boundedJson(context, MAXIMUM_PUBLISH_BODY_BYTES);
+      if (
+        typeof body !== "object" ||
+        body === null ||
+        !("idempotencyKey" in body) ||
+        body.idempotencyKey !== publisher.publishIdempotencyKey
+      ) {
+        return compactError(context, 403);
+      }
+      const result = await publishBundle(context.env, publisher, body);
       return context.json(result, 201);
     } catch (error) {
       if (error instanceof RegistryRequestTooLargeError) return compactError(context, 413);
@@ -247,6 +396,29 @@ export function createRegistryServer(): App {
       return context.body(null, 304);
     }
     return context.json(recipe);
+  });
+
+  app.get("/v1/skills/:namespace/:name", async (context) => {
+    if (!(await allow(context.env.PUBLIC_READ_RATE_LIMIT, clientKey(context)))) {
+      return compactError(context, 429);
+    }
+    const parsed = registryArtifactPathSchema.omit({ version: true }).safeParse({
+      kind: "skill",
+      name: context.req.param("name"),
+      namespace: context.req.param("namespace"),
+    });
+    if (!parsed.success) return compactError(context, 404);
+    const skill = await latestSkill(context.env, parsed.data.namespace, parsed.data.name);
+    if (!skill) return compactError(context, 404);
+    context.header(
+      "cache-control",
+      "public, max-age=60, s-maxage=600, stale-while-revalidate=3600",
+    );
+    context.header("etag", `"${skill.package.digest}"`);
+    if (context.req.header("if-none-match") === `"${skill.package.digest}"`) {
+      return context.body(null, 304);
+    }
+    return context.json(skill);
   });
 
   app.get("/v1/artifacts/:kind/:namespace/:name/:version", async (context) => {

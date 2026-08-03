@@ -46,6 +46,10 @@ import {
 import { registerScheduleTools } from "./schedule-tools.js";
 import { registerRecoveryTools } from "./recovery-tools.js";
 import { MCP_RECIPES_TOOL_NAME, registerRecipeTools } from "./recipe-tools.js";
+import {
+  MCP_RECIPE_PUBLICATIONS_TOOL_NAME,
+  registerRecipePublicationTools,
+} from "./recipe-publication-tools.js";
 import { controlPlaneToolResult } from "./tool-result.js";
 import { MCP_AGENT_WORKFLOWS_TOOL_NAME, registerWorkflowTools } from "./workflow-tools.js";
 import {
@@ -103,6 +107,7 @@ export {
   MCP_REVOKE_AUTHORITY_TOOL_NAME,
 } from "./recovery-tools.js";
 export { MCP_RECIPES_TOOL_NAME };
+export { MCP_RECIPE_PUBLICATIONS_TOOL_NAME };
 
 const MAX_MCP_BODY_BYTES = 512 * 1024;
 export const MCP_MODEL_VISIBLE_CATALOG_SIZE_BUDGET_BYTES = 84 * 1_024;
@@ -207,6 +212,7 @@ function createMcpServer(
   registerScheduleTools(server, context);
   registerRecoveryTools(server, context);
   registerRecipeTools(server, context);
+  registerRecipePublicationTools(server, context);
   registerConnectionTools(server, context, {
     connectionLinks: createComposioConnectionLinks({
       apiKey: env.COMPOSIO_API_KEY,

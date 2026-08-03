@@ -137,4 +137,10 @@ imports a digest-pinned local copy, creates no authority implicitly, never start
 follows Registry updates at runtime. Registry restriction or loss cannot mutate an installed
 owner-local version.
 
+Public publishing requires both owner Full control and a short-lived Registry authorization bound
+to one publication idempotency key. GitHub authentication and its session cookie remain at the
+Registry. The owner instance retains only a derived verifier, confirms the exact public bundle
+digest before writing, and cannot use that authorization for another mutation identity. Publishing
+never serializes owner-local IDs, credentials, grants, Briefs, history, or runtime telemetry.
+
 No prompt-level instruction is an acceptable substitute for one of these controls.

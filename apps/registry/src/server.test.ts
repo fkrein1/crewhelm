@@ -2,6 +2,7 @@ import { applyD1Migrations, env, SELF } from "cloudflare:test";
 import {
   recipeRegistryProjectionSchema,
   registryArtifactVersionEnvelopeSchema,
+  registryPublishAuthorizationSchema,
   registryPublishResultSchema,
   registryRecipeSearchResponseSchema,
 } from "@crewhelm/contracts";
@@ -18,6 +19,8 @@ import {
 } from "./registry.js";
 
 const session = "test-publisher-session";
+const secondarySession = "test-secondary-publisher-session";
+let publicationAuthorizationSequence = 20;
 
 beforeAll(async () => {
   await applyD1Migrations(env.REGISTRY_DB, env.TEST_MIGRATIONS);
@@ -31,10 +34,171 @@ beforeAll(async () => {
     env.REGISTRY_DB.prepare(
       "INSERT INTO publisher_sessions (token_hash, github_user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
     ).bind(await sha256Hex(new TextEncoder().encode(session)), 123, now + 3_600, now),
+    env.REGISTRY_DB.prepare(
+      `INSERT INTO publishers
+        (github_user_id, github_login, namespace, display_name, profile_url, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(456, "hubot", "hubot", "Hubot", "https://github.com/hubot", now, now),
+    env.REGISTRY_DB.prepare(
+      "INSERT INTO publisher_sessions (token_hash, github_user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+    ).bind(await sha256Hex(new TextEncoder().encode(secondarySession)), 456, now + 3_600, now),
   ]);
 });
 
+async function publicationHeaders(
+  idempotencyKey: string,
+  publisherSession = session,
+): Promise<Record<string, string>> {
+  publicationAuthorizationSequence += 1;
+  const verifier = `registry-test-verifier-${String(publicationAuthorizationSequence).padStart(48, "0")}`;
+  const clientIp = `192.0.2.${String(publicationAuthorizationSequence)}`;
+  const created = await SELF.fetch("https://registry.crewhelm.test/v1/publish/authorizations", {
+    body: JSON.stringify({
+      challenge: await sha256Hex(new TextEncoder().encode(verifier)),
+      idempotencyKey,
+      installationLabel: "Registry test",
+    }),
+    headers: { "cf-connecting-ip": clientIp, "content-type": "application/json" },
+    method: "POST",
+  });
+  const authorization = registryPublishAuthorizationSchema.parse(await created.json());
+  const approved = await SELF.fetch(
+    `https://registry.crewhelm.test/publish/authorizations/${authorization.id}`,
+    {
+      headers: {
+        "cf-connecting-ip": clientIp,
+        cookie: `crewhelm_registry_session=${publisherSession}`,
+        origin: "https://registry.crewhelm.test",
+      },
+      method: "POST",
+    },
+  );
+  if (!approved.ok) throw new Error(`Expected publication authorization: ${approved.status}`);
+  return {
+    "x-crewhelm-publish-authorization": authorization.id,
+    "x-crewhelm-publish-verifier": verifier,
+  };
+}
+
 describe("public Recipe Registry", () => {
+  it("grants one installation a bounded GitHub-backed publishing authorization", async () => {
+    const verifier = "registry-publish-verifier-that-is-long-enough-for-the-contract";
+    const idempotencyKey = "118391a6-1847-4cfe-9350-4a4ba478f08c";
+    const created = await SELF.fetch("https://registry.crewhelm.test/v1/publish/authorizations", {
+      body: JSON.stringify({
+        challenge: await sha256Hex(new TextEncoder().encode(verifier)),
+        idempotencyKey,
+        installationLabel: "Franklin's Crewhelm",
+      }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    });
+    expect(created.status).toBe(201);
+    const authorization = registryPublishAuthorizationSchema.parse(await created.json());
+    expect(authorization.authorizationUrl).toBe(
+      `https://registry.crewhelm.test/api/registry/publish/authorizations/${authorization.id}`,
+    );
+
+    const pending = await SELF.fetch(
+      `https://registry.crewhelm.test/v1/publish/authorizations/${authorization.id}/resolve`,
+      {
+        body: JSON.stringify({ verifier }),
+        headers: { "cf-connecting-ip": "192.0.2.10", "content-type": "application/json" },
+        method: "POST",
+      },
+    );
+    expect(pending.status).toBe(401);
+
+    const approval = await SELF.fetch(
+      `https://registry.crewhelm.test/publish/authorizations/${authorization.id}`,
+      {
+        headers: {
+          cookie: `crewhelm_registry_session=${secondarySession}`,
+          origin: "https://registry.crewhelm.test",
+        },
+        method: "POST",
+      },
+    );
+    expect(approval.status).toBe(200);
+    expect(await approval.text()).toContain("Publishing authorized");
+
+    const rebound = await SELF.fetch(
+      `https://registry.crewhelm.test/publish/authorizations/${authorization.id}`,
+      {
+        headers: {
+          "cf-connecting-ip": "192.0.2.11",
+          cookie: `crewhelm_registry_session=${session}`,
+          origin: "https://registry.crewhelm.test",
+        },
+        method: "POST",
+      },
+    );
+    expect(rebound.status).toBe(400);
+
+    const wrongVerifier = await SELF.fetch(
+      `https://registry.crewhelm.test/v1/publish/authorizations/${authorization.id}/resolve`,
+      {
+        body: JSON.stringify({ verifier: `${verifier}-wrong` }),
+        headers: { "cf-connecting-ip": "192.0.2.12", "content-type": "application/json" },
+        method: "POST",
+      },
+    );
+    expect(wrongVerifier.status).toBe(401);
+
+    const resolved = await SELF.fetch(
+      `https://registry.crewhelm.test/v1/publish/authorizations/${authorization.id}/resolve`,
+      {
+        body: JSON.stringify({ verifier }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      },
+    );
+    expect(resolved.status).toBe(200);
+    await expect(resolved.json()).resolves.toMatchObject({
+      id: authorization.id,
+      publisher: { namespace: "hubot" },
+    });
+
+    const recipe = recipeFixture();
+    recipe.name = "authorized-recipe";
+    recipe.discovery.description = "Organize recurring operational checks into a compact digest.";
+    recipe.discovery.tags = ["operations"];
+    recipe.responsibility.outcome = "The owner receives a compact operational digest.";
+    recipe.responsibility.summary = "Summarize operational checks.";
+    recipe.responsibility.title = "Operations Digest";
+    const publish = await SELF.fetch("https://registry.crewhelm.test/v1/publish", {
+      body: JSON.stringify({
+        idempotencyKey,
+        namespace: "hubot",
+        recipe: { package: recipe, version: 1 },
+        skills: [],
+      }),
+      headers: {
+        "content-type": "application/json",
+        "x-crewhelm-publish-authorization": authorization.id,
+        "x-crewhelm-publish-verifier": verifier,
+      },
+      method: "POST",
+    });
+    expect(publish.status).toBe(201);
+
+    const wrongMutation = await SELF.fetch("https://registry.crewhelm.test/v1/publish", {
+      body: JSON.stringify({
+        idempotencyKey: "0eef665c-53a4-47d7-8674-e57699869e77",
+        namespace: "hubot",
+        recipe: { package: recipe, version: 1 },
+        skills: [],
+      }),
+      headers: {
+        "content-type": "application/json",
+        "x-crewhelm-publish-authorization": authorization.id,
+        "x-crewhelm-publish-verifier": verifier,
+      },
+      method: "POST",
+    });
+    expect(wrongMutation.status).toBe(403);
+  });
+
   it("uses the same-origin gateway callback for GitHub OAuth", async () => {
     const response = await SELF.fetch(
       "https://registry.crewhelm.test/auth/github/start?return_to=/publish",
@@ -104,12 +268,12 @@ describe("public Recipe Registry", () => {
       recipe: { package: recipeFixture(), version: 1 },
       skills: [],
     };
+    const authorizationHeaders = await publicationHeaders(body.idempotencyKey);
     const publish = await SELF.fetch("https://registry.crewhelm.test/v1/publish", {
       body: JSON.stringify(body),
       headers: {
         "content-type": "application/json",
-        cookie: `crewhelm_registry_session=${session}`,
-        origin: "https://registry.crewhelm.test",
+        ...authorizationHeaders,
       },
       method: "POST",
     });
@@ -194,15 +358,16 @@ describe("public Recipe Registry", () => {
       body: JSON.stringify(body),
       headers: {
         "content-type": "application/json",
-        cookie: `crewhelm_registry_session=${session}`,
-        origin: "https://registry.crewhelm.test",
+        ...authorizationHeaders,
       },
       method: "POST",
     });
     expect(replay.status).toBe(201);
     const count = await env.REGISTRY_DB.prepare(
-      "SELECT COUNT(*) AS count FROM artifact_versions",
-    ).first<{ count: number }>();
+      "SELECT COUNT(*) AS count FROM artifact_versions WHERE namespace = ? AND name = ?",
+    )
+      .bind("octocat", "research-brief-steward")
+      .first<{ count: number }>();
     expect(count?.count).toBe(1);
     const pending = await env.REGISTRY_DB.prepare(
       "SELECT COUNT(*) AS count FROM publish_upload_intents",
@@ -210,7 +375,53 @@ describe("public Recipe Registry", () => {
     expect(pending?.count).toBe(0);
   });
 
+  it("bypasses cached latest projections for authoritative publication planning", async () => {
+    const recipe = recipeFixture();
+    recipe.name = "fresh-latest-projection";
+    const firstKey = "50b7a3a0-f783-413b-b91d-a8fa074f26e4";
+    const first = await SELF.fetch("https://registry.crewhelm.test/v1/publish", {
+      body: JSON.stringify({
+        idempotencyKey: firstKey,
+        namespace: "hubot",
+        recipe: { package: recipe, version: 1 },
+        skills: [],
+      }),
+      headers: {
+        "content-type": "application/json",
+        ...(await publicationHeaders(firstKey, secondarySession)),
+      },
+      method: "POST",
+    });
+    expect(first.status).toBe(201);
+    const latestUrl = "https://registry.crewhelm.test/v1/recipes/hubot/fresh-latest-projection";
+    expect(
+      recipeRegistryProjectionSchema.parse(await (await SELF.fetch(latestUrl)).json()).artifact
+        .version,
+    ).toBe(1);
+
+    const secondKey = "91075d90-81d5-42d0-901f-51dfe73e301f";
+    const secondRecipe = structuredClone(recipe);
+    secondRecipe.discovery.description = `${recipe.discovery.description} Updated.`;
+    const second = await SELF.fetch("https://registry.crewhelm.test/v1/publish", {
+      body: JSON.stringify({
+        idempotencyKey: secondKey,
+        namespace: "hubot",
+        recipe: { package: secondRecipe, version: 2 },
+        skills: [],
+      }),
+      headers: {
+        "content-type": "application/json",
+        ...(await publicationHeaders(secondKey, secondarySession)),
+      },
+      method: "POST",
+    });
+    expect(second.status).toBe(201);
+    const fresh = await SELF.fetch(latestUrl, { headers: { "cache-control": "no-cache" } });
+    expect(recipeRegistryProjectionSchema.parse(await fresh.json()).artifact.version).toBe(2);
+  });
+
   it("caps a streaming publish body before buffering the complete request", async () => {
+    const authorizationHeaders = await publicationHeaders("0c24f01f-1d2f-48ff-803c-d2d13c58d499");
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array(900_000));
@@ -222,8 +433,7 @@ describe("public Recipe Registry", () => {
       body,
       headers: {
         "content-type": "application/json",
-        cookie: `crewhelm_registry_session=${session}`,
-        origin: "https://registry.crewhelm.test",
+        ...authorizationHeaders,
       },
       method: "POST",
     });
@@ -285,13 +495,17 @@ describe("public Recipe Registry", () => {
     expect(usage?.artifact_count).toBe(2);
   });
 
-  it("denies cross-origin publishing before parsing untrusted bytes", async () => {
+  it("denies publishing without a one-publication authorization before parsing bytes", async () => {
     const response = await SELF.fetch("https://registry.crewhelm.test/v1/publish", {
       body: "{}",
-      headers: { "content-type": "application/json", origin: "https://attacker.example" },
+      headers: {
+        "content-type": "application/json",
+        cookie: `crewhelm_registry_session=${session}`,
+        origin: "https://registry.crewhelm.test",
+      },
       method: "POST",
     });
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(401);
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
@@ -301,17 +515,18 @@ describe("public Recipe Registry", () => {
       kind: "web",
       source: "https://example.com/token/not-a-real-secret-value",
     };
+    const idempotencyKey = "7be0e202-b731-43a8-b777-cfe1d60c1bd2";
+    const authorizationHeaders = await publicationHeaders(idempotencyKey);
     const response = await SELF.fetch("https://registry.crewhelm.test/v1/publish", {
       body: JSON.stringify({
-        idempotencyKey: "7be0e202-b731-43a8-b777-cfe1d60c1bd2",
+        idempotencyKey,
         namespace: "octocat",
         recipe: { package: recipeFixture(), version: 2 },
         skills: [{ package: skill, version: 1 }],
       }),
       headers: {
         "content-type": "application/json",
-        cookie: `crewhelm_registry_session=${session}`,
-        origin: "https://registry.crewhelm.test",
+        ...authorizationHeaders,
       },
       method: "POST",
     });
