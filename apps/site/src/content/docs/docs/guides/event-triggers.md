@@ -75,8 +75,9 @@ silently accepted.
 - If a provider lifecycle operation is unknown, inspect the exact Event Trigger and follow its
   recovery state. Do not create a duplicate trigger with a new idempotency key.
 - A stale Agent revision pauses or skips the trigger rather than retargeting it.
-- A referenced Brief cannot be deleted until the Event Trigger is updated or deleted without that
-  reference.
+- Update the Event Trigger without the Brief, or complete Event Trigger deletion, to release the
+  recurring reference. Deleting the Brief still fails closed while any admitted Run or Workflow
+  retains the exact revision; inspect that resource and follow its retention lifecycle.
 - An authenticated but unmatched stale delivery is acknowledged without starting work.
 - Pausing or deleting cannot undo an external effect from an already-started Run.
 
