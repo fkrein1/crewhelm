@@ -88,6 +88,7 @@ const MINIMUM_DEPLOYMENT_STABILITY_MS = 10_000;
 const REQUIRED_CONSECUTIVE_DEPLOYMENT_MATCHES = 3;
 const SANDBOX_CONTAINER_CLASS_NAME = "CrewhelmSandbox";
 const SANDBOX_CONTAINER_IMAGE = "docker.io/cloudflare/sandbox:0.12.4-python";
+const SANDBOX_WORKFLOW_NAME_SUFFIX = "-agent-task-workflow";
 const TABLE_INVENTORY_SQL = "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name";
 const MIGRATION_INVENTORY_SQL = "SELECT name FROM d1_migrations ORDER BY id";
 const ALLOWED_AUTH_TABLES = new Set([
@@ -621,6 +622,18 @@ function reportProgress(
 
 function sandboxContainerApplicationName(workerName: string): string {
   return `${workerName}-${SANDBOX_CONTAINER_CLASS_NAME}`.toLowerCase();
+}
+
+function sandboxWorkflowName(workerName: string): string {
+  const directName = `${workerName}${SANDBOX_WORKFLOW_NAME_SUFFIX}`;
+
+  if (deploymentNameSchema.safeParse(directName).success) {
+    return directName;
+  }
+
+  const digest = createHash("sha256").update(workerName).digest("hex").slice(0, 8);
+  const prefixLength = 63 - SANDBOX_WORKFLOW_NAME_SUFFIX.length - digest.length - 1;
+  return `${workerName.slice(0, prefixLength)}-${digest}${SANDBOX_WORKFLOW_NAME_SUFFIX}`;
 }
 
 async function readContainerApplications(
@@ -2309,7 +2322,10 @@ async function stageDeployment(
         CREWHELM_DEPLOYMENT_FINGERPRINT: assets.digest,
         PUBLIC_ORIGIN: options.origin.origin,
       },
-      workflows: assets.template.workflows,
+      workflows: assets.template.workflows.map((workflow) => ({
+        ...workflow,
+        name: sandboxWorkflowName(options.workerName),
+      })),
     };
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
     return configPath;

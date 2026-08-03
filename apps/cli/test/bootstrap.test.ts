@@ -101,7 +101,7 @@ const stagedConfigSchema = z.looseObject({
   r2_buckets: z.tuple([
     z.looseObject({
       binding: z.literal("SKILL_PACKAGES"),
-      bucket_name: z.literal("crewhelm-skills"),
+      bucket_name: z.string().regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])$/),
     }),
   ]),
   ratelimits: z.tuple([
@@ -120,7 +120,7 @@ const stagedConfigSchema = z.looseObject({
     z.looseObject({
       binding: z.literal("AGENT_TASK_WORKFLOW"),
       class_name: z.literal("AgentTaskWorkflow"),
-      name: z.literal("crewhelm-agent-task-workflow"),
+      name: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
     }),
   ]),
   vars: z.looseObject({
@@ -155,13 +155,16 @@ function secretList(names: readonly string[]): WranglerResult {
   return success(JSON.stringify(names.map((name) => ({ name, type: "secret_text" }))));
 }
 
-function sandboxContainerList(state: "active" | "degraded" | "provisioning" | "ready" = "ready") {
+function sandboxContainerList(
+  state: "active" | "degraded" | "provisioning" | "ready" = "ready",
+  name = "crewhelm-crewhelmsandbox",
+) {
   return success(
     JSON.stringify([
       {
         id: "a039044b-a162-4e3e-ab30-98f8655e4138",
         image: "docker.io/cloudflare/sandbox:0.12.4-python",
-        name: "crewhelm-crewhelmsandbox",
+        name,
         state,
       },
     ]),
@@ -1865,6 +1868,7 @@ describe("Cloudflare bootstrap", () => {
 
   it("reuses existing resources without requiring or replacing secrets", async () => {
     const fixture = await createDeploymentAssets();
+    const workerName = "crewhelm-testing";
     let stagedDirectory: string | undefined;
     let stagedConfig: z.infer<typeof stagedConfigSchema> | undefined;
     let stagedTextModule = false;
@@ -1883,7 +1887,7 @@ describe("Cloudflare bootstrap", () => {
       }
 
       if (arguments_[0] === "containers") {
-        return sandboxContainerList();
+        return sandboxContainerList("ready", `${workerName}-crewhelmsandbox`);
       }
 
       if (arguments_[0] === "d1" && arguments_[1] === "list") {
@@ -1936,7 +1940,7 @@ describe("Cloudflare bootstrap", () => {
       const allWranglerCalls = vi.fn<RunWrangler>(dependencies.runWrangler);
       dependencies.runWrangler = allWranglerCalls;
       const report = await bootstrapDeployment(
-        { ...REUSE_OPTIONS, sandboxEnabled: true },
+        { ...REUSE_OPTIONS, sandboxEnabled: true, workerName },
         dependencies,
       );
 
@@ -1967,20 +1971,20 @@ describe("Cloudflare bootstrap", () => {
           image: "docker.io/cloudflare/sandbox:0.12.4-python",
           instance_type: "lite",
           max_instances: 5,
-          name: "crewhelm-crewhelmsandbox",
+          name: "crewhelm-testing-crewhelmsandbox",
         },
       ]);
       expect(stagedConfig?.workflows).toEqual([
         {
           binding: "AGENT_TASK_WORKFLOW",
           class_name: "AgentTaskWorkflow",
-          name: "crewhelm-agent-task-workflow",
+          name: "crewhelm-testing-agent-task-workflow",
         },
       ]);
       expect(stagedConfig?.observability.logs.invocation_logs).toBe(false);
       expect(stagedConfig?.observability.traces.enabled).toBe(false);
       expect(stagedConfig?.ratelimits.map(({ namespace_id }) => namespace_id)).toEqual(
-        Object.values(rateLimitNamespacesForWorker(OPTIONS.workerName)),
+        Object.values(rateLimitNamespacesForWorker(workerName)),
       );
       expect(stagedConfig?.rules).toEqual([
         { fallthrough: true, globs: ["**/*.sql"], type: "Text" },
