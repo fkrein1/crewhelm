@@ -293,6 +293,35 @@ export class Skills {
     this.#ownerKey = ownerKey;
   }
 
+  findActiveVersionByDigest(packageDigest: string): { id: string; version: number } | null {
+    const row = this.#database
+      .select({ id: skillVersions.skillId, version: skillVersions.version })
+      .from(skillVersions)
+      .innerJoin(skills, eq(skills.skillId, skillVersions.skillId))
+      .where(and(eq(skillVersions.packageDigest, packageDigest), eq(skills.status, "active")))
+      .orderBy(asc(skillVersions.skillId), asc(skillVersions.version))
+      .limit(1)
+      .get();
+
+    return row ?? null;
+  }
+
+  matchesVersionDigest(id: string, version: number, packageDigest: string): boolean {
+    return (
+      this.#database
+        .select({ id: skillVersions.skillId })
+        .from(skillVersions)
+        .where(
+          and(
+            eq(skillVersions.skillId, id),
+            eq(skillVersions.version, version),
+            eq(skillVersions.packageDigest, packageDigest),
+          ),
+        )
+        .get() !== undefined
+    );
+  }
+
   async publish(authority: OwnerAuthority, input: unknown): Promise<PublishSkillResult> {
     const request = publishSkillInputSchema.safeParse(input);
 

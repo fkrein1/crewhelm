@@ -53,6 +53,7 @@ export interface OwnerControlPlaneClient {
   lookupRemoteMcpConnectionCreation?(authorityInput: unknown, input: unknown): Promise<unknown>;
   reserveConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;
   reserveRemoteMcpOAuthSetup?(authorityInput: unknown, input: unknown): Promise<unknown>;
+  recipes?(authorityInput: unknown, input: unknown): Promise<unknown>;
   reserveIntegrationEnablement(authorityInput: unknown, input: unknown): Promise<unknown>;
   reconcileToolExecution(authorityInput: unknown, input: unknown): Promise<unknown>;
   readBrief(authorityInput: unknown, input: unknown): Promise<unknown>;

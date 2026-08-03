@@ -139,6 +139,7 @@ async function digestCanonicalRequest(canonicalRequest: string): Promise<string>
 async function digestAgentCreation(
   input: CreateAgentInput,
   blueprintProvenance: AgentBlueprintProvenance | null,
+  initialStatus: "active" | "disabled",
 ): Promise<string> {
   return digestCanonicalRequest(
     JSON.stringify({
@@ -146,6 +147,7 @@ async function digestAgentCreation(
       executionLimits: input.executionLimits,
       capabilities: input.capabilities,
       instructions: input.instructions,
+      ...(initialStatus === "disabled" ? { initialStatus } : {}),
       name: input.name,
     }),
   );
@@ -892,10 +894,42 @@ export class AgentRegistry {
     });
   }
 
+  async findCreation(
+    input: unknown,
+    blueprintProvenance: AgentBlueprintProvenance | null,
+    initialStatus: "active" | "disabled",
+    idempotencyClientId: OwnerAuthority["clientId"],
+  ): Promise<{ id: string; revision: number } | null> {
+    const request = createAgentInputSchema.safeParse(input);
+    if (!request.success) return null;
+    const requestDigest = await digestAgentCreation(
+      request.data,
+      blueprintProvenance,
+      initialStatus,
+    );
+    const row = this.#database
+      .select({
+        id: agentCreations.agentId,
+        requestDigest: agentCreations.requestDigest,
+        revision: agentCreations.revision,
+      })
+      .from(agentCreations)
+      .where(
+        and(
+          eq(agentCreations.clientId, idempotencyClientId),
+          eq(agentCreations.idempotencyKey, request.data.idempotencyKey),
+        ),
+      )
+      .get();
+    return row?.requestDigest === requestDigest ? { id: row.id, revision: row.revision } : null;
+  }
+
   async create(
     authority: OwnerAuthority,
     input: unknown,
     blueprintProvenance: AgentBlueprintProvenance | null = null,
+    initialStatus: "active" | "disabled" = "active",
+    idempotencyClientId: OwnerAuthority["clientId"] = authority.clientId,
   ): Promise<CreateAgentResult> {
     const request = createAgentInputSchema.safeParse(input);
 
@@ -903,7 +937,11 @@ export class AgentRegistry {
       return deniedAgent("invalid_request");
     }
 
-    const requestDigest = await digestAgentCreation(request.data, blueprintProvenance);
+    const requestDigest = await digestAgentCreation(
+      request.data,
+      blueprintProvenance,
+      initialStatus,
+    );
     const fleetConfiguration = this.#currentFleetConfiguration();
     const executionLimits = request.data.executionLimits ?? fleetConfiguration.execution;
 
@@ -934,7 +972,7 @@ export class AgentRegistry {
         )
         .where(
           and(
-            eq(agentCreations.clientId, authority.clientId),
+            eq(agentCreations.clientId, idempotencyClientId),
             eq(agentCreations.idempotencyKey, request.data.idempotencyKey),
           ),
         )
@@ -970,7 +1008,17 @@ export class AgentRegistry {
       const agentId = `agent_${crypto.randomUUID()}`;
       const createdAt = Date.now();
 
-      transaction.insert(agents).values({ agentId, createdAt, currentRevision: 1 }).run();
+      transaction
+        .insert(agents)
+        .values({
+          agentId,
+          createdAt,
+          currentRevision: 1,
+          ...(initialStatus === "disabled"
+            ? { disabledAt: createdAt, status: "disabled" as const }
+            : {}),
+        })
+        .run();
       transaction
         .insert(agentRevisions)
         .values({
@@ -990,7 +1038,7 @@ export class AgentRegistry {
         .insert(agentCreations)
         .values({
           agentId,
-          clientId: authority.clientId,
+          clientId: idempotencyClientId,
           idempotencyKey: request.data.idempotencyKey,
           requestDigest,
           revision: 1,
@@ -1017,7 +1065,7 @@ export class AgentRegistry {
         model,
         name: request.data.name,
         revision: 1,
-        status: "active",
+        status: initialStatus,
       });
 
       return createAgentResultSchema.parse({ agent, created: true, ok: true });

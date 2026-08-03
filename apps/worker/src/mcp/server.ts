@@ -45,6 +45,7 @@ import {
 } from "./session-tools.js";
 import { registerScheduleTools } from "./schedule-tools.js";
 import { registerRecoveryTools } from "./recovery-tools.js";
+import { MCP_RECIPES_TOOL_NAME, registerRecipeTools } from "./recipe-tools.js";
 import { controlPlaneToolResult } from "./tool-result.js";
 import { MCP_AGENT_WORKFLOWS_TOOL_NAME, registerWorkflowTools } from "./workflow-tools.js";
 import {
@@ -101,11 +102,12 @@ export {
   MCP_RECONCILE_TOOL_EXECUTION_TOOL_NAME,
   MCP_REVOKE_AUTHORITY_TOOL_NAME,
 } from "./recovery-tools.js";
+export { MCP_RECIPES_TOOL_NAME };
 
 const MAX_MCP_BODY_BYTES = 512 * 1024;
-export const MCP_MODEL_VISIBLE_CATALOG_SIZE_BUDGET_BYTES = 82 * 1_024;
+export const MCP_MODEL_VISIBLE_CATALOG_SIZE_BUDGET_BYTES = 84 * 1_024;
 export const MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES = 64 * 1_024;
-export const MCP_TOOL_COUNT_BUDGET = 38;
+export const MCP_TOOL_COUNT_BUDGET = 40;
 const MCP_SERVER_INFO = {
   name: "crewhelm",
   version: "0.1.0",
@@ -204,6 +206,7 @@ function createMcpServer(
   registerEventTriggerTools(server, context);
   registerScheduleTools(server, context);
   registerRecoveryTools(server, context);
+  registerRecipeTools(server, context);
   registerConnectionTools(server, context, {
     connectionLinks: createComposioConnectionLinks({
       apiKey: env.COMPOSIO_API_KEY,

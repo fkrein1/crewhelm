@@ -116,6 +116,13 @@ Preview creates no Agent, imports no Skill, attaches no Connection, grants no au
 Schedule or Event Trigger, and starts no work. A later installation must re-fetch and verify every
 digest and match the confirmed installation plan.
 
+Installation durably records that exact plan, imports or reuses each selected pinned Skill, and
+creates a disabled Agent with the resulting local Skill references. Selected Connection bindings,
+the primary operation, Schedules, and Event Triggers remain inert in the installation receipt.
+Granting Connection authority or activating an operation is a separate explicit owner action. If a
+write is interrupted, the returned installation ID resumes deterministic child writes from the same
+stored plan; it does not fetch a changed public plan or duplicate completed imports.
+
 ## Updates and lifecycle
 
 Recipe and Skill versions are immutable. Changing instructions, operations, output, dependencies,
@@ -135,8 +142,8 @@ owner's control plane and normal revocation paths.
    publishing.
 3. Owner-local MCP search, exact inspection, raw Skill review, compatibility, authority, cost, and
    installation preview.
-4. Recoverable installation of Skills, Agent, bindings, retained operation templates, and selected
-   Schedules and Event Triggers without automatically starting work.
+4. Recoverable installation of Skills and a disabled Agent, with confirmed Connection bindings and
+   operation templates retained as inert owner-local plan data.
 5. Explicit Agent-to-Recipe publishing with per-Skill decisions.
 6. Outcome-first site discovery, dependency and authority inspection, samples, versions, review,
    reports, and social signals.

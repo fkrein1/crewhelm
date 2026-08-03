@@ -45,6 +45,7 @@ import {
   ownerAuthoritySchema,
   publishSkillResultSchema,
   publishAgentBlueprintResultSchema,
+  recipeToolResultSchema,
   instantiateAgentBlueprintResultSchema,
   retireSkillResultSchema,
   retireAgentBlueprintResultSchema,
@@ -90,6 +91,7 @@ import {
   MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES,
   MCP_DECIDE_RUN_TOOL_APPROVAL_TOOL_NAME,
   MCP_RECONCILE_TOOL_EXECUTION_TOOL_NAME,
+  MCP_RECIPES_TOOL_NAME,
   MCP_REVOKE_AUTHORITY_TOOL_NAME,
   MCP_SEARCH_INTEGRATIONS_TOOL_NAME,
   MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME,
@@ -237,6 +239,59 @@ describe("authenticated MCP handler", () => {
     expect(serializedSchemas).toBeLessThanOrEqual(MCP_SERIALIZED_SCHEMA_SIZE_BUDGET_BYTES);
   });
 
+  it("routes bounded public Recipe discovery through the authenticated MCP surface", async () => {
+    const authority = await ownerAuthority("recipe-mcp-search", [OWNER_READ_SCOPE]);
+    const registryUrls: string[] = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input instanceof Request ? input.url : input));
+      registryUrls.push(url.toString());
+      return Response.json({
+        query: "decision ready research",
+        results: [],
+        retrieval: "lexical_fallback",
+        searchVersion: 1,
+      });
+    });
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 1,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: { action: "search", query: "decision ready research" },
+            name: MCP_RECIPES_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload = jsonRpcToolResultSchema.parse(await response.json());
+    if (payload.result.isError) {
+      throw new Error(
+        JSON.stringify({ result: payload.result.content[0]?.text, urls: registryUrls }),
+      );
+    }
+    expect(recipeToolResultSchema.parse(JSON.parse(payload.result.content[0]?.text ?? ""))).toEqual(
+      {
+        action: "search",
+        ok: true,
+        registry: "https://crewhelm.app/",
+        response: {
+          query: "decision ready research",
+          results: [],
+          retrieval: "lexical_fallback",
+          searchVersion: 1,
+        },
+      },
+    );
+    expect(registryUrls).toEqual([
+      "https://crewhelm.app/api/registry/v1/recipes/search?q=decision+ready+research&limit=10",
+    ]);
+    fetchMock.mockRestore();
+  });
+
   it("marks Agent replacement as destructive while keeping creation additive", async () => {
     const authority = await ownerAuthority();
     const response = await handleAuthenticatedMcpRequest(
@@ -282,6 +337,7 @@ describe("authenticated MCP handler", () => {
       (tool) => tool.name === MCP_AGENT_WORKFLOWS_TOOL_NAME,
     );
     const briefsTool = payload.result.tools.find((tool) => tool.name === MCP_BRIEFS_TOOL_NAME);
+    const recipesTool = payload.result.tools.find((tool) => tool.name === MCP_RECIPES_TOOL_NAME);
     const configureScheduleTool = payload.result.tools.find(
       (tool) => tool.name === MCP_CONFIGURE_AGENT_SCHEDULE_TOOL_NAME,
     );
@@ -393,6 +449,10 @@ describe("authenticated MCP handler", () => {
     });
     expect(briefsTool?.inputSchema).not.toHaveProperty("oneOf");
     expect(JSON.stringify(briefsTool?.inputSchema)).toContain("read(id, revision)");
+    expect(recipesTool?.inputSchema).not.toHaveProperty("oneOf");
+    expect(JSON.stringify(recipesTool?.inputSchema)).toContain(
+      "install(request, expectedConfirmationDigest, idempotencyKey)",
+    );
     expect(scheduleReadTools).toHaveLength(3);
     expect(scheduleReadTools.every((tool) => tool.annotations.readOnlyHint)).toBe(true);
     expect(connectionLinkTool?.annotations).toMatchObject({

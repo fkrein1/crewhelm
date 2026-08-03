@@ -232,6 +232,13 @@
       "when": 1785701644662,
       "tag": "0032_panoramic_speed_demon",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1785751067309,
+      "tag": "0033_safe_sir_ram",
+      "breakpoints": true
     }
   ]
 }

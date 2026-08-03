@@ -142,6 +142,11 @@ orchestrator as inert untrusted source. The orchestrator can explain findings bu
 authority or establish safety. Local preview reports how Skill instructions can influence each
 proposed grant, including whole-catalog remote MCP authority. Installation independently re-fetches
 and verifies packages, copies Skills into owner-local R2, and records local IDs and provenance.
+Before mutation it durably records the confirmed plan and exact selected Skill packages. Child
+writes use deterministic idempotency keys; an interrupted install resumes from the same receipt
+without trusting new Registry bytes or duplicating completed imports. The created Agent is disabled,
+has no grants, and has no active Schedule or Event Trigger. Selected Connection IDs and operation
+templates remain inert plan data until a later explicit authority or autonomy change.
 Installed Agents neither read the Registry at runtime nor update automatically. Restriction,
 retirement, outage, or later package versions cannot alter an installed copy.
 

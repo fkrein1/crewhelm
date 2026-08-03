@@ -363,6 +363,17 @@
     {
       "evidence": {
         "definitionVersion": 2,
+        "testFiles": [
+          "apps/worker/src/owner/recipes/module.test.ts",
+          "apps/worker/src/owner/recipes/registry-client.test.ts"
+        ]
+      },
+      "id": "owner-recipes",
+      "pathPrefixes": ["apps/worker/src/owner/recipes/"]
+    },
+    {
+      "evidence": {
+        "definitionVersion": 2,
         "testFiles": ["apps/worker/src/owner/usage/module.test.ts"]
       },
       "id": "owner-usage",
