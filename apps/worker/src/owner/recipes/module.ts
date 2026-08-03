@@ -526,7 +526,7 @@ export class Recipes {
     if (replay !== undefined) {
       if (replay.requestDigest !== requestDigest) return denied("idempotency_conflict");
       try {
-        return await this.#continue(authority, replay.installationId, "install");
+        return await this.#continue(authority, replay.installationId, "install", "replayed");
       } catch {
         return denied("installation_incomplete", replay.installationId);
       }
@@ -588,7 +588,7 @@ export class Recipes {
       })
       .run();
     try {
-      return await this.#continue(authority, installationId, "install");
+      return await this.#continue(authority, installationId, "install", "created");
     } catch {
       return denied("installation_incomplete", installationId);
     }
@@ -606,7 +606,7 @@ export class Recipes {
       .get();
     if (row === undefined) return denied("artifact_not_found");
     try {
-      return await this.#continue(authority, installationId, action);
+      return await this.#continue(authority, installationId, action, "recovered");
     } catch {
       return denied("installation_incomplete", installationId);
     }
@@ -616,6 +616,7 @@ export class Recipes {
     authority: OwnerAuthority,
     installationId: string,
     action: "install" | "recover",
+    installationEvidence: "created" | "recovered" | "replayed",
   ): Promise<RecipeToolResult> {
     let row = this.#database
       .select()
@@ -702,7 +703,12 @@ export class Recipes {
     }
     row = { ...row, plan, receipt: storedReceipt, skillPackages };
     if (row.status === "installed") {
-      return recipeToolResultSchema.parse({ action, ok: true, receipt: row.receipt });
+      return recipeToolResultSchema.parse({
+        action,
+        installationEvidence,
+        ok: true,
+        receipt: row.receipt,
+      });
     }
 
     for (let index = row.receipt.skills.length; index < selectedSkills.length; index += 1) {
@@ -798,7 +804,7 @@ export class Recipes {
         })
         .run();
     });
-    return recipeToolResultSchema.parse({ action, ok: true, receipt });
+    return recipeToolResultSchema.parse({ action, installationEvidence, ok: true, receipt });
   }
 
   #validTimeZone(timeZone: string): boolean {

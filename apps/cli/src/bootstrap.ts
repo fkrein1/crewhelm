@@ -3,7 +3,7 @@ import { chmod, cp, lstat, mkdtemp, readFile, readdir, rm, writeFile } from "nod
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
-import { deploymentFingerprintSchema } from "@crewhelm/contracts";
+import { deploymentFingerprintSchema, recipeRegistryOriginSchema } from "@crewhelm/contracts";
 import * as z from "zod";
 
 import type { CloudflareGatewayAuthorization } from "./cloudflare-gateway-authorization.js";
@@ -28,6 +28,9 @@ const CLOUDFLARE_API_TOKEN_ENVIRONMENT = "CREWHELM_CLOUDFLARE_API_TOKEN";
 const CLOUDFLARE_GATEWAY_DENIED_MESSAGE = `Cloudflare denied AI Gateway management. Set ${CLOUDFLARE_API_TOKEN_ENVIRONMENT} to an account API token with AI Gateway Edit.`;
 const COMPOSIO_API_KEY_ENVIRONMENT = "CREWHELM_COMPOSIO_API_KEY";
 const BRAVE_SEARCH_API_KEY_ENVIRONMENT = "CREWHELM_BRAVE_SEARCH_API_KEY";
+const TESTING_RECIPE_REGISTRY_ORIGIN = "https://crewhelm-registry-dev.fkrein.workers.dev/";
+const TESTING_WORKER_NAME = "crewhelm-testing";
+const TESTING_WORKER_ORIGIN = "https://crewhelm-testing.fkrein.workers.dev";
 const GITHUB_SECRET_ENVIRONMENT = {
   clientId: "CREWHELM_GITHUB_CLIENT_ID",
   clientSecret: "CREWHELM_GITHUB_CLIENT_SECRET",
@@ -405,10 +408,12 @@ export const bootstrapOptionsSchema = z.strictObject({
   databaseId: databaseIdSchema.optional(),
   databaseName: deploymentNameSchema,
   origin: z.instanceof(URL).refine((origin) => origin.protocol === "https:"),
+  recipeRegistryOrigin: recipeRegistryOriginSchema.optional(),
   requireExisting: z.boolean().optional(),
   requireFresh: z.boolean().optional(),
   sandboxEnabled: z.boolean().optional(),
   setupGitHub: z.boolean().optional(),
+  testingInstallation: z.literal(true).optional(),
   timeoutMs: z.number().int().min(100).max(30_000),
   workerName: deploymentNameSchema,
 });
@@ -487,8 +492,10 @@ export interface ExistingInstallationCoordinates {
   databaseId: string;
   databaseName: string;
   origin: string;
+  recipeRegistryOrigin?: string;
   sandboxEnabled?: boolean;
   skillBucketName?: string;
+  testingInstallation?: true;
   workerName: string;
 }
 
@@ -557,6 +564,28 @@ export function skillBucketNameForWorker(workerName: string): string {
     .digest("hex");
 
   return r2BucketNameSchema.parse(`${workerName.slice(0, 46)}-${digest.slice(0, 8)}-skills`);
+}
+
+function assertRecipeRegistryBoundary(options: BootstrapOptions): void {
+  if (options.testingInstallation !== true) {
+    if (options.recipeRegistryOrigin !== undefined) {
+      throw commandFailed(
+        "configuration",
+        "A Recipe Registry override requires the dedicated testing installation.",
+      );
+    }
+    return;
+  }
+  if (
+    options.workerName !== TESTING_WORKER_NAME ||
+    options.origin.origin !== TESTING_WORKER_ORIGIN ||
+    options.recipeRegistryOrigin !== TESTING_RECIPE_REGISTRY_ORIGIN
+  ) {
+    throw commandFailed(
+      "configuration",
+      "Testing dependencies require the exact dedicated testing installation.",
+    );
+  }
 }
 
 interface CloudflareContext {
@@ -2025,7 +2054,11 @@ async function recoverExistingInstallation(
     databaseId: database.uuid,
     databaseName: database.name,
     origin: options.origin.origin,
+    ...(options.recipeRegistryOrigin === undefined
+      ? {}
+      : { recipeRegistryOrigin: options.recipeRegistryOrigin }),
     ...(recoveredSandboxEnabled ? { sandboxEnabled: true } : {}),
+    ...(options.testingInstallation === true ? { testingInstallation: true as const } : {}),
     ...(skillBucketBinding?.bucket_name === undefined
       ? {}
       : { skillBucketName: skillBucketBinding.bucket_name }),
@@ -2316,11 +2349,23 @@ async function stageDeployment(
       secrets: {
         required: REQUIRED_SECRET_NAMES,
       },
+      ...(options.testingInstallation === true
+        ? {
+            services: [
+              {
+                binding: "RECIPE_REGISTRY",
+                service: "crewhelm-registry-dev",
+              },
+            ],
+          }
+        : {}),
       triggers: assets.template.triggers,
       vars: {
         ...(aiGateway === undefined ? {} : { AI_GATEWAY_ID: aiGateway.id }),
         CREWHELM_DEPLOYMENT_FINGERPRINT: assets.digest,
         PUBLIC_ORIGIN: options.origin.origin,
+        RECIPE_REGISTRY_ORIGIN: options.recipeRegistryOrigin ?? "https://crewhelm.app/",
+        ...(options.testingInstallation === true ? { CREWHELM_TESTING_INSTALLATION: "true" } : {}),
       },
       workflows: assets.template.workflows.map((workflow) => ({
         ...workflow,
@@ -2693,6 +2738,7 @@ export async function bootstrapDeployment(
   options: BootstrapOptions,
   dependencies: BootstrapDependencies,
 ): Promise<BootstrapReport> {
+  assertRecipeRegistryBoundary(options);
   reportProgress(dependencies, "assets", "Loading packaged deployment assets");
   const assets = await loadDeploymentAssets(dependencies);
   const installed = await diagnoseDeploymentAlignment(options, {

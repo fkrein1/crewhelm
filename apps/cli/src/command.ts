@@ -131,8 +131,10 @@ const cliCommandSchema = z.discriminatedUnion("kind", [
     json: z.boolean(),
     kind: z.literal("up"),
     origin: bootstrapOptionsSchema.shape.origin.optional(),
+    recipeRegistryOrigin: bootstrapOptionsSchema.shape.recipeRegistryOrigin,
     sandboxEnabled: bootstrapOptionsSchema.shape.sandboxEnabled,
     setupGitHub: z.boolean(),
+    testingInstallation: bootstrapOptionsSchema.shape.testingInstallation,
     timeoutMs: bootstrapOptionsSchema.shape.timeoutMs,
     workerName: bootstrapOptionsSchema.shape.workerName.optional(),
   }),
@@ -223,8 +225,10 @@ interface UpCommandOptions {
   endpoint?: string;
   installation: string;
   json?: boolean;
+  recipeRegistryOrigin?: string;
   sandbox?: boolean;
   setupGithub?: boolean;
+  testingInstallation?: boolean;
   timeoutMs: string;
   workerName?: string;
 }
@@ -405,9 +409,11 @@ function createCliProgram(
     .summary("create or safely upgrade an installation")
     .description("Create or safely upgrade one Crewhelm installation.")
     .option("--endpoint <origin>", "HTTPS origin for the Crewhelm Worker")
+    .option("--recipe-registry-origin <origin>", "Recipe Registry origin")
     .option("--installation <path>", "installation metadata path", "crewhelm.installation.json")
     .option("--browser <browser>", "system, codex, or none", "system")
     .option("--setup-github", "create or rotate the private GitHub App")
+    .option("--testing-installation", "pin this installation to testing dependencies")
     .option("--account-id <id>", "Cloudflare account identifier")
     .option("--worker-name <name>", "Cloudflare Worker name")
     .option("--database-name <name>", "D1 database name")
@@ -431,8 +437,10 @@ function createCliProgram(
           json: options.json === true,
           kind: "up",
           origin: parseOrigin(options.endpoint, "up"),
+          recipeRegistryOrigin: options.recipeRegistryOrigin,
           sandboxEnabled: options.sandbox,
           setupGitHub: options.setupGithub === true,
+          testingInstallation: options.testingInstallation === true ? true : undefined,
           timeoutMs: Number(options.timeoutMs),
           workerName: options.workerName,
         }),

@@ -187,7 +187,12 @@ import { AiGatewayUsage } from "./usage/index.js";
 import { R2SkillPackageObjectStore, Skills, deniedSkill } from "./skills/index.js";
 import { AgentWorkflows } from "./workflows/index.js";
 import { Briefs, R2OwnerContentObjectStore, deniedBrief } from "./briefs/index.js";
-import { deniedRecipe, RecipeRegistryClient, Recipes } from "./recipes/index.js";
+import {
+  configuredRecipeRegistryOrigin,
+  deniedRecipe,
+  RecipeRegistryClient,
+  Recipes,
+} from "./recipes/index.js";
 
 const INVALID_RUN_ADMISSION = {
   error: {
@@ -384,9 +389,15 @@ export class OwnerControlPlane extends DurableObject {
       environment.PUBLIC_ORIGIN,
     );
     this.#authorityControls = new AuthorityControls(this.#database);
+    const recipeRegistry = environment.RECIPE_REGISTRY;
     this.#recipes = new Recipes(
       this.#database,
-      new RecipeRegistryClient(environment.RECIPE_REGISTRY_ORIGIN ?? "https://crewhelm.app/"),
+      new RecipeRegistryClient(
+        configuredRecipeRegistryOrigin(environment),
+        recipeRegistry === undefined
+          ? undefined
+          : (input, init) => recipeRegistry.fetch(input, init),
+      ),
       this.#agents,
       this.#skills,
     );
