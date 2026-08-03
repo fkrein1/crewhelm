@@ -481,7 +481,7 @@ describe("repository foundation", () => {
 
     expect(cliManifest).toMatchObject({
       name: "@crewhelm/cli",
-      version: "0.1.0-beta.3",
+      version: "0.1.0-beta.4",
       bin: {
         crewhelm: "dist/crewhelm.js",
       },
@@ -1080,7 +1080,8 @@ describe("repository foundation", () => {
       for (const value of Object.values(record)) {
         if (typeof value !== "string") continue;
 
-        expect(value).not.toMatch(/\$\{\{\s*(?:secrets|vars)\.(?:CLOUDFLARE_|CF_)/u);
+        expect(value).not.toMatch(/\$\{\{\s*(?:secrets|vars)\./u);
+        expect(value).not.toMatch(/\bcloudflare\/[A-Za-z0-9_.-]+@/iu);
         expect(value).not.toMatch(
           /(?:pnpm(?:\s+--filter\s+\S+)?\s+(?:run\s+)?deploy(?::|\b)|wrangler\s+(?:deploy|versions\s+upload|d1\s+migrations\s+apply))/u,
         );
@@ -1089,9 +1090,24 @@ describe("repository foundation", () => {
 
     const registryPackage = parseJsonObject(await read("apps/registry/package.json"));
     expect(registryPackage["scripts"]).toMatchObject({
-      "deploy:dev": "pnpm run db:migrate:dev && wrangler deploy --env dev",
       "deploy:production": "pnpm run db:migrate:production && wrangler deploy --env production",
     });
+    expect(registryPackage["scripts"]).not.toHaveProperty("deploy:dev");
+    expect(registryPackage["scripts"]).not.toHaveProperty("db:migrate:dev");
+
+    const sitePackage = parseJsonObject(await read("apps/site/package.json"));
+    expect(sitePackage["scripts"]).not.toHaveProperty("deploy:dev");
+
+    for (const [configPath, unconfiguredName] of [
+      ["apps/registry/wrangler.jsonc", "crewhelm-registry-unconfigured"],
+      ["apps/site/wrangler.jsonc", "crewhelm-site-unconfigured"],
+    ] as const) {
+      const config = await read(configPath);
+      expect(config).toContain(`"name": "${unconfiguredName}"`);
+      expect(config).not.toContain('"dev":');
+      expect(config).not.toContain("dev.crewhelm.app");
+      expect(config).not.toContain('-dev"');
+    }
   });
 
   it("versions the protected main ruleset", async () => {

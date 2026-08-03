@@ -18,11 +18,11 @@ describe("site Registry gateway", () => {
       ASSETS: service(assetsFetch),
       REGISTRY: service(registryFetch),
     } satisfies SiteEnv;
-    const request = new Request("https://dev.crewhelm.app/api/registry/v1/publish?draft=1", {
+    const request = new Request("https://crewhelm.app/api/registry/v1/publish?draft=1", {
       body: "payload",
       headers: {
         cookie: "crewhelm_registry_session=session",
-        origin: "https://dev.crewhelm.app",
+        origin: "https://crewhelm.app",
       },
       method: "POST",
     });
@@ -34,7 +34,7 @@ describe("site Registry gateway", () => {
     expect(registryFetch).toHaveBeenCalledOnce();
     expect(assetsFetch).not.toHaveBeenCalled();
     const forwarded = registryFetch.mock.calls[0]?.[0];
-    expect(forwarded?.headers.get("origin")).toBe("https://dev.crewhelm.app");
+    expect(forwarded?.headers.get("origin")).toBe("https://crewhelm.app");
     expect(forwarded?.headers.get("cookie")).toBe("crewhelm_registry_session=session");
     expect(forwarded?.method).toBe("POST");
     expect(new URL(forwarded?.url ?? "https://invalid.test").search).toBe("?draft=1");

@@ -1,6 +1,6 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "crewhelm-registry",
+  "name": "crewhelm-registry-unconfigured",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-22",
   "compatibility_flags": ["global_fetch_strictly_public"],
@@ -18,58 +18,6 @@
     },
   },
   "env": {
-    "dev": {
-      "name": "crewhelm-registry-dev",
-      "ai": {
-        "binding": "AI",
-      },
-      "d1_databases": [
-        {
-          "binding": "REGISTRY_DB",
-          "database_name": "crewhelm-registry-dev",
-          "database_id": "664a7b2c-f231-4448-b03c-d26f85d2ce42",
-          "migrations_dir": "migrations",
-        },
-      ],
-      "r2_buckets": [
-        {
-          "binding": "REGISTRY_PACKAGES",
-          "bucket_name": "crewhelm-registry-packages-dev",
-        },
-      ],
-      "vectorize": [
-        {
-          "binding": "RECIPE_SEARCH_INDEX",
-          "index_name": "crewhelm-recipe-search-dev",
-        },
-      ],
-      "ratelimits": [
-        {
-          "name": "PUBLIC_READ_RATE_LIMIT",
-          "namespace_id": "21001",
-          "simple": { "limit": 300, "period": 60 },
-        },
-        {
-          "name": "SEARCH_RATE_LIMIT",
-          "namespace_id": "21002",
-          "simple": { "limit": 60, "period": 60 },
-        },
-        {
-          "name": "PUBLISH_RATE_LIMIT",
-          "namespace_id": "21003",
-          "simple": { "limit": 10, "period": 60 },
-        },
-      ],
-      "vars": {
-        "PUBLIC_API_PREFIX": "/api/registry",
-        "PUBLIC_ORIGIN": "https://dev.crewhelm.app/",
-      },
-      "triggers": {
-        "crons": ["7 * * * *"],
-      },
-      "workers_dev": false,
-      "preview_urls": false,
-    },
     "production": {
       "name": "crewhelm-registry",
       "ai": {

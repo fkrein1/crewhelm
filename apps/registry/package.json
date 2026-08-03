@@ -5,9 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "wrangler deploy --dry-run --env production --outdir dist",
-    "db:migrate:dev": "wrangler d1 migrations apply REGISTRY_DB --remote --env dev",
     "db:migrate:production": "wrangler d1 migrations apply REGISTRY_DB --remote --env production",
-    "deploy:dev": "pnpm run db:migrate:dev && wrangler deploy --env dev",
     "deploy:production": "pnpm run db:migrate:production && wrangler deploy --env production"
   },
   "dependencies": {

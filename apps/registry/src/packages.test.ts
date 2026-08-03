@@ -50,6 +50,20 @@ describe("Registry packages", () => {
     expect(warnings.suspectedPrivateIdentifiers).toBe(1);
   });
 
+  it("scans object keys and decoded Recipe URLs for sensitive content", () => {
+    expect(
+      inspectPublicText({
+        schema: { properties: { "api_key=abcdefghijklmnop": { type: "string" } } },
+      }).suspectedSecrets,
+    ).toBe(true);
+    expect(
+      inspectPublicText({
+        endpoint:
+          "https://mcp.example.com/%74%6f%6b%65%6e%3Dabcdefghijklmnop/%31%32%33%65%34%35%36%37%2D%65%38%39%62%2D%34%32%64%33%2D%61%34%35%36%2D%34%32%36%36%31%34%31%37%34%30%30%30",
+      }),
+    ).toEqual({ suspectedPrivateIdentifiers: true, suspectedSecrets: true });
+  });
+
   it("projects user-facing outcomes and authority separately from package bytes", async () => {
     const recipe = recipePackageSchema.parse(recipeFixture());
     recipe.connections = [

@@ -53,13 +53,30 @@ export function inspectPublicText(value: unknown): {
   suspectedSecrets: boolean;
 } {
   const texts: string[] = [];
+  const collectText = (text: string): void => {
+    texts.push(text);
+    try {
+      let normalized = new URL(text).href;
+      for (let index = 0; index < 3; index += 1) {
+        const decoded = decodeURIComponent(normalized);
+        if (decoded === normalized) break;
+        texts.push(decoded);
+        normalized = decoded;
+      }
+    } catch {
+      // Non-URL text is scanned in its exact public form.
+    }
+  };
   const collect = (candidate: unknown): void => {
     if (typeof candidate === "string") {
-      texts.push(candidate);
+      collectText(candidate);
     } else if (Array.isArray(candidate)) {
       for (const item of candidate) collect(item);
     } else if (candidate !== null && typeof candidate === "object") {
-      for (const item of Object.values(candidate)) collect(item);
+      for (const [key, item] of Object.entries(candidate)) {
+        collectText(key);
+        collect(item);
+      }
     }
   };
   collect(value);
