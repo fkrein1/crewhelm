@@ -24,9 +24,22 @@ inside it; the owner control plane decodes and validates the full typed request 
 
 - Full control access to the Crewhelm installation.
 - The exact Agent ID and revision to publish.
-- Public discovery copy, responsibility boundaries, inputs, operations, license, provenance, tags,
-  and a sample deliverable for the Recipe draft.
-- One explicit decision for every local Skill attached to that Agent revision.
+- A declared license.
+- The exact IDs of any current Schedules and Event Triggers to include.
+
+## Prepare and review the candidate
+
+1. Call `prepare_publish` with the exact Agent `{id, revision}`, license, and selected Schedule and
+   Event Trigger IDs.
+2. Review the returned candidate. Crewhelm copies the Agent instructions, limits, portable
+   capabilities, and local Skill coordinates; converts selected recurring operations and attached
+   Connections into portable declarations; and replaces exact recurring Brief references with
+   named public inputs.
+3. Edit public discovery copy, responsibility boundaries, tags, sample deliverable, operation
+   presentation, Connection requirements, Brief input descriptions, and Skill decisions where
+   needed. Keep the copied Agent executable definition exact.
+
+Preparation is owner-local and has no public effect. Exact Brief and Connection IDs remain local.
 
 ## Authorize this publication
 
@@ -47,24 +60,19 @@ publication candidate:
   license and whether it is required or optional.
 - `reference`: pin an existing Registry Skill coordinate and digest. Preview succeeds only when its
   public package matches the local Skill exactly.
-- `remove`: exclude it from the public candidate. This remains blocked until Crewhelm can verify a
-  rehearsal of the changed candidate; the flow does not claim equivalent behavior from omission
-  alone.
+- `remove`: exclude it from the public candidate.
 
 Public Skills cannot contain `scripts/`, suspected secrets, or suspected private identifiers.
 Skill Markdown stays inert public package content and grants no authority.
 
 ## Preview and publish
 
-1. Build the candidate with the source `{id, revision}`, a complete public Recipe draft without a
-   `skills` field, and the explicit Skill decisions. The server validates the decoded structure
-   against the full Recipe contract.
-2. Call `preview_publish`. Its `request` JSON contains the action, authorization ID, candidate, and
-   original idempotency key.
-3. Confirm `ready: true`. Review the publisher namespace, exact next Recipe and Skill versions,
+1. Call `preview_publish`. Its `request` JSON contains the action, authorization ID, reviewed
+   candidate, and original idempotency key.
+2. Confirm `ready: true`. Review the publisher namespace, exact next Recipe and Skill versions,
    public digests, file paths, Skill provenance and warning counts, requested authority, operations,
    limits, and the complete exclusions list.
-4. Preserve `confirmationDigest`, then call `publish` with the unchanged candidate, authorization,
+3. Preserve `confirmationDigest`, then call `publish` with the unchanged candidate, authorization,
    idempotency key, and expected confirmation digest.
 
 The Registry independently revalidates the package, sensitive-content checks, namespace, exact

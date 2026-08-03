@@ -34,8 +34,9 @@ and retains the exact Session branch revision check. A stale handle cannot overw
 silently append to newer conversation state.
 
 A Schedule is an occurrence source, not authority. Its revision freezes one exact Agent revision,
-instruction, time trigger, output contract, and schedule limits. Configuring, pausing, resuming, and
-updating require owner autonomy authority and exact revisions. Each occurrence has one deterministic
+instruction, optional exact Brief revisions, time trigger, output contract, and schedule limits.
+Configuring, pausing, resuming, and updating require owner autonomy authority and exact revisions.
+Each occurrence has one deterministic
 admission identity; delayed alarm recovery may retry that identity but cannot create a second Run,
 and one alarm claims at most one occurrence per Schedule. A lifecycle mutation is rejected as busy
 while an occurrence admission is pending, preventing an already-started Run from being relabeled as
@@ -43,8 +44,9 @@ skipped. Terminal occurrence history is deterministically pruned to its document
 Agent revision pauses or skips the Schedule rather than silently widening or retargeting it.
 
 An Event Trigger is an occurrence source, not authority. Its revision freezes one exact Agent
-revision, instruction, connected-event source, output contract, and provider limits. Pausing,
-resuming, updating, and deleting require owner autonomy authority and exact revisions. Source
+revision, instruction, optional exact Brief revisions, connected-event source, output contract, and
+provider limits. Pausing, resuming, updating, and deleting require owner autonomy authority and
+exact revisions. Source
 payloads remain untrusted context. Each occurrence has one deterministic admission identity;
 delayed alarm recovery may retry that identity but cannot create a second Run, and one alarm claims
 at most one occurrence per Event Trigger. A lifecycle mutation is rejected as busy while an
@@ -61,7 +63,8 @@ secrets are encrypted at rest and never enter Agent prompts. Authenticated unmat
 acknowledged without starting work. Provider trigger creation and lifecycle retries are bounded; an
 unresolved operation cannot silently become active. Stable provider source identities deduplicate
 repeated deliveries, and a provider-supplied source timestamp cannot replay an event from before the
-Event Trigger existed. Pending event count and bytes are bounded per Event Trigger, and terminal
+Event Trigger existed. A provider payload cannot select, replace, or revise Brief context. Pending
+event count and bytes are bounded per Event Trigger, and terminal
 occurrence records discard the provider payload after admission or skip. Event Runs durably retain
 exact Event Trigger and provider-event provenance.
 
@@ -141,6 +144,7 @@ Public publishing requires both owner Full control and a short-lived Registry au
 to one publication idempotency key. GitHub authentication and its session cookie remain at the
 Registry. The owner instance retains only a derived verifier, confirms the exact public bundle
 digest before writing, and cannot use that authorization for another mutation identity. Publishing
-never serializes owner-local IDs, credentials, grants, Briefs, history, or runtime telemetry.
+preparation replaces recurring exact Brief references with public named input slots. Publishing
+never serializes owner-local IDs, credentials, grants, Brief contents, history, or runtime telemetry.
 
 No prompt-level instruction is an acceptable substitute for one of these controls.

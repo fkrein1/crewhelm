@@ -18,7 +18,7 @@ export function registerRecipeTools(server: McpServer, context: McpToolContext):
         readOnlyHint: false,
       },
       description:
-        "Search, inspect, and install immutable public Recipes and Skills. read_skill uses SKILL.md or a safe relative path. Preview and confirm the exact digest before installation.",
+        "Search, inspect, and install immutable public Recipes and Skills. read_skill uses SKILL.md or a safe relative path. Preview with owner-local Connection and exact Brief bindings for selected recurring operations, then confirm the unchanged digest before installation.",
       inputSchema: recipeToolMcpInputSchema,
       title: "Manage Crewhelm Recipes",
     },

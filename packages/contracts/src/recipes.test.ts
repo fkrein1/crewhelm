@@ -158,6 +158,7 @@ function packageInput(): RecipePackage {
     operations: {
       eventTriggers: [
         {
+          briefInputNames: ["security-invariants"],
           connectionSlot: "release-slack",
           delivery: "realtime" as const,
           eventSlug: "SLACK_MESSAGE_CREATED",
@@ -199,6 +200,7 @@ function packageInput(): RecipePackage {
       },
       schedules: [
         {
+          briefInputNames: ["release-checklist"],
           instruction: "Check active release candidates for {{product-name}} and report changes.",
           name: "weekday-health-check",
           outputContract: { kind: "markdown" as const },
@@ -283,6 +285,18 @@ describe("Recipe contracts", () => {
     unknownInput.operations.primary.inputNames = ["missing-input"];
     expect(recipePackageSchema.safeParse(unknownInput).success).toBe(false);
 
+    const unknownRecurringBrief = packageInput();
+    const schedule = unknownRecurringBrief.operations.schedules[0];
+    if (schedule === undefined) throw new Error("Expected Schedule fixture.");
+    schedule.briefInputNames = ["missing-input"];
+    expect(recipePackageSchema.safeParse(unknownRecurringBrief).success).toBe(false);
+
+    const invocationAsRecurringBrief = packageInput();
+    const invocationSchedule = invocationAsRecurringBrief.operations.schedules[0];
+    if (invocationSchedule === undefined) throw new Error("Expected Schedule fixture.");
+    invocationSchedule.briefInputNames = ["release-candidate"];
+    expect(recipePackageSchema.safeParse(invocationAsRecurringBrief).success).toBe(false);
+
     const unknownConnection = packageInput();
     const eventTrigger = unknownConnection.operations.eventTriggers[0];
     if (eventTrigger === undefined) throw new Error("Expected Event Trigger fixture.");
@@ -364,6 +378,21 @@ describe("Recipe contracts", () => {
         authKind: "bearer",
       }).success,
     ).toBe(false);
+  });
+
+  it("allows event-only Composio Connections only when a matching Event Trigger uses them", () => {
+    const eventOnly = packageInput();
+    const composio = eventOnly.connections.find(
+      (connection) => connection.kind === "composio" && connection.slot === "release-slack",
+    );
+    if (composio === undefined || composio.kind !== "composio") {
+      throw new Error("Expected Composio fixture.");
+    }
+    composio.tools = [];
+    expect(recipePackageSchema.safeParse(eventOnly).success).toBe(true);
+
+    eventOnly.operations.eventTriggers = [];
+    expect(recipePackageSchema.safeParse(eventOnly).success).toBe(false);
   });
 
   it("accepts bounded public Skill packages and rejects scripts", () => {

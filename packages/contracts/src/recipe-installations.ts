@@ -35,6 +35,7 @@ import {
   registrySearchQuerySchema,
 } from "./recipe-registry.js";
 import { skillFilePathSchema, skillIdSchema, skillVersionSchema } from "./skills.js";
+import { briefReferenceSchema } from "./briefs.js";
 
 export const MAXIMUM_INCOMPLETE_RECIPE_INSTALLATIONS = 8;
 
@@ -71,6 +72,18 @@ const recipeConnectionBindingSchema = z.strictObject({
   slot: z.string().min(1).max(40),
 });
 
+export const recipeBriefBindingSchema = z.strictObject({
+  brief: briefReferenceSchema,
+  inputName: recipePackageSchema.shape.inputs.element.shape.name,
+});
+const recipeBriefBindingsSchema = z
+  .array(recipeBriefBindingSchema)
+  .max(16)
+  .refine(
+    (bindings) => new Set(bindings.map(({ inputName }) => inputName)).size === bindings.length,
+    "Expected one exact Brief binding per Recipe input.",
+  );
+
 const recipeOperationSelectionSchema = z.strictObject({
   eventTriggers: z.array(recipeOperationNameSchema).max(8).default([]),
   schedules: z.array(recipeOperationNameSchema).max(8).default([]),
@@ -78,6 +91,7 @@ const recipeOperationSelectionSchema = z.strictObject({
 });
 
 export const recipePreviewRequestSchema = z.strictObject({
+  briefBindings: recipeBriefBindingsSchema.default([]),
   connectionBindings: z.array(recipeConnectionBindingSchema).max(8).default([]),
   operations: recipeOperationSelectionSchema.default({ eventTriggers: [], schedules: [] }),
   optionalSkills: z
@@ -158,6 +172,18 @@ export const recipeInstallationPlanSchema = z.strictObject({
     requested: recipeRegistryProjectionSchema.shape.requestedAuthority,
     startsWork: z.literal(false),
   }),
+  briefs: z
+    .array(
+      z.strictObject({
+        bound: briefReferenceSchema.nullable(),
+        description: recipePackageSchema.shape.inputs.element.shape.description,
+        inputName: recipePackageSchema.shape.inputs.element.shape.name,
+        required: z.boolean(),
+        state: z.enum(["available", "combination_unavailable", "missing", "unavailable"]),
+      }),
+    )
+    .max(16)
+    .default([]),
   confirmationDigest: sha256DigestSchema,
   connections: z.array(recipePreviewConnectionSchema).max(8),
   operations: z.strictObject({
@@ -183,6 +209,7 @@ const recipeInstalledSkillSchema = z.strictObject({
 
 export const recipeInstallationReceiptSchema = z.strictObject({
   agent: z.strictObject({ id: agentIdSchema, revision: agentRevisionNumberSchema }).nullable(),
+  briefs: recipeBriefBindingsSchema.default([]),
   connections: z.array(recipeConnectionBindingSchema).max(8),
   createdAt: z.iso.datetime(),
   id: recipeInstallationIdSchema,
@@ -222,7 +249,9 @@ export const recipeToolMcpInputSchema = z
   .strictObject({
     action: z
       .enum(["search", "inspect", "read_skill", "preview", "install", "recover"])
-      .describe("install(request, expectedConfirmationDigest, idempotencyKey)"),
+      .describe(
+        "install(request, expectedConfirmationDigest, idempotencyKey). Preview can bind exact owner-local Briefs to selected recurring operations.",
+      ),
     expectedConfirmationDigest: sha256DigestSchema.optional(),
     idempotencyKey: agentCreationIdempotencyKeySchema.optional(),
     installationId: recipeInstallationIdSchema.optional(),

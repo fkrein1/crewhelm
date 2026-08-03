@@ -24,7 +24,7 @@ A Recipe declares:
   and execution ceilings;
 - required or optional immutable Skill dependencies;
 - named Composio or remote MCP Connection slots and requested tool authority;
-- named Brief or invocation inputs;
+- named Brief or invocation inputs, with each recurring operation naming the Brief slots it uses;
 - one primary direct Run or durable Workflow template;
 - zero to eight Schedule and Event Trigger templates in total;
 - explicit Markdown or bounded JSON output contracts and one synthetic primary sample; and
@@ -39,6 +39,10 @@ One Recipe owns one responsibility. Its operations are bounded entry points, not
 workflow graph. The primary operation describes a deliberate invocation. Schedules describe when
 recurring work starts; Event Triggers describe which connected events start work. Both start one
 normal bounded Run and carry no authority of their own.
+
+A public Brief input is only a portable name, description, and required-or-optional declaration.
+Each Schedule or Event Trigger names the Brief inputs it needs. Installation binds those names to
+exact owner-local Brief revisions; the Registry never receives the content, ID, or revision.
 
 ## Skill artifacts
 
@@ -55,7 +59,7 @@ Publishing an Agent requires an explicit decision for every local Skill:
 
 1. publish an exact public Skill version with the Recipe;
 2. reference an existing Registry version with the same digest; or
-3. remove the Skill from the public candidate and rehearse the changed behavior.
+3. remove the Skill from the public candidate.
 
 Publishing never silently sanitizes a Skill, copies its instructions into the Agent, or republishes
 third-party content. Public artifacts require declared license and provenance. Suspected secrets,
@@ -91,6 +95,10 @@ The Registry is a normal public HTTP service, not an owner control plane or runt
 - Agent publishing uses a short-lived, one-publication authorization bound to the owner's
   idempotency key. The browser keeps the GitHub session at the Registry; the owner instance proves
   possession of its verifier without receiving the GitHub token or Registry cookie.
+- Publication preparation starts from one exact owner-local Agent revision. The owner control plane
+  copies its executable definition, converts selected recurring operations and Connection grants
+  into portable declarations, replaces exact Brief references with named inputs, and returns one
+  candidate for public review and editing before authorization and digest confirmation.
 - Public snapshots and change feeds preserve an open read contract for mirrors.
 
 The Registry never holds owner Connections, credentials, Briefs, grants, installation receipts, or
@@ -105,7 +113,8 @@ The owner instance combines public content with private local facts. Preview res
 - existing or missing Skill versions;
 - Connection bindings and the entire reviewed remote MCP catalog breadth;
 - exact Composio tool versions, effect classification, requested authorization, expiry, and limits;
-- Brief and invocation input choices;
+- exact owner-local Brief bindings for the selected recurring operation slots, including missing
+  required inputs and combinations that exceed the bounded Brief context;
 - Schedule timing and owner-selected time zone, plus Event Trigger sources and filters;
 - output contracts, aggregate budget, current pricing, and installation prerequisites; and
 - how each untrusted Skill can influence the exact authority proposed for the Agent.
@@ -121,7 +130,8 @@ digest and match the confirmed installation plan.
 
 Installation durably records that exact plan, imports or reuses each selected pinned Skill, and
 creates a disabled Agent with the resulting local Skill references. Selected Connection bindings,
-the primary operation, Schedules, and Event Triggers remain inert in the installation receipt.
+Brief bindings, the primary operation, Schedules, and Event Triggers remain inert in the
+installation receipt.
 Granting Connection authority or activating an operation is a separate explicit owner action. If a
 write is interrupted, the returned installation ID resumes deterministic child writes from the same
 stored plan; it does not fetch a changed public plan or duplicate completed imports.

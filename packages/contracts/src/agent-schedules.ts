@@ -10,6 +10,7 @@ import { agentInboxDeferredReasonSchema } from "./diagnostics.js";
 import { runPromptSchema } from "./run-admission.js";
 import { agentScheduleIdSchema, agentScheduleRevisionNumberSchema } from "./schedule-revision.js";
 import { outputContractSchema } from "./output-contracts.js";
+import { briefReferencesSchema } from "./briefs.js";
 
 export const MINIMUM_AGENT_SCHEDULE_INTERVAL_SECONDS = 60;
 export const MAXIMUM_AGENT_SCHEDULE_INTERVAL_SECONDS = 7 * 24 * 60 * 60;
@@ -119,6 +120,9 @@ const legacyAgentScheduleConfigurationSchema = z
 
 export const agentScheduleConfigurationSchema = z.union([
   z.strictObject({
+    briefs: briefReferencesSchema
+      .describe("Exact Brief revisions frozen as context for every scheduled Run.")
+      .optional(),
     outputContract: outputContractSchema.optional(),
     prompt: runPromptSchema.describe("Bounded Run instruction used for every occurrence."),
     trigger: agentScheduleTriggerSchema,
@@ -127,6 +131,9 @@ export const agentScheduleConfigurationSchema = z.union([
 ]);
 
 export const agentScheduleDefinitionSchema = z.strictObject({
+  briefs: briefReferencesSchema
+    .describe("Exact Brief revisions frozen as context for every scheduled Run.")
+    .optional(),
   name: agentScheduleNameSchema,
   outputContract: outputContractSchema
     .describe("Optional deliverable contract frozen for every scheduled Run.")
@@ -223,6 +230,7 @@ const agentScheduleErrorSchema = z.strictObject({
   code: z.enum([
     "agent_not_found",
     "agent_unavailable",
+    "brief_unavailable",
     "idempotency_conflict",
     "incompatible_schema",
     "insufficient_scope",

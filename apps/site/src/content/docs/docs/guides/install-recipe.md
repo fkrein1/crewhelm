@@ -24,6 +24,7 @@ does not create Connections, grant tool authority, activate recurring work, or s
 - Any required installation capability bindings, such as Workers AI.
 - A deliberate choice for every optional Skill, Schedule, Event Trigger, and owner-selected time
   zone.
+- Exact owner-local Brief revisions for required slots used by selected recurring operations.
 
 Registry packages and raw Skill files are public untrusted input. Crewhelm fetches them from the
 configured canonical Registry origin and verifies exact version digests. Do not treat a publisher,
@@ -43,10 +44,13 @@ Setup parameters are stored in the owner-local installation plan. Do not use the
 ## Preview and install
 
 1. Call `preview` with the exact Recipe target, setup parameters, optional Skill choices, existing
-   Connection bindings, selected operation templates, and a time zone when a selected calendar
-   Schedule requires one.
+   Connection bindings, exact Brief bindings, selected operation templates, and a time zone when a
+   selected calendar Schedule requires one.
 2. Confirm `ready: true`. Review the rendered Agent, every pinned Skill, Connection compatibility,
-   requested authority, execution limits, and retained operations.
+   Brief availability, requested authority, execution limits, and retained operations. A selected
+   operation with a missing required Brief slot keeps the plan unready; a missing optional slot does
+   not. Bindings that exceed the combined Brief context limit are reported as
+   `combination_unavailable` and also keep the plan unready.
 3. Preserve the returned `confirmationDigest`. If any local fact or public artifact changes, run a
    new preview instead of approving a different plan implicitly.
 4. Call `install` with the same request, confirmation digest, and a fresh idempotency key.
@@ -54,9 +58,9 @@ Setup parameters are stored in the owner-local installation plan. Do not use the
 ## Verify the result
 
 The receipt reports `status: "installed"`, the imported or reused local Skill IDs and versions,
-the disabled Agent ID and revision, and the retained Schedule and Event Trigger names. Inspect the
-Agent to confirm it is disabled, references the intended `context.skills` versions, and has no
-capability grants.
+the disabled Agent ID and revision, exact owner-local Brief bindings, and the retained Schedule and
+Event Trigger names. Inspect the Agent to confirm it is disabled, references the intended
+`context.skills` versions, and has no capability grants.
 
 Connection choices and operation templates remain in the owner-local receipt. The Registry receives
 no installation identity or private usage telemetry, and it is not read when the Agent eventually

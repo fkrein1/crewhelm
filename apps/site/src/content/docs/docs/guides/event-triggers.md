@@ -24,12 +24,14 @@ webhook URL or bearer token.
 - An active Agent ID and exact revision.
 - Capacity in the Agent's eight shared recurring-start slots for Event Triggers and Schedules.
 - A clear event, supported filters, and bounded instruction for each occurrence.
+- Any exact Brief revisions the recurring responsibility needs.
 
 ## Authority and custody
 
 An Event Trigger freezes the Agent revision, instruction, Connection, provider account, auth
-configuration, event slug and version, delivery kind, filters, optional output contract, and
-limits. The source payload is untrusted context and cannot grant authority.
+configuration, event slug and version, delivery kind, filters, optional output contract, optional
+exact Brief revisions, and limits. The source payload is untrusted context and cannot grant
+authority or choose Brief context.
 
 Crewhelm verifies signed provider delivery before owner routing, deduplicates stable event
 identities, bounds pending payloads, and gives each occurrence one deterministic Run admission
@@ -44,7 +46,8 @@ identity.
    Event Trigger definition using those returned source fields.
 4. Write the instruction as the Agent's responsibility for each matching event.
 5. Omit the output contract for Markdown, or freeze one bounded JSON contract for every event Run.
-6. Retain the Event Trigger ID and revision.
+6. Add only the exact Brief `{id, revision}` references needed for every matching event.
+7. Retain the Event Trigger ID and revision.
 
 ## Verify delivery
 
@@ -72,6 +75,8 @@ silently accepted.
 - If a provider lifecycle operation is unknown, inspect the exact Event Trigger and follow its
   recovery state. Do not create a duplicate trigger with a new idempotency key.
 - A stale Agent revision pauses or skips the trigger rather than retargeting it.
+- A referenced Brief cannot be deleted until the Event Trigger is updated or deleted without that
+  reference.
 - An authenticated but unmatched stale delivery is acknowledged without starting work.
 - Pausing or deleting cannot undo an external effect from an already-started Run.
 

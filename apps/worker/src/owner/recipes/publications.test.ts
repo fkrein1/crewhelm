@@ -1,13 +1,19 @@
 import {
+  AGENTS_READ_SCOPE,
+  AGENTS_WRITE_SCOPE,
+  AUTONOMY_WRITE_SCOPE,
+  COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
   OWNER_WRITE_SCOPE,
   recipePublicationToolResultSchema,
   registryArtifactVersionEnvelopeSchema,
   registryPublishBundleSchema,
   type RecipePublicationCandidate,
   type RegistryArtifactVersionEnvelope,
+  type ComposioToolCapabilityGrant,
   type SkillPackage,
 } from "@crewhelm/contracts";
 import { env } from "cloudflare:workers";
+import { runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { skillsCapabilityConfiguration } from "../../agent-capabilities/skills.js";
@@ -159,7 +165,12 @@ describe("OwnerControlPlane Recipe publications", () => {
       return Response.json({ error: "unavailable" }, { status: 500 });
     });
 
-    const authority = await authorityFor("recipe-publication", [OWNER_WRITE_SCOPE]);
+    const authority = await authorityFor("recipe-publication", [
+      AGENTS_READ_SCOPE,
+      AGENTS_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
+      OWNER_WRITE_SCOPE,
+    ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const publishedSkill = await stub.publishSkill(authority, {
       idempotencyKey: "publish-local-skill",
@@ -179,6 +190,206 @@ describe("OwnerControlPlane Recipe publications", () => {
     ].toSorted((left, right) => left.id.localeCompare(right.id));
     const createdAgent = await stub.createAgent(authority, localAgentInput);
     if (!createdAgent.ok) throw new Error("Expected source Agent creation.");
+    const connectionId = "connection_00000000-0000-4000-8000-000000000001";
+    const grant: ComposioToolCapabilityGrant = {
+      agentId: createdAgent.agent.id,
+      agentRevision: createdAgent.agent.revision,
+      authorization: "approval_required",
+      capabilityId: COMPOSIO_TOOL_EXECUTE_CAPABILITY_ID,
+      connectionId,
+      effect: "read",
+      expiresAt: null,
+      grantId: "grant_00000000-0000-4000-8000-000000000001",
+      integrationSlug: "github",
+      limits: {
+        maxCallsPerRun: 3,
+        maxConcurrency: 1,
+        maxCostMicrousdPerCall: 1_000,
+        maxDurationMs: 20_000,
+        maxOutputBytes: 32_000,
+      },
+      ownerKey: authority.ownerKey,
+      targetDigests: ["a".repeat(64)],
+      tool: {
+        description: "Read repository issues.",
+        inputParametersJson: "{}",
+        name: "List issues",
+        outputParametersJson: "{}",
+        tags: ["readOnlyHint"],
+      },
+      toolkitVersion: "20260801_00",
+      toolSlug: "GITHUB_LIST_ISSUES",
+    };
+    await runInDurableObject(stub, (_instance, state) => {
+      const now = Date.now();
+      state.storage.sql.exec(
+        `INSERT INTO connections
+          (connection_id, provider, provider_connection_id, auth_config_id, account_label,
+            status, created_at, revoked_at)
+         VALUES (?, 'composio', 'ca_publication', 'ac_publication', 'GitHub',
+            'active', ?, NULL)`,
+        connectionId,
+        now,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO capability_grants
+          (grant_id, agent_id, agent_revision, connection_id, grant, status, created_at, revoked_at)
+         VALUES (?, ?, ?, ?, ?, 'active', ?, NULL)`,
+        grant.grantId,
+        grant.agentId,
+        grant.agentRevision,
+        grant.connectionId,
+        JSON.stringify(grant),
+        now,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO capability_grants
+          (grant_id, agent_id, agent_revision, connection_id, grant, status, created_at, revoked_at)
+         VALUES (?, ?, ?, ?, ?, 'revoked', ?, ?)`,
+        "grant_00000000-0000-4000-8000-000000000002",
+        grant.agentId,
+        grant.agentRevision,
+        grant.connectionId,
+        JSON.stringify({
+          ...grant,
+          grantId: "grant_00000000-0000-4000-8000-000000000002",
+          toolSlug: "GITHUB_DELETE_A_REPOSITORY",
+        }),
+        now,
+        now,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO capability_grants
+          (grant_id, agent_id, agent_revision, connection_id, grant, status, created_at, revoked_at)
+         VALUES (?, ?, ?, ?, ?, 'active', ?, NULL)`,
+        "grant_00000000-0000-4000-8000-000000000003",
+        grant.agentId,
+        grant.agentRevision,
+        grant.connectionId,
+        JSON.stringify({
+          ...grant,
+          expiresAt: new Date(now - 60_000).toISOString(),
+          grantId: "grant_00000000-0000-4000-8000-000000000003",
+          toolSlug: "GITHUB_ARCHIVE_A_REPOSITORY",
+        }),
+        now,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO capability_grants
+          (grant_id, agent_id, agent_revision, connection_id, grant, status, created_at, revoked_at)
+         VALUES (?, ?, ?, ?, ?, 'active', ?, NULL)`,
+        "grant_00000000-0000-4000-8000-000000000004",
+        grant.agentId,
+        grant.agentRevision,
+        grant.connectionId,
+        JSON.stringify({
+          ...grant,
+          expiresAt: new Date(now + 30_000).toISOString(),
+          grantId: "grant_00000000-0000-4000-8000-000000000004",
+          toolSlug: "GITHUB_TRANSFER_A_REPOSITORY",
+        }),
+        now,
+      );
+    });
+    const brief = await stub.createBrief(authority, {
+      content: "Prefer independently confirmed sources and state uncertainty.",
+      idempotencyKey: "publication-source-brief",
+      mediaType: "text/plain",
+      name: "Research standards",
+    });
+    if (!brief.ok) throw new Error("Expected publication Brief fixture.");
+    const schedule = await stub.configureAgentSchedule(authority, {
+      agentId: createdAgent.agent.id,
+      expectedAgentRevision: createdAgent.agent.revision,
+      expectedScheduleRevision: null,
+      idempotencyKey: "publication-source-schedule",
+      schedule: {
+        briefs: [{ id: brief.brief.id, revision: brief.version.revision }],
+        name: "Weekly research briefing",
+        prompt: "Prepare this week's research briefing.",
+        trigger: { intervalSeconds: 604_800, type: "interval" },
+      },
+      scheduleId: null,
+    });
+    if (!schedule.ok) throw new Error("Expected publication Schedule fixture.");
+
+    const prepared = recipePublicationToolResultSchema.parse(
+      await stub.recipePublications(authority, {
+        action: "prepare_publish",
+        agent: { id: createdAgent.agent.id, revision: createdAgent.agent.revision },
+        license: "MIT",
+        scheduleIds: [schedule.schedule.id],
+      }),
+    );
+    expect(prepared).toMatchObject({
+      action: "prepare_publish",
+      candidate: {
+        agent: { id: createdAgent.agent.id, revision: createdAgent.agent.revision },
+        recipe: {
+          agent: {
+            instructions: createdAgent.agent.instructions,
+            suggestedName: createdAgent.agent.name,
+          },
+          connections: [
+            {
+              integration: "github",
+              kind: "composio",
+              slot: "github",
+              tools: [
+                {
+                  authorization: "approval_required",
+                  effect: "read",
+                  slug: "GITHUB_LIST_ISSUES",
+                  version: "20260801_00",
+                },
+              ],
+            },
+          ],
+          inputs: [
+            {
+              description: "Owner-provided Research standards context.",
+              kind: "brief",
+              name: "research-standards",
+              required: true,
+            },
+          ],
+          name: "research-brief-steward",
+          operations: {
+            schedules: [
+              {
+                briefInputNames: ["research-standards"],
+                instruction: "Prepare this week's research briefing.",
+                name: "weekly-research-briefing",
+              },
+            ],
+          },
+        },
+        skills: [
+          {
+            decision: "publish",
+            license: "MIT",
+            local: { id: publishedSkill.skill.id, version: 1 },
+            requirement: "required",
+          },
+        ],
+      },
+      nextAction: "preview_publish",
+      ok: true,
+    });
+
+    const tokenAgentInput = agentInput("create-token-source", "Literal token steward");
+    tokenAgentInput.instructions =
+      "Preserve the literal {{reserved-token}} text when explaining template syntax.";
+    tokenAgentInput.executionLimits = recipeFixture().agent.executionLimits;
+    const tokenAgent = await stub.createAgent(authority, tokenAgentInput);
+    if (!tokenAgent.ok) throw new Error("Expected literal-token Agent fixture.");
+    await expect(
+      stub.recipePublications(authority, {
+        action: "prepare_publish",
+        agent: { id: tokenAgent.agent.id, revision: tokenAgent.agent.revision },
+        license: "MIT",
+      }),
+    ).resolves.toMatchObject({ error: { code: "public_package_invalid" }, ok: false });
 
     const authorization = recipePublicationToolResultSchema.parse(
       await stub.recipePublications(authority, {
@@ -287,22 +498,10 @@ describe("OwnerControlPlane Recipe publications", () => {
       action: "preview_publish",
       ok: true,
       plan: {
-        blockingReasons: ["skill_removal_rehearsal_required"],
-        ready: false,
+        blockingReasons: [],
+        ready: true,
       },
     });
-    if (!removedPreview.ok || removedPreview.action !== "preview_publish") {
-      throw new Error("Expected blocked Skill-removal preview.");
-    }
-    await expect(
-      stub.recipePublications(authority, {
-        action: "publish",
-        authorizationId,
-        candidate: removedCandidate,
-        expectedConfirmationDigest: removedPreview.plan.confirmationDigest,
-        idempotencyKey,
-      }),
-    ).resolves.toMatchObject({ error: { code: "rehearsal_required" }, ok: false });
 
     await expect(
       stub.recipePublications(authority, {

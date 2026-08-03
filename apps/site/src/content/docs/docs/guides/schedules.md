@@ -21,14 +21,15 @@ revision at an elapsed interval or a daily, weekly, or monthly wall-clock time.
 - Full control access.
 - An active Agent ID and exact revision.
 - A bounded recurring instruction.
+- Any exact Brief revisions the recurring responsibility needs.
 - A trigger: interval, or calendar time with an IANA time zone.
 - Capacity in the Agent's eight shared recurring-start slots for Schedules and Event Triggers.
 
 ## Authority and custody
 
-A Schedule freezes one Agent revision, instruction, trigger, output contract, and schedule limits.
-It supplies an occurrence, not authority. Every occurrence still passes normal Run admission and
-Tool gate checks.
+A Schedule freezes one Agent revision, instruction, optional exact Brief revisions, trigger, output
+contract, and schedule limits. It supplies an occurrence, not authority. Every occurrence still
+passes normal Run admission and Tool gate checks.
 
 Crewhelm owns alarm timing, one deterministic admission identity per occurrence, duplicate
 suppression, history, and recovery. A late alarm advances to the next future occurrence instead of
@@ -46,7 +47,9 @@ replaying a backlog.
    monthly selector. A monthly day that does not exist in a month is skipped.
 5. Omit the output contract for Markdown, or freeze one bounded JSON contract for every scheduled
    Run.
-6. Retain the returned Schedule ID and revision.
+6. Add only the exact Brief `{id, revision}` references needed for this recurring responsibility.
+   Crewhelm validates them without requiring the MCP client to read and resend their content.
+7. Retain the returned Schedule ID and revision.
 
 ## Verify the Schedule
 
@@ -69,6 +72,8 @@ instead of silently retargeting it.
 - If a Schedule is busy, inspect it and retry the lifecycle change only after the pending admission
   settles. Do not infer whether its Run started.
 - On a revision conflict, reread both the Agent and Schedule before deciding to update.
+- A referenced Brief cannot be deleted until the Schedule is paused with a new revision that no
+  longer retains it, or the Schedule is deleted.
 - Inspect the most recent occurrence and Run before manually replacing delayed work. Late alarms do
   not replay missed intervals.
 - Pausing prevents future occurrences; it cannot undo an external effect from a Run already

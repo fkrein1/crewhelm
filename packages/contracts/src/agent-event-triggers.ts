@@ -17,11 +17,13 @@ import {
   integrationToolParameterMapSchema,
   integrationToolSlugSchema,
 } from "./integrations.js";
+import { briefReferencesSchema, type BriefReference } from "./briefs.js";
 
 export const MAXIMUM_AGENT_EVENT_TRIGGER_HISTORY_ITEMS = 20;
 export const MAXIMUM_RETAINED_AGENT_EVENT_TRIGGER_OCCURRENCES = 100;
 
 export type AgentEventTriggerDefinition = {
+  briefs?: BriefReference[] | undefined;
   instruction: string;
   name: string;
   outputContract?: OutputContract | undefined;
@@ -95,6 +97,9 @@ const agentEventTriggerNameSchema = z
 
 export const agentEventTriggerDefinitionSchema: z.ZodType<AgentEventTriggerDefinition> =
   z.strictObject({
+    briefs: briefReferencesSchema
+      .describe("Exact Brief revisions frozen as context for every Event Trigger Run.")
+      .optional(),
     instruction: runPromptSchema.describe(
       "What the Agent should do for each Event Trigger occurrence and what useful outcome it should return.",
     ),
@@ -120,6 +125,9 @@ const eventTriggerFiltersSchema = z
   });
 
 const eventTriggerToolDefinitionSchema = z.strictObject({
+  briefs: briefReferencesSchema
+    .describe("Exact Brief revisions frozen as context for every Event Trigger Run.")
+    .optional(),
   connectionId: connectionIdSchema.describe("Connected account returned by sources."),
   delivery: z.enum(["provider_polling", "realtime"]).describe("Delivery returned by sources."),
   eventSlug: integrationToolSlugSchema.describe("Event slug returned by sources."),
@@ -334,6 +342,7 @@ const agentEventTriggerErrorSchema = z.strictObject({
   code: z.enum([
     "agent_not_found",
     "agent_unavailable",
+    "brief_unavailable",
     "connection_not_found",
     "connection_unavailable",
     "idempotency_conflict",
@@ -405,6 +414,7 @@ export type AgentEventTriggersResult =
         code:
           | "agent_not_found"
           | "agent_unavailable"
+          | "brief_unavailable"
           | "connection_not_found"
           | "connection_unavailable"
           | "idempotency_conflict"

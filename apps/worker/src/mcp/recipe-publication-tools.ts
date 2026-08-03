@@ -21,7 +21,7 @@ export function registerRecipePublicationTools(server: McpServer, context: McpTo
         readOnlyHint: false,
       },
       description:
-        "Authorize, preview, and publish one Agent revision as an immutable public Recipe. Pass the selected action and its fields as request JSON; confirm the preview digest before publishing.",
+        "Port one exact live Agent revision into a public Recipe. Start with prepare_publish to copy its instructions, limits, capabilities, Skills, selected Schedules, selected Event Triggers, Brief slots, and portable Connection requirements into a reviewable candidate. Edit only what needs public shaping, authorize with GitHub, preview the exact exclusions and authority, then publish the confirmed digest.",
       inputSchema: recipePublicationToolMcpInputSchema,
       title: "Publish Crewhelm Recipe",
     },

@@ -52,6 +52,21 @@ describe("OwnerControlPlane Agent schedules", () => {
     }
 
     await expect(
+      controlPlane.configureAgentSchedule(authority, {
+        agentId: created.agent.id,
+        expectedAgentRevision: created.agent.revision,
+        expectedScheduleRevision: null,
+        idempotencyKey: "schedule-missing-brief",
+        schedule: {
+          briefs: [{ id: "brief_00000000-0000-4000-8000-000000000001", revision: 1 }],
+          name: "Missing Brief schedule",
+          prompt: "Use context that is not available.",
+          trigger: { intervalSeconds: 120, type: "interval" },
+        },
+      }),
+    ).resolves.toMatchObject({ error: { code: "brief_unavailable" }, ok: false });
+
+    await expect(
       controlPlane.configureFleetConfiguration(authority, {
         expectedRevision: configuration.configuration.revision,
         idempotencyKey: "schedule-minimum-fleet",
@@ -359,6 +374,13 @@ describe("OwnerControlPlane Agent schedules", () => {
     if (!first.ok || !second.ok) {
       throw new Error("Expected scheduled Agent fixtures.");
     }
+    const brief = await controlPlane.createBrief(authority, {
+      content: "Use the owner's weekly priorities when preparing this result.",
+      idempotencyKey: "schedule-context-brief",
+      mediaType: "text/plain",
+      name: "Weekly priorities",
+    });
+    if (!brief.ok) throw new Error("Expected scheduled Brief fixture.");
 
     await runInDurableObject(
       env.CREW_AGENT.getByName(
@@ -380,6 +402,7 @@ describe("OwnerControlPlane Agent schedules", () => {
         expectedScheduleRevision: null,
         idempotencyKey: "configure-schedule-1",
         schedule: {
+          briefs: [{ id: brief.brief.id, revision: brief.version.revision }],
           name: "Typed scheduled responsibility",
           outputContract: scheduledJsonOutputContract,
           prompt: JSON_OUTPUT_TEST_PROMPT,
@@ -485,9 +508,17 @@ describe("OwnerControlPlane Agent schedules", () => {
       }),
     ]);
     await expect(controlPlane.inspectRun(authority, { runId: firstRunId })).resolves.toMatchObject({
+      briefs: [{ id: brief.brief.id, revision: brief.version.revision }],
       ok: true,
       run: { schedule: { id: firstSchedule.schedule.id, revision: 1 } },
     });
+    await expect(
+      controlPlane.deleteBrief(authority, {
+        expectedRevision: brief.version.revision,
+        id: brief.brief.id,
+        idempotencyKey: "delete-scheduled-brief",
+      }),
+    ).resolves.toMatchObject({ error: { code: "brief_busy" }, ok: false });
     await vi.waitFor(
       async () => {
         const inspected = await controlPlane.inspectRun(authority, {

@@ -1,5 +1,6 @@
 import {
   AGENTS_READ_SCOPE,
+  MAXIMUM_BRIEF_CONTENT_BYTES,
   MAXIMUM_INCOMPLETE_RECIPE_INSTALLATIONS,
   OWNER_READ_SCOPE,
   OWNER_WRITE_SCOPE,
@@ -32,10 +33,10 @@ async function encodedPackage(value: unknown) {
   return { bytes, descriptor: { digest, sizeBytes: bytes.byteLength }, source };
 }
 
-async function registryFixture() {
+async function registryFixture(transformRecipe?: (recipe: RecipePackage) => RecipePackage) {
   const skill: RegistrySkillPackage = skillFixture();
   const encodedSkill = await encodedPackage(skill);
-  const recipe: RecipePackage = {
+  const baseRecipe: RecipePackage = {
     ...recipeFixture(),
     agent: {
       ...recipeFixture().agent,
@@ -61,6 +62,7 @@ async function registryFixture() {
       },
     ],
   };
+  const recipe = transformRecipe?.(baseRecipe) ?? baseRecipe;
   const encodedRecipe = await encodedPackage(recipe);
   const recipeProjection = projectRecipe({
     descriptor: encodedRecipe.descriptor,
@@ -226,6 +228,186 @@ describe("OwnerControlPlane Recipes", () => {
         request,
       }),
     ).resolves.toEqual({ ...installed, installationEvidence: "replayed" });
+  });
+
+  it("binds exact owner-local Briefs to selected recurring Recipe operations", async () => {
+    const fixture = await registryFixture((recipe) => ({
+      ...recipe,
+      inputs: [
+        ...recipe.inputs,
+        {
+          description: "The owner's exact weekly priorities.",
+          kind: "brief" as const,
+          name: "weekly-priorities",
+          required: true,
+        },
+        {
+          description: "The first large context source.",
+          kind: "brief" as const,
+          name: "large-context-a",
+          required: true,
+        },
+        {
+          description: "The second large context source.",
+          kind: "brief" as const,
+          name: "large-context-b",
+          required: true,
+        },
+      ].toSorted((left, right) => left.name.localeCompare(right.name)),
+      operations: {
+        ...recipe.operations,
+        schedules: [
+          {
+            briefInputNames: ["weekly-priorities"],
+            instruction: "Prepare the weekly review using the owner's priorities.",
+            name: "weekly-review",
+            outputContract: { kind: "markdown" as const },
+            trigger: { intervalSeconds: 604_800, type: "interval" as const },
+          },
+          {
+            briefInputNames: ["large-context-a", "large-context-b"],
+            instruction: "Prepare a review from both large context sources.",
+            name: "oversized-review",
+            outputContract: { kind: "markdown" as const },
+            trigger: { intervalSeconds: 604_800, type: "interval" as const },
+          },
+        ].toSorted((left, right) => left.name.localeCompare(right.name)),
+      },
+    }));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const response = fixture.responses.get(
+        new URL(String(input instanceof Request ? input.url : input)).pathname,
+      );
+      return response?.() ?? new Response(null, { status: 404 });
+    });
+    const authority = await authorityFor("recipe-brief-binding", [
+      AGENTS_READ_SCOPE,
+      OWNER_READ_SCOPE,
+      OWNER_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const brief = await stub.createBrief(authority, {
+      content: "Ship the onboarding improvement and protect reliability work.",
+      idempotencyKey: "recipe-weekly-priorities",
+      mediaType: "text/plain",
+      name: "Weekly priorities",
+    });
+    if (!brief.ok) throw new Error("Expected Recipe Brief fixture.");
+    const request = {
+      connectionBindings: [],
+      operations: { eventTriggers: [], schedules: ["weekly-review"] },
+      optionalSkills: [],
+      parameters: {},
+      target: fixture.target,
+    };
+    await expect(stub.recipes(authority, { action: "preview", request })).resolves.toMatchObject({
+      action: "preview",
+      ok: true,
+      plan: {
+        briefs: [
+          {
+            bound: null,
+            inputName: "weekly-priorities",
+            required: true,
+            state: "missing",
+          },
+        ],
+        ready: false,
+      },
+    });
+
+    const boundRequest = {
+      ...request,
+      briefBindings: [
+        {
+          brief: { id: brief.brief.id, revision: brief.version.revision },
+          inputName: "weekly-priorities",
+        },
+      ],
+    };
+    const preview = recipeToolResultSchema.parse(
+      await stub.recipes(authority, { action: "preview", request: boundRequest }),
+    );
+    expect(preview).toMatchObject({
+      action: "preview",
+      ok: true,
+      plan: {
+        briefs: [
+          {
+            bound: { id: brief.brief.id, revision: brief.version.revision },
+            inputName: "weekly-priorities",
+            state: "available",
+          },
+        ],
+        ready: true,
+      },
+    });
+    if (!preview.ok || preview.action !== "preview") throw new Error("Expected bound preview.");
+    await expect(
+      stub.recipes(authority, {
+        action: "install",
+        expectedConfirmationDigest: preview.plan.confirmationDigest,
+        idempotencyKey: "install-recipe-with-brief",
+        request: boundRequest,
+      }),
+    ).resolves.toMatchObject({
+      action: "install",
+      ok: true,
+      receipt: {
+        briefs: [
+          {
+            brief: { id: brief.brief.id, revision: brief.version.revision },
+            inputName: "weekly-priorities",
+          },
+        ],
+      },
+    });
+
+    const largeBriefA = await stub.createBrief(authority, {
+      content: "a".repeat(MAXIMUM_BRIEF_CONTENT_BYTES),
+      idempotencyKey: "recipe-large-context-a",
+      mediaType: "text/plain",
+      name: "Large context A",
+    });
+    const largeBriefB = await stub.createBrief(authority, {
+      content: "b".repeat(MAXIMUM_BRIEF_CONTENT_BYTES),
+      idempotencyKey: "recipe-large-context-b",
+      mediaType: "text/plain",
+      name: "Large context B",
+    });
+    if (!largeBriefA.ok || !largeBriefB.ok) throw new Error("Expected large Brief fixtures.");
+    await expect(
+      stub.recipes(authority, {
+        action: "preview",
+        request: {
+          connectionBindings: [],
+          briefBindings: [
+            {
+              brief: { id: largeBriefA.brief.id, revision: largeBriefA.version.revision },
+              inputName: "large-context-a",
+            },
+            {
+              brief: { id: largeBriefB.brief.id, revision: largeBriefB.version.revision },
+              inputName: "large-context-b",
+            },
+          ],
+          operations: { eventTriggers: [], schedules: ["oversized-review"] },
+          optionalSkills: [],
+          parameters: {},
+          target: fixture.target,
+        },
+      }),
+    ).resolves.toMatchObject({
+      action: "preview",
+      ok: true,
+      plan: {
+        briefs: [
+          { inputName: "large-context-a", state: "combination_unavailable" },
+          { inputName: "large-context-b", state: "combination_unavailable" },
+        ],
+        ready: false,
+      },
+    });
   });
 
   it("denies stale confirmation and hostile Registry responses before creating local state", async () => {
