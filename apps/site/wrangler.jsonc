@@ -1,19 +1,65 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "crewhelm-site",
+  "main": "src/worker.ts",
   "compatibility_date": "2026-07-29",
   "assets": {
+    "binding": "ASSETS",
     "directory": "./dist",
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "404-page",
-    "run_worker_first": false,
+    "run_worker_first": ["/api/registry", "/api/registry/*"],
   },
-  "workers_dev": true,
-  "preview_urls": true,
-  "routes": [
-    {
-      "pattern": "crewhelm.app",
-      "custom_domain": true,
+  "workers_dev": false,
+  "preview_urls": false,
+  "env": {
+    "dev": {
+      "name": "crewhelm-site-dev",
+      "assets": {
+        "binding": "ASSETS",
+        "directory": "./dist",
+        "html_handling": "auto-trailing-slash",
+        "not_found_handling": "404-page",
+        "run_worker_first": ["/api/registry", "/api/registry/*"],
+      },
+      "services": [
+        {
+          "binding": "REGISTRY",
+          "service": "crewhelm-registry-dev",
+        },
+      ],
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [
+        {
+          "pattern": "dev.crewhelm.app",
+          "custom_domain": true,
+        },
+      ],
     },
-  ],
+    "production": {
+      "name": "crewhelm-site",
+      "assets": {
+        "binding": "ASSETS",
+        "directory": "./dist",
+        "html_handling": "auto-trailing-slash",
+        "not_found_handling": "404-page",
+        "run_worker_first": ["/api/registry", "/api/registry/*"],
+      },
+      "services": [
+        {
+          "binding": "REGISTRY",
+          "service": "crewhelm-registry",
+        },
+      ],
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [
+        {
+          "pattern": "crewhelm.app",
+          "custom_domain": true,
+        },
+      ],
+    },
+  },
 }

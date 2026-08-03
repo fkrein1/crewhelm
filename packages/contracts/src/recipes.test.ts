@@ -354,6 +354,13 @@ describe("Recipe contracts", () => {
     expect(
       recipeRemoteMcpConnectionRequirementSchema.safeParse({
         ...remote,
+        authorization: "standing",
+        requiredTools: [{ effect: "destructive", name: "repositories.delete" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      recipeRemoteMcpConnectionRequirementSchema.safeParse({
+        ...remote,
         authKind: "bearer",
       }).success,
     ).toBe(false);
@@ -436,7 +443,7 @@ describe("Recipe contracts", () => {
         namespace: "example",
         version: 1,
       },
-      effectiveAuthority: {
+      requestedAuthority: {
         approvalRequired: { destructive: 0, read: 0, write: 3 },
         standing: { destructive: 0, read: 2, write: 0 },
       },
@@ -470,9 +477,9 @@ describe("Recipe contracts", () => {
     expect(
       recipeRegistryProjectionSchema.safeParse({
         ...recipeProjection,
-        effectiveAuthority: {
-          ...recipeProjection.effectiveAuthority,
-          standing: { ...recipeProjection.effectiveAuthority.standing, destructive: 1 },
+        requestedAuthority: {
+          ...recipeProjection.requestedAuthority,
+          standing: { ...recipeProjection.requestedAuthority.standing, destructive: 1 },
         },
       }).success,
     ).toBe(false);

@@ -4,11 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "astro build && node ../../scripts/validate-site-output.mjs dist",
-    "deploy:production": "pnpm run build && wrangler deploy",
+    "build": "astro build && node ../../scripts/validate-site-output.mjs dist && wrangler deploy --dry-run --env production --outdir worker-dist",
+    "deploy:dev": "pnpm run build && wrangler deploy --env dev",
+    "deploy:production": "pnpm run build && wrangler deploy --env production",
     "dev": "astro dev",
     "preview": "astro preview",
-    "preview:upload": "pnpm run build && wrangler versions upload"
+    "typecheck": "tsc --noEmit --project tsconfig.worker.json && tsc --noEmit --project src/tsconfig.json"
   },
   "dependencies": {
     "@astrojs/sitemap": "3.7.3",
@@ -17,8 +18,10 @@
     "astro": "7.1.6"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "5.20260724.1",
     "@tailwindcss/vite": "4.3.3",
     "tailwindcss": "4.3.3",
+    "vitest": "4.1.10",
     "wrangler": "4.115.0"
   }
 }

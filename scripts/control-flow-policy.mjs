@@ -7,6 +7,8 @@ const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const policyUrl = new URL("./control-flow-policy.json", import.meta.url);
 const productionSourceRoots = [
   "apps/cli/src",
+  "apps/registry/src",
+  "apps/site/src",
   "apps/worker/control-plane-migrations",
   "apps/worker/src",
   "packages/composio/src",
@@ -318,6 +320,8 @@ export function verifyControlFlowEvidence(policy, root = repositoryRoot, tracked
       const insideRepository = absolutePath.startsWith(`${resolve(root)}${sep}`);
       const includedByVitest =
         /^(?:packages|test)\/.*\.test\.ts$/.test(testFile) ||
+        /^apps\/registry\/src\/.*\.test\.ts$/.test(testFile) ||
+        /^apps\/site\/src\/.*\.test\.ts$/.test(testFile) ||
         /^apps\/worker\/src\/.*\.test\.ts$/.test(testFile) ||
         /^apps\/cli\/test\/.*\.test\.ts$/.test(testFile);
 

@@ -303,6 +303,12 @@ export const recipeRemoteMcpConnectionRequirementSchema = requestedConnectionBou
   .refine(
     ({ requiredTools, reviewedToolCount }) => reviewedToolCount >= requiredTools.length,
     "The reviewed remote MCP catalog must contain every required tool.",
+  )
+  .refine(
+    ({ authorization, requiredTools }) =>
+      authorization === "approval_required" ||
+      requiredTools.every(({ effect }) => effect !== "destructive"),
+    "Destructive remote MCP tools must request approval-required authority.",
   );
 
 export const recipeConnectionRequirementSchema = z.discriminatedUnion("kind", [
@@ -652,7 +658,7 @@ export const recipeRegistryProjectionSchema = z
   .strictObject({
     ...registryProjectionBase,
     artifact: registryArtifactCoordinateSchema.extend({ kind: z.literal("recipe") }),
-    effectiveAuthority: z.strictObject({
+    requestedAuthority: z.strictObject({
       approvalRequired: z.strictObject({
         destructive: z.number().int().nonnegative().safe(),
         read: z.number().int().nonnegative().safe(),

@@ -42,8 +42,14 @@ jobs:
         run: pnpm lint
       - name: Check types
         run: pnpm typecheck
-      - name: Test CLI and foundation
-        run: pnpm exec vitest run --project cli --project foundation --maxWorkers=50%
+      - name: Test CLI, Registry, site, and foundation
+        run: >-
+          pnpm exec vitest run
+          --project cli
+          --project foundation
+          --project registry
+          --project site
+          --maxWorkers=50%
       - name: Build repository
         run: pnpm build
       - name: Check release package

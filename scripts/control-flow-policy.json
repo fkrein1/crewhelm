@@ -14,6 +14,42 @@
     {
       "evidence": {
         "definitionVersion": 2,
+        "testFiles": ["apps/registry/src/packages.test.ts", "apps/registry/src/server.test.ts"]
+      },
+      "id": "recipe-registry",
+      "pathPrefixes": ["apps/registry/src/"]
+    },
+    {
+      "evidence": {
+        "definitionVersion": 2,
+        "testFiles": ["apps/site/src/worker.test.ts"]
+      },
+      "files": ["apps/site/src/worker.ts"],
+      "id": "site-registry-gateway"
+    },
+    {
+      "evidence": {
+        "definitionVersion": 2,
+        "testFiles": ["test/site-docs.test.ts"]
+      },
+      "files": ["apps/site/src/content.config.ts", "apps/site/src/lib/docs-manifest.ts"],
+      "id": "site-docs"
+    },
+    {
+      "evidence": {
+        "definitionVersion": 2,
+        "testFiles": ["test/site-seo.test.ts"]
+      },
+      "files": [
+        "apps/site/src/lib/seo.ts",
+        "apps/site/src/pages/llms.txt.ts",
+        "apps/site/src/pages/robots.txt.ts"
+      ],
+      "id": "site-public-endpoints"
+    },
+    {
+      "evidence": {
+        "definitionVersion": 2,
         "testFiles": [
           "apps/cli/test/authenticated-doctor.test.ts",
           "apps/cli/test/bootstrap.test.ts",

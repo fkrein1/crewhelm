@@ -292,7 +292,7 @@ describe("repository foundation", () => {
       test: "vitest run --maxWorkers=50%",
       "test:watch": "vitest --maxWorkers=50%",
       typecheck:
-        "tsc --noEmit && tsc --noEmit --project apps/worker/tsconfig.json && tsc --noEmit --project apps/worker/src/tsconfig.json",
+        "tsc --noEmit && tsc --noEmit --project apps/registry/tsconfig.json && tsc --noEmit --project apps/registry/src/tsconfig.json && tsc --noEmit --project apps/site/tsconfig.worker.json && tsc --noEmit --project apps/site/src/tsconfig.json && tsc --noEmit --project apps/worker/tsconfig.json && tsc --noEmit --project apps/worker/src/tsconfig.json",
       verify: "node ./scripts/verify.mjs",
     });
   });
@@ -1032,13 +1032,18 @@ describe("repository foundation", () => {
       "pnpm format:check",
       "pnpm lint",
       "pnpm typecheck",
-      "pnpm exec vitest run --project cli --project foundation --maxWorkers=50%",
+      "pnpm exec vitest run --project cli --project foundation --project registry --project site --maxWorkers=50%",
       "pnpm build",
       "pnpm release:check",
       "pnpm install --frozen-lockfile",
       'pnpm exec vitest run --project worker --shard="$SHARD/2" --maxWorkers=50%',
       'test "$CHECKS_RESULT" = success\ntest "$WORKER_TESTS_RESULT" = success\n',
     ]);
+
+    expect(continuousIntegration?.workflow["concurrency"]).toEqual({
+      group: "ci-${{ github.ref }}",
+      "cancel-in-progress": true,
+    });
 
     const continuousIntegrationJobs = continuousIntegration?.workflow["jobs"];
     expect(isRecord(continuousIntegrationJobs)).toBe(true);
@@ -1069,6 +1074,81 @@ describe("repository foundation", () => {
       needs: ["checks", "worker-tests"],
       "runs-on": "ubuntu-24.04",
     });
+
+    const registryDelivery = workflows.find(({ name }) => name === "registry-delivery.yml");
+    expect(registryDelivery?.workflow).toMatchObject({
+      concurrency: { "cancel-in-progress": false, group: "registry-delivery" },
+      on: { push: { branches: ["main"] } },
+      permissions: { contents: "read" },
+    });
+    const registryDeliveryCommands: string[] = [];
+    visitRecords(registryDelivery?.workflow, (record) => {
+      if (typeof record["run"] === "string") registryDeliveryCommands.push(record["run"]);
+    });
+    const requireCloudflareCredentials =
+      'test -n "$CLOUDFLARE_ACCOUNT_ID"\ntest -n "$CLOUDFLARE_API_TOKEN"\n';
+    const smokePublicRegistry =
+      'health="$(\n  curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 2 \\\n    "$DEPLOYMENT_ORIGIN/api/registry/health"\n)"\njq --exit-status \'.status == "ok"\' <<< "$health" > /dev/null\nsearch="$(\n  curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 2 \\\n    "$DEPLOYMENT_ORIGIN/api/registry/v1/recipes/search?q=deployment"\n)"\njq --exit-status \\\n  \'.searchVersion == 1 and (.results | type == "array")\' <<< "$search" > /dev/null\n';
+    expect(registryDeliveryCommands).toEqual([
+      "pnpm install --frozen-lockfile",
+      "pnpm verify",
+      "pnpm install --frozen-lockfile",
+      requireCloudflareCredentials,
+      "pnpm --filter @crewhelm/registry db:migrate:dev",
+      "pnpm --filter @crewhelm/registry deploy:dev",
+      "pnpm --filter @crewhelm/site deploy:dev",
+      smokePublicRegistry,
+      "pnpm install --frozen-lockfile",
+      requireCloudflareCredentials,
+      "pnpm --filter @crewhelm/registry db:migrate:production",
+      "pnpm --filter @crewhelm/registry deploy:production",
+      "pnpm --filter @crewhelm/site deploy:production",
+      smokePublicRegistry,
+    ]);
+    const registryDeliveryJobs = registryDelivery?.workflow["jobs"];
+    expect(isRecord(registryDeliveryJobs)).toBe(true);
+    if (!isRecord(registryDeliveryJobs)) {
+      throw new TypeError("Expected Registry delivery jobs.");
+    }
+    expect(registryDeliveryJobs["verify"]).toMatchObject({
+      name: "Verify deployment revision",
+      "runs-on": "ubuntu-24.04",
+    });
+    expect(registryDeliveryJobs["deploy-development"]).toMatchObject({
+      env: {
+        CLOUDFLARE_ACCOUNT_ID: "${{ vars.CLOUDFLARE_ACCOUNT_ID }}",
+      },
+      environment: { name: "development", url: "https://dev.crewhelm.app" },
+      needs: "verify",
+      "runs-on": "ubuntu-24.04",
+    });
+    expect(registryDeliveryJobs["deploy-production"]).toMatchObject({
+      env: {
+        CLOUDFLARE_ACCOUNT_ID: "${{ vars.CLOUDFLARE_ACCOUNT_ID }}",
+      },
+      environment: { name: "production", url: "https://crewhelm.app" },
+      needs: "deploy-development",
+      "runs-on": "ubuntu-24.04",
+    });
+    for (const jobName of ["deploy-development", "deploy-production"]) {
+      const job = registryDeliveryJobs[jobName];
+      if (!isRecord(job) || !Array.isArray(job["steps"])) {
+        throw new TypeError(`Expected ${jobName} deployment steps.`);
+      }
+      const credentialSteps = job["steps"].flatMap((step) => {
+        if (!isRecord(step) || !isRecord(step["env"])) return [];
+        return step["env"]["CLOUDFLARE_API_TOKEN"] === "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          ? [step["name"]]
+          : [];
+      });
+      expect(credentialSteps).toEqual([
+        "Require deployment credentials",
+        "Apply Registry migrations",
+        "Deploy Registry",
+        "Deploy site gateway",
+      ]);
+      expect(isRecord(job["env"]) ? job["env"]["CLOUDFLARE_API_TOKEN"] : undefined).toBeUndefined();
+    }
   });
 
   it("versions the protected main ruleset", async () => {

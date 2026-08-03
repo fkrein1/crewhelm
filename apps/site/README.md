@@ -2,8 +2,15 @@
 
 The public site is a static Astro application deployed through Cloudflare Workers Assets. Keeping
 the landing page prerendered gives the launch site the smallest runtime and strongest cacheability.
-Future server-rendered recipe discovery can add Astro's Cloudflare adapter and D1 to the same
-`crewhelm-site` Worker without moving the public domain.
+
+## Registry gateway
+
+The site Worker handles only `/api/registry` before static assets, removes that public prefix, and
+forwards the request to the private Recipe Registry Worker through a service binding. Similar-looking
+paths remain website traffic, and Registry failures return a compact, non-cacheable response.
+
+The gateway gives browser publishing one origin without moving Registry persistence, search,
+scheduled work, or secrets into the site Worker.
 
 ## Local development
 
@@ -22,58 +29,18 @@ shared frontmatter contract, `src/lib/docs-manifest.ts` owns navigation and publ
 
 ## Delivery
 
-`wrangler.jsonc` is the source of truth for the `crewhelm-site` Worker, preview URLs, and the
-`crewhelm.app` Custom Domain. Delivery has two deliberately separate lanes:
+`wrangler.jsonc` is the source of truth for site bindings and public domains. Pull requests verify
+the site without deployment credentials, including for forks. Cloudflare Workers Builds does not
+independently deploy this Worker.
 
-- The secretless GitHub Actions workflow verifies site-impacting pull-request commits, including
-  forks. It never receives Cloudflare credentials.
-- Cloudflare Workers Builds owns uploads. Its GitHub App posts or updates the pull-request comment
-  with the versioned `workers.dev` preview URL and retains earlier build history in that comment.
+After a protected-main merge, the Registry delivery workflow verifies the exact revision, applies
+forward-compatible Registry migrations, deploys the Registry before its site gateway, and
+smoke-tests development. Production approval promotes the same revision in the same order. The
+environment-scoped Cloudflare token is available only to the credential check, migration, and
+deploy steps; dependency installation and smoke tests never receive it. Registry OAuth credentials
+remain Worker secrets and are not deployment inputs.
 
-Keep the `crewhelm-site` Workers Build configured with:
-
-| Setting                       | Value                                |
-| ----------------------------- | ------------------------------------ |
-| Root directory                | `apps/site`                          |
-| Production branch             | `main`                               |
-| Build command                 | `pnpm run build`                     |
-| Production deploy command     | `pnpm exec wrangler deploy`          |
-| Non-production deploy command | `pnpm exec wrangler versions upload` |
-| Non-production branch builds  | Enabled                              |
-| Preview branch excludes       | `dependabot/*`                       |
-| Build watch include paths     | See the list below                   |
-
-Set the build watch include paths to the repository-root patterns below and leave the exclude
-paths empty. Cloudflare applies the same watch paths to production and non-production branches, so
-irrelevant commits neither deploy production nor upload a preview version.
-
-```text
-.nvmrc
-apps/site/*
-package.json
-packages/design/*
-pnpm-lock.yaml
-pnpm-workspace.yaml
-```
-
-Do not leave Cloudflare's automatically generated Workers Builds token at its default scope. Edit
-it, or select a custom user token, so its resources are limited to the Crewhelm Cloudflare account
-and the `crewhelm.app` zone. It may grant Account Settings Read, Workers Scripts Edit, User Details
-Read, Memberships Read, and Workers Routes Edit for `crewhelm.app`; it must not grant KV or R2
-access. Cloudflare currently scopes Workers Scripts Edit to an account rather than one Worker, so
-this remains deployment authority for every Worker in that account.
-
-Only pushes to branches inside `fkrein1/crewhelm`, restricted to trusted maintainers, may enter the
-Cloudflare upload lane. Exclude `dependabot/*`; add every future automation-owned branch prefix to
-the exclusions before enabling that automation. Fork pull requests run only the secretless GitHub
-Actions verification and must never receive a Cloudflare build token. GitHub App repository access
-remains limited to `fkrein1/crewhelm`.
-
-If the build token or a trusted branch is compromised, disable non-production builds, revoke the
-token, inspect Worker build and deployment history, restore the last verified `crewhelm-site`
-version if needed, then create and select a replacement custom token before re-enabling previews.
-No Cloudflare secret is stored in GitHub Actions.
-
-Do not add D1 until a server-rendered recipe slice defines its schema, ranking semantics, abuse
-bounds, migration/recovery path, and SEO contracts. When that slice exists, add the binding to the
-same Worker rather than splitting the public site into a second deployment.
+A failed promotion stops before the next environment. Restore the previous verified Worker
+versions when code or routing must roll back; D1 migrations remain forward-only, so recovery repairs
+schema state forward and every migration must remain compatible with the prior Worker. Running
+promotions are never cancelled after effects begin.

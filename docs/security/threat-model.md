@@ -130,7 +130,12 @@ or retiring a Skill grants no runtime capability, and `scripts/` remains inert.
 
 Public Registry content adds a separate hostile supply-chain boundary. Recipe and Skill blobs are
 immutable and content-addressed; compact D1 projections support discovery but do not replace exact
-package verification. Initial public Skill artifacts reject `scripts/`, floating or transitive
+package verification. GitHub publisher login uses browser-bound, single-use PKCE state; provider
+responses are stream-bounded, tokens are used only during the callback and are not retained, and
+opaque Registry sessions are stored as hashes. Publication reserves typed D1 intent and
+version state before R2 writes. Abandoned writes enter a quarantine grace period before a second
+pass deletes only their reserved object keys, preventing late storage completion from escaping
+cleanup. Initial public Skill artifacts reject `scripts/`, floating or transitive
 dependencies, and missing license or provenance. The self-hosted owner instance fetches exact files,
 verifies their pinned digest, runs deterministic checks, and exposes bounded raw content to the MCP
 orchestrator as inert untrusted source. The orchestrator can explain findings but cannot grant
@@ -301,15 +306,20 @@ only a workflow- and environment-bound npm OIDC identity. It publishes the verif
 a separate GitHub-write job creates the immutable prerelease; retries require the existing npm and
 GitHub artifacts to match exactly.
 
-The public site's Cloudflare upload lane accepts only branches inside the connected Crewhelm
-repository that trusted maintainers can push. Fork pull requests receive secretless verification
-but no Cloudflare credential or preview upload. Dependabot and every other automation-owned branch
-prefix are excluded from this lane. Workers Builds uses a custom user token limited to the Crewhelm
-account and `crewhelm.app` zone, with no KV or R2 access. Cloudflare exposes Workers Scripts Edit
-only at account scope, so that account-wide deployment authority remains a residual risk. Suspected
-compromise requires disabling branch builds, revoking the token, auditing Worker build and
-deployment history, restoring the last verified site version when needed, and selecting a
-replacement token before previews resume.
+Pull requests, including forks, receive secretless Registry and site verification only. After a
+protected-main merge, one non-cancelling workflow verifies the exact revision, applies Registry D1
+migrations, deploys the Registry before its site gateway, smoke-tests development, and requires
+environment approval before repeating that order in production. Cloudflare Workers Builds does not
+independently deploy the site.
+
+Each environment holds a minimally scoped Cloudflare token. GitHub exposes it only to the explicit
+credential check, migration, and deploy steps; checkout, action setup, dependency installation,
+verification, and smoke tests never receive it. Registry GitHub OAuth credentials remain
+Cloudflare Worker secrets and are not workflow inputs. Cloudflare deployment and D1 permissions
+remain account-scoped residual authority. Suspected compromise requires stopping promotions,
+revoking the affected environment token, auditing migrations and Worker versions, restoring the
+last verified Registry and site versions where needed, and repairing D1 schema state forward. D1
+migrations therefore remain compatible with the prior Worker until promotion completes.
 
 AI Gateway management may use a process-scoped `CREWHELM_CLOUDFLARE_API_TOKEN` limited to
 account-level AI Gateway Edit. Interactive recovery prints a scoped token recipe and never stores

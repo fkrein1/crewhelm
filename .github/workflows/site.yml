@@ -33,8 +33,8 @@ permissions:
 
 jobs:
   build:
-    # Cloudflare Workers Builds owns preview uploads and PR comments. This
-    # secretless check stays safe for forked pull requests.
+    # Deployment authority is deliberately separate from this secretless check,
+    # which stays safe for forked pull requests.
     name: Verify site
     runs-on: ubuntu-24.04
     timeout-minutes: 10
