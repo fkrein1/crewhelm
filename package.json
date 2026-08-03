@@ -14,6 +14,8 @@
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint --type-aware --type-check --deny-warnings --report-unused-disable-directives .",
+    "registry:dev": "tsx ./scripts/crewhelm-registry-development.ts",
+    "testing:up": "tsx ./scripts/crewhelm-testing-up.ts",
     "release:check": "node apps/cli/scripts/release-package.mjs",
     "test": "vitest run --maxWorkers=50%",
     "test:watch": "vitest --maxWorkers=50%",

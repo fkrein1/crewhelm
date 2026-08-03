@@ -17,6 +17,7 @@ declare global {
       CREW_SESSION: DurableObjectNamespace<CrewSession>;
       CODE_SANDBOX?: DurableObjectNamespace<CrewhelmSandbox>;
       CREWHELM_DEPLOYMENT_FINGERPRINT: string;
+      CREWHELM_TESTING_INSTALLATION?: string;
       GITHUB_CLIENT_ID: string;
       GITHUB_CLIENT_SECRET: string;
       AUTH_RATE_LIMIT: RateLimit;
@@ -25,6 +26,7 @@ declare global {
       OWNER_CONTROL_PLANE: DurableObjectNamespace<OwnerControlPlane>;
       OWNER_GITHUB_USER_ID: string;
       PUBLIC_ORIGIN: string;
+      RECIPE_REGISTRY?: Fetcher;
       RECIPE_REGISTRY_ORIGIN?: string;
       SKILL_PACKAGES: R2Bucket;
     }

@@ -1,7 +1,9 @@
 #!/usr/bin/env -S pnpm exec tsx
 
-import { readFile } from "node:fs/promises";
-import { parseArgs } from "node:util";
+import { execFile } from "node:child_process";
+import { access, readFile } from "node:fs/promises";
+import path from "node:path";
+import { parseArgs, promisify } from "node:util";
 
 import {
   WORKERS_AI_CAPABILITY_ID,
@@ -12,9 +14,11 @@ import {
   configureAgentScheduleResultSchema,
   createAgentResultSchema,
   getAgentScheduleResultSchema,
+  getAgentResultSchema,
   inspectRunResultSchema,
   listConnectionsResultSchema,
   listAgentSchedulesResultSchema,
+  recipeToolResultSchema,
   manageAgentSessionsResultSchema,
   manageAgentWorkflowsResultSchema,
   startRunResultSchema,
@@ -23,7 +27,9 @@ import {
   type ConfigureAgentScheduleResult,
   type CreateAgentResult,
   type GetAgentScheduleResult,
+  type GetAgentResult,
   type ListAgentSchedulesResult,
+  type RecipeToolResult,
   type InspectRunResult,
   type ListConnectionsResult,
   type StartRunResult,
@@ -64,6 +70,7 @@ import { callRehearsalTool, readRehearsalStatus } from "../apps/cli/src/rehearsa
 const DEFAULT_INSTALLATION = "crewhelm.testing.installation.json";
 const DEFAULT_CREDENTIAL = ".crewhelm-rehearsal-credential.json";
 const STANDARD_REHEARSAL_ORIGIN = "https://crewhelm-testing.fkrein.workers.dev";
+const executeFile = promisify(execFile);
 
 interface RehearsalTarget {
   expectedDeploymentFingerprint: string;
@@ -71,6 +78,27 @@ interface RehearsalTarget {
 }
 
 type McpResultSchema<Result> = Parameters<typeof parseMcpToolResult<Result>>[1];
+
+async function exists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveCredentialPath(configured: string | undefined): Promise<string> {
+  if (configured !== undefined) return configured;
+  if (await exists(DEFAULT_CREDENTIAL)) return DEFAULT_CREDENTIAL;
+
+  const { stdout } = await executeFile("git", ["rev-parse", "--git-common-dir"]);
+  const mainCredential = path.join(
+    path.dirname(path.resolve(process.cwd(), stdout.trim())),
+    DEFAULT_CREDENTIAL,
+  );
+  return (await exists(mainCredential)) ? mainCredential : DEFAULT_CREDENTIAL;
+}
 
 const SCHEDULE_REHEARSAL_TOOLS = [
   "crewhelm_batch_disable_agents",
@@ -103,6 +131,7 @@ const TYPED_OUTPUT_REHEARSAL_TOOLS = [
   "crewhelm_inspect_run",
   "crewhelm_start_run",
 ] as const;
+const RECIPE_REHEARSAL_TOOLS = ["crewhelm_get_agent", "crewhelm_recipes"] as const;
 const TYPED_OUTPUT_CONTRACT = {
   kind: "json",
   schema: {
@@ -228,6 +257,146 @@ async function workflow(options: {
     },
     { expectedDeploymentFingerprint: rehearsalTarget.expectedDeploymentFingerprint, fetch },
   );
+}
+
+async function recipes(options: {
+  credentialPath: string;
+  installationPath: string;
+  timeoutMs: number;
+}): Promise<unknown> {
+  const target = await resolveRehearsalTarget(options.installationPath);
+  const publicReport = await diagnoseDeployment(
+    { origin: target.origin, timeoutMs: options.timeoutMs },
+    { expectedDeploymentFingerprint: target.expectedDeploymentFingerprint, fetch },
+  );
+  if (!publicReport.ok || publicReport.deployment.alignment !== "aligned") {
+    return { ok: false, public: publicReport, schemaVersion: 1 };
+  }
+  const credential = await readRehearsalCredential(options.credentialPath);
+  const result = await runRefreshableOwnerSession(
+    {
+      credential,
+      origin: target.origin,
+      persistCredential: (rotated) => writeRehearsalCredential(options.credentialPath, rotated),
+      timeoutMs: options.timeoutMs,
+    },
+    { expectedDeploymentFingerprint: target.expectedDeploymentFingerprint, fetch },
+    async (session) => {
+      await session.call(
+        "initialize",
+        {
+          capabilities: {},
+          clientInfo: { name: "crewhelm-live-rehearsal", version: CREWHELM_CLI_VERSION },
+          protocolVersion: MCP_PROTOCOL_VERSION,
+        },
+        initializeResponseSchema,
+      );
+      const catalog = await session.call("tools/list", {}, toolListResponseSchema);
+      const names = new Set(catalog.result.tools.map((tool) => tool.name));
+      if (!RECIPE_REHEARSAL_TOOLS.every((name) => names.has(name))) {
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          "MCP catalog omitted a Recipe rehearsal tool.",
+        );
+      }
+
+      const callRecipe = (action: string, arguments_: unknown) =>
+        callRehearsalTool<RecipeToolResult>(
+          session,
+          "crewhelm_recipes",
+          arguments_,
+          recipeToolResultSchema,
+          `Recipe ${action} returned an invalid payload.`,
+          { acceptErrorResult: true },
+        );
+      const search = await callRecipe("search", {
+        action: "search",
+        limit: 10,
+        query: "decision memo",
+      });
+      if (!search.ok || search.action !== "search") {
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          `Recipe search was denied${search.ok ? "" : ` (${search.error.code})`}.`,
+        );
+      }
+      const match = search.response.results.find(
+        ({ recipe }) => recipe.artifact.name === "decision-memo-advisor",
+      );
+      if (match === undefined) {
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          "Testing Registry omitted decision-memo-advisor.",
+        );
+      }
+      const recipeTarget = {
+        ...match.recipe.artifact,
+        digest: match.recipe.package.digest,
+        registry: search.registry,
+      };
+      const inspected = await callRecipe("inspect", { action: "inspect", target: recipeTarget });
+      if (!inspected.ok || inspected.action !== "inspect") {
+        throw new TemporaryOwnerSessionError("invalid_payload", "Recipe inspection was denied.");
+      }
+      const request = {
+        connectionBindings: [],
+        operations: { eventTriggers: [], schedules: [] },
+        optionalSkills: [],
+        parameters: {},
+        target: recipeTarget,
+      };
+      const preview = await callRecipe("preview", { action: "preview", request });
+      if (!preview.ok || preview.action !== "preview" || !preview.plan.ready) {
+        throw new TemporaryOwnerSessionError("invalid_payload", "Recipe preview was not ready.");
+      }
+      const installed = await callRecipe("install", {
+        action: "install",
+        expectedConfirmationDigest: preview.plan.confirmationDigest,
+        idempotencyKey: `testing-recipe-${target.expectedDeploymentFingerprint.slice(0, 16)}-${recipeTarget.digest.slice(0, 16)}`,
+        request,
+      });
+      if (
+        !installed.ok ||
+        installed.action !== "install" ||
+        installed.receipt.status !== "installed" ||
+        installed.receipt.agent === null
+      ) {
+        throw new TemporaryOwnerSessionError("invalid_payload", "Recipe installation failed.");
+      }
+      const agent = await callRehearsalTool<GetAgentResult>(
+        session,
+        "crewhelm_get_agent",
+        { id: installed.receipt.agent.id },
+        getAgentResultSchema,
+        "Installed Recipe Agent returned an invalid payload.",
+      );
+      if (!agent.ok || agent.agent.status !== "disabled") {
+        throw new TemporaryOwnerSessionError(
+          "invalid_payload",
+          "Installed Recipe Agent was not disabled.",
+        );
+      }
+      return {
+        agentId: agent.agent.id,
+        installationEvidence: installed.installationEvidence,
+        recipe: `${recipeTarget.namespace}/${recipeTarget.name}@${String(recipeTarget.version)}`,
+        status: agent.agent.status,
+      };
+    },
+  );
+
+  return {
+    authorization: result.authorization,
+    evidence: result.operation.status === "completed" ? result.operation.value : undefined,
+    ok:
+      result.authorization.ok &&
+      result.operation.status === "completed" &&
+      result.revocation.status === "revoked",
+    operation: result.operation,
+    public: publicReport,
+    revocation: result.revocation,
+    schemaVersion: 1,
+  };
 }
 
 async function sandbox(options: {
@@ -2280,6 +2449,7 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
     action !== "inspect-sandbox" &&
     action !== "recover" &&
     action !== "recover-conversation" &&
+    action !== "recipes" &&
     action !== "sandbox" &&
     action !== "schedules" &&
     action !== "typed-output" &&
@@ -2287,7 +2457,7 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
     action !== "workflow"
   ) {
     process.stderr.write(
-      "Usage: crewhelm-live-rehearsal.ts <authorize|connected-event-triggers|conversation|inspect-sandbox|recover|recover-conversation|sandbox|schedules|typed-output|web-research|workflow> [options]\n",
+      "Usage: crewhelm-live-rehearsal.ts <authorize|connected-event-triggers|conversation|inspect-sandbox|recipes|recover|recover-conversation|sandbox|schedules|typed-output|web-research|workflow> [options]\n",
     );
     return 2;
   }
@@ -2296,7 +2466,7 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
     options: {
       browser: { default: "codex", type: "string" },
       "agent-id": { type: "string" },
-      credential: { default: DEFAULT_CREDENTIAL, type: "string" },
+      credential: { type: "string" },
       installation: { default: DEFAULT_INSTALLATION, type: "string" },
       "run-timeout-ms": { default: "240000", type: "string" },
       "run-id": { type: "string" },
@@ -2309,7 +2479,7 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
   });
   const timeoutMs = boundedInteger(parsed.values["timeout-ms"], 100, 30_000, "timeout-ms");
   const common = {
-    credentialPath: parsed.values.credential,
+    credentialPath: await resolveCredentialPath(parsed.values.credential),
     installationPath: parsed.values.installation,
     timeoutMs,
   };
@@ -2343,62 +2513,64 @@ export async function runLiveRehearsal(arguments_: readonly string[]): Promise<n
           })
         : action === "conversation"
           ? await conversation({ ...common, runTimeoutMs })
-          : action === "inspect-sandbox"
-            ? await inspectSandbox({
-                ...common,
-                runId:
-                  parsed.values["run-id"] ??
-                  (() => {
-                    throw new Error("inspect-sandbox requires run-id.");
-                  })(),
-              })
-            : action === "recover-conversation"
-              ? await recoverConversation({
+          : action === "recipes"
+            ? await recipes(common)
+            : action === "inspect-sandbox"
+              ? await inspectSandbox({
                   ...common,
-                  agentId:
-                    parsed.values["agent-id"] ??
+                  runId:
+                    parsed.values["run-id"] ??
                     (() => {
-                      throw new Error("recover-conversation requires agent-id.");
-                    })(),
-                  sessionId:
-                    parsed.values["session-id"] ??
-                    (() => {
-                      throw new Error("recover-conversation requires session-id.");
+                      throw new Error("inspect-sandbox requires run-id.");
                     })(),
                 })
-              : action === "recover"
-                ? await recover({
+              : action === "recover-conversation"
+                ? await recoverConversation({
                     ...common,
                     agentId:
                       parsed.values["agent-id"] ??
                       (() => {
-                        throw new Error("recover requires agent-id.");
+                        throw new Error("recover-conversation requires agent-id.");
                       })(),
-                    runTimeoutMs,
-                    workflowId:
-                      parsed.values["workflow-id"] ??
+                    sessionId:
+                      parsed.values["session-id"] ??
                       (() => {
-                        throw new Error("recover requires workflow-id.");
+                        throw new Error("recover-conversation requires session-id.");
                       })(),
                   })
-                : action === "sandbox"
-                  ? await sandbox({
+                : action === "recover"
+                  ? await recover({
                       ...common,
+                      agentId:
+                        parsed.values["agent-id"] ??
+                        (() => {
+                          throw new Error("recover requires agent-id.");
+                        })(),
                       runTimeoutMs,
+                      workflowId:
+                        parsed.values["workflow-id"] ??
+                        (() => {
+                          throw new Error("recover requires workflow-id.");
+                        })(),
                     })
-                  : action === "schedules"
-                    ? await schedules(common)
-                    : action === "typed-output"
-                      ? await typedOutput({ ...common, runTimeoutMs })
-                      : action === "web-research"
-                        ? await webResearch({
-                            ...common,
-                            runTimeoutMs,
-                          })
-                        : await workflow({
-                            ...common,
-                            runTimeoutMs,
-                          });
+                  : action === "sandbox"
+                    ? await sandbox({
+                        ...common,
+                        runTimeoutMs,
+                      })
+                    : action === "schedules"
+                      ? await schedules(common)
+                      : action === "typed-output"
+                        ? await typedOutput({ ...common, runTimeoutMs })
+                        : action === "web-research"
+                          ? await webResearch({
+                              ...common,
+                              runTimeoutMs,
+                            })
+                          : await workflow({
+                              ...common,
+                              runTimeoutMs,
+                            });
   process.stdout.write(`${JSON.stringify(report)}\n`);
   return typeof report === "object" && report !== null && Reflect.get(report, "ok") === true
     ? 0

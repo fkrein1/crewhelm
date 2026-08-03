@@ -429,8 +429,13 @@ async function resolveUpOptions(
     databaseId: command.databaseId ?? previous?.databaseId,
     databaseName: command.databaseName ?? previous?.databaseName ?? "crewhelm-auth",
     origin,
+    recipeRegistryOrigin: command.recipeRegistryOrigin ?? previous?.recipeRegistryOrigin,
     sandboxEnabled: command.sandboxEnabled ?? previous?.sandboxEnabled,
     setupGitHub: command.setupGitHub,
+    testingInstallation:
+      command.testingInstallation === true || previous?.testingInstallation === true
+        ? true
+        : undefined,
     timeoutMs: command.timeoutMs,
     workerName: command.workerName ?? previous?.workerName ?? "crewhelm",
   });
@@ -469,6 +474,8 @@ async function saveInstallation(
   report: BootstrapReport,
   aiDailySpendUsd?: number,
   sandboxEnabled?: boolean,
+  recipeRegistryOrigin?: string,
+  testingInstallation?: true,
 ): Promise<void> {
   await saveInstallationCoordinates(path, {
     accountId: report.account.id,
@@ -477,7 +484,9 @@ async function saveInstallation(
     databaseId: report.database.id,
     databaseName: report.database.name,
     origin: report.deployment.origin,
+    ...(recipeRegistryOrigin === undefined ? {} : { recipeRegistryOrigin }),
     ...(sandboxEnabled === true ? { sandboxEnabled: true } : {}),
+    ...(testingInstallation === true ? { testingInstallation: true as const } : {}),
     skillBucketName: skillBucketNameForWorker(report.deployment.workerName),
     workerName: report.deployment.workerName,
   });
@@ -800,6 +809,8 @@ export async function runCli(
             report,
             options.aiDailySpendUsd,
             options.sandboxEnabled,
+            options.recipeRegistryOrigin,
+            options.testingInstallation,
           );
         } catch {
           throw new BootstrapError(

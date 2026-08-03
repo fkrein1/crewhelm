@@ -116,6 +116,14 @@ const stagedConfigSchema = z.looseObject({
     }),
   ]),
   secrets: z.looseObject({ required: z.array(z.string()) }),
+  services: z
+    .tuple([
+      z.looseObject({
+        binding: z.literal("RECIPE_REGISTRY"),
+        service: z.literal("crewhelm-registry-dev"),
+      }),
+    ])
+    .optional(),
   workflows: z.tuple([
     z.looseObject({
       binding: z.literal("AGENT_TASK_WORKFLOW"),
@@ -609,6 +617,27 @@ describe("Cloudflare bootstrap", () => {
     expect(skillBucketNameForWorker(longWorkerName)).not.toBe(
       skillBucketNameForWorker(`crewhelm-${"b".repeat(54)}`),
     );
+  });
+
+  it("rejects Recipe Registry overrides outside the exact testing installation", async () => {
+    const runWrangler = vi.fn<RunWrangler>();
+    const dependencies = createDependencies("unused", runWrangler);
+    const recipeRegistryOrigin = "https://crewhelm-registry-dev.fkrein.workers.dev/";
+
+    await expect(
+      bootstrapDeployment({ ...REUSE_OPTIONS, recipeRegistryOrigin }, dependencies),
+    ).rejects.toMatchObject({ stage: "configuration" });
+    await expect(
+      bootstrapDeployment(
+        {
+          ...REUSE_OPTIONS,
+          recipeRegistryOrigin,
+          testingInstallation: true,
+        },
+        dependencies,
+      ),
+    ).rejects.toMatchObject({ stage: "configuration" });
+    expect(runWrangler).not.toHaveBeenCalled();
   });
 
   it("recovers an existing installation before any deployment mutation", async () => {
@@ -1998,6 +2027,7 @@ describe("Cloudflare bootstrap", () => {
         "OWNER_GITHUB_USER_ID",
       ]);
       expect(stagedConfig?.vars.PUBLIC_ORIGIN).toBe(OPTIONS.origin.origin);
+      expect(stagedConfig?.services).toBeUndefined();
       expect(stagedConfig?.vars.CREWHELM_DEPLOYMENT_FINGERPRINT).toBe(
         deploymentFingerprints.get(fixture.assets),
       );

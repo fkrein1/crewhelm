@@ -397,11 +397,19 @@ describe("Recipe contracts", () => {
       "https://[::1]/",
       "https://registry.example.com:8443/",
       "https://registry.internal/",
+      "http://localhost:8788/",
+      "http://127.0.0.1/",
+      "http://127.0.0.1:80/",
+      "http://127.0.0.2:8788/",
     ]) {
       const recipe = packageInput();
       recipe.skills[0]!.registry = registry;
       expect(recipePackageSchema.safeParse(recipe).success).toBe(false);
     }
+
+    const localRecipe = packageInput();
+    localRecipe.skills[0]!.registry = "http://127.0.0.1:8788/";
+    expect(recipePackageSchema.safeParse(localRecipe).success).toBe(true);
 
     const recipe = packageInput();
     recipe.skills[0]!.registry = "https://registry.crewhelm.app/";

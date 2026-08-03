@@ -197,6 +197,7 @@ describe("OwnerControlPlane Recipes", () => {
     );
     expect(installed).toMatchObject({
       action: "install",
+      installationEvidence: "created",
       ok: true,
       receipt: {
         status: "installed",
@@ -224,7 +225,7 @@ describe("OwnerControlPlane Recipes", () => {
         idempotencyKey: "install-research-recipe",
         request,
       }),
-    ).resolves.toEqual(installed);
+    ).resolves.toEqual({ ...installed, installationEvidence: "replayed" });
   });
 
   it("denies stale confirmation and hostile Registry responses before creating local state", async () => {

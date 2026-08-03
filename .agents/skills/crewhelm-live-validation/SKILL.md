@@ -17,26 +17,33 @@ control owner access for bounded public MCP journeys on `crewhelm-testing`. No a
 pause is required for that exact installation, client type, and scenario. It does not authorize
 production, another account, another installation, or broader scope.
 
-Before any MCP or mutating call:
+Before any MCP or mutating call, run the relevant deterministic checks, then reconcile the complete
+testing installation:
 
-1. Run the relevant deterministic checks, `pnpm build`, and `pnpm release:check` in sequence. The
-   rehearsal wrapper reads `apps/cli/dist/release.json`; do not start it from a build-only tree.
-2. Run:
+```sh
+pnpm testing:up --json
+```
 
-   ```sh
-   node apps/cli/dist/crewhelm.js up \
-     --installation crewhelm.testing.installation.json \
-     --json
-   ```
+This one command builds the current branch, checks its release package, applies every pending
+testing Registry migration, deploys and fingerprints the testing Registry, reconciles the ten
+development seed Recipes, applies every pending MCP/Auth migration, deploys `crewhelm-testing`, and
+passes public diagnosis. It also copies non-secret installation metadata from the main worktree
+when a new worktree does not have it. It never copies a saved OAuth credential.
 
-3. Verify the report names `crewhelm-testing`, reports
-   `https://crewhelm-testing.fkrein.workers.dev`, passes public diagnosis, and is aligned to the
-   packaged fingerprint. Build logs are not target evidence.
-4. Pass `--installation crewhelm.testing.installation.json` to every installation-backed command.
-   Do not retype the endpoint. A supplied endpoint must be rejected on any mismatch before network
-   access.
-5. Never use an ambient MCP connector unless its visible exact origin equals the installation
-   metadata. A generic name, cached schema, or familiar account is not origin proof.
+Verify the report names `crewhelm-testing`, reports
+`https://crewhelm-testing.fkrein.workers.dev`, reports the testing Registry ready with ten seeded
+Recipes, and confirms both deployments match the current branch. Refuse to continue on any stale
+migration, fingerprint, seed, or Registry binding. Build logs are not target evidence.
+
+Pass `--installation crewhelm.testing.installation.json` to every installation-backed command.
+Do not retype the endpoint. A supplied endpoint must be rejected on any mismatch before network
+access.
+Never use an ambient MCP connector unless its visible exact origin equals the installation
+metadata. A generic name, cached schema, or familiar account is not origin proof.
+
+Routine live validation does not exercise Registry publisher GitHub OAuth. Seed reconciliation uses
+an ignored testing-only setup credential, while Registry reads remain public. Exercise publisher
+OAuth separately only when its authentication path changes, and state this coverage boundary.
 
 ## Access lanes
 
@@ -44,13 +51,27 @@ Routine feature rehearsals use the saved credential through
 `scripts/crewhelm-live-rehearsal.ts`; they do not repeat browser authorization. The credential is
 origin-bound, ignored by Git, mode 0600, and rotated before every session. Tokens never appear in
 output, and each 15-minute access token is revoked and verified before exit.
+When the current worktree has no credential, the script reads the main worktree's credential in
+place; it never copies it.
+
+Run the Recipe Registry journey to prove public search, immutable inspection, preview,
+digest-confirmed installation, Skill import, and disabled-Agent creation:
+
+```sh
+pnpm exec tsx scripts/crewhelm-live-rehearsal.ts recipes \
+  --installation crewhelm.testing.installation.json
+```
+
+The first Recipe journey for a deployment fingerprint reports `installationEvidence: "created"`.
+A repeat of the same build reports `"replayed"`; treat that only as idempotency evidence, not as
+fresh Skill-import or Agent-creation evidence. A new deployment fingerprint receives a new bounded
+installation key, retaining at most one disabled Recipe Agent per tested build.
 
 Run the durable Workflow journey without a browser:
 
 ```sh
 pnpm exec tsx scripts/crewhelm-live-rehearsal.ts workflow \
-  --installation crewhelm.testing.installation.json \
-  --credential .crewhelm-rehearsal-credential.json
+  --installation crewhelm.testing.installation.json
 ```
 
 Run the owner-private MCP conversation journey to prove first message, follow-up, replay, stale
@@ -59,18 +80,18 @@ restoration:
 
 ```sh
 pnpm exec tsx scripts/crewhelm-live-rehearsal.ts conversation \
-  --installation crewhelm.testing.installation.json \
-  --credential .crewhelm-rehearsal-credential.json
+  --installation crewhelm.testing.installation.json
 ```
 
-Run the Composio connected-event Watch journey to discover a filter-free event on an existing
+Run the Composio connected Event Trigger journey to discover a filter-free event on an existing
 returned test connection, independently activate it when the provider confirms readiness, create
 one provider trigger, prove exact replay, deny unsigned ingress, wait for one authentic provider
-event and verify its exact Watch-to-Run provenance, then exercise lifecycle controls, delete the
-trigger and Watch, restore Agent capacity, and revoke the short-lived access token:
+event and verify its exact Event-Trigger-to-Run provenance, then exercise lifecycle controls,
+delete the provider and Crewhelm triggers, restore Agent capacity, and revoke the short-lived
+access token:
 
 ```sh
-pnpm exec tsx scripts/crewhelm-live-rehearsal.ts connected-watches \
+pnpm exec tsx scripts/crewhelm-live-rehearsal.ts connected-event-triggers \
   --installation crewhelm.testing.installation.json \
   --credential .crewhelm-rehearsal-credential.json \
   --slack-channel-id '<exact connected test channel ID>'

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
+import { recipeRegistryOriginSchema } from "@crewhelm/contracts";
 import * as z from "zod";
 
 const MAXIMUM_INSTALLATION_BYTES = 16 * 1_024;
@@ -17,6 +18,7 @@ export const installationSchema = z.strictObject({
   databaseId: z.uuid(),
   databaseName: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
   origin: z.url(),
+  recipeRegistryOrigin: recipeRegistryOriginSchema.optional(),
   sandboxEnabled: z.boolean().optional(),
   skillBucketName: z
     .string()
@@ -24,6 +26,7 @@ export const installationSchema = z.strictObject({
     .max(63)
     .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])$/)
     .optional(),
+  testingInstallation: z.literal(true).optional(),
   updatedAt: z.iso.datetime(),
   workerName: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
 });

@@ -111,25 +111,48 @@ const safePublicUrlSchema = z
     );
   }, "Expected an HTTPS URL without credentials, query, or fragment.");
 
-export const recipeRegistryOriginSchema = safePublicUrlSchema.refine((value) => {
+function isCanonicalLoopbackRegistryOrigin(value: string): boolean {
   const url = new URL(value);
-  const encodedHostname = url.hostname.toLowerCase();
-  const hostname = encodedHostname.replace(/\.+$/, "");
+  const port = Number(url.port);
   return (
+    url.protocol === "http:" &&
+    url.hostname === "127.0.0.1" &&
+    Number.isInteger(port) &&
+    port >= 1_024 &&
+    port <= 65_535 &&
     url.pathname === "/" &&
-    (url.port === "" || url.port === "443") &&
-    hostname.includes(".") &&
-    hostname !== "localhost" &&
-    !hostname.endsWith(".localhost") &&
-    !hostname.endsWith(".local") &&
-    !hostname.endsWith(".internal") &&
-    !hostname.endsWith(".home.arpa") &&
-    !hostname.endsWith(".onion") &&
-    !isDeniedIpv4Literal(hostname) &&
-    !encodedHostname.startsWith("[") &&
+    url.username === "" &&
+    url.password === "" &&
+    url.search === "" &&
+    url.hash === "" &&
     url.toString() === value
   );
-}, "Expected a canonical public HTTPS Registry origin without a path or nonstandard port.");
+}
+
+export const recipeRegistryOriginSchema = z
+  .url()
+  .max(2_048)
+  .refine((value) => {
+    if (isCanonicalLoopbackRegistryOrigin(value)) return true;
+    if (!safePublicUrlSchema.safeParse(value).success) return false;
+    const url = new URL(value);
+    const encodedHostname = url.hostname.toLowerCase();
+    const hostname = encodedHostname.replace(/\.+$/, "");
+    return (
+      url.pathname === "/" &&
+      (url.port === "" || url.port === "443") &&
+      hostname.includes(".") &&
+      hostname !== "localhost" &&
+      !hostname.endsWith(".localhost") &&
+      !hostname.endsWith(".local") &&
+      !hostname.endsWith(".internal") &&
+      !hostname.endsWith(".home.arpa") &&
+      !hostname.endsWith(".onion") &&
+      !isDeniedIpv4Literal(hostname) &&
+      !encodedHostname.startsWith("[") &&
+      url.toString() === value
+    );
+  }, "Expected a canonical public HTTPS Registry origin or an explicit loopback HTTP development origin.");
 
 export const recipePublisherNamespaceSchema = z
   .string()

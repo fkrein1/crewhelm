@@ -33,3 +33,6 @@ Exact coordinates remain the authoritative single-result path.
 
 Publisher namespaces remain stable after their first authenticated claim. Recipe and Skill versions
 are immutable, and secrets or private identifiers fail closed before package storage.
+
+For local Registry development and full Cloudflare validation, follow
+[`docs/engineering/registry-development.md`](../../docs/engineering/registry-development.md).

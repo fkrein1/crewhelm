@@ -1,2 +1,6 @@
 export { Recipes, deniedRecipe } from "./module.js";
-export { RecipeRegistryClient, RecipeRegistryClientError } from "./registry-client.js";
+export {
+  configuredRecipeRegistryOrigin,
+  RecipeRegistryClient,
+  RecipeRegistryClientError,
+} from "./registry-client.js";

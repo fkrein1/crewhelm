@@ -23,6 +23,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAXIMUM_SEARCH_RESPONSE_BYTES = 512 * 1_024;
+const TESTING_REGISTRY_ORIGIN = "https://crewhelm-registry-dev.fkrein.workers.dev/";
 
 const recipeArtifactResponseSchema = z.strictObject({
   envelope: registryArtifactVersionEnvelopeSchema,
@@ -36,6 +37,17 @@ export class RecipeRegistryClientError extends Error {
     super("Recipe Registry request failed.");
     this.name = "RecipeRegistryClientError";
   }
+}
+
+export function configuredRecipeRegistryOrigin(environment: {
+  RECIPE_REGISTRY_ORIGIN?: string;
+  CREWHELM_TESTING_INSTALLATION?: string;
+}): string {
+  const origin = environment.RECIPE_REGISTRY_ORIGIN ?? "https://crewhelm.app/";
+  if (environment.CREWHELM_TESTING_INSTALLATION === "true" && origin !== TESTING_REGISTRY_ORIGIN) {
+    throw new Error("Testing installation Recipe Registry is not configured safely.");
+  }
+  return origin;
 }
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -276,7 +288,7 @@ export class RecipeRegistryClient {
       response = await this.#fetch(url, {
         headers: { accept: "application/json" },
         method: "GET",
-        redirect: "error",
+        redirect: "manual",
         signal,
       });
     } catch {
