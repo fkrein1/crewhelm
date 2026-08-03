@@ -17,6 +17,9 @@ import type {
   RunBudgetReservation,
   RunSession,
   RemoteMcpCatalog,
+  RecipeInstallationPlan,
+  RecipeInstallationReceipt,
+  RegistrySkillPackage,
   SkillProvenance,
   SkillWarning,
   WorkflowDeliverable,
@@ -1385,6 +1388,40 @@ export const skillMutations = sqliteTable(
   ],
 );
 
+export const recipeInstallations = sqliteTable(
+  "recipe_installations",
+  {
+    installationId: text("installation_id").primaryKey(),
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    planDigest: text("plan_digest").notNull(),
+    plan: text("plan", { mode: "json" }).$type<RecipeInstallationPlan>().notNull(),
+    skillPackages: text("skill_packages", { mode: "json" })
+      .$type<RegistrySkillPackage[]>()
+      .notNull(),
+    receipt: text("receipt", { mode: "json" }).$type<RecipeInstallationReceipt>().notNull(),
+    status: text("status", { enum: ["installing", "installed"] }).notNull(),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("recipe_installations_client_idempotency").on(table.clientId, table.idempotencyKey),
+    index("recipe_installations_status_updated").on(table.status, table.updatedAt),
+    check("recipe_installations_request_digest_length", sql`length(${table.requestDigest}) = 64`),
+    check("recipe_installations_plan_digest_length", sql`length(${table.planDigest}) = 64`),
+    check("recipe_installations_plan_json", sql`json_valid(${table.plan})`),
+    check("recipe_installations_skill_packages_json", sql`json_valid(${table.skillPackages})`),
+    check("recipe_installations_receipt_json", sql`json_valid(${table.receipt})`),
+    check("recipe_installations_status", sql`${table.status} IN ('installing', 'installed')`),
+    check("recipe_installations_created_at_positive", sql`${table.createdAt} > 0`),
+    check(
+      "recipe_installations_updated_after_creation",
+      sql`${table.updatedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
 export const runAdmissions = sqliteTable(
   "run_admissions",
   {
@@ -2224,6 +2261,7 @@ export const controlPlaneSchema = {
   remoteMcpConnections,
   remoteMcpConnectionMutations,
   remoteMcpOAuthRequests,
+  recipeInstallations,
   composioEventTriggerWebhook,
   controlPlane,
   controlPlaneMigrations,

@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "c3ea729b-d2b9-490d-83c1-be4690640efe",
-  "prevId": "49230ae9-1b97-4cfc-a9b3-e13a270e97e0",
+  "id": "4b172c4c-6787-4cf1-af92-a6b40645eaa9",
+  "prevId": "c3ea729b-d2b9-490d-83c1-be4690640efe",
   "tables": {
     "agent_blueprint_mutations": {
       "name": "agent_blueprint_mutations",
@@ -3861,6 +3861,137 @@
         "integration_usage_events_recorded_at_positive": {
           "name": "integration_usage_events_recorded_at_positive",
           "value": "\"integration_usage_events\".\"recorded_at\" > 0"
+        }
+      }
+    },
+    "recipe_installations": {
+      "name": "recipe_installations",
+      "columns": {
+        "installation_id": {
+          "name": "installation_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "request_digest": {
+          "name": "request_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "plan_digest": {
+          "name": "plan_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "plan": {
+          "name": "plan",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "skill_packages": {
+          "name": "skill_packages",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "receipt": {
+          "name": "receipt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "recipe_installations_client_idempotency": {
+          "name": "recipe_installations_client_idempotency",
+          "columns": ["client_id", "idempotency_key"],
+          "isUnique": true
+        },
+        "recipe_installations_status_updated": {
+          "name": "recipe_installations_status_updated",
+          "columns": ["status", "updated_at"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "recipe_installations_request_digest_length": {
+          "name": "recipe_installations_request_digest_length",
+          "value": "length(\"recipe_installations\".\"request_digest\") = 64"
+        },
+        "recipe_installations_plan_digest_length": {
+          "name": "recipe_installations_plan_digest_length",
+          "value": "length(\"recipe_installations\".\"plan_digest\") = 64"
+        },
+        "recipe_installations_plan_json": {
+          "name": "recipe_installations_plan_json",
+          "value": "json_valid(\"recipe_installations\".\"plan\")"
+        },
+        "recipe_installations_skill_packages_json": {
+          "name": "recipe_installations_skill_packages_json",
+          "value": "json_valid(\"recipe_installations\".\"skill_packages\")"
+        },
+        "recipe_installations_receipt_json": {
+          "name": "recipe_installations_receipt_json",
+          "value": "json_valid(\"recipe_installations\".\"receipt\")"
+        },
+        "recipe_installations_status": {
+          "name": "recipe_installations_status",
+          "value": "\"recipe_installations\".\"status\" IN ('installing', 'installed')"
+        },
+        "recipe_installations_created_at_positive": {
+          "name": "recipe_installations_created_at_positive",
+          "value": "\"recipe_installations\".\"created_at\" > 0"
+        },
+        "recipe_installations_updated_after_creation": {
+          "name": "recipe_installations_updated_after_creation",
+          "value": "\"recipe_installations\".\"updated_at\" >= \"recipe_installations\".\"created_at\""
         }
       }
     },

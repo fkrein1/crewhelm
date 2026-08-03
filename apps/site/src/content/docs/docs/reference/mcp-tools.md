@@ -3759,6 +3759,334 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 </details>
 
+## `crewhelm_recipes`
+
+**Discover and install Crewhelm Recipes**
+
+Search the public Crewhelm Recipe Registry, progressively inspect exact immutable Recipe or Skill content, preview owner-local consequences, then install only a confirmed digest. Installation imports selected Skills, creates a disabled Agent, retains selected operations, creates no Connections or grants, and starts no work. Use recover with the returned installation ID after an incomplete apply.
+
+Attributes: write, non-destructive, idempotent, open-world.
+
+<details>
+<summary>Input schema</summary>
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "search",
+        "inspect",
+        "read_skill",
+        "preview",
+        "install",
+        "recover"
+      ],
+      "description": "search, inspect, read_skill, preview, install(request, expectedConfirmationDigest, idempotencyKey), recover"
+    },
+    "expectedConfirmationDigest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "installationId": {
+      "type": "string",
+      "pattern": "^recipe_installation_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "limit": {
+      "default": 10,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "description": "SKILL.md or a relative path under assets/, references/, or scripts/."
+    },
+    "query": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 256
+    },
+    "request": {
+      "type": "object",
+      "properties": {
+        "connectionBindings": {
+          "default": [],
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "connectionId": {
+                "type": "string",
+                "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              "slot": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              }
+            },
+            "required": [
+              "connectionId",
+              "slot"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "operations": {
+          "default": {
+            "eventTriggers": [],
+            "schedules": []
+          },
+          "type": "object",
+          "properties": {
+            "eventTriggers": {
+              "default": [],
+              "maxItems": 8,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[a-z][a-z0-9-]*$"
+              }
+            },
+            "schedules": {
+              "default": [],
+              "maxItems": 8,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[a-z][a-z0-9-]*$"
+              }
+            },
+            "timeZone": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          },
+          "additionalProperties": false
+        },
+        "optionalSkills": {
+          "default": [],
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[a-z][a-z0-9-]*$"
+              },
+              "namespace": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 39,
+                "pattern": "^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+              }
+            },
+            "required": [
+              "name",
+              "namespace"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "parameters": {
+          "default": {},
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          }
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "recipe"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "namespace": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 39,
+              "pattern": "^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+            },
+            "version": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "registry": {
+              "type": "string",
+              "maxLength": 2048,
+              "format": "uri"
+            }
+          },
+          "required": [
+            "kind",
+            "name",
+            "namespace",
+            "version",
+            "digest",
+            "registry"
+          ],
+          "additionalProperties": false,
+          "description": "One exact immutable Recipe version at the configured canonical Registry origin."
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "additionalProperties": false
+    },
+    "target": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "recipe"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "namespace": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 39,
+              "pattern": "^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+            },
+            "version": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "registry": {
+              "type": "string",
+              "maxLength": 2048,
+              "format": "uri"
+            }
+          },
+          "required": [
+            "kind",
+            "name",
+            "namespace",
+            "version",
+            "digest",
+            "registry"
+          ],
+          "additionalProperties": false,
+          "description": "One exact immutable Recipe version at the configured canonical Registry origin."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "skill"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "namespace": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 39,
+              "pattern": "^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+            },
+            "version": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "registry": {
+              "type": "string",
+              "maxLength": 2048,
+              "format": "uri"
+            }
+          },
+          "required": [
+            "kind",
+            "name",
+            "namespace",
+            "version",
+            "digest",
+            "registry"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "additionalProperties": false
+}
+```
+
+</details>
+
 ## `crewhelm_reconcile_tool_execution`
 
 **Reconcile unknown tool execution**

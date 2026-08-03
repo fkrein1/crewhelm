@@ -25,6 +25,7 @@ import {
   startAgentWorkflowInputSchema,
   startRunInputSchema,
   ownerAuthoritySchema,
+  recipeToolInputSchema,
   type ControlPlaneStatusResult,
   type AgentInboxDeferredReason,
   type AgentInboxResult,
@@ -110,6 +111,7 @@ import {
   type ExecuteRemoteMcpToolResult,
   type ReadBriefResult,
   type DeleteBriefResult,
+  type RecipeToolResult,
 } from "@crewhelm/contracts";
 import {
   createComposioEventCatalog,
@@ -185,6 +187,7 @@ import { AiGatewayUsage } from "./usage/index.js";
 import { R2SkillPackageObjectStore, Skills, deniedSkill } from "./skills/index.js";
 import { AgentWorkflows } from "./workflows/index.js";
 import { Briefs, R2OwnerContentObjectStore, deniedBrief } from "./briefs/index.js";
+import { deniedRecipe, RecipeRegistryClient, Recipes } from "./recipes/index.js";
 
 const INVALID_RUN_ADMISSION = {
   error: {
@@ -308,6 +311,7 @@ export class OwnerControlPlane extends DurableObject {
   readonly #aiGatewayUsage: AiGatewayUsage;
   readonly #skills: Skills;
   readonly #briefs: Briefs;
+  readonly #recipes: Recipes;
   readonly #workflows: AgentWorkflows;
 
   constructor(state: DurableObjectState, environment: Cloudflare.Env) {
@@ -380,6 +384,12 @@ export class OwnerControlPlane extends DurableObject {
       environment.PUBLIC_ORIGIN,
     );
     this.#authorityControls = new AuthorityControls(this.#database);
+    this.#recipes = new Recipes(
+      this.#database,
+      new RecipeRegistryClient(environment.RECIPE_REGISTRY_ORIGIN ?? "https://crewhelm.app/"),
+      this.#agents,
+      this.#skills,
+    );
     this.#agentSchedules = new AgentSchedules(this.#database, this.#storage, () =>
       this.#fleetConfigurations.currentData(),
     );
@@ -654,6 +664,19 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     return this.#agents.create(authorization.authority, input);
+  }
+
+  async recipes(authorityInput: unknown, input: unknown): Promise<RecipeToolResult> {
+    const request = recipeToolInputSchema.safeParse(input);
+    if (!request.success) return deniedRecipe("invalid_request");
+    const scope =
+      request.data.action === "install" || request.data.action === "recover"
+        ? OWNER_WRITE_SCOPE
+        : OWNER_READ_SCOPE;
+    const authorization = this.#authorize(authorityInput, scope);
+    return authorization.ok
+      ? this.#recipes.handle(authorization.authority, request.data)
+      : deniedRecipe(authorization.code);
   }
 
   async createRunAdmission(

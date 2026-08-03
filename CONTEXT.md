@@ -40,10 +40,10 @@ Crewhelm's MCP interface.
 
 ## Recipe
 
-A planned, versioned declarative template for an Agent's model, instructions, requested
-capabilities, connection requirements, and limits. Recipes are part of the long-term product
-vision and are not yet an implemented control-plane resource. They contain neither credentials nor
-executable code.
+An immutable public declaration of one responsibility: Agent instructions and limits, pinned
+Skills, Connection requirements, inputs, and bounded operation templates. The Registry holds only
+public untrusted packages. An owner-local installation receipt pins the confirmed plan and imported
+assets; it contains no credentials, grants no authority, and starts no work.
 
 ## Run
 

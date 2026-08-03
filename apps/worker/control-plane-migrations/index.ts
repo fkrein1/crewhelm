@@ -31,6 +31,7 @@ import migration29 from "./0029_mushy_legion.sql";
 import migration30 from "./0030_mixed_corsair.sql";
 import migration31 from "./0031_freezing_master_chief.sql";
 import migration32 from "./0032_panoramic_speed_demon.sql";
+import migration33 from "./0033_safe_sir_ram.sql";
 
 export const controlPlaneMigrations = [
   {
@@ -197,6 +198,11 @@ export const controlPlaneMigrations = [
     name: "0032_panoramic_speed_demon",
     sql: migration32,
     version: 33,
+  },
+  {
+    name: "0033_safe_sir_ram",
+    sql: migration33,
+    version: 34,
   },
 ] as const;
 

@@ -25,6 +25,7 @@ declare global {
       OWNER_CONTROL_PLANE: DurableObjectNamespace<OwnerControlPlane>;
       OWNER_GITHUB_USER_ID: string;
       PUBLIC_ORIGIN: string;
+      RECIPE_REGISTRY_ORIGIN?: string;
       SKILL_PACKAGES: R2Bucket;
     }
   }
