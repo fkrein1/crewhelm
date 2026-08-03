@@ -1,0 +1,25 @@
+{
+  "name": "@crewhelm/registry",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "wrangler deploy --dry-run --env production --outdir dist",
+    "db:migrate:dev": "wrangler d1 migrations apply REGISTRY_DB --remote --env dev",
+    "db:migrate:production": "wrangler d1 migrations apply REGISTRY_DB --remote --env production",
+    "deploy:dev": "wrangler deploy --env dev",
+    "deploy:production": "wrangler deploy --env production"
+  },
+  "dependencies": {
+    "@crewhelm/contracts": "workspace:*",
+    "drizzle-orm": "0.45.2",
+    "hono": "4.12.32",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.18.8",
+    "@cloudflare/workers-types": "5.20260724.1",
+    "vitest": "4.1.10",
+    "wrangler": "4.114.0"
+  }
+}

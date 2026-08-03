@@ -1,8 +1,5 @@
 # Recipes
 
-Status: planned portable contract; Registry persistence and owner-local installation are separate
-delivery slices.
-
 Crewhelm Recipes make useful responsibilities portable without moving authority, credentials, or
 private owner context into a public service. A Recipe is one immutable mandate with one primary Run
 or Workflow template plus bounded optional Schedules and Event Triggers. It is the public sharing
@@ -76,12 +73,21 @@ availability is not a runtime dependency.
 
 The Registry is a normal public HTTP service, not an owner control plane or runtime marketplace.
 
+- The public contract lives under `/api/registry` on the Crewhelm site origin. A narrow site Worker
+  gateway forwards only that prefix to an internal Registry Worker through a service binding. Each
+  deployed environment isolates its Workers, storage, indexes, rate limits, and OAuth application.
 - R2 stores immutable Recipe and Skill packages keyed by canonical digest.
 - D1 stores publisher identity, artifact names and versions, searchable projections, dependency
   edges, lifecycle and review state, reports, and explicit social signals.
 - The site and Crewhelm MCP use the same public read contract.
 - Search and list responses use compact D1 projections; exact inspection reads the immutable R2
   package only after selection.
+- Outcome search embeds only bounded public Recipe discovery metadata into Vectorize. It returns a
+  bounded ranked shortlist, has no generated answer, and falls back to D1 full-text search while a
+  new version is pending or embeddings are unavailable.
+- Public reads are cacheable and rate limited. Publisher GitHub identity, per-publisher daily
+  quotas, immutable versions, idempotency, and content checks bound public write abuse; search does
+  not persist raw queries or receive installation identity.
 - Public snapshots and change feeds preserve an open read contract for mirrors.
 
 The Registry never holds owner Connections, credentials, Briefs, grants, installation receipts, or
