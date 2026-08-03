@@ -287,7 +287,6 @@ export const recipeComposioConnectionRequirementSchema = requestedConnectionBoun
   slot: recipeConnectionSlotSchema,
   tools: z
     .array(recipeComposioToolRequirementSchema)
-    .min(1)
     .max(20)
     .refine(
       (tools) => uniqueInCanonicalOrder(tools.map(({ slug, version }) => `${slug}:${version}`)),
@@ -375,6 +374,11 @@ const recipeOperationInputNamesSchema = z
   .array(recipeInputNameSchema)
   .max(MAXIMUM_RECIPE_INPUTS)
   .refine(uniqueInCanonicalOrder, "Expected unique operation input names in canonical order.");
+const recipeOperationBriefInputNamesSchema = z
+  .array(recipeInputNameSchema)
+  .max(MAXIMUM_RECIPE_INPUTS)
+  .refine(uniqueInCanonicalOrder, "Expected unique Brief input names in canonical order.")
+  .optional();
 export const recipeRunOperationSchema = z.strictObject({
   inputNames: recipeOperationInputNamesSchema,
   kind: z.literal("run"),
@@ -457,12 +461,14 @@ const recipeEventFiltersSchema = z
   .refine((filters) => Object.keys(filters).length <= 32, "Too many Recipe event filters.");
 
 export const recipeScheduleSchema = z.strictObject({
+  briefInputNames: recipeOperationBriefInputNamesSchema,
   instruction: runPromptSchema,
   name: recipeOperationNameSchema,
   outputContract: outputContractSchema,
   trigger: recipeScheduleTriggerSchema,
 });
 export const recipeEventTriggerSchema = z.strictObject({
+  briefInputNames: recipeOperationBriefInputNamesSchema,
   connectionSlot: recipeConnectionSlotSchema,
   delivery: z.enum(["provider_polling", "realtime"]),
   eventSlug: integrationToolSlugSchema,
@@ -575,13 +581,32 @@ export const recipePackageSchema = z
     }
 
     const inputNames = new Set(recipe.inputs.map(({ name }) => name));
+    const briefInputNames = new Set(
+      recipe.inputs.filter(({ kind }) => kind === "brief").map(({ name }) => name),
+    );
     if (recipe.operations.primary.inputNames.some((name) => !inputNames.has(name))) {
       context.addIssue({
         code: "custom",
         message: "Primary operation references an unknown input.",
       });
     }
-    if (recipe.inputs.some(({ name }) => !recipe.operations.primary.inputNames.includes(name))) {
+    const recurringBriefInputNames = [
+      ...recipe.operations.eventTriggers.flatMap(({ briefInputNames: names }) => names ?? []),
+      ...recipe.operations.schedules.flatMap(({ briefInputNames: names }) => names ?? []),
+    ];
+    if (recurringBriefInputNames.some((name) => !briefInputNames.has(name))) {
+      context.addIssue({
+        code: "custom",
+        message: "Recurring operations may reference only declared Brief inputs.",
+      });
+    }
+    if (
+      recipe.inputs.some(
+        ({ name }) =>
+          !recipe.operations.primary.inputNames.includes(name) &&
+          !recurringBriefInputNames.includes(name),
+      )
+    ) {
       context.addIssue({ code: "custom", message: "Every Recipe input must be used." });
     }
 
@@ -636,6 +661,22 @@ export const recipePackageSchema = z
         context.addIssue({
           code: "custom",
           message: "Event Trigger must reference a matching Composio Connection slot.",
+        });
+      }
+    }
+    for (const connection of recipe.connections) {
+      if (
+        connection.kind === "composio" &&
+        connection.tools.length === 0 &&
+        !recipe.operations.eventTriggers.some(
+          (eventTrigger) =>
+            eventTrigger.connectionSlot === connection.slot &&
+            eventTrigger.integration === connection.integration,
+        )
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "A zero-tool Composio Connection must support a matching Event Trigger.",
         });
       }
     }

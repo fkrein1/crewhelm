@@ -74,6 +74,11 @@ the immutable bundle with the same short-lived proof. Production never transfers
 session cookie or GitHub token to the owner Worker; exact-loopback Registry development substitutes
 only the seeded local publisher.
 
+Before that handoff, publication preparation reads one exact Agent revision and selected current
+Schedule and Event Trigger revisions. It derives the public Agent definition, Skill decisions,
+portable Connection requirements, and named Brief inputs locally. Exact Brief references and
+Connection IDs never enter the public candidate.
+
 Optional installation features have three separate states: provider-plan eligibility,
 installation enablement, and Agent enablement. The CLI owns plan checks, explicit activation, and
 infrastructure readiness; MCP reports bounded prerequisite and setup metadata but does not infer
@@ -120,10 +125,11 @@ explicit read. Intermediate Workflow stages remain Markdown.
 Runs and tool calls are bound to the admitted Agent and fleet-configuration revisions.
 Each Agent may also own a bounded collection of independently named recurring schedules. A
 schedule has an opaque identity and immutable, Agent-global revision history; each revision freezes
-the exact Agent revision, prompt, and either an elapsed interval or a daily, weekly, or monthly
-wall-clock trigger with an explicit IANA time zone. Alarm claims advance each schedule directly to
-its next future occurrence, so late alarms do not replay a backlog. Agent revision changes pause
-stale schedules before admission, while schedule IDs flow into deferred inbox projections and
+the exact Agent revision, prompt, optional exact Brief revisions, and either an elapsed interval or
+a daily, weekly, or monthly wall-clock trigger with an explicit IANA time zone. Alarm claims advance
+each schedule directly to its next future occurrence, so late alarms do not replay a backlog. Agent
+revision changes pause stale schedules before admission, while schedule IDs flow into deferred
+inbox projections and
 schedule-specific audit events. Scheduled Run discovery retains the originating schedule ID and
 revision. Each Agent has eight shared recurring-start slots across Schedules and Event Triggers.
 Paused Schedules can be updated and reused; deleting an Event Trigger releases its slot while
@@ -137,9 +143,9 @@ event starts a fresh bounded Run; ongoing human conversation remains a separate 
 
 Composio is the first connected-event source. Crewhelm discovers the event catalog for one active
 Connection, freezes the exact event slug, version, provider and Crewhelm-side filters, Agent
-revision, instruction, and optional output contract, then owns the trigger-instance lifecycle. One
-installation-level V3
-webhook reaches a bounded public ingress and a dedicated high-capacity rate policy. One fixed
+revision, instruction, optional exact Brief revisions, and optional output contract, then owns the
+trigger-instance lifecycle. One installation-level V3 webhook reaches a bounded public ingress and
+a dedicated high-capacity rate policy. One fixed
 installation ingress object verifies the signature over the exact raw bytes and timestamp before it
 reads the signed owner identity or routes to any owner object. Its encrypted secret is reconciled on
 a bounded TTL and cooldown rather than on every invalid request. The owner then matches the exact

@@ -165,6 +165,13 @@ describe("OwnerControlPlane Agent Event Triggers", () => {
     if (!created.ok) {
       throw new Error("Expected Composio Event Trigger Agent fixture.");
     }
+    const brief = await controlPlane.createBrief(authority, {
+      content: "Prioritize customer-impacting issues and state uncertainty.",
+      idempotencyKey: "event-trigger-context-brief",
+      mediaType: "text/plain",
+      name: "Issue triage policy",
+    });
+    if (!brief.ok) throw new Error("Expected Event Trigger Brief fixture.");
 
     await runInDurableObject(controlPlane, (_instance, state) => {
       const now = Date.now();
@@ -242,6 +249,7 @@ describe("OwnerControlPlane Agent Event Triggers", () => {
       expectedAgentRevision: created.agent.revision,
       idempotencyKey: "create-composio-eventTrigger",
       eventTrigger: {
+        briefs: [{ id: brief.brief.id, revision: brief.version.revision }],
         instruction: "Summarize the new issue and recommend the next owner action.",
         name: "New GitHub issues",
         source: {
@@ -255,6 +263,17 @@ describe("OwnerControlPlane Agent Event Triggers", () => {
         },
       },
     } as const;
+
+    await expect(
+      controlPlane.agentEventTriggers(authority, {
+        ...createInput,
+        idempotencyKey: "create-event-trigger-missing-brief",
+        eventTrigger: {
+          ...createInput.eventTrigger,
+          briefs: [{ id: "brief_00000000-0000-4000-8000-000000000001", revision: 1 }],
+        },
+      }),
+    ).resolves.toMatchObject({ error: { code: "brief_unavailable" }, ok: false });
 
     await runInDurableObject(controlPlane, (_instance, state) => {
       const now = Date.now();
@@ -657,6 +676,7 @@ describe("OwnerControlPlane Agent Event Triggers", () => {
 
     const dispatchedRun = await controlPlane.inspectRun(authority, { runId });
     expect(dispatchedRun).toMatchObject({
+      briefs: [{ id: brief.brief.id, revision: brief.version.revision }],
       ok: true,
       run: {
         runId,
@@ -669,6 +689,13 @@ describe("OwnerControlPlane Agent Event Triggers", () => {
       },
     });
     expect(dispatchedRun.ok ? dispatchedRun.run : {}).not.toHaveProperty("schedule");
+    await expect(
+      controlPlane.deleteBrief(authority, {
+        expectedRevision: brief.version.revision,
+        id: brief.brief.id,
+        idempotencyKey: "delete-event-trigger-brief",
+      }),
+    ).resolves.toMatchObject({ error: { code: "brief_busy" }, ok: false });
 
     await vi.waitFor(
       async () => {

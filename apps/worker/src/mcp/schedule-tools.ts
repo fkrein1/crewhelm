@@ -28,7 +28,7 @@ export function registerScheduleTools(server: McpServer, context: McpToolContext
         readOnlyHint: false,
       },
       description:
-        "Create, update, or independently pause a named recurring responsibility bound to an exact Crewhelm Agent revision. Use scheduleId null to create another schedule, list schedules before exact updates, and update a paused schedule to reuse one of the eight bounded slots.",
+        "Create, update, or independently pause a named recurring responsibility bound to an exact Crewhelm Agent revision. Optionally attach exact Brief revisions for context on every occurrence. Use scheduleId null to create another schedule, list schedules before exact updates, and update a paused schedule to reuse one of the eight bounded slots.",
       inputSchema: configureAgentScheduleInputSchema,
       title: "Configure Crewhelm Agent schedule",
     },

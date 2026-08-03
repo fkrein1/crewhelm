@@ -13,6 +13,7 @@ import {
   listAgentSchedulesResultSchema,
   type AgentSchedule,
   type AgentScheduleConfiguration,
+  type BriefReference,
   type ConfigureAgentScheduleResult,
   type FleetConfigurationData,
   type GetAgentScheduleResult,
@@ -34,6 +35,7 @@ import {
   auditEvents,
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
+import type { Briefs } from "../briefs/index.js";
 import {
   minimumAgentScheduleIntervalSeconds,
   nextAgentScheduleOccurrence,
@@ -65,6 +67,7 @@ type ScheduleStateRow = {
 export type DueAgentSchedule = {
   agentId: string;
   agentRevision: number;
+  briefs: BriefReference[] | undefined;
   lastRunId: string | null;
   name: string;
   outputContract: OutputContract | undefined;
@@ -142,6 +145,7 @@ function activeDefinition(
   return "name" in input
     ? {
         configuration: {
+          ...(input.briefs === undefined ? {} : { briefs: input.briefs }),
           ...(input.outputContract === undefined ? {} : { outputContract: input.outputContract }),
           prompt: input.prompt,
           trigger: input.trigger,
@@ -162,6 +166,7 @@ export function deniedAgentSchedule(code: ScheduleFailure["error"]["code"]): Sch
 }
 
 export class AgentSchedules {
+  readonly #briefs: Briefs;
   readonly #currentFleetConfiguration: () => FleetConfigurationData;
   readonly #database: Database;
   readonly #storage: DurableObjectStorage;
@@ -170,7 +175,9 @@ export class AgentSchedules {
     database: Database,
     storage: DurableObjectStorage,
     currentFleetConfiguration: () => FleetConfigurationData,
+    briefs: Briefs,
   ) {
+    this.#briefs = briefs;
     this.#currentFleetConfiguration = currentFleetConfiguration;
     this.#database = database;
     this.#storage = storage;
@@ -205,6 +212,14 @@ export class AgentSchedules {
         minimumInterval < this.#currentFleetConfiguration().schedules.minimumIntervalSeconds)
     ) {
       return deniedAgentSchedule("invalid_request");
+    }
+
+    const referencedBriefs =
+      definition !== null && "briefs" in definition.configuration
+        ? definition.configuration.briefs
+        : undefined;
+    if (definition !== null && !(await this.#briefs.materialize(referencedBriefs)).ok) {
+      return deniedAgentSchedule("brief_unavailable");
     }
 
     const requestDigest = await digestRequest(request.data);
@@ -624,6 +639,7 @@ export class AgentSchedules {
         due.push({
           agentId: row.agentId,
           agentRevision: row.agentRevision,
+          briefs: "briefs" in configuration.data ? configuration.data.briefs : undefined,
           lastRunId: row.lastRunId,
           name: row.name,
           outputContract:
@@ -751,6 +767,7 @@ export class AgentSchedules {
           due.push({
             agentId: row.agentId,
             agentRevision: row.agentRevision,
+            briefs: "briefs" in configuration.data ? configuration.data.briefs : undefined,
             lastRunId: row.lastRunId,
             name: row.name,
             outputContract:

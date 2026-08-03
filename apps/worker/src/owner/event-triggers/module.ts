@@ -11,6 +11,7 @@ import {
   type AgentEventTriggerOccurrence,
   type AgentEventTriggersInput,
   type AgentEventTriggersResult,
+  type BriefReference,
   type IntegrationToolParameterValue,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
@@ -28,6 +29,7 @@ import { and, asc, count, desc, eq, lte, min, ne, sql } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import type { Connections } from "../connections/index.js";
+import type { Briefs } from "../briefs/index.js";
 import {
   agentEventTriggerOccurrences,
   agentEventTriggerRevisions,
@@ -55,6 +57,7 @@ export function deniedAgentEventTrigger(
 export type DueAgentEventTrigger = {
   agentId: string;
   agentRevision: number;
+  briefs: BriefReference[] | undefined;
   eventData: Record<string, IntegrationToolParameterValue>;
   eventId: string;
   instruction: string;
@@ -199,6 +202,7 @@ function pruneHistory(transaction: DatabaseTransaction, eventTriggerId: string):
 }
 
 export class AgentEventTriggers {
+  readonly #briefs: Briefs;
   readonly #connections: Connections;
   readonly #database: Database;
   readonly #eventCatalog: ComposioEventCatalog;
@@ -213,12 +217,14 @@ export class AgentEventTriggers {
     storage: DurableObjectStorage,
     ownerKey: string | undefined,
     connections: Connections,
+    briefs: Briefs,
     adapters: {
       eventCatalog: ComposioEventCatalog;
       triggerInstances: ComposioTriggerInstances;
       webhookIngress: { ensure(): Promise<boolean> };
     },
   ) {
+    this.#briefs = briefs;
     this.#connections = connections;
     this.#database = database;
     this.#eventCatalog = adapters.eventCatalog;
@@ -502,6 +508,10 @@ export class AgentEventTriggers {
 
     if ((await digest(current.definition)) === (await digest(input.eventTrigger))) {
       return deniedAgentEventTrigger("no_changes");
+    }
+
+    if (!(await this.#briefs.materialize(input.eventTrigger.briefs)).ok) {
+      return deniedAgentEventTrigger("brief_unavailable");
     }
 
     const agent = this.#database
@@ -971,6 +981,7 @@ export class AgentEventTriggers {
       due.push({
         agentId: candidate.agentId,
         agentRevision: candidate.agentRevision,
+        briefs: candidate.definition.briefs,
         eventData: candidate.eventData,
         eventId: candidate.eventId,
         instruction: candidate.definition.instruction,
@@ -1216,6 +1227,10 @@ export class AgentEventTriggers {
   async #validateDefinition(
     definition: EventTriggerDefinition,
   ): Promise<{ ok: true } | { error: EventTriggerFailure; ok: false }> {
+    if (!(await this.#briefs.materialize(definition.briefs)).ok) {
+      return { error: deniedAgentEventTrigger("brief_unavailable"), ok: false };
+    }
+
     const connection = this.#connections.inspect({ connectionId: definition.source.connectionId });
 
     if (!connection.ok) {

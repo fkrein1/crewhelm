@@ -2,6 +2,8 @@ import * as z from "zod";
 
 import { sha256DigestSchema } from "./capabilities.js";
 import { agentIdSchema, agentRevisionNumberSchema } from "./control-plane.js";
+import { agentScheduleIdSchema } from "./schedule-revision.js";
+import { agentEventTriggerIdSchema } from "./agent-event-triggers.js";
 import {
   recipeLicenseSchema,
   recipePackageSchema,
@@ -60,7 +62,27 @@ export const recipePublicationCandidateSchema = z.strictObject({
     ),
 });
 
+const recipePublicationSourceSchema = z.strictObject({
+  id: agentIdSchema,
+  revision: agentRevisionNumberSchema,
+});
+
 export const recipePublicationToolInputSchema = z.discriminatedUnion("action", [
+  z.strictObject({
+    action: z.literal("prepare_publish"),
+    agent: recipePublicationSourceSchema,
+    eventTriggerIds: z
+      .array(agentEventTriggerIdSchema)
+      .max(8)
+      .refine((ids) => new Set(ids).size === ids.length, "Expected unique Event Trigger IDs.")
+      .default([]),
+    license: recipeLicenseSchema,
+    scheduleIds: z
+      .array(agentScheduleIdSchema)
+      .max(8)
+      .refine((ids) => new Set(ids).size === ids.length, "Expected unique Schedule IDs.")
+      .default([]),
+  }),
   z.strictObject({
     action: z.literal("authorize_publish"),
     idempotencyKey: registryPublishIdempotencyKeySchema,
@@ -85,7 +107,10 @@ export const recipePublicationToolMcpInputSchema = z.strictObject({
   request: z
     .string()
     .min(2)
-    .max(160 * 1_024),
+    .max(160 * 1_024)
+    .describe(
+      "JSON action. Start with prepare_publish(agent,license,scheduleIds?,eventTriggerIds?) to copy a live Agent revision into a reviewable candidate; then authorize_publish(idempotencyKey,installationLabel); preview_publish(authorizationId,candidate,idempotencyKey); and publish with the unchanged candidate plus expectedConfirmationDigest.",
+    ),
 });
 
 const publicSkillPreviewSchema = z.discriminatedUnion("decision", [
@@ -159,6 +184,17 @@ const recipePublicationErrorSchema = z.strictObject({
 });
 
 export const recipePublicationToolResultSchema = z.union([
+  z.strictObject({
+    action: z.literal("prepare_publish"),
+    candidate: recipePublicationCandidateSchema,
+    nextAction: z.literal("preview_publish"),
+    ok: z.literal(true),
+    review: z.strictObject({
+      connections: z.literal("Review portable requirements and requested authority."),
+      publicCopy: z.literal("Review the title, summary, outcome, boundaries, tags, and sample."),
+      skills: z.literal("Choose publish, reference, or remove for every local Skill."),
+    }),
+  }),
   z.strictObject({
     action: z.literal("authorize_publish"),
     authorization: registryPublishAuthorizationSchema,

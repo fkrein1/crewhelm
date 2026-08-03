@@ -107,7 +107,7 @@ operator.
 
 **Manage Crewhelm Agent Event Triggers**
 
-Create and manage Event Triggers that start a fresh Agent Run when a matching connected-app event occurs. Call sources with an exact Connection first; Crewhelm owns delivery and recovery.
+Create and manage Event Triggers that start a fresh Agent Run when a matching connected-app event occurs. Call sources with an exact Connection first, and optionally attach exact Brief revisions for context on every occurrence. Crewhelm owns delivery and recovery; provider payloads cannot choose Briefs.
 
 Attributes: write, destructive, idempotent, closed-world.
 
@@ -166,6 +166,30 @@ Attributes: write, destructive, idempotent, closed-world.
     "eventTrigger": {
       "type": "object",
       "properties": {
+        "briefs": {
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              "revision": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 100
+              }
+            },
+            "required": [
+              "id",
+              "revision"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Exact Brief revisions frozen as context for every Event Trigger Run."
+        },
         "connectionId": {
           "type": "string",
           "pattern": "^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -2201,7 +2225,7 @@ Attributes: write, destructive, idempotent, open-world.
 
 **Configure Crewhelm Agent schedule**
 
-Create, update, or independently pause a named recurring responsibility bound to an exact Crewhelm Agent revision. Use scheduleId null to create another schedule, list schedules before exact updates, and update a paused schedule to reuse one of the eight bounded slots.
+Create, update, or independently pause a named recurring responsibility bound to an exact Crewhelm Agent revision. Optionally attach exact Brief revisions for context on every occurrence. Use scheduleId null to create another schedule, list schedules before exact updates, and update a paused schedule to reuse one of the eight bounded slots.
 
 Attributes: write, destructive, idempotent, closed-world.
 
@@ -2247,6 +2271,30 @@ Attributes: write, destructive, idempotent, closed-world.
             {
               "type": "object",
               "properties": {
+                "briefs": {
+                  "maxItems": 8,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                      },
+                      "revision": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 100
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "revision"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "description": "Exact Brief revisions frozen as context for every scheduled Run."
+                },
                 "name": {
                   "type": "string",
                   "minLength": 1,
@@ -3763,7 +3811,7 @@ Attributes: read-only, non-destructive, idempotent, closed-world.
 
 **Publish Crewhelm Recipe**
 
-Authorize, preview, and publish one Agent revision as an immutable public Recipe. Pass the selected action and its fields as request JSON; confirm the preview digest before publishing.
+Port one exact live Agent revision into a public Recipe. Start with prepare_publish to copy its instructions, limits, capabilities, Skills, selected Schedules, selected Event Triggers, Brief slots, and portable Connection requirements into a reviewable candidate. Edit only what needs public shaping, authorize with GitHub, preview the exact exclusions and authority, then publish the confirmed digest.
 
 Attributes: write, destructive, idempotent, open-world.
 
@@ -3778,7 +3826,8 @@ Attributes: write, destructive, idempotent, open-world.
     "request": {
       "type": "string",
       "minLength": 2,
-      "maxLength": 163840
+      "maxLength": 163840,
+      "description": "JSON action. Start with prepare_publish(agent,license,scheduleIds?,eventTriggerIds?) to copy a live Agent revision into a reviewable candidate; then authorize_publish(idempotencyKey,installationLabel); preview_publish(authorizationId,candidate,idempotencyKey); and publish with the unchanged candidate plus expectedConfirmationDigest."
     }
   },
   "required": [
@@ -3794,7 +3843,7 @@ Attributes: write, destructive, idempotent, open-world.
 
 **Manage Crewhelm Recipes**
 
-Search, inspect, and install immutable public Recipes and Skills. read_skill uses SKILL.md or a safe relative path. Preview and confirm the exact digest before installation.
+Search, inspect, and install immutable public Recipes and Skills. read_skill uses SKILL.md or a safe relative path. Preview with owner-local Connection and exact Brief bindings for selected recurring operations, then confirm the unchanged digest before installation.
 
 Attributes: write, non-destructive, idempotent, open-world.
 
@@ -3816,7 +3865,7 @@ Attributes: write, non-destructive, idempotent, open-world.
         "install",
         "recover"
       ],
-      "description": "install(request, expectedConfirmationDigest, idempotencyKey)"
+      "description": "install(request, expectedConfirmationDigest, idempotencyKey). Preview can bind exact owner-local Briefs to selected recurring operations."
     },
     "expectedConfirmationDigest": {
       "type": "string",
@@ -3851,6 +3900,46 @@ Attributes: write, non-destructive, idempotent, open-world.
     "request": {
       "type": "object",
       "properties": {
+        "briefBindings": {
+          "default": [],
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "brief": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 100
+                  }
+                },
+                "required": [
+                  "id",
+                  "revision"
+                ],
+                "additionalProperties": false
+              },
+              "inputName": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40,
+                "pattern": "^[a-z][a-z0-9-]*$"
+              }
+            },
+            "required": [
+              "brief",
+              "inputName"
+            ],
+            "additionalProperties": false
+          }
+        },
         "connectionBindings": {
           "default": [],
           "maxItems": 8,

@@ -22,7 +22,7 @@ export function registerEventTriggerTools(server: McpServer, context: McpToolCon
         readOnlyHint: false,
       },
       description:
-        "Create and manage Event Triggers that start a fresh Agent Run when a matching connected-app event occurs. Call sources with an exact Connection first; Crewhelm owns delivery and recovery.",
+        "Create and manage Event Triggers that start a fresh Agent Run when a matching connected-app event occurs. Call sources with an exact Connection first, and optionally attach exact Brief revisions for context on every occurrence. Crewhelm owns delivery and recovery; provider payloads cannot choose Briefs.",
       inputSchema: agentEventTriggersToolInputSchema,
       title: "Manage Crewhelm Agent Event Triggers",
     },
@@ -38,6 +38,9 @@ export function registerEventTriggerTools(server: McpServer, context: McpToolCon
                   : {
                       ...input,
                       eventTrigger: {
+                        ...(input.eventTrigger.briefs === undefined
+                          ? {}
+                          : { briefs: input.eventTrigger.briefs }),
                         instruction: input.eventTrigger.instruction,
                         name: input.eventTrigger.name,
                         ...(input.eventTrigger.outputContract === undefined

@@ -399,15 +399,18 @@ export class OwnerControlPlane extends DurableObject {
       configuredRecipeRegistryOrigin(environment),
       recipeRegistry === undefined ? undefined : (input, init) => recipeRegistry.fetch(input, init),
     );
-    this.#recipes = new Recipes(this.#database, recipeRegistryClient, this.#agents, this.#skills);
-    this.#recipePublications = new RecipePublications(
+    this.#recipes = new Recipes(
+      this.#database,
       recipeRegistryClient,
       this.#agents,
       this.#skills,
-      environment.BETTER_AUTH_SECRET,
+      this.#briefs,
     );
-    this.#agentSchedules = new AgentSchedules(this.#database, this.#storage, () =>
-      this.#fleetConfigurations.currentData(),
+    this.#agentSchedules = new AgentSchedules(
+      this.#database,
+      this.#storage,
+      () => this.#fleetConfigurations.currentData(),
+      this.#briefs,
     );
     const ingressStub = environment.OWNER_CONTROL_PLANE.getByName(
       COMPOSIO_WEBHOOK_INGRESS_OBJECT_NAME,
@@ -417,6 +420,7 @@ export class OwnerControlPlane extends DurableObject {
       this.#storage,
       this.#objectName,
       this.#connections,
+      this.#briefs,
       {
         eventCatalog: createComposioEventCatalog({ apiKey: environment.COMPOSIO_API_KEY }),
         triggerInstances: createComposioTriggerInstances({ apiKey: environment.COMPOSIO_API_KEY }),
@@ -424,6 +428,16 @@ export class OwnerControlPlane extends DurableObject {
           ensure: () => ingressStub.ensureComposioWebhookIngress(),
         },
       },
+    );
+    this.#recipePublications = new RecipePublications(
+      this.#database,
+      recipeRegistryClient,
+      this.#agents,
+      this.#skills,
+      this.#briefs,
+      this.#agentSchedules,
+      this.#agentEventTriggers,
+      environment.BETTER_AUTH_SECRET,
     );
     this.#composioWebhookIngress = new ComposioWebhookIngress(
       this.#database,
@@ -1777,6 +1791,7 @@ export class OwnerControlPlane extends DurableObject {
       authority,
       {
         agentId: schedule.agentId,
+        ...(schedule.briefs === undefined ? {} : { briefs: schedule.briefs }),
         expectedRevision: schedule.agentRevision,
         idempotencyKey: `schedule.${schedule.scheduleId}.${schedule.scheduleRevision}.${schedule.scheduledAt}`,
         ...(schedule.outputContract === undefined
@@ -1872,6 +1887,7 @@ export class OwnerControlPlane extends DurableObject {
       authority,
       {
         agentId: eventTrigger.agentId,
+        ...(eventTrigger.briefs === undefined ? {} : { briefs: eventTrigger.briefs }),
         expectedRevision: eventTrigger.agentRevision,
         idempotencyKey: await eventTriggerIdempotencyKey(eventTrigger),
         ...(eventTrigger.outputContract === undefined

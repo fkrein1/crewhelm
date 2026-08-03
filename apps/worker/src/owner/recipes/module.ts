@@ -23,6 +23,7 @@ import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import { skillsCapabilityConfiguration } from "../../agent-capabilities/skills.js";
 import type { AgentRegistry } from "../agents/index.js";
+import type { Briefs } from "../briefs/index.js";
 import {
   auditEvents,
   connections,
@@ -137,6 +138,7 @@ function registryFailure(error: unknown): RecipeToolResult {
 
 export class Recipes {
   readonly #agents: AgentRegistry;
+  readonly #briefs: Briefs;
   readonly #database: Database;
   readonly #registry: RecipeRegistryClient;
   readonly #skills: Skills;
@@ -146,8 +148,10 @@ export class Recipes {
     registry: RecipeRegistryClient,
     agents: AgentRegistry,
     skills: Skills,
+    briefs: Briefs,
   ) {
     this.#agents = agents;
+    this.#briefs = briefs;
     this.#database = database;
     this.#registry = registry;
     this.#skills = skills;
@@ -226,6 +230,20 @@ export class Recipes {
     }
     const artifact = await this.#registry.recipe(request.target);
     const recipe = artifact.package;
+    const briefBindings = new Map(
+      request.briefBindings.map((binding) => [binding.inputName, binding.brief]),
+    );
+    if (
+      briefBindings.size !== request.briefBindings.length ||
+      [...briefBindings.keys()].some(
+        (name) =>
+          !recipe.inputs.some(
+            (recipeInput) => recipeInput.kind === "brief" && recipeInput.name === name,
+          ),
+      )
+    ) {
+      return { ok: false, result: denied("invalid_request") };
+    }
     const optionalSelections = new Set(
       request.optionalSkills.map(({ name, namespace }) => `${namespace}/${name}`),
     );
@@ -460,6 +478,54 @@ export class Recipes {
         ),
         instruction: render(event.instruction),
       }));
+    const recurringBriefInputNames = new Set([
+      ...selectedSchedules.flatMap(({ briefInputNames }) => briefInputNames ?? []),
+      ...selectedEvents.flatMap(({ briefInputNames }) => briefInputNames ?? []),
+    ]);
+    if ([...briefBindings.keys()].some((inputName) => !recurringBriefInputNames.has(inputName))) {
+      return { ok: false, result: denied("invalid_request") };
+    }
+    const combinationUnavailableInputNames = new Set<string>();
+    const operationBriefInputGroups = [
+      ...selectedSchedules.map(({ briefInputNames }) => briefInputNames ?? []),
+      ...selectedEvents.map(({ briefInputNames }) => briefInputNames ?? []),
+    ];
+    await Promise.all(
+      operationBriefInputGroups.map(async (inputNames) => {
+        const references = inputNames.flatMap((inputName) => {
+          const reference = briefBindings.get(inputName);
+          return reference === undefined ? [] : [reference];
+        });
+        if (references.length > 0 && !(await this.#briefs.materialize(references)).ok) {
+          for (const inputName of inputNames) combinationUnavailableInputNames.add(inputName);
+        }
+      }),
+    );
+    const previewBriefs = await Promise.all(
+      recipe.inputs
+        .filter(
+          (recipeInput) =>
+            recipeInput.kind === "brief" && recurringBriefInputNames.has(recipeInput.name),
+        )
+        .map(async (recipeInput) => {
+          const bound = briefBindings.get(recipeInput.name) ?? null;
+          const available = bound === null ? null : (await this.#briefs.materialize([bound])).ok;
+          return {
+            bound,
+            description: recipeInput.description,
+            inputName: recipeInput.name,
+            required: recipeInput.required,
+            state:
+              bound === null
+                ? ("missing" as const)
+                : available
+                  ? combinationUnavailableInputNames.has(recipeInput.name)
+                    ? ("combination_unavailable" as const)
+                    : ("available" as const)
+                  : ("unavailable" as const),
+          };
+        }),
+    );
     const primary =
       recipe.operations.primary.kind === "run"
         ? { ...recipe.operations.primary, prompt: render(recipe.operations.primary.prompt) }
@@ -487,6 +553,7 @@ export class Recipes {
         requested: artifact.projection.requestedAuthority,
         startsWork: false as const,
       },
+      briefs: previewBriefs,
       connections: previewConnections,
       operations: {
         eventTriggers: selectedEvents,
@@ -497,7 +564,10 @@ export class Recipes {
       prerequisites: resolved.prerequisites,
       ready:
         resolved.prerequisites.every(({ state }) => state === "available") &&
-        previewConnections.every(({ state }) => state === "available"),
+        previewConnections.every(({ state }) => state === "available") &&
+        previewBriefs.every(
+          ({ required, state }) => state === "available" || (!required && state === "missing"),
+        ),
       recipe: artifact.projection,
       skills: previewSkills,
       source: {
@@ -564,11 +634,15 @@ export class Recipes {
     const retainedConnections = resolved.plan.connections.flatMap(({ bound, slot }) =>
       bound === null ? [] : [{ connectionId: bound.connectionId, slot }],
     );
+    const retainedBriefs = resolved.plan.briefs.flatMap(({ bound, inputName }) =>
+      bound === null ? [] : [{ brief: bound, inputName }],
+    );
     if (retainedConnections.length !== resolved.plan.connections.length) {
       return denied("plan_not_ready");
     }
     const receipt = recipeInstallationReceiptSchema.parse({
       agent: null,
+      briefs: retainedBriefs,
       connections: retainedConnections,
       createdAt: new Date(now).toISOString(),
       id: installationId,
@@ -656,9 +730,16 @@ export class Recipes {
       skillPackage.success ? [skillPackage.data] : [],
     );
     const { confirmationDigest, ...confirmedIntent } = plan;
+    const { briefs: _briefs, ...legacyConfirmedIntent } = confirmedIntent;
+    const confirmedIntentMatches =
+      (await digest(confirmedIntent)) === confirmationDigest ||
+      (plan.briefs.length === 0 && (await digest(legacyConfirmedIntent)) === confirmationDigest);
     const selectedSkills = plan.skills.filter(({ selected }) => selected);
     const retainedConnections = plan.connections.flatMap(({ bound, slot }) =>
       bound === null ? [] : [{ connectionId: bound.connectionId, slot }],
+    );
+    const retainedBriefs = plan.briefs.flatMap(({ bound, inputName }) =>
+      bound === null ? [] : [{ brief: bound, inputName }],
     );
     const agentInputFor = (receipt: typeof storedReceipt) => ({
       ...plan.agent,
@@ -687,10 +768,11 @@ export class Recipes {
       !plan.ready ||
       row.planDigest !== confirmationDigest ||
       storedReceipt.planDigest !== confirmationDigest ||
-      (await digest(confirmedIntent)) !== confirmationDigest ||
+      !confirmedIntentMatches ||
       storedReceipt.id !== installationId ||
       storedReceipt.status !== row.status ||
       !sameCanonical(storedReceipt.source, plan.source) ||
+      !sameCanonical(storedReceipt.briefs, retainedBriefs) ||
       !sameCanonical(storedReceipt.connections, retainedConnections) ||
       skillPackages.length !== selectedSkills.length ||
       storedReceipt.skills.length > selectedSkills.length ||

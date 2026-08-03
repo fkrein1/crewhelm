@@ -6,6 +6,8 @@ import {
   MAXIMUM_BRIEFS_PER_OWNER,
   MAXIMUM_WORKFLOW_DELIVERABLE_BYTES,
   admittedBriefContextContentSchema,
+  agentEventTriggerDefinitionSchema,
+  agentScheduleConfigurationSchema,
   artifactIdSchema,
   briefContentRecordSchema,
   briefContentSchema,
@@ -42,10 +44,14 @@ import {
   type WorkflowDeliverable,
   type JsonDeliverable,
 } from "@crewhelm/contracts";
-import { and, asc, count, eq, gt, isNotNull, sql, sum } from "drizzle-orm";
+import { and, asc, count, eq, gt, isNotNull, ne, sql, sum } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import {
+  agentEventTriggerRevisions,
+  agentEventTriggers,
+  agentScheduleRevisions,
+  agentSchedules,
   agentWorkflows,
   auditEvents,
   briefDeletions,
@@ -1095,8 +1101,48 @@ export class Briefs implements WorkflowDeliverableStorage {
       .from(agentWorkflows)
       .where(isNotNull(agentWorkflows.briefContext))
       .all();
-    return [...runRows, ...workflowRows].some(
-      ({ context }) => context?.references.some((reference) => reference.id === id) === true,
+    const scheduledRows = database
+      .select({ configuration: agentScheduleRevisions.configuration })
+      .from(agentSchedules)
+      .innerJoin(
+        agentScheduleRevisions,
+        and(
+          eq(agentScheduleRevisions.scheduleId, agentSchedules.scheduleId),
+          eq(agentScheduleRevisions.revision, agentSchedules.currentRevision),
+        ),
+      )
+      .where(ne(agentSchedules.status, "deleted"))
+      .all();
+    const eventRows = database
+      .select({ definition: agentEventTriggerRevisions.definition })
+      .from(agentEventTriggers)
+      .innerJoin(
+        agentEventTriggerRevisions,
+        and(
+          eq(agentEventTriggerRevisions.eventTriggerId, agentEventTriggers.eventTriggerId),
+          eq(agentEventTriggerRevisions.revision, agentEventTriggers.currentRevision),
+        ),
+      )
+      .where(ne(agentEventTriggers.status, "deleted"))
+      .all();
+    return (
+      [...runRows, ...workflowRows].some(
+        ({ context }) => context?.references.some((reference) => reference.id === id) === true,
+      ) ||
+      scheduledRows.some(({ configuration }) => {
+        const parsed = agentScheduleConfigurationSchema.safeParse(configuration);
+        return (
+          parsed.success &&
+          "briefs" in parsed.data &&
+          parsed.data.briefs?.some((reference) => reference.id === id) === true
+        );
+      }) ||
+      eventRows.some(({ definition }) => {
+        const parsed = agentEventTriggerDefinitionSchema.safeParse(definition);
+        return (
+          parsed.success && parsed.data.briefs?.some((reference) => reference.id === id) === true
+        );
+      })
     );
   }
 
