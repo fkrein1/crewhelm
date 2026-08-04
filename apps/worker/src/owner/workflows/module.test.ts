@@ -48,6 +48,7 @@ const WORKFLOW_FAILURE_CASES = [
   ["invalid_authority", "invalid_authority"],
   ["invalid_request", "invalid_request"],
   ["model_unavailable", "model_unavailable"],
+  ["model_disabled", "model_unavailable"],
   ["owner_mismatch", "owner_mismatch"],
   ["revision_conflict", "revision_conflict"],
   ["run_unavailable", "workflow_unavailable"],

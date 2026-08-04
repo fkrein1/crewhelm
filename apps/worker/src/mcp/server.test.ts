@@ -72,6 +72,7 @@ import {
   MCP_CHANGE_AUTOMATIONS_TOOL_NAME,
   MCP_CHANGE_CONNECTIONS_TOOL_NAME,
   MCP_CHANGE_CONTEXT_TOOL_NAME,
+  MCP_CHANGE_MODELS_TOOL_NAME,
   MCP_CHANGE_RECIPES_TOOL_NAME,
   MCP_CHANGE_WORK_TOOL_NAME,
   MCP_CREATE_AGENT_TOOL_NAME,
@@ -92,6 +93,7 @@ import {
   MCP_INSPECT_AUTOMATIONS_TOOL_NAME,
   MCP_INSPECT_CONNECTIONS_TOOL_NAME,
   MCP_INSPECT_CONTEXT_TOOL_NAME,
+  MCP_INSPECT_MODELS_TOOL_NAME,
   MCP_INSPECT_RECOVERY_TOOL_NAME,
   MCP_INSPECT_RECIPES_TOOL_NAME,
   MCP_INSPECT_WORK_TOOL_NAME,
@@ -1061,6 +1063,16 @@ describe("authenticated MCP handler", () => {
       openWorldHint: true,
       readOnlyHint: false,
     });
+    expect(byName.get(MCP_INSPECT_MODELS_TOOL_NAME)?.annotations).toMatchObject({
+      destructiveHint: false,
+      openWorldHint: true,
+      readOnlyHint: true,
+    });
+    expect(byName.get(MCP_CHANGE_MODELS_TOOL_NAME)?.annotations).toMatchObject({
+      destructiveHint: true,
+      openWorldHint: true,
+      readOnlyHint: false,
+    });
     expect(byName.get(MCP_INSPECT_RECIPES_TOOL_NAME)?.annotations).toMatchObject({
       destructiveHint: false,
       openWorldHint: true,
@@ -1426,9 +1438,7 @@ describe("authenticated MCP handler", () => {
       "temperature",
       "topP",
     ]);
-    expect(catalog.capabilities[0]?.configurationFields[0]?.enum).toContain(
-      "@cf/moonshotai/kimi-k2.7-code",
-    );
+    expect(catalog.capabilities[0]?.configurationFields[0]?.enum).toBeUndefined();
     expect(result.isError).toBe(false);
 
     const sandboxResponse = await handleAuthenticatedMcpRequest(
@@ -1680,7 +1690,7 @@ describe("authenticated MCP handler", () => {
           {
             configuration: {
               fallbackModels: [],
-              primaryModel: "@cf/openai/gpt-oss-20b",
+              primaryModel: "@cf/openai/gpt-oss-120b",
             },
             id: "inference.workers-ai",
             schemaVersion: 2,

@@ -41,11 +41,7 @@ import {
   runSessionSchema,
   sessionContinuationSchema,
 } from "./agent-sessions.js";
-import {
-  DEFAULT_RUNNABLE_AGENT_MODEL,
-  RUNNABLE_AGENT_MODELS,
-  runnableAgentModelSchema,
-} from "./inference.js";
+import { DEFAULT_RUNNABLE_AGENT_MODEL, runnableAgentModelSchema } from "./inference.js";
 import {
   admittedBriefContextContentSchema,
   admittedBriefContextSchema,
@@ -90,7 +86,7 @@ export const runBudgetReservationIdSchema = z
   );
 export const runPromptSchema = z.string().min(1).max(MAXIMUM_RUN_PROMPT_CHARACTERS);
 export const runOutputSchema = z.string().max(MAXIMUM_RUN_OUTPUT_CHARACTERS);
-export { DEFAULT_RUNNABLE_AGENT_MODEL, RUNNABLE_AGENT_MODELS, runnableAgentModelSchema };
+export { DEFAULT_RUNNABLE_AGENT_MODEL, runnableAgentModelSchema };
 export const runIntegrationLimitsSchema = z.strictObject({
   callsPerDay: z.number().int().min(1).max(1_000_000),
   callsPerThirtyDays: z.number().int().min(1).max(1_000_000),
@@ -262,6 +258,7 @@ const runAdmissionRequestErrorSchema = z.strictObject({
     "invalid_authority",
     "invalid_request",
     "model_unavailable",
+    "model_disabled",
     "owner_mismatch",
     "revision_conflict",
   ]),
@@ -752,6 +749,7 @@ const runRequestErrorSchema = z.strictObject({
     "invalid_authority",
     "invalid_request",
     "model_unavailable",
+    "model_disabled",
     "owner_mismatch",
     "revision_conflict",
     "branch_revision_conflict",

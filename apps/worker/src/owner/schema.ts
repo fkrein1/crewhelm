@@ -25,6 +25,7 @@ import type {
   WorkflowDeliverable,
   JsonValue,
   McpAuthoringDraftKind,
+  ModelCatalogData,
   ProviderAuthSetupPlan,
 } from "@crewhelm/contracts";
 import {
@@ -99,6 +100,52 @@ export const fleetConfigurationUpdates = sqliteTable(
       sql`length(${table.requestDigest}) = 43`,
     ),
     check("fleet_configuration_updates_revision_positive", sql`${table.revision} > 0`),
+  ],
+);
+
+export const modelCatalogs = sqliteTable(
+  "model_catalogs",
+  {
+    singleton: integer("singleton").primaryKey(),
+    currentRevision: integer("current_revision").notNull(),
+  },
+  (table) => [
+    check("model_catalogs_singleton", sql`${table.singleton} = 1`),
+    check("model_catalogs_current_revision_positive", sql`${table.currentRevision} > 0`),
+  ],
+);
+
+export const modelCatalogRevisions = sqliteTable(
+  "model_catalog_revisions",
+  {
+    revision: integer("revision").primaryKey(),
+    catalog: text("catalog", { mode: "json" }).$type<ModelCatalogData>().notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    check("model_catalog_revisions_revision_positive", sql`${table.revision} > 0`),
+    check("model_catalog_revisions_catalog_json", sql`json_valid(${table.catalog})`),
+    check("model_catalog_revisions_created_at_positive", sql`${table.createdAt} > 0`),
+  ],
+);
+
+export const modelCatalogUpdates = sqliteTable(
+  "model_catalog_updates",
+  {
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    revision: integer("revision").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.clientId, table.idempotencyKey] }),
+    uniqueIndex("model_catalog_updates_revision").on(table.revision),
+    foreignKey({
+      columns: [table.revision],
+      foreignColumns: [modelCatalogRevisions.revision],
+    }).onDelete("restrict"),
+    check("model_catalog_updates_request_digest_length", sql`length(${table.requestDigest}) = 43`),
+    check("model_catalog_updates_revision_positive", sql`${table.revision} > 0`),
   ],
 );
 
@@ -2443,6 +2490,9 @@ export const controlPlaneSchema = {
   providerAuthConfigs,
   providerAuthSetupRequests,
   mcpAuthoringDrafts,
+  modelCatalogRevisions,
+  modelCatalogs,
+  modelCatalogUpdates,
   runAdmissions,
   runtimeToolExecutions,
   skillMutations,

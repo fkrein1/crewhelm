@@ -31,6 +31,7 @@ import {
   type CrewAgentRuntimeConfig,
   type FleetConfiguration,
   type ListAgentRunsInput,
+  type ModelCatalogData,
   type OwnerAuthority,
   type RunAdmissionPermit,
   type RedeemRunReceiverCapabilityResult,
@@ -122,13 +123,18 @@ function eventTriggerReference(row: EventTriggerReferenceRow): {
 
 export function runAdmissionFailureFromCapabilityCompilation(
   failure: CapabilityCompilationFailure,
-): Extract<RunAdmissionRequestErrorCode, "capability_unavailable" | "model_unavailable"> {
+): Extract<
+  RunAdmissionRequestErrorCode,
+  "capability_unavailable" | "model_disabled" | "model_unavailable"
+> {
   switch (failure.code) {
     case "configuration_unavailable":
       return failure.moduleId === WORKERS_AI_CAPABILITY_ID ||
         failure.moduleId === AI_GATEWAY_CAPABILITY_ID
         ? "model_unavailable"
         : "capability_unavailable";
+    case "model_disabled":
+      return "model_disabled";
     case "capability_conflict":
     case "capability_unavailable":
     case "invalid_configuration":
@@ -327,6 +333,7 @@ export class RunAdmissions {
   readonly #availableCapabilityPrerequisites: ReadonlySet<string>;
   readonly #briefs: Briefs;
   readonly #currentFleetConfiguration: () => FleetConfiguration;
+  readonly #currentModelCatalog: () => ModelCatalogData;
   readonly #database: ControlPlaneDatabase;
   readonly #objectName: string | undefined;
   readonly #storage: DurableObjectStorage;
@@ -337,12 +344,14 @@ export class RunAdmissions {
     database: ControlPlaneDatabase,
     storage: DurableObjectStorage,
     currentFleetConfiguration: () => FleetConfiguration,
+    currentModelCatalog: () => ModelCatalogData,
     skills: Skills,
     briefs: Briefs,
     availableCapabilityPrerequisites: ReadonlySet<string>,
   ) {
     this.#availableCapabilityPrerequisites = availableCapabilityPrerequisites;
     this.#currentFleetConfiguration = currentFleetConfiguration;
+    this.#currentModelCatalog = currentModelCatalog;
     this.#database = database;
     this.#objectName = objectName;
     this.#storage = storage;
@@ -494,6 +503,7 @@ export class RunAdmissions {
         availablePrerequisites: this.#availableCapabilityPrerequisites,
         checkPrerequisites: true,
         fleetConfiguration: fleetConfiguration.data,
+        modelCatalog: this.#currentModelCatalog(),
       });
 
       if (!compiledCapabilities.ok) {
@@ -1421,6 +1431,7 @@ export class RunAdmissions {
       availablePrerequisites: this.#availableCapabilityPrerequisites,
       checkPrerequisites: true,
       fleetConfiguration: this.#currentFleetConfiguration().data,
+      modelCatalog: this.#currentModelCatalog(),
     });
 
     if (!compiledCapabilities.ok) {

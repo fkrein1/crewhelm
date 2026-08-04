@@ -38,6 +38,12 @@ Workflow performing it.
 An owner-authorized AI tool, such as Claude or Codex, that administers the control plane through
 Crewhelm's MCP interface.
 
+## Model catalog
+
+The revisioned set of exact Cloudflare AI model IDs an owner has enabled for Agent admission, plus
+one enabled default. It is owner policy, separate from Cloudflare's live provider catalog and from
+Crewhelm's deterministic runtime limits.
+
 ## Recipe
 
 An immutable public declaration of one responsibility: Agent instructions and limits, pinned

@@ -10,6 +10,7 @@ sources:
   - docs/reference/mcp-tools.md
   - docs/product/philosophy.md
   - packages/contracts/src/control-plane.ts
+  - packages/contracts/src/model-catalog.ts
 ---
 
 Create an Agent with a clear responsibility, then start one bounded Run and inspect its result.
@@ -25,8 +26,8 @@ Agent creation does not grant access to an external provider.
 ## Authority and custody
 
 An Agent is owner-scoped. Its definition becomes an immutable revision, and every Run records the
-exact revision it uses. Omit optional capability configuration and execution limits for the first
-Agent to inherit the current fleet defaults.
+exact revision it uses. Omit optional capability configuration to use the owner model catalog's
+current default, and omit execution limits to use the fleet execution defaults.
 
 Creating an Agent grants no external authority. Connections, native capabilities, and standing
 tool authority are separate, explicit configuration choices.

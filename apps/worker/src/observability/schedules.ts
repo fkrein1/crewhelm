@@ -20,6 +20,7 @@ const SCHEDULE_FAILURE_REASON = {
   invalid_authority: "invalid_authority",
   invalid_request: "invalid_request",
   model_unavailable: "model_unavailable",
+  model_disabled: "model_disabled",
   owner_mismatch: "owner_mismatch",
   record_dispatch_conflict: "record_dispatch_conflict",
   revision_conflict: "revision_conflict",

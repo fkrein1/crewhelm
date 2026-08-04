@@ -60,6 +60,7 @@ const SCHEDULED_RUN_FAILURE_CASES = [
   ["invalid_authority", "run_unavailable"],
   ["invalid_request", "run_unavailable"],
   ["model_unavailable", "model_unavailable"],
+  ["model_disabled", "model_unavailable"],
   ["owner_mismatch", "run_unavailable"],
   ["revision_conflict", "revision_conflict"],
   ["run_unavailable", "run_unavailable"],
@@ -138,6 +139,9 @@ function rewindControlPlaneMigrations(
   storage.sql.exec("DROP TABLE IF EXISTS remote_mcp_oauth_requests");
   storage.sql.exec("DROP TABLE IF EXISTS remote_mcp_connection_mutations");
   storage.sql.exec("DROP TABLE IF EXISTS remote_mcp_connections");
+  storage.sql.exec("DROP TABLE IF EXISTS model_catalog_updates");
+  storage.sql.exec("DROP TABLE IF EXISTS model_catalogs");
+  storage.sql.exec("DROP TABLE IF EXISTS model_catalog_revisions");
   storage.sql.exec("PRAGMA foreign_keys=ON");
   storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= ?", firstRemovedVersion);
 }
@@ -449,6 +453,11 @@ describe("OwnerControlPlane", () => {
           name: "0036_thin_rumiko_fujikawa",
           version: 37,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0037_curved_stellaris",
+          version: 38,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });
@@ -531,9 +540,12 @@ describe("OwnerControlPlane", () => {
       state.storage.sql.exec("DROP TABLE mcp_authoring_drafts");
       state.storage.sql.exec("DROP TABLE provider_auth_configs");
       state.storage.sql.exec("DROP TABLE provider_auth_setup_requests");
+      state.storage.sql.exec("DROP TABLE model_catalog_updates");
+      state.storage.sql.exec("DROP TABLE model_catalogs");
+      state.storage.sql.exec("DROP TABLE model_catalog_revisions");
       state.storage.sql.exec(
         "DELETE FROM control_plane_migrations WHERE version >= ?",
-        CONTROL_PLANE_SCHEMA_VERSION - 4,
+        CONTROL_PLANE_SCHEMA_VERSION - 5,
       );
       await state.storage.sync();
       state.storage.sql.exec("PRAGMA foreign_keys=ON");
@@ -1939,6 +1951,7 @@ describe("OwnerControlPlane", () => {
         { version: 35 },
         { version: 36 },
         { version: 37 },
+        { version: 38 },
       ]);
     });
   });
@@ -2252,7 +2265,7 @@ describe("OwnerControlPlane", () => {
       admission: { run_id: admission.permit.runId, trigger: "manual" },
       foreignKeys: [],
       migration: {
-        name: "0036_thin_rumiko_fujikawa",
+        name: "0037_curved_stellaris",
         version: CONTROL_PLANE_SCHEMA_VERSION,
       },
       workflow: {

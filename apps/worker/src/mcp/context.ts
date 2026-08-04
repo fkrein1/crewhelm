@@ -19,6 +19,7 @@ export interface OwnerControlPlaneClient {
   completeProviderAuthSetup?(input: unknown): Promise<unknown>;
   completeIntegrationEnablement(authorityInput: unknown, input: unknown): Promise<unknown>;
   configureFleetConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
+  configureModelCatalog?(authorityInput: unknown, input: unknown): Promise<unknown>;
   createBrief(authorityInput: unknown, input: unknown): Promise<unknown>;
   decideRunToolApproval(authorityInput: unknown, input: unknown): Promise<unknown>;
   deleteAgentSession?(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -31,6 +32,7 @@ export interface OwnerControlPlaneClient {
   getAgentRevision(authorityInput: unknown, input: unknown): Promise<unknown>;
   getAgentSchedule(authorityInput: unknown, input: unknown): Promise<unknown>;
   getFleetConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
+  getModelCatalog?(authorityInput: unknown, input: unknown): Promise<unknown>;
   getSkill(authorityInput: unknown, input: unknown): Promise<unknown>;
   executeRemoteMcpTool?(input: unknown): Promise<unknown>;
   exchangeProviderAuthSetup?(input: unknown): Promise<unknown>;
@@ -83,6 +85,7 @@ export interface OwnerControlPlaneClient {
 }
 
 export interface McpEnvironment {
+  AI?: Ai;
   AI_GATEWAY_ID?: string | undefined;
   BETTER_AUTH_SECRET: string;
   BRAVE_SEARCH_API_KEY?: string | undefined;
@@ -94,7 +97,12 @@ export interface McpEnvironment {
   };
 }
 
+export interface CloudflareModelDiscoveryClient {
+  models(params?: AiModelsSearchParams): Promise<AiModelsSearchObject[]>;
+}
+
 export interface McpToolContext {
+  ai: CloudflareModelDiscoveryClient | undefined;
   authority: OwnerAuthority;
   availableAgentCapabilityPrerequisites: ReadonlySet<string>;
   controlPlane: OwnerControlPlaneClient;

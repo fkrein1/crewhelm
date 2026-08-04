@@ -6,10 +6,7 @@ import {
   DEFAULT_FLEET_MAX_CONCURRENT_RUNS,
   DEFAULT_FLEET_MAX_CONNECTIONS,
   DEFAULT_FLEET_RUN_RETENTION_SECONDS,
-  DEFAULT_AI_GATEWAY_AGENT_MODEL,
-  DEFAULT_RUNNABLE_AGENT_MODEL,
   OWNER_READ_SCOPE,
-  RUNNABLE_AGENT_MODELS,
 } from "@crewhelm/contracts";
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -21,28 +18,19 @@ import { controlPlaneSchema } from "../schema.js";
 import { FleetConfigurations } from "./module.js";
 
 describe("OwnerControlPlane fleet configuration", () => {
-  it("does not replace an existing fleet default when installation prerequisites change", async () => {
+  it("preserves an existing fleet configuration", async () => {
     const authority = await authorityFor("fleet-configuration-existing", [OWNER_READ_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
     const initial = await stub.getFleetConfiguration(authority, { target: { kind: "fleet" } });
 
-    expect(initial).toMatchObject({
-      configuration: {
-        data: { models: { default: DEFAULT_RUNNABLE_AGENT_MODEL } },
-        revision: 1,
-      },
-      ok: true,
-    });
+    expect(initial).toMatchObject({ configuration: { revision: 1 }, ok: true });
 
     const preserved = await runInDurableObject(stub, (_instance, state) => {
       const database = drizzle(state.storage, { schema: controlPlaneSchema });
-      return new FleetConfigurations(database, DEFAULT_AI_GATEWAY_AGENT_MODEL).current();
+      return new FleetConfigurations(database).current();
     });
 
-    expect(preserved).toMatchObject({
-      data: { models: { default: DEFAULT_RUNNABLE_AGENT_MODEL } },
-      revision: 1,
-    });
+    expect(preserved).toMatchObject({ revision: 1 });
   });
 
   it("previews and applies a revision-checked partial configuration idempotently", async () => {
@@ -64,10 +52,6 @@ describe("OwnerControlPlane fleet configuration", () => {
             maxConnections: DEFAULT_FLEET_MAX_CONNECTIONS,
           },
           integrations: { callsPerDay: DEFAULT_FLEET_INTEGRATION_CALLS_PER_DAY },
-          models: {
-            allowed: [...RUNNABLE_AGENT_MODELS].toSorted(),
-            default: DEFAULT_RUNNABLE_AGENT_MODEL,
-          },
           retention: {
             inboxSeconds: DEFAULT_FLEET_INBOX_RETENTION_SECONDS,
             runSeconds: DEFAULT_FLEET_RUN_RETENTION_SECONDS,

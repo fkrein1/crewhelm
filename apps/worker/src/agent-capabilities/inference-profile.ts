@@ -1,29 +1,20 @@
 import {
   inferenceReasoningEffortSchema,
+  agentModelSchema,
   MAXIMUM_INFERENCE_FALLBACKS,
   type AgentRuntimePlan,
   type AgentCapabilityDescriptor,
-  type FleetConfigurationData,
+  type ModelCatalogData,
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
 import type { CapabilityModuleResolution } from "./kernel.js";
 
-export function inferenceProfileConfigurationSchema<const Models extends readonly string[]>(
-  models: Models,
-  reasoningModels: ReadonlySet<string>,
-): z.ZodType<
-  InferenceProfileConfiguration & {
-    fallbackModels: Models[number][];
-    primaryModel: Models[number];
-  }
-> {
-  const modelSchema = z.enum(models);
-
+export function inferenceProfileConfigurationSchema(): z.ZodType<InferenceProfileConfiguration> {
   return z
     .strictObject({
-      fallbackModels: z.array(modelSchema).max(MAXIMUM_INFERENCE_FALLBACKS).default([]),
-      primaryModel: modelSchema,
+      fallbackModels: z.array(agentModelSchema).max(MAXIMUM_INFERENCE_FALLBACKS).default([]),
+      primaryModel: agentModelSchema,
       reasoningEffort: inferenceReasoningEffortSchema.optional(),
       temperature: z.number().min(0).max(2).optional(),
       topP: z.number().min(0).max(1).optional(),
@@ -36,17 +27,6 @@ export function inferenceProfileConfigurationSchema<const Models extends readonl
           code: "custom",
           message: "Inference attempt models must be unique.",
           path: ["fallbackModels"],
-        });
-      }
-
-      if (
-        profile.reasoningEffort !== undefined &&
-        attemptOrder.some((model) => !reasoningModels.has(model))
-      ) {
-        context.addIssue({
-          code: "custom",
-          message: "Every inference attempt must support the selected reasoning effort.",
-          path: ["reasoningEffort"],
         });
       }
     });
@@ -74,17 +54,17 @@ export function inferenceRuntimeProfile(
 
 export function resolveInferenceProfile(
   profile: InferenceProfileConfiguration,
-  fleetConfiguration: FleetConfigurationData,
+  modelCatalog: ModelCatalogData,
 ): CapabilityModuleResolution {
   const attemptOrder = [profile.primaryModel, ...profile.fallbackModels];
 
   if (
     attemptOrder.some(
-      (model) => !fleetConfiguration.models.allowed.some((allowedModel) => allowedModel === model),
+      (model) => !modelCatalog.enabledModels.some((enabledModel) => enabledModel === model),
     )
   ) {
     return {
-      code: "configuration_unavailable",
+      code: "model_disabled",
       ok: false,
     };
   }
@@ -100,20 +80,16 @@ export function resolveInferenceProfile(
   };
 }
 
-export function inferenceConfigurationFields(
-  models: readonly string[],
-): AgentCapabilityDescriptor["configurationFields"] {
+export function inferenceConfigurationFields(): AgentCapabilityDescriptor["configurationFields"] {
   return [
     {
-      description: "Primary supported model selected for each model turn.",
-      enum: [...models],
+      description: "Exact owner-enabled Cloudflare AI model ID selected for each model turn.",
       name: "primaryModel",
       required: true,
       type: "string" as const,
     },
     {
       description: "Ordered unique fallback models tried only before an attempt emits output.",
-      enum: [...models],
       name: "fallbackModels",
       required: false,
       type: "list" as const,

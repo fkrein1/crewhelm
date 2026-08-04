@@ -33,7 +33,7 @@ describe("fleet read response budgets", () => {
     const agents = Array.from({ length: MAXIMUM_FLEET_LIST_ITEMS }, (_, index) => ({
       createdAt: timestamp,
       id: `agent_${uuid(index)}`,
-      model: "m".repeat(160),
+      model: `${"p".repeat(78)}/${"m".repeat(81)}`,
       name: "N".repeat(80),
       revision: Number.MAX_SAFE_INTEGER,
       status: "disabled" as const,

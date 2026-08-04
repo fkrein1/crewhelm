@@ -975,9 +975,19 @@ describe("OwnerControlPlane runs", () => {
     const authority = await authorityFor("236", [
       OWNER_WRITE_SCOPE,
       AGENTS_WRITE_SCOPE,
+      AUTONOMY_WRITE_SCOPE,
       RUNS_WRITE_SCOPE,
     ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    await expect(
+      stub.configureModelCatalog(authority, {
+        change: { kind: "add", modelId: "openai/gpt-5.6-luna" },
+        expectedRevision: 1,
+        idempotencyKey: "enable-gateway-model-236",
+        mode: "apply",
+        target: { kind: "model-catalog" },
+      }),
+    ).resolves.toMatchObject({ applied: true, ok: true });
     const supported = await stub.createAgent(authority, {
       ...agentInput("create-supported-model-agent-236"),
       capabilities: [
@@ -1006,7 +1016,7 @@ describe("OwnerControlPlane runs", () => {
       throw new Error("Expected supported model-policy fixture Agent.");
     }
     expect(unlisted).toEqual({
-      error: { code: "invalid_request", message: "Agent request denied." },
+      error: { code: "model_disabled", message: "Agent request denied." },
       ok: false,
     });
 

@@ -124,7 +124,7 @@ Create a disabled Agent from one bounded definition.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `capabilities` | No | array of object | Optional capability module configuration. Omit to use the fleet's default inference module. minimum items: `1`; maximum items: `16` |
+| `capabilities` | No | array of object | Optional capability module configuration. Omit to use the owner model catalog's default inference module. minimum items: `1`; maximum items: `16` |
 | `executionLimits` | No | object | Optional Agent-specific ceilings. Omit to inherit the current fleet execution defaults. |
 | `instructions` | Yes | string | minimum length: `1`; maximum length: `8192` |
 | `name` | Yes | string | minimum length: `1`; maximum length: `80` |
@@ -339,7 +339,7 @@ Create a disabled Agent from one bounded definition.
         ],
         "additionalProperties": false
       },
-      "description": "Optional capability module configuration. Omit to use the fleet's default inference module."
+      "description": "Optional capability module configuration. Omit to use the owner model catalog's default inference module."
     },
     "executionLimits": {
       "type": "object",
@@ -3102,7 +3102,7 @@ Grant one Agent revision selected tools from one remote MCP Connection snapshot.
 
 **Change Crewhelm context**
 
-Draft and apply configuration packages or manage Briefs.
+Preview fleet policy changes, draft configuration packages, or manage Briefs.
 
 Attributes: write, destructive, idempotent, closed-world.
 
@@ -3247,54 +3247,6 @@ Preview one bounded fleet policy patch without applying it.
           },
           "additionalProperties": false,
           "description": "Integration usage and loop controls."
-        },
-        "models": {
-          "type": "object",
-          "properties": {
-            "allowed": {
-              "minItems": 1,
-              "maxItems": 12,
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": [
-                  "@cf/ibm-granite/granite-4.0-h-micro",
-                  "@cf/meta/llama-4-scout-17b-16e-instruct",
-                  "@cf/moonshotai/kimi-k2.6",
-                  "@cf/moonshotai/kimi-k2.7-code",
-                  "@cf/openai/gpt-oss-20b",
-                  "@cf/openai/gpt-oss-120b",
-                  "@cf/qwen/qwen3-30b-a3b-fp8",
-                  "@cf/zai-org/glm-4.7-flash",
-                  "@cf/zai-org/glm-5.2",
-                  "openai/gpt-5.6-luna",
-                  "openai/gpt-5.6-sol",
-                  "openai/gpt-5.6-terra"
-                ]
-              },
-              "description": "Allowed supported model IDs, unique and sorted in ascending order."
-            },
-            "default": {
-              "type": "string",
-              "enum": [
-                "@cf/ibm-granite/granite-4.0-h-micro",
-                "@cf/meta/llama-4-scout-17b-16e-instruct",
-                "@cf/moonshotai/kimi-k2.6",
-                "@cf/moonshotai/kimi-k2.7-code",
-                "@cf/openai/gpt-oss-20b",
-                "@cf/openai/gpt-oss-120b",
-                "@cf/qwen/qwen3-30b-a3b-fp8",
-                "@cf/zai-org/glm-4.7-flash",
-                "@cf/zai-org/glm-5.2",
-                "openai/gpt-5.6-luna",
-                "openai/gpt-5.6-sol",
-                "openai/gpt-5.6-terra"
-              ],
-              "description": "New inference model used when Agent creation omits capability configuration."
-            }
-          },
-          "additionalProperties": false,
-          "description": "Fleet model selection defaults and allowlist."
         },
         "retention": {
           "type": "object",
@@ -4656,6 +4608,192 @@ Delete one exact unreferenced Brief revision.
   },
   "required": [
     "brief"
+  ],
+  "additionalProperties": false
+}
+```
+
+</details>
+
+## `crewhelm_change_models`
+
+**Change models**
+
+Preview or confirm model catalog changes.
+
+Attributes: write, destructive, idempotent, open-world.
+
+How to use this tool:
+
+1. Send `{"request":"operations"}` to list its subtools.
+2. Send `{"request":"schema","name":"…"}` for one subtool’s exact inputs.
+3. Send `{"request":"execute","name":"…","input":{…}}` to run it.
+
+| Subtool | Purpose |
+| --- | --- |
+| `add_model` | Inspect, preview, or enable one exact Cloudflare model ID. |
+| `remove_model` | Preview impacted Agents, then disable one model without rewriting history. |
+| `set_default_model` | Preview or change the owner's default model. |
+
+### `add_model`
+
+Inspect, preview, or enable one exact Cloudflare model ID.
+
+| Input | Required | Type | Details |
+| --- | --- | --- | --- |
+| `confirm` | No | boolean | Leave false to preview; repeat with true to apply. default: `false` |
+| `expectedRevision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
+| `modelId` | Yes | string | minimum length: `3`; maximum length: `160`; pattern: `^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\/)?[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:/-]*$` |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
+
+<details>
+<summary>View exact JSON Schema</summary>
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "confirm": {
+      "default": false,
+      "description": "Leave false to preview; repeat with true to apply.",
+      "type": "boolean"
+    },
+    "expectedRevision": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "modelId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\\/)?[A-Za-z0-9][A-Za-z0-9._-]*\\/[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "requestKey": {
+      "description": "Optional retry identity. Omit it on the ordinary happy path.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    }
+  },
+  "required": [
+    "expectedRevision",
+    "modelId"
+  ],
+  "additionalProperties": false
+}
+```
+
+</details>
+
+### `remove_model`
+
+Preview impacted Agents, then disable one model without rewriting history.
+
+| Input | Required | Type | Details |
+| --- | --- | --- | --- |
+| `confirm` | No | boolean | Leave false to preview; repeat with true to apply. default: `false` |
+| `expectedRevision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
+| `modelId` | Yes | string | minimum length: `3`; maximum length: `160`; pattern: `^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\/)?[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:/-]*$` |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
+| `replacementDefaultModelId` | No | string | minimum length: `3`; maximum length: `160`; pattern: `^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\/)?[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:/-]*$` |
+
+<details>
+<summary>View exact JSON Schema</summary>
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "confirm": {
+      "default": false,
+      "description": "Leave false to preview; repeat with true to apply.",
+      "type": "boolean"
+    },
+    "expectedRevision": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "modelId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\\/)?[A-Za-z0-9][A-Za-z0-9._-]*\\/[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "requestKey": {
+      "description": "Optional retry identity. Omit it on the ordinary happy path.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "replacementDefaultModelId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\\/)?[A-Za-z0-9][A-Za-z0-9._-]*\\/[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    }
+  },
+  "required": [
+    "expectedRevision",
+    "modelId"
+  ],
+  "additionalProperties": false
+}
+```
+
+</details>
+
+### `set_default_model`
+
+Preview or change the owner's default model.
+
+| Input | Required | Type | Details |
+| --- | --- | --- | --- |
+| `confirm` | No | boolean | Leave false to preview; repeat with true to apply. default: `false` |
+| `expectedRevision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
+| `modelId` | Yes | string | minimum length: `3`; maximum length: `160`; pattern: `^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\/)?[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:/-]*$` |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
+
+<details>
+<summary>View exact JSON Schema</summary>
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "confirm": {
+      "default": false,
+      "description": "Leave false to preview; repeat with true to apply.",
+      "type": "boolean"
+    },
+    "expectedRevision": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "modelId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\\/)?[A-Za-z0-9][A-Za-z0-9._-]*\\/[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "requestKey": {
+      "description": "Optional retry identity. Omit it on the ordinary happy path.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    }
+  },
+  "required": [
+    "expectedRevision",
+    "modelId"
   ],
   "additionalProperties": false
 }
@@ -6291,7 +6429,7 @@ List Agents with compact current-revision metadata.
 | --- | --- | --- | --- |
 | `cursor` | No | string | pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `limit` | No | integer | minimum: `1`; maximum: `25`; default: `25` |
-| `model` | No | string | Return Agents using this exact model. minimum length: `1`; maximum length: `160`; pattern: `^(?:@cf\/)?[A-Za-z0-9][A-Za-z0-9._:/-]*$` |
+| `model` | No | string | Return Agents using this exact model. minimum length: `3`; maximum length: `160`; pattern: `^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\/)?[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:/-]*$` |
 | `name` | No | string | Return Agents whose names contain this value, case-insensitively for ASCII characters. minimum length: `1`; maximum length: `80` |
 | `status` | No | "active" \| "disabled" | Return Agents in this lifecycle state. |
 
@@ -6316,9 +6454,9 @@ List Agents with compact current-revision metadata.
     "model": {
       "description": "Return Agents using this exact model.",
       "type": "string",
-      "minLength": 1,
+      "minLength": 3,
       "maxLength": 160,
-      "pattern": "^(?:@cf\\/)?[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+      "pattern": "^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\\/)?[A-Za-z0-9][A-Za-z0-9._-]*\\/[A-Za-z0-9][A-Za-z0-9._:/-]*$"
     },
     "name": {
       "description": "Return Agents whose names contain this value, case-insensitively for ASCII characters.",
@@ -7020,7 +7158,7 @@ List compact provider and remote MCP Connection metadata.
 
 **Inspect Crewhelm context**
 
-Inspect fleet policy, capability modules, Skills, blueprints, and owner-provided context through bounded catalogs and exact reads.
+Inspect fleet policy, capabilities, Skills, blueprints, and Briefs.
 
 Attributes: read-only, non-destructive, idempotent, closed-world.
 
@@ -7527,6 +7665,177 @@ Read the content of one exact immutable Brief revision.
   "required": [
     "brief"
   ],
+  "additionalProperties": false
+}
+```
+
+</details>
+
+## `crewhelm_inspect_models`
+
+**Inspect models**
+
+Search or inspect Cloudflare models and list owner-enabled IDs.
+
+Attributes: read-only, non-destructive, idempotent, open-world.
+
+How to use this tool:
+
+1. Send `{"request":"operations"}` to list its subtools.
+2. Send `{"request":"schema","name":"…"}` for one subtool’s exact inputs.
+3. Send `{"request":"execute","name":"…","input":{…}}` to run it.
+
+| Subtool | Purpose |
+| --- | --- |
+| `search_models` | Search current models by name, provider, task, or declared capability. |
+| `inspect_model` | Inspect one exact current Cloudflare model ID. |
+| `list_enabled_models` | List owner-enabled model IDs and the default. |
+
+### `search_models`
+
+Search current models by name, provider, task, or declared capability.
+
+| Input | Required | Type | Details |
+| --- | --- | --- | --- |
+| `capability` | No | "function-calling" \| "reasoning" \| "vision" | — |
+| `limit` | No | integer | minimum: `1`; maximum: `25`; default: `10` |
+| `provider` | No | string | minimum length: `1`; maximum length: `80` |
+| `query` | No | string | minimum length: `1`; maximum length: `120` |
+| `task` | No | string | minimum length: `1`; maximum length: `80` |
+
+<details>
+<summary>View exact JSON Schema</summary>
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "capability": {
+      "type": "string",
+      "enum": [
+        "function-calling",
+        "reasoning",
+        "vision"
+      ]
+    },
+    "limit": {
+      "default": 10,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "task": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+</details>
+
+### `inspect_model`
+
+Inspect one exact current Cloudflare model ID.
+
+| Input | Required | Type | Details |
+| --- | --- | --- | --- |
+| `modelId` | Yes | string | minimum length: `3`; maximum length: `160`; pattern: `^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\/)?[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:/-]*$` |
+
+<details>
+<summary>View exact JSON Schema</summary>
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "modelId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\\/)?[A-Za-z0-9][A-Za-z0-9._-]*\\/[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    }
+  },
+  "required": [
+    "modelId"
+  ],
+  "additionalProperties": false
+}
+```
+
+</details>
+
+### `list_enabled_models`
+
+List owner-enabled model IDs and the default.
+
+| Input | Required | Type | Details |
+| --- | --- | --- | --- |
+| `capability` | No | "function-calling" \| "reasoning" \| "vision" | — |
+| `limit` | No | integer | minimum: `1`; maximum: `25`; default: `10` |
+| `modelId` | No | string | minimum length: `3`; maximum length: `160`; pattern: `^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\/)?[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:/-]*$` |
+| `provider` | No | string | minimum length: `1`; maximum length: `80` |
+| `query` | No | string | minimum length: `1`; maximum length: `120` |
+| `task` | No | string | minimum length: `1`; maximum length: `80` |
+
+<details>
+<summary>View exact JSON Schema</summary>
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "capability": {
+      "type": "string",
+      "enum": [
+        "function-calling",
+        "reasoning",
+        "vision"
+      ]
+    },
+    "limit": {
+      "default": 10,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25
+    },
+    "modelId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\\/)?[A-Za-z0-9][A-Za-z0-9._-]*\\/[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "task": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    }
+  },
   "additionalProperties": false
 }
 ```

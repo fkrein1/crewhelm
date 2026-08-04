@@ -142,6 +142,8 @@ export function agentWorkflowFailureFromRunStart(code: RunStartFailureCode): Fai
     case "run_unavailable":
     case "session_not_found":
       return "workflow_unavailable";
+    case "model_disabled":
+      return "model_unavailable";
     case "agent_not_found":
     case "agent_unavailable":
     case "admission_limit_exceeded":

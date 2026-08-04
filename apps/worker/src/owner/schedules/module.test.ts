@@ -594,24 +594,26 @@ describe("OwnerControlPlane Agent schedules", () => {
         },
       ],
     });
-    const configuration = await controlPlane.getFleetConfiguration(authority, {
+    const catalog = await controlPlane.getModelCatalog(authority, {
+      target: { kind: "model-catalog" },
+    });
+    const fleetConfiguration = await controlPlane.getFleetConfiguration(authority, {
       target: { kind: "fleet" },
     });
 
-    if (!created.ok || !configuration.ok) {
+    if (!created.ok || !catalog.ok || !fleetConfiguration.ok) {
       throw new Error("Expected deferred schedule fixtures.");
     }
-    const restrictedConfiguration = await controlPlane.configureFleetConfiguration(authority, {
-      expectedRevision: configuration.configuration.revision,
+    const restrictedConfiguration = await controlPlane.configureModelCatalog(authority, {
+      change: {
+        kind: "remove",
+        modelId: "@cf/zai-org/glm-4.7-flash",
+        replacementDefaultModelId: "@cf/meta/llama-4-scout-17b-16e-instruct",
+      },
+      expectedRevision: catalog.catalog.revision,
       idempotencyKey: "restrict-deferred-schedule-models",
       mode: "apply",
-      patch: {
-        models: {
-          allowed: ["@cf/meta/llama-4-scout-17b-16e-instruct"],
-          default: "@cf/meta/llama-4-scout-17b-16e-instruct",
-        },
-      },
-      target: { kind: "fleet" },
+      target: { kind: "model-catalog" },
     });
 
     if (!restrictedConfiguration.ok) {
@@ -660,7 +662,7 @@ describe("OwnerControlPlane Agent schedules", () => {
           agentName: "Deferred Schedule Agent",
           configuration: {
             agentRevision: created.agent.revision,
-            fleetRevision: restrictedConfiguration.configuration.revision,
+            fleetRevision: fleetConfiguration.configuration.revision,
             scheduleRevision: 1,
           },
           kind: "deferred",
