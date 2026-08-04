@@ -1114,7 +1114,7 @@ describe("repository foundation", () => {
       env: {
         preview: {
           kv_namespaces: [{ binding: "SESSION", id: "2c54b9c67de54712bb33624f6a978448" }],
-          name: "crewhelm-site-preview",
+          name: "crewhelm-site",
           preview_urls: true,
           services: [{ binding: "REGISTRY", service: "crewhelm-registry-dev" }],
           vars: {

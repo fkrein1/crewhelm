@@ -14,7 +14,7 @@
   "preview_urls": false,
   "env": {
     "preview": {
-      "name": "crewhelm-site-preview",
+      "name": "crewhelm-site",
       "assets": {
         "binding": "ASSETS",
         "directory": "./dist/client",

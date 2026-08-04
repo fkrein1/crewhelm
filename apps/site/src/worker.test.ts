@@ -84,7 +84,7 @@ describe("site Registry gateway", () => {
 
     const response = await routeSiteRequest(
       new Request(
-        "https://branch-crewhelm-site-preview.fkrein.workers.dev/api/registry/v1/recipes/search?q=research",
+        "https://branch-crewhelm-site.fkrein.workers.dev/api/registry/v1/recipes/search?q=research",
       ),
       env,
     );
