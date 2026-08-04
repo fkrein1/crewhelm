@@ -257,14 +257,17 @@ function normalizeCredentialFields(
 ): ProviderCredentialField[] | null {
   const fields = [...details.required, ...details.optional]
     .filter((field) => field.name !== "oauth_redirect_uri")
-    .map((field) => ({
-      key: field.name,
-      label: field.displayName,
-      maximumLength: field.is_secret === false ? 2_048 : 8_192,
-      required: field.required,
-      secret: field.is_secret !== false,
-      type: "string" as const,
-    }));
+    .map((field) => {
+      const secret = field.name.toLowerCase() === "scopes" ? false : field.is_secret !== false;
+      return {
+        key: field.name,
+        label: field.displayName,
+        maximumLength: secret ? 8_192 : 2_048,
+        required: field.required,
+        secret,
+        type: "string" as const,
+      };
+    });
 
   const parsed = providerCredentialFieldsSchema.safeParse(fields);
   return parsed.success ? parsed.data : null;

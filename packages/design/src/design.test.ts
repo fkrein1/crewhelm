@@ -205,6 +205,9 @@ describe("Crewhelm design foundation", () => {
     expect(CREWHELM_WEB_STYLES).not.toContain("data-theme");
     expect(CREWHELM_WEB_STYLES).toContain("@media (prefers-reduced-motion: reduce)");
     expect(CREWHELM_WEB_STYLES).toContain('.ch-button[aria-disabled="true"]');
+    expect(CREWHELM_WEB_STYLES).toContain(".ch-form-section");
+    expect(CREWHELM_WEB_STYLES).toContain(".ch-input:focus");
+    expect(CREWHELM_WEB_STYLES).toContain('.ch-step[aria-current="step"]');
     expect(CREWHELM_WEB_STYLES).not.toContain("body.ch-page::before");
     expect(CREWHELM_WEB_STYLES).not.toContain("box-shadow: 10px 10px 0 var(--ch-page-accent)");
     expect(CREWHELM_WEB_STYLES.length).toBeLessThan(16_000);
