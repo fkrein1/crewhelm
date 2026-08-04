@@ -221,8 +221,6 @@ body.ch-page {
 .ch-form-section {
   display: grid;
   gap: var(--ch-space-4);
-  padding-top: var(--ch-space-5);
-  border-top: 1px solid var(--ch-color-border-strong);
 }
 
 .ch-form-section h2 {
@@ -305,22 +303,29 @@ body.ch-page {
 }
 
 .ch-trust {
-  padding: var(--ch-space-4);
-  border-left: 3px solid var(--ch-color-positive);
-  background: var(--ch-color-positive-soft);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: var(--ch-space-3);
+  padding-top: var(--ch-space-2);
 }
 
 .ch-trust strong,
 .ch-trust p {
-  display: block;
   margin: 0;
   font-size: 12px;
   line-height: 1.5;
 }
 
+.ch-trust strong {
+  color: var(--ch-color-text-muted);
+  font: 700 9px/1.5 var(--ch-font-mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
 .ch-trust p {
-  margin-top: var(--ch-space-1);
-  color: var(--ch-color-text-secondary);
+  color: var(--ch-color-text-muted);
 }
 
 .ch-panel strong {

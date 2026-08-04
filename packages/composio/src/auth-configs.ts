@@ -256,9 +256,9 @@ function normalizeCredentialFields(
   details: z.infer<typeof composioAuthConfigCreationFieldsSchema>,
 ): ProviderCredentialField[] | null {
   const fields = [...details.required, ...details.optional]
-    .filter((field) => field.name !== "oauth_redirect_uri")
+    .filter((field) => field.name !== "oauth_redirect_uri" && field.name.toLowerCase() !== "scopes")
     .map((field) => {
-      const secret = field.name.toLowerCase() === "scopes" ? false : field.is_secret !== false;
+      const secret = field.is_secret !== false;
       return {
         key: field.name,
         label: field.displayName,
