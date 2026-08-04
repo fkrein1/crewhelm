@@ -106,12 +106,11 @@ interface RegistryService {
 }
 
 interface RecipeSiteEnv {
-  REGISTRY: RegistryService;
-  REGISTRY_ORIGIN?: string;
+  REGISTRY?: RegistryService;
+  REGISTRY_PUBLIC_ORIGIN?: string;
 }
 
-function registryOrigin(requestUrl: URL, configuredOrigin: string | undefined): string {
-  if (configuredOrigin === undefined) return requestUrl.origin;
+function registryOrigin(configuredOrigin: string): string {
   const origin = new URL(configuredOrigin);
   if (
     origin.protocol !== "https:" ||
@@ -127,12 +126,19 @@ function registryOrigin(requestUrl: URL, configuredOrigin: string | undefined): 
   return origin.origin;
 }
 
-async function registryJson(path: string, request: Request): Promise<unknown> {
+async function registryResponse(path: string, request: Request): Promise<Response> {
   const runtime: RecipeSiteEnv = cloudflareEnv;
-  const url = new URL(path, registryOrigin(new URL(request.url), runtime.REGISTRY_ORIGIN));
-  const response = await runtime.REGISTRY.fetch(
-    new Request(url, { headers: registryReadHeaders(request) }),
-  );
+  const headers = registryReadHeaders(request);
+  if (runtime.REGISTRY) {
+    return runtime.REGISTRY.fetch(new Request(new URL(path, request.url), { headers }));
+  }
+  if (!runtime.REGISTRY_PUBLIC_ORIGIN) throw new Error("Registry is unavailable");
+  const origin = registryOrigin(runtime.REGISTRY_PUBLIC_ORIGIN);
+  return fetch(new Request(new URL(`/api/registry${path}`, origin), { headers }));
+}
+
+async function registryJson(path: string, request: Request): Promise<unknown> {
+  const response = await registryResponse(path, request);
   if (!response.ok) throw new Error(`Registry read failed with ${response.status}`);
   return response.json();
 }
@@ -150,13 +156,9 @@ export async function getRegistryRecipe(
   namespace: string,
   name: string,
 ): Promise<SiteRecipeProjection | null> {
-  const runtime: RecipeSiteEnv = cloudflareEnv;
-  const url = new URL(
+  const response = await registryResponse(
     `/v1/recipes/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
-    registryOrigin(new URL(request.url), runtime.REGISTRY_ORIGIN),
-  );
-  const response = await runtime.REGISTRY.fetch(
-    new Request(url, { headers: registryReadHeaders(request) }),
+    request,
   );
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`Registry read failed with ${response.status}`);

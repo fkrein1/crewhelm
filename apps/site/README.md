@@ -44,10 +44,11 @@ Worker. Registry deployment calls `pnpm deploy:production`; the site builds with
 and deploys with `pnpm exec wrangler deploy --env production`. Both projects track `main`.
 
 Site pull requests upload an isolated version of the connected `crewhelm-site` Worker. The preview
-version routes Registry reads through a private service binding to `crewhelm-registry-dev`; it is
-not promoted to the production route. Version preview URLs must remain enabled on the connected
-Worker because Workers Builds preserves that Worker identity even when Wrangler selects the
-`preview` environment. Keep the site Workers Build configured with:
+version reads the live catalog through the public, read-only Registry API on `crewhelm.app`; it has
+no direct production Registry binding and is not promoted to the production route. Version preview
+URLs must remain enabled on the connected Worker because Workers Builds preserves that Worker
+identity even when Wrangler selects the `preview` environment. Keep the site Workers Build
+configured with:
 
 | Setting                              | Value                                               |
 | ------------------------------------ | --------------------------------------------------- |
@@ -71,9 +72,9 @@ sessions, so its Astro config selects an in-memory session driver instead. Keep 
 the site gains a deliberate, environment-isolated session store; implicit KV provisioning races
 with the existing production namespace and makes branch uploads fail.
 
-Preview requests address the development Registry binding through the synthetic
-`https://registry.internal` origin. The service binding—not public DNS—is the transport authority;
-using a mapped `workers.dev` hostname from another preview Worker causes Cloudflare error 1042.
+Preview Registry access is restricted to `GET` and `HEAD` and forwards only read headers. Keep
+`global_fetch_strictly_public` enabled so the preview Worker can use the public production route
+without bypassing its mapped Worker or zone controls.
 
 Preview-host requests also require Cloudflare's `global_fetch_strictly_public` compatibility flag
 so Astro can reach its Worker and asset surfaces without Cloudflare rejecting the same-zone fetch.

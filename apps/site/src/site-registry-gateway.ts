@@ -6,8 +6,8 @@ interface RequestService {
 
 export interface SiteEnv {
   ASSETS: RequestService;
-  REGISTRY: RequestService;
-  REGISTRY_ORIGIN?: string;
+  REGISTRY?: RequestService;
+  REGISTRY_PUBLIC_ORIGIN?: string;
 }
 
 export function registryPath(pathname: string): string | null {
@@ -23,30 +23,41 @@ export function registryReadHeaders(request: Request): Headers {
   return headers;
 }
 
+function exactHttpsOrigin(value: string): string {
+  const origin = new URL(value);
+  if (
+    origin.protocol !== "https:" ||
+    origin.username !== "" ||
+    origin.password !== "" ||
+    origin.pathname !== "/" ||
+    origin.search !== "" ||
+    origin.hash !== "" ||
+    origin.origin !== value
+  ) {
+    throw new Error("Invalid Registry public origin configuration.");
+  }
+  return origin.origin;
+}
+
 export async function routeSiteRequest(request: Request, env: SiteEnv): Promise<Response> {
   const url = new URL(request.url);
   const internalPath = registryPath(url.pathname);
   if (internalPath === null) return env.ASSETS.fetch(request);
 
   try {
-    if (env.REGISTRY_ORIGIN !== undefined) {
-      const registryOrigin = new URL(env.REGISTRY_ORIGIN);
-      if (
-        registryOrigin.protocol !== "https:" ||
-        registryOrigin.pathname !== "/" ||
-        registryOrigin.search !== "" ||
-        registryOrigin.hash !== "" ||
-        registryOrigin.username !== "" ||
-        registryOrigin.password !== "" ||
-        registryOrigin.origin !== env.REGISTRY_ORIGIN
-      ) {
-        throw new Error("Invalid Registry origin configuration.");
-      }
-      url.protocol = registryOrigin.protocol;
-      url.host = registryOrigin.host;
+    if (env.REGISTRY) {
+      url.pathname = internalPath;
+      return await env.REGISTRY.fetch(new Request(url, request));
     }
-    url.pathname = internalPath;
-    return await env.REGISTRY.fetch(new Request(url, request));
+    if (!env.REGISTRY_PUBLIC_ORIGIN || (request.method !== "GET" && request.method !== "HEAD")) {
+      throw new Error("Registry public fallback is unavailable.");
+    }
+    const origin = exactHttpsOrigin(env.REGISTRY_PUBLIC_ORIGIN);
+    url.protocol = "https:";
+    url.host = new URL(origin).host;
+    return await fetch(
+      new Request(url, { headers: registryReadHeaders(request), method: request.method }),
+    );
   } catch {
     return Response.json(
       { error: "unavailable" },

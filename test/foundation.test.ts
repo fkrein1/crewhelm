@@ -1118,10 +1118,7 @@ describe("repository foundation", () => {
         preview: {
           name: "crewhelm-site-preview",
           preview_urls: true,
-          services: [{ binding: "REGISTRY", service: "crewhelm-registry-dev" }],
-          vars: {
-            REGISTRY_ORIGIN: "https://registry.internal",
-          },
+          vars: { REGISTRY_PUBLIC_ORIGIN: "https://crewhelm.app" },
           workers_dev: false,
         },
         production: {

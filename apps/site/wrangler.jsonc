@@ -23,14 +23,8 @@
         "not_found_handling": "404-page",
         "run_worker_first": ["/api/registry", "/api/registry/*", "/recipes", "/recipes/*"],
       },
-      "services": [
-        {
-          "binding": "REGISTRY",
-          "service": "crewhelm-registry-dev",
-        },
-      ],
       "vars": {
-        "REGISTRY_ORIGIN": "https://registry.internal",
+        "REGISTRY_PUBLIC_ORIGIN": "https://crewhelm.app",
       },
       "workers_dev": false,
       "preview_urls": true,
