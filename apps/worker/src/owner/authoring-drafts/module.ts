@@ -227,6 +227,8 @@ export class McpAuthoringDrafts {
       digest(jsonValueSchema.parse({ content, draft: locator })),
       digest(content),
     ]);
+    const now = Date.now();
+    this.#deleteExpired(now);
     const row = this.#owned(authority, input.draft.id);
     if (row === undefined) return denied("draft_not_found");
     if (
@@ -249,11 +251,9 @@ export class McpAuthoringDrafts {
     ) {
       return denied("revision_conflict");
     }
-    const now = Date.now();
     const next = {
       content,
       contentDigest,
-      expiresAt: now + MCP_AUTHORING_DRAFT_TTL_SECONDS * 1_000,
       lastIdempotencyKey: input.idempotencyKey,
       lastRequestDigest: requestDigest,
       revision: row.revision + 1,
