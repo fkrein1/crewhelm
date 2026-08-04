@@ -43,10 +43,10 @@ Workers Builds runs from `apps/registry` for the Registry Worker and `apps/site`
 Worker. Registry deployment calls `pnpm deploy:production`; the site builds with `pnpm run build`
 and deploys with `pnpm exec wrangler deploy --env production`. Both projects track `main`.
 
-Site pull requests also upload a version of the separate `crewhelm-site-preview` Worker. Its public
-preview URL routes Registry reads through a private service binding to `crewhelm-registry-dev`; it
-has no production route or production Registry binding. Keep the site Workers Build configured
-with:
+Site pull requests upload an undeployed version of the connected `crewhelm-site` Worker. Its public
+preview URL routes Registry reads through a private service binding to `crewhelm-registry-dev`; the
+preview environment has no production route or production Registry binding. Keep the site Workers
+Build configured with:
 
 | Setting                              | Value                                               |
 | ------------------------------------ | --------------------------------------------------- |
@@ -62,5 +62,6 @@ Preview URLs are public and have no Workers logs. Do not put secrets or producti
 preview environment. Disable non-production branch builds to stop new previews; existing uploaded
 versions remain inert unless their preview URL is requested.
 
-Restore a previous Worker version when code or routing must roll back. D1 migrations remain
-forward-only, so recovery repairs schema state forward.
+Restore only a Worker version verified as a production deployment from `main` with the production
+Registry and KV bindings. Never deploy or roll back to a pull-request preview version. D1
+migrations remain forward-only, so recovery repairs schema state forward.
