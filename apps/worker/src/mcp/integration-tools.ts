@@ -1,10 +1,13 @@
 import {
+  CONNECTION_CONFIGS_READ_SCOPE,
   CONNECTION_CONFIGS_WRITE_SCOPE,
   completeIntegrationEnablementInputSchema,
   enableIntegrationInputSchema,
   enableIntegrationResultSchema,
   inspectIntegrationToolInputSchema,
   inspectIntegrationToolResultSchema,
+  inspectProviderAuthInputSchema,
+  inspectProviderAuthResultSchema,
   integrationAuthConfigListInputSchema,
   integrationAuthConfigListResultSchema,
   integrationCatalogSearchInputSchema,
@@ -12,6 +15,7 @@ import {
   integrationToolSearchInputSchema,
   integrationToolSearchResultSchema,
   reserveIntegrationEnablementResultSchema,
+  recordProviderAuthConfigResultSchema,
 } from "@crewhelm/contracts";
 import type { ComposioAuthConfigs, ComposioCatalog } from "@crewhelm/composio";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -26,6 +30,7 @@ import {
 
 export const MCP_ENABLE_INTEGRATION_TOOL_NAME = "crewhelm_enable_integration";
 export const MCP_INSPECT_INTEGRATION_TOOL_NAME = "crewhelm_inspect_integration_tool";
+export const MCP_INSPECT_PROVIDER_AUTH_TOOL_NAME = "crewhelm_inspect_provider_auth";
 export const MCP_LIST_INTEGRATION_AUTH_CONFIGS_TOOL_NAME = "crewhelm_list_integration_auth_configs";
 export const MCP_SEARCH_INTEGRATIONS_TOOL_NAME = "crewhelm_search_integrations";
 export const MCP_SEARCH_INTEGRATION_TOOLS_TOOL_NAME = "crewhelm_search_integration_tools";
@@ -101,6 +106,104 @@ async function enableIntegration(
     });
   }
 
+  let inspectionResponse: unknown;
+
+  try {
+    inspectionResponse = await authConfigs.inspect({
+      integrationSlug: request.data.integrationSlug,
+    });
+  } catch {
+    inspectionResponse = null;
+  }
+
+  const inspection = inspectProviderAuthResultSchema.safeParse(inspectionResponse);
+  if (!inspection.success || !inspection.data.ok) {
+    return integrationEnablementMcpResult({
+      error: {
+        code: "provider_auth_unavailable",
+        message: "Integration enablement request denied.",
+      },
+      ok: false,
+    });
+  }
+
+  const readiness = inspection.data.authentication;
+  let selected = readiness.state === "ready" ? readiness.selected : undefined;
+
+  if (readiness.state === "ready" && request.data.authConfigId !== undefined) {
+    if (request.data.authConfigId !== readiness.selected.authConfigId) {
+      return integrationEnablementMcpResult({
+        error: { code: "invalid_request", message: "Integration enablement request denied." },
+        ok: false,
+      });
+    }
+  } else if (readiness.state === "selection_required") {
+    selected = readiness.choices.find(
+      (choice) => choice.authConfigId === request.data.authConfigId,
+    );
+    if (selected === undefined) return integrationEnablementMcpResult(inspection.data);
+  } else if (readiness.state === "unsupported") {
+    return integrationEnablementMcpResult(inspection.data);
+  } else if (readiness.state === "setup_required") {
+    if (request.data.authConfigId !== undefined) {
+      return integrationEnablementMcpResult({
+        error: { code: "invalid_request", message: "Integration enablement request denied." },
+        ok: false,
+      });
+    }
+    if (!readiness.managedAuthAvailable) {
+      return integrationEnablementMcpResult(inspection.data);
+    }
+  }
+
+  if (selected !== undefined) {
+    if (controlPlane.recordProviderAuthConfig === undefined) {
+      return unavailableToolResult({
+        code: "invalid_control_plane_response",
+        disposition: "contact_operator",
+        phase: "control_plane.response",
+        reason: "invalid_response",
+      });
+    }
+
+    let recordedResponse: unknown;
+    try {
+      recordedResponse = await controlPlane.recordProviderAuthConfig(authority, selected);
+    } catch {
+      return unavailableToolResult({ phase: "control_plane.rpc", reason: "transport_error" });
+    }
+    const recorded = recordProviderAuthConfigResultSchema.safeParse(recordedResponse);
+    if (!recorded.success) {
+      return unavailableToolResult({
+        code: "invalid_control_plane_response",
+        disposition: "contact_operator",
+        phase: "control_plane.response",
+        reason: "invalid_response",
+      });
+    }
+    if (!recorded.data.ok) {
+      return integrationEnablementMcpResult({
+        error: {
+          code:
+            recorded.data.error.code === "provider_auth_config_limit_exceeded"
+              ? "integration_enablement_request_limit_exceeded"
+              : recorded.data.error.code,
+          message: "Integration enablement request denied.",
+        },
+        ok: false,
+      });
+    }
+
+    return integrationEnablementMcpResult({
+      authConfigId: selected.authConfigId,
+      authScheme: selected.authScheme.toLowerCase(),
+      created: false,
+      integrationSlug: selected.integrationSlug,
+      managed: selected.source === "composio_managed",
+      ok: true,
+    });
+  }
+
   let reservationResponse: unknown;
 
   try {
@@ -138,11 +241,12 @@ async function enableIntegration(
     });
   }
 
-  let providerResult: Awaited<ReturnType<ComposioAuthConfigs["ensureManaged"]>>;
+  let providerResult: Awaited<ReturnType<ComposioAuthConfigs["createManaged"]>>;
 
   try {
-    providerResult = await authConfigs.ensureManaged({
+    providerResult = await authConfigs.createManaged({
       integrationSlug: request.data.integrationSlug,
+      name: inspection.data.integration.name,
     });
   } catch {
     return unknownIntegrationEnablementMcpResult(reservation.data);
@@ -155,8 +259,12 @@ async function enableIntegration(
   }
 
   const completion = completeIntegrationEnablementInputSchema.safeParse({
-    ...providerResult.authConfig,
+    authConfigId: providerResult.authConfig.authConfigId,
+    authScheme: providerResult.authConfig.authScheme.toLowerCase(),
     created: providerResult.created,
+    integrationSlug: providerResult.authConfig.integrationSlug,
+    managed: true,
+    name: providerResult.authConfig.name,
     reservationId: reservation.data.reservationId,
   });
 
@@ -181,6 +289,53 @@ async function enableIntegration(
     : unknownIntegrationEnablementMcpResult(reservation.data);
 }
 
+async function inspectProviderAuth(
+  context: McpToolContext,
+  authConfigs: ComposioAuthConfigs,
+  input: unknown,
+) {
+  if (!context.authority.scopes.includes(CONNECTION_CONFIGS_READ_SCOPE)) {
+    return validatedToolResult(
+      {
+        error: {
+          code: "insufficient_scope",
+          message: "Provider authentication request denied.",
+        },
+        ok: false,
+      },
+      inspectProviderAuthResultSchema,
+    );
+  }
+
+  const request = inspectProviderAuthInputSchema.safeParse(input);
+  if (!request.success || !authConfigs.isAvailable()) {
+    return validatedToolResult(
+      {
+        error: {
+          code: "provider_auth_unavailable",
+          message: "Provider authentication request denied.",
+        },
+        ok: false,
+      },
+      inspectProviderAuthResultSchema,
+    );
+  }
+
+  let result: unknown;
+  try {
+    result = await authConfigs.inspect(request.data);
+  } catch {
+    result = null;
+  }
+
+  return validatedToolResult(result, inspectProviderAuthResultSchema, {
+    code: "invalid_integration_response",
+    disposition: "contact_operator",
+    phase: "integration.response",
+    reason: "invalid_response",
+  });
+}
+
 export function registerIntegrationTools(
   server: McpServer,
   context: McpToolContext,
@@ -188,6 +343,23 @@ export function registerIntegrationTools(
 ): void {
   const { authority } = context;
   const { authConfigs, catalog } = configuration;
+
+  server.registerTool(
+    MCP_INSPECT_PROVIDER_AUTH_TOOL_NAME,
+    {
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+        readOnlyHint: true,
+      },
+      description:
+        "Inspect whether one exact provider can connect now, requires an auth-config choice, or needs owner setup. This read creates no reservation.",
+      inputSchema: inspectProviderAuthInputSchema,
+      title: "Inspect provider authentication",
+    },
+    async (input) => inspectProviderAuth(context, authConfigs, input),
+  );
 
   server.registerTool(
     MCP_ENABLE_INTEGRATION_TOOL_NAME,
@@ -199,7 +371,7 @@ export function registerIntegrationTools(
         readOnlyHint: false,
       },
       description:
-        "Enable managed authentication for a chosen integration. Pass the returned authConfigId directly to crewhelm_create_connection_link; do not list auth configurations after a successful enablement.",
+        "Resolve provider authentication readiness, reuse an exact selected auth config, or create managed authentication when available. Setup and selection prerequisites create no external-effect reservation.",
       inputSchema: enableIntegrationInputSchema,
       title: "Enable integration",
     },
@@ -216,7 +388,7 @@ export function registerIntegrationTools(
         readOnlyHint: true,
       },
       description:
-        "List bounded pre-existing auth configurations for an integration. This recovery or selection read is unnecessary immediately after crewhelm_enable_integration returns authConfigId.",
+        "List bounded active auth configurations for an integration when exact selection or recovery is needed.",
       inputSchema: integrationAuthConfigListInputSchema,
       title: "List integration auth configurations",
     },

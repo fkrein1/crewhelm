@@ -71,14 +71,16 @@ confirmation with a boolean.
 
 The facade may compose private commands when the intermediate value has no owner decision:
 
-- `connect_provider` enables managed provider authentication, retains the returned auth
-  configuration internally, and creates the owner authorization link.
+- `connect_provider` first inspects exact provider-auth readiness. It reuses one selected active
+  managed or custom auth config, idempotently creates a managed config only when the toolkit says
+  managed auth is available, or returns exact selection or setup prerequisites without reserving
+  an external effect. Once one config is ready, it records only safe auth-config metadata and
+  creates the owner authorization link.
 - Recipe `prepare` ports an exact live Agent revision plus selected returned Schedules and Event
   Triggers into a reviewable public candidate.
 
-Each private step still validates scopes and persists replay state independently. Provider
-credentials remain in provider or Crewhelm custody and never enter MCP arguments, results, logs, or
-Agent context.
+Each private step still validates scopes and persists replay state independently. Composio
+provider credentials never enter MCP arguments, results, logs, or Agent context.
 
 Complex authoring uses owner-scoped durable drafts instead of carrying complete candidates through
 every model turn. `prepare_*` operations store one validated Recipe installation, Recipe

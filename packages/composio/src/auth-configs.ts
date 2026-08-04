@@ -1,7 +1,13 @@
 import {
   connectionAuthConfigIdSchema,
+  inspectProviderAuthInputSchema,
+  inspectProviderAuthResultSchema,
   integrationSlugSchema,
-  type EnableIntegrationInput,
+  providerAuthSchemeSchema,
+  type InspectProviderAuthInput,
+  type InspectProviderAuthResult,
+  type ProviderAuthConfigReference,
+  type ProviderAuthScheme,
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
@@ -9,47 +15,54 @@ import { readBoundedJson } from "./bounded-json.js";
 import { isUnknownRecord } from "./safe-values.js";
 
 const COMPOSIO_AUTH_CONFIGS_URL = "https://backend.composio.dev/api/v3.1/auth_configs";
+const COMPOSIO_TOOLKITS_URL = "https://backend.composio.dev/api/v3.1/toolkits";
 const AUTH_CONFIG_TIMEOUT_MS = 5_000;
 const MAXIMUM_AUTH_CONFIG_RESPONSE_BYTES = 256 * 1_024;
+const MAXIMUM_TOOLKIT_RESPONSE_BYTES = 256 * 1_024;
 
 const composioApiKeySchema = z.string().min(16).max(4_096).regex(/^\S+$/);
-const managedAuthConfigFieldsSchema = z.looseObject({
+const composioAuthConfigFieldsSchema = z.looseObject({
   auth_scheme: z.string().min(1).max(64),
   id: connectionAuthConfigIdSchema,
-  is_composio_managed: z.literal(true),
+  is_composio_managed: z.boolean(),
 });
-const managedAuthConfigSchema = managedAuthConfigFieldsSchema.extend({
+const composioAuthConfigSchema = composioAuthConfigFieldsSchema.extend({
+  name: z.string().min(1).max(160),
+  status: z.literal("ENABLED"),
   toolkit: z.looseObject({
     slug: integrationSlugSchema,
   }),
 });
-const managedAuthConfigListSchema = z.looseObject({
-  items: z
-    .array(
-      managedAuthConfigSchema.extend({
-        status: z.literal("ENABLED"),
-      }),
-    )
-    .max(50),
+const composioAuthConfigListSchema = z.looseObject({
+  items: z.array(composioAuthConfigSchema).max(50),
   next_cursor: z.string().min(1).max(2_048).nullish(),
 });
 const managedAuthConfigCreateSchema = z.looseObject({
-  auth_config: managedAuthConfigFieldsSchema,
+  auth_config: composioAuthConfigFieldsSchema.extend({
+    is_composio_managed: z.literal(true),
+  }),
   toolkit: z.looseObject({
     slug: integrationSlugSchema,
   }),
 });
+const composioToolkitSchema = z.looseObject({
+  auth_config_details: z
+    .array(
+      z.looseObject({
+        mode: z.string().min(1).max(64),
+      }),
+    )
+    .max(16),
+  composio_managed_auth_schemes: z.array(z.string().min(1).max(64)).max(16),
+  enabled: z.literal(true).optional(),
+  name: z.string().min(1).max(160),
+  no_auth: z.boolean().optional(),
+  slug: integrationSlugSchema,
+});
 
-export interface ManagedIntegrationAuthConfig {
-  authConfigId: string;
-  authScheme: string;
-  integrationSlug: string;
-  managed: true;
-}
-
-export type EnsureManagedIntegrationAuthConfigResult =
+export type CreateManagedIntegrationAuthConfigResult =
   | {
-      authConfig: ManagedIntegrationAuthConfig;
+      authConfig: ProviderAuthConfigReference;
       created: boolean;
       ok: true;
     }
@@ -62,9 +75,11 @@ export type EnsureManagedIntegrationAuthConfigResult =
     };
 
 export interface ComposioAuthConfigs {
-  ensureManaged(
-    input: Pick<EnableIntegrationInput, "integrationSlug">,
-  ): Promise<EnsureManagedIntegrationAuthConfigResult>;
+  createManaged(input: {
+    integrationSlug: string;
+    name: string;
+  }): Promise<CreateManagedIntegrationAuthConfigResult>;
+  inspect(input: InspectProviderAuthInput): Promise<InspectProviderAuthResult>;
   isAvailable(): boolean;
 }
 
@@ -78,11 +93,11 @@ export interface ComposioAuthConfigsOptions {
 export interface ComposioAuthConfigResponseEvent {
   durationMs: number;
   integrationSlug: string;
-  operation: "create" | "lookup" | "recovery";
+  operation: "create" | "inspect_toolkit" | "list" | "recovery";
   status: number;
 }
 
-function outcomeUnknown(): EnsureManagedIntegrationAuthConfigResult {
+function outcomeUnknown(): CreateManagedIntegrationAuthConfigResult {
   return {
     error: {
       code: "integration_enablement_outcome_unknown",
@@ -92,16 +107,64 @@ function outcomeUnknown(): EnsureManagedIntegrationAuthConfigResult {
   };
 }
 
-function normalize(
-  authConfig: z.infer<typeof managedAuthConfigFieldsSchema>,
-  integrationSlug: string,
-): ManagedIntegrationAuthConfig {
+function unavailableInspection(): InspectProviderAuthResult {
   return {
-    authConfigId: authConfig.id,
-    authScheme: authConfig.auth_scheme.toLowerCase(),
-    integrationSlug,
-    managed: true,
+    error: {
+      code: "provider_auth_unavailable",
+      message: "Provider authentication request denied.",
+    },
+    ok: false,
   };
+}
+
+function normalizeScheme(value: string): ProviderAuthScheme | null {
+  const parsed = providerAuthSchemeSchema.safeParse(value.toUpperCase());
+  return parsed.success ? parsed.data : null;
+}
+
+function uniqueSchemes(values: readonly string[]): ProviderAuthScheme[] {
+  const schemes: ProviderAuthScheme[] = [];
+
+  for (const value of values) {
+    const scheme = normalizeScheme(value);
+    if (scheme !== null && !schemes.includes(scheme)) schemes.push(scheme);
+  }
+
+  return schemes;
+}
+
+function normalizeAuthConfig(
+  authConfig: z.infer<typeof composioAuthConfigSchema>,
+): ProviderAuthConfigReference | null {
+  const authScheme = normalizeScheme(authConfig.auth_scheme);
+
+  return authScheme === null
+    ? null
+    : {
+        authConfigId: authConfig.id,
+        authScheme,
+        integrationSlug: authConfig.toolkit.slug,
+        name: authConfig.name,
+        source: authConfig.is_composio_managed ? "composio_managed" : "crewhelm_custom",
+      };
+}
+
+function normalizeCreatedManagedAuthConfig(
+  authConfig: z.infer<typeof managedAuthConfigCreateSchema>["auth_config"],
+  integrationSlug: string,
+  name: string,
+): ProviderAuthConfigReference | null {
+  const authScheme = normalizeScheme(authConfig.auth_scheme);
+
+  return authScheme === null
+    ? null
+    : {
+        authConfigId: authConfig.id,
+        authScheme,
+        integrationSlug,
+        name,
+        source: "composio_managed",
+      };
 }
 
 function containsSecret(value: unknown, secret: string): boolean {
@@ -110,23 +173,16 @@ function containsSecret(value: unknown, secret: string): boolean {
   while (pending.length > 0) {
     const current = pending.pop();
 
-    if (typeof current === "string" && current.includes(secret)) {
-      return true;
-    }
+    if (typeof current === "string" && current.includes(secret)) return true;
 
     if (Array.isArray(current)) {
-      for (const item of current as unknown[]) {
-        pending.push(item);
-      }
+      for (const item of current as unknown[]) pending.push(item);
       continue;
     }
 
     if (isUnknownRecord(current)) {
       for (const [key, item] of Object.entries(current)) {
-        if (key.includes(secret)) {
-          return true;
-        }
-
+        if (key.includes(secret)) return true;
         pending.push(item);
       }
     }
@@ -165,12 +221,13 @@ export function createComposioAuthConfigs(
       : AbortSignal.any([options.signal, AbortSignal.timeout(AUTH_CONFIG_TIMEOUT_MS)]);
   }
 
-  async function findManaged(
+  async function listActive(
     integrationSlug: string,
-    operation: Extract<ComposioAuthConfigResponseEvent["operation"], "lookup" | "recovery">,
-  ): Promise<ManagedIntegrationAuthConfig | null | undefined> {
+    operation: Extract<ComposioAuthConfigResponseEvent["operation"], "list" | "recovery">,
+    managedOnly = false,
+  ): Promise<ProviderAuthConfigReference[] | undefined> {
     const endpoint = new URL(COMPOSIO_AUTH_CONFIGS_URL);
-    endpoint.searchParams.set("is_composio_managed", "true");
+    if (managedOnly) endpoint.searchParams.set("is_composio_managed", "true");
     endpoint.searchParams.set("limit", "50");
     endpoint.searchParams.set("show_disabled", "false");
     endpoint.searchParams.set("toolkit_slug", integrationSlug);
@@ -195,42 +252,40 @@ export function createComposioAuthConfigs(
 
     const body = await readBoundedJson(response, MAXIMUM_AUTH_CONFIG_RESPONSE_BYTES);
     if (!body.ok) return undefined;
-    const result = managedAuthConfigListSchema.safeParse(body.value);
+    const result = composioAuthConfigListSchema.safeParse(body.value);
+    if (!result.success || result.data.next_cursor != null) return undefined;
 
+    const normalized = result.data.items.map(normalizeAuthConfig);
     if (
-      !result.success ||
-      result.data.items.some((item) => item.toolkit.slug !== integrationSlug) ||
-      (result.data.items.length === 0 && result.data.next_cursor != null)
+      normalized.some(
+        (item, index) =>
+          item === null ||
+          item.integrationSlug !== integrationSlug ||
+          (managedOnly && result.data.items[index]?.is_composio_managed !== true),
+      )
     ) {
       return undefined;
     }
 
-    const selected = result.data.items
-      .map((item) => normalize(item, item.toolkit.slug))
-      .toSorted((left, right) => left.authConfigId.localeCompare(right.authConfigId))[0];
-
-    return selected ?? null;
+    return normalized
+      .filter((item): item is ProviderAuthConfigReference => item !== null)
+      .toSorted((left, right) => left.authConfigId.localeCompare(right.authConfigId));
   }
 
   return {
-    async ensureManaged(input) {
+    async createManaged(input) {
       const integrationSlug = integrationSlugSchema.safeParse(input.integrationSlug);
+      const name = z.string().min(1).max(160).safeParse(input.name);
 
-      if (!apiKey.success || !integrationSlug.success) {
-        return outcomeUnknown();
-      }
+      if (!apiKey.success || !integrationSlug.success || !name.success) return outcomeUnknown();
 
       try {
-        const existing = await findManaged(integrationSlug.data, "lookup");
-
-        if (existing === undefined) {
-          return outcomeUnknown();
-        }
-
-        if (existing !== null) {
-          return containsSecret(existing, apiKey.data)
+        const existing = await listActive(integrationSlug.data, "recovery", true);
+        if (existing === undefined) return outcomeUnknown();
+        if (existing[0] !== undefined) {
+          return containsSecret(existing[0], apiKey.data)
             ? outcomeUnknown()
-            : { authConfig: existing, created: false, ok: true };
+            : { authConfig: existing[0], created: false, ok: true };
         }
 
         const startedAt = performance.now();
@@ -264,23 +319,113 @@ export function createComposioAuthConfigs(
             : { success: false as const };
 
           if (created.success && created.data.toolkit.slug === integrationSlug.data) {
-            const authConfig = normalize(created.data.auth_config, created.data.toolkit.slug);
+            const authConfig = normalizeCreatedManagedAuthConfig(
+              created.data.auth_config,
+              integrationSlug.data,
+              name.data,
+            );
 
-            return containsSecret(authConfig, apiKey.data)
-              ? outcomeUnknown()
-              : { authConfig, created: true, ok: true };
+            if (authConfig !== null && !containsSecret(authConfig, apiKey.data)) {
+              return { authConfig, created: true, ok: true };
+            }
           }
         }
 
-        const recovered = await findManaged(integrationSlug.data, "recovery");
-
-        return recovered === null ||
-          recovered === undefined ||
-          containsSecret(recovered, apiKey.data)
+        const recovered = await listActive(integrationSlug.data, "recovery", true);
+        return recovered?.[0] === undefined || containsSecret(recovered[0], apiKey.data)
           ? outcomeUnknown()
-          : { authConfig: recovered, created: false, ok: true };
+          : { authConfig: recovered[0], created: false, ok: true };
       } catch {
         return outcomeUnknown();
+      }
+    },
+    async inspect(input) {
+      const request = inspectProviderAuthInputSchema.safeParse(input);
+      if (!apiKey.success || !request.success) return unavailableInspection();
+
+      try {
+        const endpoint = new URL(
+          `${COMPOSIO_TOOLKITS_URL}/${encodeURIComponent(request.data.integrationSlug)}`,
+        );
+        endpoint.searchParams.set("version", "latest");
+        const startedAt = performance.now();
+        const response = await fetchImplementation(endpoint, {
+          headers: { accept: "application/json", "x-api-key": apiKey.data },
+          method: "GET",
+          redirect: "manual",
+          signal: signal(),
+        });
+        recordResponse("inspect_toolkit", response.status, request.data.integrationSlug, startedAt);
+
+        if (response.status === 404) {
+          return inspectProviderAuthResultSchema.parse({
+            authentication: { reason: "toolkit_unavailable", state: "unsupported" },
+            integration: { name: request.data.integrationSlug, slug: request.data.integrationSlug },
+            ok: true,
+          });
+        }
+
+        if (
+          response.status !== 200 ||
+          !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
+        ) {
+          return unavailableInspection();
+        }
+
+        const body = await readBoundedJson(response, MAXIMUM_TOOLKIT_RESPONSE_BYTES);
+        const toolkit = body.ok
+          ? composioToolkitSchema.safeParse(body.value)
+          : { success: false as const };
+        if (!toolkit.success || toolkit.data.slug !== request.data.integrationSlug) {
+          return unavailableInspection();
+        }
+
+        const integration = { name: toolkit.data.name, slug: toolkit.data.slug };
+        const availableSchemes = uniqueSchemes(
+          toolkit.data.auth_config_details.map((detail) => detail.mode),
+        );
+        if (toolkit.data.no_auth === true || availableSchemes.length === 0) {
+          return inspectProviderAuthResultSchema.parse({
+            authentication: { reason: "auth_scheme_unsupported", state: "unsupported" },
+            integration,
+            ok: true,
+          });
+        }
+
+        const authConfigs = await listActive(request.data.integrationSlug, "list");
+        if (
+          authConfigs === undefined ||
+          authConfigs.some((config) => !availableSchemes.includes(config.authScheme))
+        ) {
+          return unavailableInspection();
+        }
+
+        const authentication =
+          authConfigs.length === 1
+            ? { selected: authConfigs[0], state: "ready" as const }
+            : authConfigs.length > 1
+              ? { choices: authConfigs, state: "selection_required" as const }
+              : (() => {
+                  const managedSchemes = uniqueSchemes(
+                    toolkit.data.composio_managed_auth_schemes,
+                  ).filter((scheme) => availableSchemes.includes(scheme));
+
+                  return {
+                    availableSchemes,
+                    managedAuthAvailable: managedSchemes.length > 0,
+                    recommendedScheme: managedSchemes[0] ?? availableSchemes[0],
+                    state: "setup_required" as const,
+                  };
+                })();
+        const result = inspectProviderAuthResultSchema.parse({
+          authentication,
+          integration,
+          ok: true,
+        });
+
+        return containsSecret(result, apiKey.data) ? unavailableInspection() : result;
+      } catch {
+        return unavailableInspection();
       }
     },
     isAvailable() {

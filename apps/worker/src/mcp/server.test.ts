@@ -31,6 +31,7 @@ import {
   integrationAuthConfigListResultSchema,
   integrationCatalogSearchResultSchema,
   inspectIntegrationToolResultSchema,
+  inspectProviderAuthResultSchema,
   inspectRunResultSchema,
   integrationToolSearchResultSchema,
   listAgentRevisionsResultSchema,
@@ -201,8 +202,12 @@ const testFacadeOperations = new Map<string, { kind: string; tool: string }>([
     { kind: "inspect_action", tool: MCP_INSPECT_CONNECTIONS_TOOL_NAME },
   ],
   [
+    "crewhelm_inspect_provider_auth",
+    { kind: "inspect_provider_auth", tool: MCP_INSPECT_CONNECTIONS_TOOL_NAME },
+  ],
+  [
     "crewhelm_list_integration_auth_configs",
-    { kind: "list_auth", tool: MCP_INSPECT_CONNECTIONS_TOOL_NAME },
+    { kind: "list_auth_configs", tool: MCP_INSPECT_CONNECTIONS_TOOL_NAME },
   ],
   [
     "crewhelm_enable_integration",
@@ -3324,6 +3329,395 @@ describe("authenticated MCP handler", () => {
     expect(text).not.toContain("provider-secret");
   });
 
+  it("inspects custom provider setup readiness without creating a reservation", async () => {
+    const authority = await ownerAuthority("mcp-spotify-readiness-owner", [
+      CONNECTION_CONFIGS_READ_SCOPE,
+    ]);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({
+          auth_config_details: [{ mode: "oauth2" }],
+          composio_managed_auth_schemes: [],
+          name: "Spotify",
+          no_auth: false,
+          slug: "spotify",
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }));
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 138,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              operation: { integrationSlug: "spotify", kind: "inspect_provider_auth" },
+            },
+            name: MCP_INSPECT_CONNECTIONS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+
+    expect(payload.isError).toBe(false);
+    expect(
+      inspectProviderAuthResultSchema.parse(JSON.parse(payload.content[0]?.text ?? "")),
+    ).toEqual({
+      authentication: {
+        availableSchemes: ["OAUTH2"],
+        managedAuthAvailable: false,
+        recommendedScheme: "OAUTH2",
+        state: "setup_required",
+      },
+      integration: { name: "Spotify", slug: "spotify" },
+      ok: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(
+      runInDurableObject(
+        env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+        (_instance, state) => ({
+          authConfigs: state.storage.sql
+            .exec("SELECT count(*) AS count FROM provider_auth_configs")
+            .one(),
+          enablements: state.storage.sql
+            .exec("SELECT count(*) AS count FROM integration_enablement_requests")
+            .one(),
+        }),
+      ),
+    ).resolves.toEqual({ authConfigs: { count: 0 }, enablements: { count: 0 } });
+  });
+
+  it("returns setup-required from connect_provider before reserving an external effect", async () => {
+    const authority = await ownerAuthority("mcp-spotify-connect-readiness-owner", [
+      CONNECTION_CONFIGS_WRITE_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({
+          auth_config_details: [{ mode: "oauth2" }],
+          composio_managed_auth_schemes: [],
+          name: "Spotify",
+          no_auth: false,
+          slug: "spotify",
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }));
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 139,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              operation: {
+                integrationSlug: "spotify",
+                kind: "connect_provider",
+                requestKey: "mcp-connect-spotify-setup",
+              },
+            },
+            name: MCP_CHANGE_CONNECTIONS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+    const result = enableIntegrationResultSchema.parse(JSON.parse(payload.content[0]?.text ?? ""));
+
+    expect(payload.isError).toBe(false);
+    expect(result).toMatchObject({
+      authentication: { managedAuthAvailable: false, state: "setup_required" },
+      integration: { slug: "spotify" },
+      ok: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(
+      runInDurableObject(
+        env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+        (_instance, state) => ({
+          enablements: state.storage.sql
+            .exec("SELECT count(*) AS count FROM integration_enablement_requests")
+            .one(),
+          links: state.storage.sql
+            .exec("SELECT count(*) AS count FROM connection_link_requests")
+            .one(),
+        }),
+      ),
+    ).resolves.toEqual({ enablements: { count: 0 }, links: { count: 0 } });
+  });
+
+  it("connects through one existing custom auth config without managed enablement", async () => {
+    const authority = await ownerAuthority("mcp-custom-auth-connect-owner", [
+      CONNECTION_CONFIGS_WRITE_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1_000).toISOString();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({
+          auth_config_details: [{ mode: "oauth2" }],
+          composio_managed_auth_schemes: [],
+          name: "Spotify",
+          no_auth: false,
+          slug: "spotify",
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          items: [
+            {
+              auth_scheme: "OAUTH2",
+              id: "ac_spotify_custom",
+              is_composio_managed: false,
+              name: "Spotify app",
+              status: "ENABLED",
+              toolkit: { slug: "spotify" },
+            },
+          ],
+          next_cursor: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            connected_account_id: "ca_spotify_custom",
+            expires_at: expiresAt,
+            experimental: { account_type: "PRIVATE" },
+            link_token: "ln_spotify_custom",
+            redirect_url: "https://connect.composio.dev/link/ln_spotify_custom",
+          },
+          { status: 201 },
+        ),
+      );
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 140,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              operation: {
+                integrationSlug: "spotify",
+                kind: "connect_provider",
+                requestKey: "mcp-connect-spotify-custom",
+              },
+            },
+            name: MCP_CHANGE_CONNECTIONS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+
+    expect(payload.isError).toBe(false);
+    expect(
+      createConnectionLinkResultSchema.parse(JSON.parse(payload.content[0]?.text ?? "")),
+    ).toMatchObject({ connectionLink: { expiresAt }, created: true, ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    await expect(
+      runInDurableObject(
+        env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+        (_instance, state) => ({
+          authConfigs: state.storage.sql
+            .exec(
+              `SELECT auth_config_id, auth_scheme, integration_slug, source
+               FROM provider_auth_configs`,
+            )
+            .toArray(),
+          enablements: state.storage.sql
+            .exec("SELECT count(*) AS count FROM integration_enablement_requests")
+            .one(),
+        }),
+      ),
+    ).resolves.toEqual({
+      authConfigs: [
+        {
+          auth_config_id: "ac_spotify_custom",
+          auth_scheme: "OAUTH2",
+          integration_slug: "spotify",
+          source: "crewhelm_custom",
+        },
+      ],
+      enablements: { count: 0 },
+    });
+  });
+
+  it("returns exact auth-config choices before connection reservation", async () => {
+    const authority = await ownerAuthority("mcp-auth-selection-owner", [
+      CONNECTION_CONFIGS_WRITE_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({
+          auth_config_details: [{ mode: "oauth2" }],
+          composio_managed_auth_schemes: ["oauth2"],
+          name: "GitHub",
+          no_auth: false,
+          slug: "github",
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          items: [
+            {
+              auth_scheme: "OAUTH2",
+              id: "ac_github_custom",
+              is_composio_managed: false,
+              name: "Custom GitHub",
+              status: "ENABLED",
+              toolkit: { slug: "github" },
+            },
+            {
+              auth_scheme: "OAUTH2",
+              id: "ac_github_managed",
+              is_composio_managed: true,
+              name: "Managed GitHub",
+              status: "ENABLED",
+              toolkit: { slug: "github" },
+            },
+          ],
+          next_cursor: null,
+        }),
+      );
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 141,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              operation: {
+                integrationSlug: "github",
+                kind: "connect_provider",
+                requestKey: "mcp-connect-github-choice",
+              },
+            },
+            name: MCP_CHANGE_CONNECTIONS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+    const result = enableIntegrationResultSchema.parse(JSON.parse(payload.content[0]?.text ?? ""));
+
+    expect(payload.isError).toBe(false);
+    expect(result).toMatchObject({
+      authentication: {
+        choices: [
+          { authConfigId: "ac_github_custom", source: "crewhelm_custom" },
+          { authConfigId: "ac_github_managed", source: "composio_managed" },
+        ],
+        state: "selection_required",
+      },
+      ok: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(
+      runInDurableObject(
+        env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+        (_instance, state) =>
+          state.storage.sql.exec("SELECT count(*) AS count FROM connection_link_requests").one(),
+      ),
+    ).resolves.toEqual({ count: 0 });
+  });
+
+  it("records only the exact selected auth config from a multiple-choice result", async () => {
+    const authority = await ownerAuthority("mcp-auth-selection-exact-owner", [
+      CONNECTION_CONFIGS_WRITE_SCOPE,
+    ]);
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({
+          auth_config_details: [{ mode: "oauth2" }],
+          composio_managed_auth_schemes: ["oauth2"],
+          name: "GitHub",
+          no_auth: false,
+          slug: "github",
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          items: [
+            {
+              auth_scheme: "OAUTH2",
+              id: "ac_github_custom",
+              is_composio_managed: false,
+              name: "Custom GitHub",
+              status: "ENABLED",
+              toolkit: { slug: "github" },
+            },
+            {
+              auth_scheme: "OAUTH2",
+              id: "ac_github_managed",
+              is_composio_managed: true,
+              name: "Managed GitHub",
+              status: "ENABLED",
+              toolkit: { slug: "github" },
+            },
+          ],
+          next_cursor: null,
+        }),
+      );
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 142,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              authConfigId: "ac_github_custom",
+              idempotencyKey: "mcp-select-github-custom",
+              integrationSlug: "github",
+            },
+            name: MCP_ENABLE_INTEGRATION_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+
+    expect(payload.isError).toBe(false);
+    expect(enableIntegrationResultSchema.parse(JSON.parse(payload.content[0]?.text ?? ""))).toEqual(
+      {
+        authConfigId: "ac_github_custom",
+        authScheme: "oauth2",
+        created: false,
+        integrationSlug: "github",
+        managed: false,
+        ok: true,
+      },
+    );
+    await expect(
+      runInDurableObject(
+        env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+        (_instance, state) =>
+          state.storage.sql.exec("SELECT auth_config_id, source FROM provider_auth_configs").one(),
+      ),
+    ).resolves.toEqual({ auth_config_id: "ac_github_custom", source: "crewhelm_custom" });
+  });
+
   it("connects a known provider through one replay-safe happy-path operation", async () => {
     const authority = await ownerAuthority("mcp-enable-github-owner", [
       CONNECTION_CONFIGS_WRITE_SCOPE,
@@ -3340,6 +3734,16 @@ describe("authenticated MCP handler", () => {
     };
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({
+          auth_config_details: [{ mode: "oauth2" }],
+          composio_managed_auth_schemes: ["oauth2"],
+          name: "GitHub",
+          no_auth: false,
+          slug: "github",
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
       .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
       .mockResolvedValueOnce(
         Response.json(
@@ -3365,6 +3769,21 @@ describe("authenticated MCP handler", () => {
           },
           { status: 201 },
         ),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          auth_config_details: [{ mode: "oauth2" }],
+          composio_managed_auth_schemes: ["oauth2"],
+          name: "GitHub",
+          no_auth: false,
+          slug: "github",
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          items: [{ ...authConfig, name: "GitHub" }],
+          next_cursor: null,
+        }),
       );
     const requestBody = JSON.stringify({
       id: 139,
@@ -3434,16 +3853,19 @@ describe("authenticated MCP handler", () => {
     expect(
       listConnectionsResultSchema.parse(JSON.parse(inspected.content[0]?.text ?? "")),
     ).toMatchObject({ connections: [{ connectionId: first.connectionLink.connectionId }] });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    const listEndpoint = fetchMock.mock.calls[0]?.[0];
+    expect(fetchMock).toHaveBeenCalledTimes(7);
+    const toolkitEndpoint = fetchMock.mock.calls[0]?.[0];
+    const listEndpoint = fetchMock.mock.calls[1]?.[0];
 
-    if (!(listEndpoint instanceof URL)) {
-      throw new TypeError("Expected a Composio auth-config URL.");
+    if (!(toolkitEndpoint instanceof URL) || !(listEndpoint instanceof URL)) {
+      throw new TypeError("Expected Composio toolkit and auth-config URLs.");
     }
 
-    expect(listEndpoint.href).toContain("/api/v3.1/auth_configs?is_composio_managed=true");
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://backend.composio.dev/api/v3.1/auth_configs");
-    expect(fetchMock.mock.calls[2]?.[0]).toBe(
+    expect(toolkitEndpoint.href).toContain("/api/v3.1/toolkits/github?version=latest");
+    expect(listEndpoint.href).toContain("/api/v3.1/auth_configs?limit=50");
+    expect(fetchMock.mock.calls[2]?.[0]).toBeInstanceOf(URL);
+    expect(fetchMock.mock.calls[3]?.[0]).toBe("https://backend.composio.dev/api/v3.1/auth_configs");
+    expect(fetchMock.mock.calls[4]?.[0]).toBe(
       "https://backend.composio.dev/api/v3.1/connected_accounts/link",
     );
   });
@@ -3717,6 +4139,7 @@ describe("authenticated MCP handler", () => {
       created: true,
       integrationSlug: "todoist",
       managed: true,
+      name: "Todoist",
       reservationId: enablement.reservationId,
     });
     const reservation = await stub.reserveConnectionLink(authority, {

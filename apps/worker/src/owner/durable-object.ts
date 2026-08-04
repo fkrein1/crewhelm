@@ -61,6 +61,7 @@ import {
   type OwnerScope,
   type RecordAgentInboxRunResult,
   type RecordConnectionAuthorizationReturnResult,
+  type RecordProviderAuthConfigResult,
   type RedeemRunReceiverCapabilityResult,
   type ReserveConnectionLinkResult,
   type ReserveIntegrationEnablementResult,
@@ -148,6 +149,7 @@ import {
   deniedConnectionLink,
   deniedConnectionRead,
   deniedIntegrationEnablement,
+  deniedProviderAuthConfig,
 } from "./connections/index.js";
 import { FleetConfigurations, deniedFleetConfiguration } from "./configuration/index.js";
 import { RemoteMcpConnections } from "./remote-mcp-connections/index.js";
@@ -1375,6 +1377,17 @@ export class OwnerControlPlane extends DurableObject {
     return authorization.ok
       ? this.#connections.completeIntegrationEnablement(authorization.authority, input)
       : deniedIntegrationEnablement(authorization.code);
+  }
+
+  async recordProviderAuthConfig(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<RecordProviderAuthConfigResult> {
+    const authorization = this.#authorize(authorityInput, CONNECTION_CONFIGS_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#connections.recordProviderAuthConfig(authorization.authority, input)
+      : deniedProviderAuthConfig(authorization.code);
   }
 
   async completeConnectionLink(

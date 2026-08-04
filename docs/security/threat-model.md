@@ -194,15 +194,21 @@ remains pinned until recovery permits a new attempt.
 
 ### Composio
 
-Catalog reads, auth-configuration reads, managed auth-configuration creation, connection links,
-Agent tool attachment, and execution are separate capabilities. All use fixed Composio endpoints,
-bounded requests and responses, manual redirect handling, normalized safe errors, and opaque
-identifiers.
+Catalog reads, provider-auth readiness inspection, managed auth-configuration creation, connection
+links, Agent tool attachment, and execution are separate capabilities. All use fixed Composio
+endpoints, bounded requests and responses, manual redirect handling, normalized safe errors, and
+opaque identifiers. Readiness normalizes only supported authentication schemes and safe active
+auth-config references. Incomplete pagination, mismatched toolkits, and invalid provider responses
+fail closed.
 
-Reading enabled auth configurations requires `connection-configs:read`. Enabling a
-Composio-managed configuration requires `connection-configs:write` and performs a bounded,
-idempotent find-or-create for one exact toolkit. Concurrent duplicate writes are suppressed. An
-ambiguous create remains unknown unless a bounded follow-up read proves the configuration exists.
+Reading enabled auth configurations or inspecting readiness requires `connection-configs:read`.
+Readiness is read-only and creates no reservation. Connecting requires `connection-configs:write`;
+it records only the selected config ID, toolkit, scheme, managed-or-custom source, display name,
+and timestamps. Creating a Composio-managed configuration performs a bounded, idempotent
+find-or-create only after readiness proves managed auth is available. Concurrent duplicate writes
+are suppressed. An ambiguous create remains unknown unless a bounded follow-up read proves the
+configuration exists. Selection and custom-setup prerequisites are known non-effects and never use
+that unknown outcome.
 
 Connect Link callbacks are short-lived bearer capabilities visible to Composio and browser
 infrastructure. Crewhelm stores only a digest, authenticates the exact owner-local reservation,

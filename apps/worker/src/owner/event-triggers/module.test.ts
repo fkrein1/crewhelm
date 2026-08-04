@@ -186,13 +186,9 @@ describe("OwnerControlPlane Agent Event Triggers", () => {
         now,
       );
       state.storage.sql.exec(
-        `INSERT INTO integration_enablement_requests
-          (client_id, idempotency_key, request_digest, integration_slug, reservation_id,
-            status, recover_after, auth_config_id, auth_scheme, created_at, completed_at)
-         VALUES ('eventTrigger-fixture', 'enable-github', ?, 'github', 'integration_enablement_fixture',
-            'completed', ?, 'ac_event_trigger_github', 'oauth2', ?, ?)`,
-        "d".repeat(43),
-        now + 60_000,
+        `INSERT INTO provider_auth_configs
+          (auth_config_id, integration_slug, auth_scheme, source, display_name, created_at, updated_at)
+         VALUES ('ac_event_trigger_github', 'github', 'OAUTH2', 'crewhelm_custom', 'GitHub test', ?, ?)`,
         now,
         now,
       );

@@ -8,7 +8,7 @@ const integrationProviderResponseEventSchema = z.discriminatedUnion("operation",
     .object({
       durationMs: durationMsSchema,
       integrationSlug: integrationSlugSchema,
-      operation: z.enum(["create", "lookup", "recovery"]),
+      operation: z.enum(["create", "inspect_toolkit", "list", "recovery"]),
       status: providerStatusSchema,
     })
     .strict(),

@@ -18,7 +18,7 @@ import {
   type RegistrySkillPackage,
   type SkillPackage,
 } from "@crewhelm/contracts";
-import { and, count, desc, eq } from "drizzle-orm";
+import { and, count, eq } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import { skillsCapabilityConfiguration } from "../../agent-capabilities/skills.js";
@@ -27,7 +27,7 @@ import type { Briefs } from "../briefs/index.js";
 import {
   auditEvents,
   connections,
-  integrationEnablementRequests,
+  providerAuthConfigs,
   recipeInstallations,
   remoteMcpConnections,
   type ControlPlaneDatabaseSchema,
@@ -370,16 +370,9 @@ export class Recipes {
         row?.authConfigId === null || row?.authConfigId === undefined
           ? null
           : (this.#database
-              .select({ value: integrationEnablementRequests.integrationSlug })
-              .from(integrationEnablementRequests)
-              .where(
-                and(
-                  eq(integrationEnablementRequests.authConfigId, row.authConfigId),
-                  eq(integrationEnablementRequests.status, "completed"),
-                ),
-              )
-              .orderBy(desc(integrationEnablementRequests.completedAt))
-              .limit(1)
+              .select({ value: providerAuthConfigs.integrationSlug })
+              .from(providerAuthConfigs)
+              .where(eq(providerAuthConfigs.authConfigId, row.authConfigId))
               .get()?.value ?? null);
       const requirementMatches =
         row === undefined || !providerMatches

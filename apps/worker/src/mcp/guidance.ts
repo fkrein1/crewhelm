@@ -84,9 +84,11 @@ Updating a Brief creates a new revision and never changes existing work.
 ### Connect an integration
 
 When the integration is known, skip catalog search. Call \`connect_provider\` through
-\`crewhelm_change_connections\` and let the owner open the returned URL. Use the
-returned authorization result for exact lifecycle inspection after OAuth. Keep the inspected
-Connection object unchanged. Search that integration's
+\`crewhelm_change_connections\`. If it returns exact auth-config choices, repeat with the selected
+\`authConfigId\`. If it reports custom setup is required, explain that no reservation was created
+and never ask for credentials in MCP. Otherwise let the owner open the returned URL. Use the
+returned authorization result for exact lifecycle inspection after authorization. Keep the
+inspected Connection object unchanged. Search that integration's
 tools and pass selected \`{slug, version}\` values directly to
 the \`grant_provider_actions\` operation. Inspect individual tools only when parameter schemas are
 needed; attachment validation rechecks every selected definition server-side.

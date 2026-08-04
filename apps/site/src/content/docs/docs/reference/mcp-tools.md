@@ -91,9 +91,11 @@ Updating a Brief creates a new revision and never changes existing work.
 ### Connect an integration
 
 When the integration is known, skip catalog search. Call `connect_provider` through
-`crewhelm_change_connections` and let the owner open the returned URL. Use the
-returned authorization result for exact lifecycle inspection after OAuth. Keep the inspected
-Connection object unchanged. Search that integration's
+`crewhelm_change_connections`. If it returns exact auth-config choices, repeat with the selected
+`authConfigId`. If it reports custom setup is required, explain that no reservation was created
+and never ask for credentials in MCP. Otherwise let the owner open the returned URL. Use the
+returned authorization result for exact lifecycle inspection after authorization. Keep the
+inspected Connection object unchanged. Search that integration's
 tools and pass selected `{slug, version}` values directly to
 the `grant_provider_actions` operation. Inspect individual tools only when parameter schemas are
 needed; attachment validation rechecks every selected definition server-side.
@@ -2380,6 +2382,7 @@ Enable one integration provider and return its authentication configuration.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
+| `authConfigId` | No | string | pattern: `^ac_[A-Za-z0-9_-]{1,124}$` |
 | `integrationSlug` | Yes | string | pattern: `^[a-z0-9][a-z0-9_-]{0,127}$` |
 | `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
@@ -2391,6 +2394,10 @@ Enable one integration provider and return its authentication configuration.
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "authConfigId": {
+      "type": "string",
+      "pattern": "^ac_[A-Za-z0-9_-]{1,124}$"
+    },
     "integrationSlug": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$"
@@ -2456,6 +2463,7 @@ Enable a provider integration and create its authorization link in one step.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
+| `authConfigId` | No | string | pattern: `^ac_[A-Za-z0-9_-]{1,124}$` |
 | `integrationSlug` | Yes | string | pattern: `^[a-z0-9][a-z0-9_-]{0,127}$` |
 | `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
@@ -2467,6 +2475,10 @@ Enable a provider integration and create its authorization link in one step.
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "authConfigId": {
+      "type": "string",
+      "pattern": "^ac_[A-Za-z0-9_-]{1,124}$"
+    },
     "integrationSlug": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$"
@@ -6749,7 +6761,8 @@ How to use this tool:
 | `search_providers` | Search the complete integration provider catalog. |
 | `search_actions` | Search provider actions, optionally within one known integration. |
 | `inspect_action` | Inspect the exact parameter schema for one provider action version. |
-| `list_auth` | List authentication configurations for enabled integration providers. |
+| `inspect_provider_auth` | Inspect provider authentication readiness for one integration. |
+| `list_auth_configs` | List authentication configurations for enabled integration providers. |
 | `list_connections` | List compact provider and remote MCP Connection metadata. |
 
 ### `search_providers`
@@ -6876,7 +6889,37 @@ Inspect the exact parameter schema for one provider action version.
 
 </details>
 
-### `list_auth`
+### `inspect_provider_auth`
+
+Inspect provider authentication readiness for one integration.
+
+| Input | Required | Type | Details |
+| --- | --- | --- | --- |
+| `integrationSlug` | Yes | string | pattern: `^[a-z0-9][a-z0-9_-]{0,127}$` |
+
+<details>
+<summary>View exact JSON Schema</summary>
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "integrationSlug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$"
+    }
+  },
+  "required": [
+    "integrationSlug"
+  ],
+  "additionalProperties": false
+}
+```
+
+</details>
+
+### `list_auth_configs`
 
 List authentication configurations for enabled integration providers.
 
