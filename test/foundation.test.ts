@@ -1120,7 +1120,7 @@ describe("repository foundation", () => {
           preview_urls: true,
           services: [{ binding: "REGISTRY", service: "crewhelm-registry-dev" }],
           vars: {
-            REGISTRY_ORIGIN: "https://crewhelm-registry-dev.fkrein.workers.dev",
+            REGISTRY_ORIGIN: "https://registry.internal",
           },
           workers_dev: false,
         },

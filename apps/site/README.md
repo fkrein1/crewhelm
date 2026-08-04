@@ -71,6 +71,10 @@ sessions, so its Astro config selects an in-memory session driver instead. Keep 
 the site gains a deliberate, environment-isolated session store; implicit KV provisioning races
 with the existing production namespace and makes branch uploads fail.
 
+Preview requests address the development Registry binding through the synthetic
+`https://registry.internal` origin. The service binding—not public DNS—is the transport authority;
+using a mapped `workers.dev` hostname from another preview Worker causes Cloudflare error 1042.
+
 Preview-host requests also require Cloudflare's `global_fetch_strictly_public` compatibility flag
 so Astro can reach its Worker and asset surfaces without Cloudflare rejecting the same-zone fetch.
 
