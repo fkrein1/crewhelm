@@ -48,6 +48,7 @@ export interface OwnerControlPlaneClient {
   listAgents(authorityInput: unknown, input: unknown): Promise<unknown>;
   listBriefs(authorityInput: unknown, input: unknown): Promise<unknown>;
   listConnections(authorityInput: unknown, input: unknown): Promise<unknown>;
+  listProviderAuthConfigs?(authorityInput: unknown, input: unknown): Promise<unknown>;
   listSkills(authorityInput: unknown, input: unknown): Promise<unknown>;
   listUnresolvedToolEffects(authorityInput: unknown, input: unknown): Promise<unknown>;
   listRunToolApprovals(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -61,6 +62,7 @@ export interface OwnerControlPlaneClient {
   prepareProviderAuthSetup?(authorityInput: unknown, input: unknown): Promise<unknown>;
   providerAuthSetupAuthority?(input: unknown): Promise<unknown>;
   readProviderAuthSetup?(input: unknown): Promise<unknown>;
+  reconcileProviderAuthSetup?(input: unknown): Promise<unknown>;
   rejectProviderAuthSetup?(input: unknown): Promise<unknown>;
   recipePublications?(authorityInput: unknown, input: unknown): Promise<unknown>;
   reserveIntegrationEnablement(authorityInput: unknown, input: unknown): Promise<unknown>;

@@ -2367,9 +2367,9 @@ How to use this tool:
 
 | Subtool | Purpose |
 | --- | --- |
-| `enable_provider` | Enable one integration provider and return its authentication configuration. |
+| `enable_provider` | Resolve auth readiness, reuse an owner-held config, create managed auth, or return a short-lived owner setup link for custom credentials. |
 | `authorize_provider` | Create an authorization link for one enabled provider integration. |
-| `connect_provider` | Enable a provider integration and create its authorization link in one step. |
+| `connect_provider` | Resolve provider auth and return an authorization link or a short-lived owner setup link for custom credentials. |
 | `inspect_provider_connection` | Inspect one exact provider Connection. |
 | `grant_provider_actions` | Grant one Agent revision selected actions from one provider Connection. |
 | `connect_remote_mcp` | Create a public, bearer, or OAuth remote MCP Connection. |
@@ -2380,7 +2380,7 @@ How to use this tool:
 
 ### `enable_provider`
 
-Enable one integration provider and return its authentication configuration.
+Resolve auth readiness, reuse an owner-held config, create managed auth, or return a short-lived owner setup link for custom credentials.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
@@ -2461,7 +2461,7 @@ Create an authorization link for one enabled provider integration.
 
 ### `connect_provider`
 
-Enable a provider integration and create its authorization link in one step.
+Resolve provider auth and return an authorization link or a short-lived owner setup link for custom credentials.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
@@ -6763,8 +6763,8 @@ How to use this tool:
 | `search_providers` | Search the complete integration provider catalog. |
 | `search_actions` | Search provider actions, optionally within one known integration. |
 | `inspect_action` | Inspect the exact parameter schema for one provider action version. |
-| `inspect_provider_auth` | Inspect provider authentication readiness for one integration. |
-| `list_auth_configs` | List authentication configurations for enabled integration providers. |
+| `inspect_provider_auth` | Inspect whether one provider is ready, requires an auth-config choice, or needs owner setup without reserving an effect. |
+| `list_auth_configs` | List bounded owner-held auth-config references; inspect provider auth for current activity. |
 | `list_connections` | List compact provider and remote MCP Connection metadata. |
 
 ### `search_providers`
@@ -6893,7 +6893,7 @@ Inspect the exact parameter schema for one provider action version.
 
 ### `inspect_provider_auth`
 
-Inspect provider authentication readiness for one integration.
+Inspect whether one provider is ready, requires an auth-config choice, or needs owner setup without reserving an effect.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
@@ -6923,7 +6923,7 @@ Inspect provider authentication readiness for one integration.
 
 ### `list_auth_configs`
 
-List authentication configurations for enabled integration providers.
+List bounded owner-held auth-config references; inspect provider auth for current activity.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |

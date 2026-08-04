@@ -72,12 +72,17 @@ confirmation with a boolean.
 The facade may compose private commands when the intermediate value has no owner decision:
 
 - `connect_provider` first inspects exact provider-auth readiness. It reuses one selected active
-  managed or custom auth config, idempotently creates a managed config only when the toolkit says
+  managed config or an active custom config recorded for that owner by Crewhelm, idempotently
+  creates a managed config only when the toolkit says
   managed auth is available, or returns exact selection or setup prerequisites without reserving
   a connection effect. Custom setup returns an owner-bound, single-use browser capability. The
   browser exchanges it for a short HttpOnly session, renders a frozen bounded field plan, and sends
   credential values only to the Worker for direct Composio relay. Once one config is ready, the
   control plane records only safe auth-config metadata and creates the owner authorization link.
+  Managed and custom creation reserve one owner capacity bound before provider egress. An
+  interrupted custom submission stays sealed until exact reconciliation by its full setup ID; it
+  is never pruned or resubmitted as though no effect occurred. Browser recovery has an immutable
+  deadline and cannot refresh itself indefinitely.
 - Recipe `prepare` ports an exact live Agent revision plus selected returned Schedules and Event
   Triggers into a reviewable public candidate.
 

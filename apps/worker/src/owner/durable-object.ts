@@ -7,6 +7,7 @@ import {
   batchDisableAgentsInputSchema,
   canonicalJson,
   CONNECTION_CONFIGS_WRITE_SCOPE,
+  CONNECTION_CONFIGS_READ_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   changeAuthorityInputSchema,
@@ -49,6 +50,7 @@ import {
   type ListAgentRevisionsResult,
   type ListAgentsResult,
   type ListConnectionsResult,
+  type IntegrationAuthConfigListResult,
   type ListUnresolvedToolEffectsResult,
   type LookupAgentConnectionConfigurationResult,
   type InspectRunResult,
@@ -1411,6 +1413,10 @@ export class OwnerControlPlane extends DurableObject {
     return this.#providerAuthSetups.reject(input);
   }
 
+  reconcileProviderAuthSetup(input: unknown): ProviderAuthSetupMutationResult {
+    return this.#providerAuthSetups.reconcile(input);
+  }
+
   providerAuthSetupAuthority(input: unknown): ProviderAuthSetupAuthorityResult {
     return this.#providerAuthSetups.authority(input);
   }
@@ -1435,6 +1441,28 @@ export class OwnerControlPlane extends DurableObject {
     return authorization.ok
       ? this.#connections.recordProviderAuthConfig(authorization.authority, input)
       : deniedProviderAuthConfig(authorization.code);
+  }
+
+  listProviderAuthConfigs(
+    authorityInput: unknown,
+    input: unknown,
+  ): IntegrationAuthConfigListResult {
+    const readAuthorization = this.#authorize(authorityInput, CONNECTION_CONFIGS_READ_SCOPE);
+    const authorization = readAuthorization.ok
+      ? readAuthorization
+      : this.#authorize(authorityInput, CONNECTION_CONFIGS_WRITE_SCOPE);
+    return authorization.ok
+      ? this.#connections.listProviderAuthConfigs(input)
+      : {
+          error: {
+            code:
+              authorization.code === "insufficient_scope"
+                ? "insufficient_scope"
+                : "integration_catalog_unavailable",
+            message: "Integration catalog request denied.",
+          },
+          ok: false,
+        };
   }
 
   async completeConnectionLink(

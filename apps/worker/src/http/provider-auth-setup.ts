@@ -26,6 +26,7 @@ const EXCHANGE_PATH = `${PROVIDER_AUTH_SETUP_PATH}/exchange`;
 const PLAN_PATH = `${PROVIDER_AUTH_SETUP_PATH}/plan`;
 const CONFIGURE_PATH = `${PROVIDER_AUTH_SETUP_PATH}/configure`;
 const CONNECT_PATH = `${PROVIDER_AUTH_SETUP_PATH}/connect`;
+const RECONCILE_PATH = `${PROVIDER_AUTH_SETUP_PATH}/reconcile`;
 const SCRIPT_PATH = `${PROVIDER_AUTH_SETUP_PATH}/app.js`;
 const MAXIMUM_JSON_BYTES = 140 * 1_024;
 const DENIED = { error: "provider_auth_setup_denied", ok: false } as const;
@@ -64,7 +65,7 @@ const SCRIPT = String.raw`(() => {
     if (!result.ok) throw result;
     if (result.status === "configured") return renderCompleted(result.plan);
     if (result.status === "rejected") return fail("These credentials were rejected. Request a new setup link and try again.");
-    if (result.status === "outcome_unknown") return fail("The provider outcome is unknown. Request a new setup link before trying again.");
+    if (result.status === "outcome_unknown") return renderUnknown(result);
     status.textContent = "Enter the credentials required by " + result.plan.integrationName + ".";
     const form = document.createElement("form");
     if (result.plan.documentationUrl) {
@@ -130,7 +131,9 @@ const SCRIPT = String.raw`(() => {
         if (error && error.error === "credentials_rejected") {
           status.textContent = "The provider rejected these credentials. Check them and try again with a new setup link.";
         } else {
-          status.textContent = "The provider outcome is unknown. Request a new setup link before trying again.";
+          const pending = await request("${PLAN_PATH}", { headers: {} }).catch(() => null);
+          if (pending !== null) return render(pending);
+          status.textContent = "The provider outcome is unknown. Reload this page to check it without resubmitting credentials.";
         }
         setup.replaceChildren();
       }
@@ -156,6 +159,30 @@ const SCRIPT = String.raw`(() => {
         window.location.assign(result.url);
       } catch {
         fail("Provider authorization could not be started. Request a new setup link and try again.");
+      }
+    });
+    actions.append(button);
+    setup.replaceChildren(actions);
+  };
+  const renderUnknown = (result) => {
+    status.textContent = "The provider may have created the authentication configuration. Do not submit credentials again.";
+    const actions = document.createElement("div");
+    actions.className = "ch-actions";
+    const button = document.createElement("button");
+    button.className = "ch-button ch-button--primary";
+    button.type = "button";
+    button.append(text("Check provider outcome"));
+    const enableAt = Number(result.recoverAfter || 0);
+    const enable = () => { button.disabled = Date.now() < enableAt; };
+    enable();
+    if (button.disabled) window.setTimeout(enable, Math.max(1, enableAt - Date.now()));
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      status.textContent = "Checking the exact provider outcome…";
+      try {
+        render(await request("${RECONCILE_PATH}", { body: "{}", method: "POST" }));
+      } catch {
+        fail("The provider outcome is still unknown. Reload this page later to check again.");
       }
     });
     actions.append(button);
@@ -218,6 +245,11 @@ function cookieToken(request: Request): string | null {
     .filter((part) => part.startsWith(`${PROVIDER_AUTH_SETUP_COOKIE}=`))
     .map((part) => part.slice(PROVIDER_AUTH_SETUP_COOKIE.length + 1));
   return values.length === 1 ? (values[0] ?? null) : null;
+}
+
+function sessionCookie(token: string, sessionExpiresAt: number): string {
+  const maxAge = Math.max(1, Math.floor((sessionExpiresAt - Date.now()) / 1_000));
+  return `${PROVIDER_AUTH_SETUP_COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=${PROVIDER_AUTH_SETUP_PATH}; Max-Age=${maxAge}`;
 }
 
 async function sessionForRequest(request: Request, env: WorkerEnv) {
@@ -298,9 +330,8 @@ export function registerProviderAuthSetupRoutes(worker: Hono<{ Bindings: WorkerE
       }),
     );
     if (!result.success || !result.data.ok) return json(DENIED, 400);
-    const maxAge = Math.max(1, Math.floor((result.data.sessionExpiresAt - Date.now()) / 1_000));
     return json(result.data, 200, {
-      "set-cookie": `${PROVIDER_AUTH_SETUP_COOKIE}=${session.token}; HttpOnly; Secure; SameSite=Strict; Path=${PROVIDER_AUTH_SETUP_PATH}; Max-Age=${maxAge}`,
+      "set-cookie": sessionCookie(session.token, result.data.sessionExpiresAt),
     });
   });
 
@@ -357,7 +388,7 @@ export function registerProviderAuthSetupRoutes(worker: Hono<{ Bindings: WorkerE
           : { oauth_redirect_uri: reservation.data.plan.callbackUrl }),
       },
       integrationSlug: reservation.data.plan.integrationSlug,
-      name: `Crewhelm ${reservation.data.plan.integrationSlug} ${session.claims.setupId.slice(-8)}`,
+      name: `Crewhelm ${session.claims.setupId.slice("provider_auth_setup_".length)}`,
     });
     if (!created.ok) {
       await controlPlane.rejectProviderAuthSetup({
@@ -444,5 +475,66 @@ export function registerProviderAuthSetupRoutes(worker: Hono<{ Bindings: WorkerE
     return completed.success && completed.data.ok
       ? json({ ok: true, url: completed.data.connectionLink.url })
       : json(DENIED, 503);
+  });
+
+  worker.post(RECONCILE_PATH, async (context) => {
+    const body = mutationAllowed(context.req.raw, context.env)
+      ? await jsonBody(context.req.raw)
+      : null;
+    if (body === null || !hasExactKeys(body, [])) return json(DENIED, 400);
+    const session = await sessionForRequest(context.req.raw, context.env);
+    if (session === null) return json(DENIED, 401);
+    const controlPlane = context.env.OWNER_CONTROL_PLANE.getByName(session.claims.ownerKey);
+    const current = providerAuthSetupPlanResultSchema.safeParse(
+      await controlPlane.readProviderAuthSetup({
+        sessionDigest: session.sessionDigest,
+        setupId: session.claims.setupId,
+      }),
+    );
+    if (
+      !current.success ||
+      !current.data.ok ||
+      current.data.status !== "outcome_unknown" ||
+      current.data.recoverAfter === undefined ||
+      current.data.recoverAfter > Date.now()
+    ) {
+      return json(DENIED, 400);
+    }
+
+    const reconciled = await createComposioAuthConfigs({
+      apiKey: context.env.COMPOSIO_API_KEY,
+    }).reconcileCustom({
+      authScheme: current.data.plan.authScheme,
+      integrationSlug: current.data.plan.integrationSlug,
+      name: `Crewhelm ${session.claims.setupId.slice("provider_auth_setup_".length)}`,
+    });
+    if (reconciled.state === "configured") {
+      await controlPlane.completeProviderAuthSetup({
+        authConfig: reconciled.authConfig,
+        sessionDigest: session.sessionDigest,
+        setupId: session.claims.setupId,
+      });
+    } else {
+      await controlPlane.reconcileProviderAuthSetup({
+        outcome: reconciled.state,
+        sessionDigest: session.sessionDigest,
+        setupId: session.claims.setupId,
+      });
+    }
+    const result = providerAuthSetupPlanResultSchema.safeParse(
+      await controlPlane.readProviderAuthSetup({
+        sessionDigest: session.sessionDigest,
+        setupId: session.claims.setupId,
+      }),
+    );
+    if (!result.success || !result.data.ok) return json(DENIED, 503);
+    const token = cookieToken(context.req.raw);
+    return json(
+      result.data,
+      200,
+      token === null
+        ? undefined
+        : { "set-cookie": sessionCookie(token, result.data.sessionExpiresAt) },
+    );
   });
 }

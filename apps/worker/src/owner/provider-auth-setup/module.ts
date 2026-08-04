@@ -1,6 +1,7 @@
 import {
   MAXIMUM_PROVIDER_AUTH_CONFIGS_PER_OWNER,
   MAXIMUM_PROVIDER_AUTH_SETUP_REQUESTS_PER_OWNER,
+  CONNECTIONS_WRITE_SCOPE,
   PROVIDER_AUTH_SETUP_CAPABILITY_LIFETIME_MS,
   PROVIDER_AUTH_SETUP_SESSION_LIFETIME_MS,
   PROVIDER_AUTH_SETUP_UNKNOWN_RECOVERY_MS,
@@ -13,6 +14,7 @@ import {
   providerAuthSetupPlanResultSchema,
   providerAuthSetupSessionInputSchema,
   rejectProviderAuthSetupInputSchema,
+  reconcileProviderAuthSetupInputSchema,
   type OwnerAuthority,
   type PrepareProviderAuthSetupResult,
   type ProviderAuthSetupAuthorityResult,
@@ -20,11 +22,12 @@ import {
   type ProviderAuthSetupPlan,
   type ProviderAuthSetupPlanResult,
 } from "@crewhelm/contracts";
-import { and, count, eq } from "drizzle-orm";
+import { and, count, eq, inArray, sql } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import {
   auditEvents,
+  integrationEnablementRequests,
   providerAuthConfigs,
   providerAuthSetupRequests,
   type ControlPlaneDatabaseSchema,
@@ -80,6 +83,18 @@ export class ProviderAuthSetups {
         ok: false,
       });
     }
+    if (
+      request.data.plan.authorizeConnection &&
+      !authority.scopes.includes(CONNECTIONS_WRITE_SCOPE)
+    ) {
+      return prepareProviderAuthSetupResultSchema.parse({
+        error: {
+          code: "insufficient_scope",
+          message: "Provider authentication setup request denied.",
+        },
+        ok: false,
+      });
+    }
 
     const now = Date.now();
     if (
@@ -99,6 +114,16 @@ export class ProviderAuthSetups {
 
     const requestDigest = await digest(stablePlan(request.data.plan));
     return this.#database.transaction((transaction) => {
+      transaction
+        .delete(providerAuthSetupRequests)
+        .where(sql`(
+          ${providerAuthSetupRequests.status} IN ('prepared', 'exchanged', 'rejected')
+          AND ${providerAuthSetupRequests.setupExpiresAt} <= ${now}
+        ) OR (
+          ${providerAuthSetupRequests.status} = 'configured'
+          AND ${providerAuthSetupRequests.sessionExpiresAt} <= ${now}
+        )`)
+        .run();
       const existing = transaction
         .select()
         .from(providerAuthSetupRequests)
@@ -199,10 +224,7 @@ export class ProviderAuthSetups {
         return denied;
       }
 
-      const sessionExpiresAt = Math.min(
-        now + PROVIDER_AUTH_SETUP_SESSION_LIFETIME_MS,
-        row.setupExpiresAt,
-      );
+      const sessionExpiresAt = row.setupExpiresAt + 2 * PROVIDER_AUTH_SETUP_UNKNOWN_RECOVERY_MS;
       transaction
         .update(providerAuthSetupRequests)
         .set({
@@ -227,15 +249,21 @@ export class ProviderAuthSetups {
     const request = providerAuthSetupSessionInputSchema.safeParse(input);
     if (!request.success) return denied;
     const row = this.#sessionRow(request.data, Date.now());
-    if (row === undefined || row.status === "submitting" || row.status === "prepared")
+    if (
+      row === undefined ||
+      row.status === "prepared" ||
+      (row.status === "exchanged" && row.setupExpiresAt <= Date.now())
+    ) {
       return denied;
+    }
 
     return providerAuthSetupPlanResultSchema.parse({
       ...(row.authConfigId === null ? {} : { authConfigId: row.authConfigId }),
       ok: true,
       plan: row.plan,
+      ...(row.recoverAfter === null ? {} : { recoverAfter: row.recoverAfter }),
       sessionExpiresAt: row.sessionExpiresAt,
-      status: row.status,
+      status: row.status === "submitting" ? "outcome_unknown" : row.status,
     });
   }
 
@@ -246,7 +274,27 @@ export class ProviderAuthSetups {
 
     return this.#database.transaction((transaction) => {
       const row = this.#sessionRow(request.data, now);
-      if (row?.status !== "exchanged") return denied;
+      if (row?.status !== "exchanged" || row.setupExpiresAt <= now) return denied;
+      const configCount =
+        transaction.select({ value: count() }).from(providerAuthConfigs).get()?.value ?? 0;
+      const reservedCount =
+        transaction
+          .select({ value: count() })
+          .from(providerAuthSetupRequests)
+          .where(inArray(providerAuthSetupRequests.status, ["submitting", "outcome_unknown"]))
+          .get()?.value ?? 0;
+      const managedReservedCount =
+        transaction
+          .select({ value: count() })
+          .from(integrationEnablementRequests)
+          .where(eq(integrationEnablementRequests.status, "pending"))
+          .get()?.value ?? 0;
+      if (
+        configCount + reservedCount + managedReservedCount >=
+        MAXIMUM_PROVIDER_AUTH_CONFIGS_PER_OWNER
+      ) {
+        return denied;
+      }
       transaction
         .update(providerAuthSetupRequests)
         .set({
@@ -273,7 +321,12 @@ export class ProviderAuthSetups {
     return this.#database.transaction((transaction) => {
       const row = this.#sessionRow(request.data, now);
       if (
-        row?.status !== "submitting" ||
+        (row?.status !== "submitting" &&
+          !(
+            row?.status === "outcome_unknown" &&
+            row.recoverAfter !== null &&
+            row.recoverAfter <= now
+          )) ||
         request.data.authConfig.integrationSlug !== row.plan.integrationSlug ||
         request.data.authConfig.authScheme !== row.plan.authScheme ||
         request.data.authConfig.source !== "crewhelm_custom"
@@ -355,6 +408,32 @@ export class ProviderAuthSetups {
       .set({
         recoverAfter: request.data.outcome === "credentials_rejected" ? null : row.recoverAfter,
         status: request.data.outcome === "credentials_rejected" ? "rejected" : "outcome_unknown",
+        updatedAt: now,
+      })
+      .where(eq(providerAuthSetupRequests.setupId, row.setupId))
+      .run();
+    return providerAuthSetupMutationResultSchema.parse({ ok: true });
+  }
+
+  reconcile(input: unknown): ProviderAuthSetupMutationResult {
+    const request = reconcileProviderAuthSetupInputSchema.safeParse(input);
+    if (!request.success) return denied;
+    const now = Date.now();
+    const row = this.#sessionRow(request.data, now);
+    if (
+      (row?.status !== "submitting" && row?.status !== "outcome_unknown") ||
+      row.recoverAfter === null ||
+      row.recoverAfter > now
+    ) {
+      return denied;
+    }
+
+    this.#database
+      .update(providerAuthSetupRequests)
+      .set({
+        recoverAfter:
+          request.data.outcome === "absent" ? null : now + PROVIDER_AUTH_SETUP_UNKNOWN_RECOVERY_MS,
+        status: request.data.outcome === "absent" ? "rejected" : "outcome_unknown",
         updatedAt: now,
       })
       .where(eq(providerAuthSetupRequests.setupId, row.setupId))

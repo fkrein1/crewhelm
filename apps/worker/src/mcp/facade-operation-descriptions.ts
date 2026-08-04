@@ -7,7 +7,8 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   bind_connection: "Bind one provider Connection to a required Recipe slot.",
   cancel_run: "Cancel one Run before it dispatches an external tool effect.",
   cancel_workflow: "Stop future stages of one exact active Workflow revision.",
-  connect_provider: "Enable a provider integration and create its authorization link in one step.",
+  connect_provider:
+    "Resolve provider auth and return an authorization link or a short-lived owner setup link for custom credentials.",
   connect_remote_mcp: "Create a public, bearer, or OAuth remote MCP Connection.",
   create: "Create a disabled Agent from one bounded definition.",
   create_brief: "Create one bounded owner-provided text Brief.",
@@ -27,7 +28,8 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   discard_install_draft: "Discard one Recipe installation draft.",
   discard_package_draft: "Discard one Skill or Agent blueprint package draft.",
   discard_publish_draft: "Discard one Recipe publication draft.",
-  enable_provider: "Enable one integration provider and return its authentication configuration.",
+  enable_provider:
+    "Resolve auth readiness, reuse an owner-held config, create managed auth, or return a short-lived owner setup link for custom credentials.",
   event_history: "List bounded delivery history for one exact Event Trigger.",
   event_sources: "List Event Trigger sources available through one exact Connection.",
   grant_provider_actions: "Grant one Agent revision selected actions from one provider Connection.",
@@ -42,7 +44,8 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   inspect_conversation: "Inspect one exact retained Agent conversation.",
   inspect_event_trigger: "Inspect one exact Event Trigger.",
   inspect_fleet: "Inspect current fleet policy, capacity, retention, and execution defaults.",
-  inspect_provider_auth: "Inspect provider authentication readiness for one integration.",
+  inspect_provider_auth:
+    "Inspect whether one provider is ready, requires an auth-config choice, or needs owner setup without reserving an effect.",
   inspect_provider_connection: "Inspect one exact provider Connection.",
   inspect_remote_mcp: "Inspect one exact remote MCP Connection and tool snapshot.",
   inspect_revision: "Inspect one exact immutable Agent revision.",
@@ -55,7 +58,8 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   install: "Install one confirmed Recipe draft and create its disabled Agent.",
   list: "List Agents with compact current-revision metadata.",
   list_approvals: "List sensitive tool actions waiting for an owner decision.",
-  list_auth_configs: "List authentication configurations for enabled integration providers.",
+  list_auth_configs:
+    "List bounded owner-held auth-config references; inspect provider auth for current activity.",
   list_blueprints: "List available owner-local Agent blueprints.",
   list_briefs: "List compact Brief metadata without reading content.",
   list_connections: "List compact provider and remote MCP Connection metadata.",

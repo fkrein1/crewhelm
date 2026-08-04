@@ -1,19 +1,12 @@
 import {
-  connectionAuthConfigIdSchema,
-  integrationAuthConfigListInputSchema,
-  integrationAuthConfigListResultSchema,
   integrationCatalogSearchInputSchema,
   integrationCatalogSearchResultSchema,
   inspectIntegrationToolInputSchema,
   inspectIntegrationToolResultSchema,
-  integrationSlugSchema,
   integrationToolkitVersionSchema,
   integrationToolParameterMapSchema,
   integrationToolSearchInputSchema,
   integrationToolSearchResultSchema,
-  type IntegrationAuthConfig,
-  type IntegrationAuthConfigListInput,
-  type IntegrationAuthConfigListResult,
   type IntegrationCatalogItem,
   type IntegrationCatalogSearchInput,
   type IntegrationCatalogSearchResult,
@@ -35,12 +28,11 @@ export {
   type CreateCustomIntegrationAuthConfigResult,
   type CreateManagedIntegrationAuthConfigResult,
   type PrepareCustomIntegrationAuthConfigResult,
+  type ReconcileCustomIntegrationAuthConfigResult,
 } from "./auth-configs.js";
 
 const COMPOSIO_TOOLKITS_URL = "https://backend.composio.dev/api/v3/toolkits";
 const COMPOSIO_TOOLS_URL = "https://backend.composio.dev/api/v3.1/tools";
-const COMPOSIO_AUTH_CONFIGS_URL = "https://backend.composio.dev/api/v3.1/auth_configs";
-const MAXIMUM_AUTH_CONFIG_RESPONSE_BYTES = 256 * 1_024;
 const MAXIMUM_TOOLKIT_RESPONSE_BYTES = 256 * 1_024;
 const MAXIMUM_TOOL_RESPONSE_BYTES = 1_024 * 1_024;
 const CATALOG_TIMEOUT_MS = 5_000;
@@ -59,20 +51,6 @@ const composioToolkitSchema = z.looseObject({
 });
 const composioCatalogResponseSchema = z.looseObject({
   items: z.array(composioToolkitSchema).max(50),
-  next_cursor: z.string().min(1).max(2_048).nullish(),
-});
-const composioAuthConfigSchema = z.looseObject({
-  auth_scheme: z.string().min(1).max(64),
-  id: connectionAuthConfigIdSchema,
-  is_composio_managed: z.boolean().nullish(),
-  name: z.string().min(1).max(160),
-  status: z.literal("ENABLED"),
-  toolkit: z.looseObject({
-    slug: integrationSlugSchema,
-  }),
-});
-const composioAuthConfigListResponseSchema = z.looseObject({
-  items: z.array(composioAuthConfigSchema).max(50),
   next_cursor: z.string().min(1).max(2_048).nullish(),
 });
 const composioToolSchema = z.looseObject({
@@ -101,7 +79,6 @@ const composioToolInspectionSchema = composioToolSchema.extend({
 
 export interface ComposioCatalog {
   inspectTool(input: InspectIntegrationToolInput): Promise<InspectIntegrationToolResult>;
-  listAuthConfigs(input: IntegrationAuthConfigListInput): Promise<IntegrationAuthConfigListResult>;
   search(input: IntegrationCatalogSearchInput): Promise<IntegrationCatalogSearchResult>;
   searchTools(input: IntegrationToolSearchInput): Promise<IntegrationToolSearchResult>;
 }
@@ -164,17 +141,6 @@ function normalizeToolkit(toolkit: z.infer<typeof composioToolkitSchema>): Integ
     slug: toolkit.slug,
     toolsCount: toolkit.meta.tools_count,
     version: toolkit.meta.version,
-  };
-}
-
-function normalizeAuthConfig(
-  authConfig: z.infer<typeof composioAuthConfigSchema>,
-): IntegrationAuthConfig {
-  return {
-    authConfigId: authConfig.id,
-    authScheme: authConfig.auth_scheme.toLowerCase(),
-    managed: authConfig.is_composio_managed ?? null,
-    name: authConfig.name,
   };
 }
 
@@ -268,47 +234,6 @@ export function createComposioCatalog(options: ComposioCatalogOptions): Composio
         const result = inspectIntegrationToolResultSchema.parse({
           ok: true,
           tool: normalizeToolInspection(inspected.data),
-        });
-
-        return containsSecret(result, apiKey.data) ? unavailable() : result;
-      } catch {
-        return unavailable();
-      }
-    },
-    async listAuthConfigs(input) {
-      const request = integrationAuthConfigListInputSchema.safeParse(input);
-
-      if (!apiKey.success || !request.success) {
-        return unavailable();
-      }
-
-      const endpoint = new URL(COMPOSIO_AUTH_CONFIGS_URL);
-      endpoint.searchParams.set("limit", String(request.data.limit));
-      endpoint.searchParams.set("show_disabled", "false");
-      endpoint.searchParams.set("toolkit_slug", request.data.integrationSlug);
-
-      if (request.data.cursor !== undefined) {
-        endpoint.searchParams.set("cursor", request.data.cursor);
-      }
-
-      try {
-        const response = await fetchCatalog(endpoint, MAXIMUM_AUTH_CONFIG_RESPONSE_BYTES);
-        if (!response.ok) return unavailable();
-        const authConfigs = composioAuthConfigListResponseSchema.safeParse(response.value);
-
-        if (
-          !authConfigs.success ||
-          authConfigs.data.items.some(
-            (authConfig) => authConfig.toolkit.slug !== request.data.integrationSlug,
-          )
-        ) {
-          return unavailable();
-        }
-
-        const result = integrationAuthConfigListResultSchema.parse({
-          authConfigs: authConfigs.data.items.map(normalizeAuthConfig),
-          nextCursor: authConfigs.data.next_cursor ?? null,
-          ok: true,
         });
 
         return containsSecret(result, apiKey.data) ? unavailable() : result;

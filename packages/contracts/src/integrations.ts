@@ -4,7 +4,7 @@ import { connectionAuthConfigIdSchema } from "./connections.js";
 
 export const INTEGRATION_ENABLEMENT_UNKNOWN_RECOVERY_MS = 30 * 60 * 1_000;
 export const MAXIMUM_INTEGRATION_ENABLEMENT_REQUESTS_PER_OWNER = 5_000;
-export const MAXIMUM_PROVIDER_AUTH_CONFIGS_PER_OWNER = 5_000;
+export const MAXIMUM_PROVIDER_AUTH_CONFIGS_PER_OWNER = 50;
 const MAXIMUM_TOOL_PARAMETER_CONTAINER_ENTRIES = 512;
 const MAXIMUM_TOOL_PARAMETER_DEPTH = 24;
 const MAXIMUM_TOOL_PARAMETER_KEY_LENGTH = 256;
@@ -307,6 +307,7 @@ const integrationEnablementErrorSchema = z.strictObject({
     "invalid_authority",
     "invalid_request",
     "owner_mismatch",
+    "provider_auth_config_limit_exceeded",
   ]),
   message: z.literal("Integration enablement request denied."),
   operation: z

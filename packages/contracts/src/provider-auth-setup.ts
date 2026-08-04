@@ -12,7 +12,7 @@ import {
 
 export const PROVIDER_AUTH_SETUP_CAPABILITY_LIFETIME_MS = 5 * 60 * 1_000;
 export const PROVIDER_AUTH_SETUP_SESSION_LIFETIME_MS = 15 * 60 * 1_000;
-export const PROVIDER_AUTH_SETUP_UNKNOWN_RECOVERY_MS = 30 * 60 * 1_000;
+export const PROVIDER_AUTH_SETUP_UNKNOWN_RECOVERY_MS = 5 * 60 * 1_000;
 export const MAXIMUM_PROVIDER_AUTH_SETUP_REQUESTS_PER_OWNER = 5_000;
 export const MAXIMUM_PROVIDER_CREDENTIAL_FIELDS = 16;
 export const MAXIMUM_PROVIDER_CREDENTIAL_VALUE_CHARACTERS = 8_192;
@@ -99,6 +99,7 @@ export const providerAuthSetupPlanResultSchema = z.discriminatedUnion("ok", [
     authConfigId: connectionAuthConfigIdSchema.optional(),
     ok: z.literal(true),
     plan: providerAuthSetupPlanSchema,
+    recoverAfter: z.number().int().positive().safe().optional(),
     sessionExpiresAt: z.number().int().positive().safe(),
     status: z.enum(["exchanged", "configured", "rejected", "outcome_unknown"]),
   }),
@@ -112,6 +113,9 @@ export const completeProviderAuthSetupInputSchema = providerAuthSetupSessionInpu
 });
 export const rejectProviderAuthSetupInputSchema = providerAuthSetupSessionInputSchema.extend({
   outcome: z.enum(["credentials_rejected", "outcome_unknown"]),
+});
+export const reconcileProviderAuthSetupInputSchema = providerAuthSetupSessionInputSchema.extend({
+  outcome: z.enum(["absent", "still_unknown"]),
 });
 export const providerAuthSetupMutationResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({ authConfigId: connectionAuthConfigIdSchema.optional(), ok: z.literal(true) }),

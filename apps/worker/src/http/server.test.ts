@@ -158,6 +158,13 @@ async function connectionAuthorizationFixture(subject: string) {
     scopes: [CONNECTIONS_READ_SCOPE, CONNECTIONS_WRITE_SCOPE],
   });
   const controlPlane = env.OWNER_CONTROL_PLANE.getByName(ownerKey);
+  await runInDurableObject(controlPlane, (_instance, state) => {
+    state.storage.sql.exec(`
+      INSERT INTO provider_auth_configs
+        (auth_config_id, integration_slug, auth_scheme, source, display_name, created_at, updated_at)
+      VALUES ('ac_github_managed', 'github', 'OAUTH2', 'composio_managed', 'GitHub', 1, 1)
+    `);
+  });
   const reservation = await controlPlane.reserveConnectionLink(authority, {
     authConfigId: "ac_github_managed",
     idempotencyKey: `callback-${subject}`,
@@ -222,7 +229,7 @@ describe("Crewhelm Worker", () => {
     const authority = ownerAuthoritySchema.parse({
       clientId: "provider-auth-browser-client",
       ownerKey,
-      scopes: [CONNECTION_CONFIGS_WRITE_SCOPE],
+      scopes: [CONNECTION_CONFIGS_WRITE_SCOPE, CONNECTIONS_WRITE_SCOPE],
     });
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(ownerKey);
     const now = Date.now();
@@ -405,6 +412,15 @@ describe("Crewhelm Worker", () => {
       controlPlane.prepareProviderAuthSetup(authority, {
         capabilityDigest: capability.capabilityDigest,
         capabilityExpiresAt,
+        idempotencyKey: "provider-auth-config-only-widened",
+        plan: { ...plan, authorizeConnection: true },
+        setupExpiresAt: now + PROVIDER_AUTH_SETUP_SESSION_LIFETIME_MS,
+      }),
+    ).resolves.toMatchObject({ error: { code: "insufficient_scope" }, ok: false });
+    await expect(
+      controlPlane.prepareProviderAuthSetup(authority, {
+        capabilityDigest: capability.capabilityDigest,
+        capabilityExpiresAt,
         idempotencyKey: "provider-auth-config-only",
         plan,
         setupExpiresAt: now + PROVIDER_AUTH_SETUP_SESSION_LIFETIME_MS,
@@ -448,6 +464,152 @@ describe("Crewhelm Worker", () => {
         setupId,
       }),
     ).resolves.toEqual({ error: "provider_auth_setup_denied", ok: false });
+  });
+
+  it("reconciles an interrupted custom-auth submission without resubmitting credentials", async () => {
+    const ownerKey = await deriveOwnerKey({
+      issuer: "https://github.com",
+      subject: "provider-auth-browser-recovery",
+    });
+    const authority = ownerAuthoritySchema.parse({
+      clientId: "provider-auth-browser-recovery-client",
+      ownerKey,
+      scopes: [CONNECTION_CONFIGS_WRITE_SCOPE],
+    });
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(ownerKey);
+    const now = Date.now();
+    const setupId = "provider_auth_setup_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const capabilityExpiresAt = now + PROVIDER_AUTH_SETUP_CAPABILITY_LIFETIME_MS;
+    const capability = await createProviderAuthSetupCapability({
+      claims: { expiresAt: capabilityExpiresAt, ownerKey, setupId },
+      origin,
+      signingSecret: env.BETTER_AUTH_SECRET,
+    });
+    const plan = {
+      authorizeConnection: false,
+      authScheme: "API_KEY" as const,
+      fieldSchemaDigest: "c".repeat(64),
+      fields: [
+        {
+          key: "api_key",
+          label: "API key",
+          maximumLength: 8_192,
+          required: true,
+          secret: true,
+          type: "string" as const,
+        },
+      ],
+      integrationName: "Linear",
+      integrationSlug: "linear",
+      setupId,
+    };
+    await expect(
+      controlPlane.prepareProviderAuthSetup(authority, {
+        capabilityDigest: capability.capabilityDigest,
+        capabilityExpiresAt,
+        idempotencyKey: "provider-auth-browser-recovery",
+        plan,
+        setupExpiresAt: now + PROVIDER_AUTH_SETUP_SESSION_LIFETIME_MS,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    const session = await createProviderAuthSetupSession({
+      ownerKey,
+      setupId,
+      signingSecret: env.BETTER_AUTH_SECRET,
+    });
+    await expect(
+      controlPlane.exchangeProviderAuthSetup({
+        capabilityDigest: capability.capabilityDigest,
+        sessionDigest: session.sessionDigest,
+        setupId,
+      }),
+    ).resolves.toMatchObject({ ok: true, status: "exchanged" });
+    await expect(
+      controlPlane.reserveProviderAuthSetupConfiguration({
+        sessionDigest: session.sessionDigest,
+        setupId,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE provider_auth_setup_requests SET recover_after = 1 WHERE setup_id = ?",
+        setupId,
+      );
+    });
+    const pending = await controlPlane.readProviderAuthSetup({
+      sessionDigest: session.sessionDigest,
+      setupId,
+    });
+    expect(pending).toMatchObject({ ok: true, recoverAfter: 1, status: "outcome_unknown" });
+    if (!pending.ok) throw new Error("Expected recoverable provider auth setup.");
+    await expect(
+      controlPlane.reconcileProviderAuthSetup({
+        outcome: "still_unknown",
+        sessionDigest: session.sessionDigest,
+        setupId,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      controlPlane.readProviderAuthSetup({
+        sessionDigest: session.sessionDigest,
+        setupId,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      sessionExpiresAt: pending.sessionExpiresAt,
+      status: "outcome_unknown",
+    });
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE provider_auth_setup_requests SET recover_after = 1 WHERE setup_id = ?",
+        setupId,
+      );
+    });
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      Response.json({
+        items: [
+          {
+            auth_scheme: "API_KEY",
+            id: "ac_linear_recovered",
+            is_composio_managed: false,
+            name: "Crewhelm bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            status: "ENABLED",
+            toolkit: { slug: "linear" },
+          },
+        ],
+        next_cursor: null,
+      }),
+    );
+    const response = await request("/setup/provider-auth/reconcile", {
+      body: "{}",
+      headers: {
+        "content-type": "application/json",
+        cookie: `crewhelm_provider_auth=${session.token}`,
+        origin,
+      },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("set-cookie")).toContain("crewhelm_provider_auth=");
+    await expect(response.json()).resolves.toMatchObject({
+      authConfigId: "ac_linear_recovered",
+      ok: true,
+      status: "configured",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    await expect(
+      runInDurableObject(controlPlane, (_instance, state) =>
+        state.storage.sql
+          .exec(
+            "SELECT status, auth_config_id AS authConfigId FROM provider_auth_setup_requests WHERE setup_id = ?",
+            setupId,
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({ authConfigId: "ac_linear_recovered", status: "configured" });
+    fetchMock.mockRestore();
   });
 
   it("routes Composio payloads only to the fixed verifier before owner selection", async () => {
@@ -690,7 +852,7 @@ describe("Crewhelm Worker", () => {
           authConfigId: "ac_github_managed",
           connectionId: fixture.connectionId,
           createdAt: expect.any(String),
-          integrationSlug: null,
+          integrationSlug: "github",
           providerConnectionId: fixture.providerConnectionId,
           status: "initiated",
         },

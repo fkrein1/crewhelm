@@ -47,7 +47,9 @@ approval-gated.
    no reservation.
 3. Call `crewhelm_change_connections` with `operation.kind: "connect_provider"` and the exact
    `integrationSlug`. Crewhelm behaves according to the current authentication state:
-   - One active auth config: Crewhelm uses it and creates the account authorization link.
+   - One active auth config: Crewhelm uses it and creates the account authorization link. Managed
+     configs may be discovered from Composio; custom configs must already be recorded for this
+     owner by a completed Crewhelm setup and still be active in Composio.
    - No active config with Composio-managed auth available: Crewhelm idempotently creates the
      managed config, then creates the authorization link.
    - Several active configs: choose one returned safe reference and repeat `connect_provider` with
@@ -91,8 +93,11 @@ approval-gated.
 - A `setup_required` or `selection_required` result is a prerequisite, not an ambiguous write.
   Resolve a selection and call `connect_provider` again. For custom setup, use its returned browser
   link. If credential submission reports rejection, obtain corrected credentials and request a new
-  link. If the provider outcome is unknown, do not resubmit; verify the auth config in Composio or
-  contact the operator first.
+  link. If the provider outcome is unknown, do not resubmit. Wait until the setup page enables
+  **Check provider outcome**, then use that exact recovery action. Crewhelm searches only for the
+  configuration name derived from the full setup ID. If the setup session is no longer available,
+  contact the operator; the unresolved attempt remains sealed and must not be replaced by a new
+  credential submission.
 - If a write returns an ambiguous reservation, retry the same facade request only as directed after
   `recoverAfter`.
 - Revoke a Connection through `crewhelm_recover` with `operation.kind: "revoke_connection"` and
