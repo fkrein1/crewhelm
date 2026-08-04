@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import * as z from "zod";
 
 import { deriveOwnerKey } from "../owner/identity.js";
+import { expectConstructibleAuthoringInputs, schemaObject } from "./facade-test-support.js";
 import { MCP_GETTING_STARTED_REFERENCE } from "./guidance.js";
 import {
   MCP_PROGRESSIVE_OPERATION_SCHEMA_SIZE_BUDGET_BYTES,
@@ -76,11 +77,6 @@ function annotationLabels(tool: McpTool): string[] {
     annotations.idempotentHint ? "idempotent" : "non-idempotent",
     annotations.openWorldHint ? "open-world" : "closed-world",
   ];
-}
-
-function schemaObject(value: unknown): Record<string, unknown> | null {
-  const parsed = z.record(z.string(), z.unknown()).safeParse(value);
-  return parsed.success ? parsed.data : null;
 }
 
 function schemaType(schema: Record<string, unknown>): string {
@@ -302,7 +298,7 @@ async function callTool(
     authority,
   });
   const result = toolCallResponseSchema.parse(await response.json()).result;
-  expect(result.isError).toBe(false);
+  expect(result.isError, `${name} ${JSON.stringify(args)}`).toBe(false);
   return JSON.parse(result.content[0]?.text ?? "null") as unknown;
 }
 
@@ -312,6 +308,7 @@ async function discoverTools(
 ): Promise<DocumentedTool[]> {
   let requestId = 2;
   const documented: DocumentedTool[] = [];
+  const descriptionsByOperationName = new Map<string, Set<string>>();
 
   for (const tool of tools) {
     if (tool.name === "crewhelm_status") {
@@ -322,6 +319,30 @@ async function discoverTools(
     const listed = operationListSchema.parse(
       await callTool(authority, requestId++, tool.name, { request: "operations" }),
     );
+    const operationSummaries = listed.operations.map(
+      ({ description }) => description.match(/^.*?[.!?](?:\s|$)/)?.[0].trim() ?? description,
+    );
+    expect(
+      new Set(operationSummaries).size,
+      `${tool.name} exposes distinct operation summaries`,
+    ).toBe(operationSummaries.length);
+    expect(operationSummaries, `${tool.name} exposes one-sentence operation summaries`).toEqual(
+      listed.operations.map(({ description }) => description),
+    );
+    for (const operation of listed.operations) {
+      const priorDescriptions =
+        descriptionsByOperationName.get(operation.name) ?? new Set<string>();
+      expect(
+        priorDescriptions.has(operation.description),
+        `${operation.name} has a facade-specific description`,
+      ).toBe(false);
+      priorDescriptions.add(operation.description);
+      descriptionsByOperationName.set(operation.name, priorDescriptions);
+      expect(
+        operation.description.length,
+        `${tool.name}.${operation.name} summary length`,
+      ).toBeLessThanOrEqual(160);
+    }
     const operations: DocumentedOperation[] = [];
     for (const operation of listed.operations) {
       const described = operationSchemaResultSchema.parse(
@@ -333,6 +354,7 @@ async function discoverTools(
       const serializedSchema = JSON.stringify(described.schema);
       expect(serializedSchema).not.toContain('"$ref"');
       expect(serializedSchema).not.toContain('"$defs"');
+      expectConstructibleAuthoringInputs(described.schema, `${tool.name}.${operation.name}`);
       expect(
         new TextEncoder().encode(serializedSchema).byteLength,
         `${tool.name}.${operation.name} progressive schema bytes`,
