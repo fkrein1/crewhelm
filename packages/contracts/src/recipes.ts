@@ -13,8 +13,10 @@ import {
 import {
   agentExecutionLimitsSchema,
   agentInstructionsSchema,
+  agentModelSchema,
   agentNameSchema,
 } from "./control-plane.js";
+import { MAXIMUM_INFERENCE_FALLBACKS } from "./inference.js";
 import {
   capabilityEffectSchema,
   composioToolLimitsSchema,
@@ -345,6 +347,22 @@ export const recipeConnectionRequirementsSchema = z
     "Expected unique Connection requirements in canonical slot order.",
   );
 
+export const recipeRegistryInferenceSchema = z
+  .strictObject({
+    fallbackModels: z
+      .array(agentModelSchema)
+      .max(MAXIMUM_INFERENCE_FALLBACKS)
+      .refine(
+        (models) => new Set(models).size === models.length,
+        "Fallback models must be unique.",
+      ),
+    primaryModel: agentModelSchema,
+  })
+  .refine(({ fallbackModels, primaryModel }) => !fallbackModels.includes(primaryModel), {
+    message: "The primary model cannot also be a fallback.",
+    path: ["fallbackModels"],
+  });
+
 export const recipeAgentCapabilitiesSchema = agentCapabilityConfigurationsSchema.superRefine(
   (capabilities, context) => {
     if (capabilities.some(({ id }) => id === SKILLS_CAPABILITY_ID)) {
@@ -355,11 +373,32 @@ export const recipeAgentCapabilitiesSchema = agentCapabilityConfigurationsSchema
       });
     }
 
-    if (capabilities.filter(({ id }) => id.startsWith("inference.")).length !== 1) {
+    const inferenceCapabilities = capabilities
+      .map((capability, index) => ({ capability, index }))
+      .filter(({ capability }) => capability.id.startsWith("inference."));
+    if (inferenceCapabilities.length !== 1) {
       context.addIssue({
         code: "custom",
         message: "A Recipe requires exactly one inference capability.",
       });
+      return;
+    }
+
+    const inferenceCapability = inferenceCapabilities[0];
+    if (!inferenceCapability) return;
+    const { capability, index } = inferenceCapability;
+    const inference = recipeRegistryInferenceSchema.safeParse({
+      fallbackModels: capability.configuration.fallbackModels,
+      primaryModel: capability.configuration.primaryModel,
+    });
+    if (!inference.success) {
+      for (const issue of inference.error.issues) {
+        context.addIssue({
+          code: "custom",
+          message: issue.message,
+          path: [index, "configuration", ...issue.path],
+        });
+      }
     }
   },
 );
@@ -740,6 +779,7 @@ export const recipeRegistryProjectionSchema = z
       .min(1)
       .max(2)
       .refine(uniqueInCanonicalOrder, "Expected unique deliverable kinds in canonical order."),
+    inference: recipeRegistryInferenceSchema,
     limits: agentExecutionLimitsSchema,
     operations: z.strictObject({
       eventTriggers: z

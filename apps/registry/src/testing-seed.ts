@@ -35,6 +35,10 @@ type SeedDefinition = {
   description: string;
   eventTriggers?: RecipePackage["operations"]["eventTriggers"];
   inputs: RecipePackage["inputs"];
+  inference: {
+    fallbackModels: string[];
+    primaryModel: string;
+  };
   instructions: string;
   name: string;
   operation: RecipePackage["operations"]["primary"];
@@ -53,12 +57,18 @@ type SeedDefinition = {
 };
 
 type ComposioConnection = Extract<RecipePackage["connections"][number], { kind: "composio" }>;
+const DEFAULT_SEED_INFERENCE: SeedDefinition["inference"] = {
+  fallbackModels: [],
+  primaryModel: "@cf/openai/gpt-oss-20b",
+};
 
-function inferenceCapability(): RecipePackage["agent"]["capabilities"][number] {
+function inferenceCapability(
+  inference: SeedDefinition["inference"],
+): RecipePackage["agent"]["capabilities"][number] {
   return {
     configuration: {
-      fallbackModels: [],
-      primaryModel: "@cf/openai/gpt-oss-20b",
+      fallbackModels: inference.fallbackModels,
+      primaryModel: inference.primaryModel,
       reasoningEffort: "medium",
     },
     id: "inference.workers-ai",
@@ -143,6 +153,7 @@ const versionOneDefinitions: SeedDefinition[] = [
         required: true,
       },
     ],
+    inference: DEFAULT_SEED_INFERENCE,
     instructions:
       "Research the supplied question. Prefer primary sources, distinguish facts from inference, and make uncertainty visible.",
     name: "research-brief-steward",
@@ -187,6 +198,7 @@ const versionOneDefinitions: SeedDefinition[] = [
         required: true,
       },
     ],
+    inference: DEFAULT_SEED_INFERENCE,
     instructions:
       "Extract only supported decisions and actions from the meeting notes. Make ambiguity explicit and produce a concise follow-up.",
     name: "meeting-follow-up-editor",
@@ -226,6 +238,7 @@ const versionOneDefinitions: SeedDefinition[] = [
         required: true,
       },
     ],
+    inference: DEFAULT_SEED_INFERENCE,
     instructions:
       "Advise on {{decision-owner}}'s decision. Surface assumptions, compare viable options fairly, and recommend the smallest responsible next step.",
     name: "decision-memo-advisor",
@@ -274,6 +287,7 @@ const versionOneDefinitions: SeedDefinition[] = [
         required: true,
       },
     ],
+    inference: DEFAULT_SEED_INFERENCE,
     instructions:
       "Inspect data quality first, use bounded computation for reproducible summaries, and connect findings to the stated question without overstating certainty.",
     name: "csv-insight-analyst",
@@ -322,6 +336,7 @@ const versionOneDefinitions: SeedDefinition[] = [
         required: true,
       },
     ],
+    inference: DEFAULT_SEED_INFERENCE,
     instructions:
       "Plan content for {{brand-name}} using only supported claims. Balance themes, formats, and calls to action across the week.",
     name: "content-calendar-planner",
@@ -413,6 +428,7 @@ const versionOneDefinitions: SeedDefinition[] = [
         required: true,
       },
     ],
+    inference: DEFAULT_SEED_INFERENCE,
     instructions:
       "Triage GitHub issues using repository evidence. Separate reproduction facts, likely impact, missing information, and proposed labels.",
     name: "github-issue-triage",
@@ -461,6 +477,7 @@ const versionOneDefinitions: SeedDefinition[] = [
         required: true,
       },
     ],
+    inference: DEFAULT_SEED_INFERENCE,
     instructions:
       "Cluster feedback by user need, preserve the strength of evidence, and distinguish recurring themes from isolated requests.",
     name: "customer-feedback-synthesizer",
@@ -523,6 +540,7 @@ const versionOneDefinitions: SeedDefinition[] = [
         required: true,
       },
     ],
+    inference: DEFAULT_SEED_INFERENCE,
     instructions:
       "Prepare account context from available CRM records and public sources. Mark stale facts, inferred risks, and unanswered questions.",
     name: "sales-account-brief",
@@ -578,6 +596,7 @@ const versionOneDefinitions: SeedDefinition[] = [
         required: true,
       },
     ],
+    inference: DEFAULT_SEED_INFERENCE,
     instructions:
       "Maintain a factual incident timeline. Distinguish confirmed impact, hypotheses, mitigations, and decisions. Draft updates for review only.",
     name: "incident-brief-coordinator",
@@ -638,6 +657,7 @@ const versionOneDefinitions: SeedDefinition[] = [
         required: true,
       },
     ],
+    inference: DEFAULT_SEED_INFERENCE,
     instructions:
       "Prepare meetings from calendar facts and supplied context. Keep unknowns explicit and prioritize the questions that improve the conversation.",
     name: "daily-meeting-prep",
@@ -682,7 +702,47 @@ const versionOneDefinitions: SeedDefinition[] = [
 
 // Registry versions are contiguous and immutable. Preserve every entry and append a complete
 // definition snapshot whenever a seed package changes so a rebuilt Registry can replay history.
-const seedDefinitionsByVersion = [versionOneDefinitions];
+const versionTwoInferenceByName: Readonly<Record<string, SeedDefinition["inference"]>> = {
+  "content-calendar-planner": DEFAULT_SEED_INFERENCE,
+  "csv-insight-analyst": {
+    fallbackModels: ["@cf/openai/gpt-oss-120b"],
+    primaryModel: "@cf/qwen/qwen3-30b-a3b-fp8",
+  },
+  "customer-feedback-synthesizer": {
+    fallbackModels: [],
+    primaryModel: "@cf/meta/llama-4-scout-17b-16e-instruct",
+  },
+  "daily-meeting-prep": {
+    fallbackModels: [],
+    primaryModel: "@cf/ibm-granite/granite-4.0-h-micro",
+  },
+  "decision-memo-advisor": {
+    fallbackModels: ["@cf/openai/gpt-oss-20b"],
+    primaryModel: "@cf/meta/llama-4-scout-17b-16e-instruct",
+  },
+  "github-issue-triage": {
+    fallbackModels: ["@cf/openai/gpt-oss-20b"],
+    primaryModel: "@cf/moonshotai/kimi-k2.7-code",
+  },
+  "incident-brief-coordinator": {
+    fallbackModels: ["@cf/openai/gpt-oss-20b"],
+    primaryModel: "@cf/zai-org/glm-4.7-flash",
+  },
+  "meeting-follow-up-editor": DEFAULT_SEED_INFERENCE,
+  "research-brief-steward": {
+    fallbackModels: ["@cf/openai/gpt-oss-120b"],
+    primaryModel: "@cf/moonshotai/kimi-k2.6",
+  },
+  "sales-account-brief": {
+    fallbackModels: ["@cf/meta/llama-4-scout-17b-16e-instruct"],
+    primaryModel: "@cf/openai/gpt-oss-120b",
+  },
+};
+const versionTwoDefinitions = versionOneDefinitions.map((definition) => ({
+  ...definition,
+  inference: versionTwoInferenceByName[definition.name] ?? DEFAULT_SEED_INFERENCE,
+}));
+const seedDefinitionsByVersion = [versionOneDefinitions, versionTwoDefinitions];
 export const TESTING_SEED_ARTIFACT_VERSION = seedDefinitionsByVersion.length;
 const FROZEN_DIGEST_ORIGIN = "https://registry.seed.invalid/";
 const frozenPackageDigestsByVersion = [
@@ -738,6 +798,58 @@ const frozenPackageDigestsByVersion = [
       skill: "2c619d5e1152e94671732f2725eff4878abc83cd50fa5915a628b13b60dde56f",
     },
   ],
+  [
+    {
+      name: "research-brief-steward",
+      recipe: "ba28ece59bacf4289314a8bef9e85e5862660e272d5c06066b8d976370ad2b6e",
+      skill: "60de228ca220d913119ba1d168f32ff055b79be0fd8d48ca3c88722777402cd6",
+    },
+    {
+      name: "meeting-follow-up-editor",
+      recipe: "61478576ca919267e5c1959e73b988dbd4df788b36fc4d6d5ed10de3a11d5e44",
+      skill: "275921dbe53f3b0f7d0e408dd8fd29cf02e9f0472d7f7e17b1e02457c8c32a94",
+    },
+    {
+      name: "decision-memo-advisor",
+      recipe: "0a9c1850e623aec51fbc3166276583c44a5d2aa4e03fb70992a17463d79ca2ab",
+      skill: "410b77a78d066c0b4ce58f25cf6a932f6fa245a16f7f84e9e953eba9b9014f8b",
+    },
+    {
+      name: "csv-insight-analyst",
+      recipe: "f2f5a4f188d14985aafb802c06675030aafc4137f181df507facd17c5f93f1e8",
+      skill: "21a4c3e396b85731f7d275f61fbabc066435302927c574f19531261e3a2fbbb8",
+    },
+    {
+      name: "content-calendar-planner",
+      recipe: "881e5d42038ee557be54d84b5dcffc31cd6fbf0ccf22bb6804ee40589531bc47",
+      skill: "4da869b46303771c88da5d050f44461bf78ff0483a5a8a6712cc0b060261206a",
+    },
+    {
+      name: "github-issue-triage",
+      recipe: "58e30dbbbf4ea1b6d6e04e69c37f1698f2fb34f8c86ea657152b265ce6c0d32d",
+      skill: "2c7da3209774be0ecc26097f97203d5413cba36fff18778b22bfe5ca3e1cf781",
+    },
+    {
+      name: "customer-feedback-synthesizer",
+      recipe: "cf3a30aee4ee94682ce42d32aea8909bf0a44672bd31b794d53e2817e8ec0d35",
+      skill: "25143fc00b12b2b4fbf0890135eb3724b1ae59de49f853f107aac2ee89a34c8b",
+    },
+    {
+      name: "sales-account-brief",
+      recipe: "ec24ad41ab55ddc480b49ec161ce1108cd7383cf49bf8fb0f7227bd612a29c4a",
+      skill: "d2b4a403c07ec676a70274cef116c68a8ea96af264b1053288ef4c6514971123",
+    },
+    {
+      name: "incident-brief-coordinator",
+      recipe: "5269ab0ccc6000ad81ce08daad66eb54282ae3873100c5e8bba39afb264e9e00",
+      skill: "eb8715f102b591e48f07fc8a3d4abf6241abe3b2a93c4a96d334ebda6465185c",
+    },
+    {
+      name: "daily-meeting-prep",
+      recipe: "6499460ceffd06a87960ad5d0f10ee8bbca24eaccd86d225ceac57021e871bca",
+      skill: "c7033072c3489494698a03bc050f678f588f3a7457a36591d1f9be4fc03029d9",
+    },
+  ],
 ] as const;
 
 function skillPackage(definition: SeedDefinition, version: number): RegistrySkillPackage {
@@ -770,7 +882,7 @@ function recipePackage(
   return recipePackageSchema.parse({
     agent: {
       capabilities: [
-        inferenceCapability(),
+        inferenceCapability(definition.inference),
         ...(definition.capabilities ?? []).map(capability),
       ].toSorted((left, right) => left.id.localeCompare(right.id)),
       executionLimits: EXECUTION_LIMITS,

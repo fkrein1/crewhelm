@@ -454,12 +454,15 @@ async function claimPublicationFinalization(
 
 function artifactInsert(database: RegistryDatabase, artifact: PreparedArtifact) {
   const { envelope } = artifact;
+  const inference = "inference" in artifact.projection ? artifact.projection.inference : null;
   return database.insert(artifactVersions).values({
     digest: envelope.package.digest,
+    fallbackModelsJson: inference === null ? null : JSON.stringify(inference.fallbackModels),
     kind: envelope.kind,
     lifecycle: envelope.lifecycle,
     name: envelope.coordinate.name,
     namespace: envelope.coordinate.namespace,
+    primaryModel: inference?.primaryModel ?? null,
     projectionJson: JSON.stringify(artifact.projection),
     publishedAt: Math.floor(new Date(envelope.publishedAt).getTime() / 1_000),
     review: envelope.review,

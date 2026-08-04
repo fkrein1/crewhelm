@@ -94,6 +94,7 @@ function projectedRecipeFields(projection: RecipeRegistryProjection) {
   const {
     deliverables,
     description,
+    inference,
     limits,
     operations,
     outcome,
@@ -106,6 +107,7 @@ function projectedRecipeFields(projection: RecipeRegistryProjection) {
   return {
     deliverables,
     description,
+    inference,
     limits,
     operations,
     outcome,

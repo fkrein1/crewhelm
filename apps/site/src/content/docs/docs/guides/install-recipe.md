@@ -38,7 +38,8 @@ Setup parameters are stored in the owner-local installation plan. Do not use the
    want.
 2. Select one exact Recipe coordinate and digest from the bounded results.
 3. Call `crewhelm_inspect_recipes` with `operation.kind: "inspect"` and the returned target. Review its responsibility boundaries, requested
-   authority, limits, inputs, Skill dependencies, and operation templates.
+   authority, configured primary and fallback models, limits, inputs, Skill dependencies, and
+   operation templates.
 4. For a selected Skill, call `operation.kind: "read_skill"` with one exact file path. Start with `SKILL.md`; read
    other files only when needed. Skill Markdown remains inert text.
 

@@ -1,0 +1,57 @@
+---
+import { icons } from "@iconify-json/logos";
+
+import type { RecipeIntegration } from "../../lib/recipe-catalog";
+
+interface Props {
+  integration: RecipeIntegration;
+  size?: number;
+}
+
+const { integration, size = 18 } = Astro.props;
+const iconNames: Readonly<Record<string, string>> = {
+  github: "github-icon",
+  googlecalendar: "google-calendar",
+  hubspot: "hubspot",
+  slack: "slack-icon",
+};
+const iconName = iconNames[integration.slug];
+const icon = iconName === undefined ? undefined : icons.icons[iconName];
+const width = icon?.width ?? icons.width ?? 32;
+const height = icon?.height ?? icons.height ?? 32;
+---
+
+<span
+  class="connection-logo"
+  role="img"
+  aria-label={`${integration.label} connection`}
+  style={`--connection-logo-size:${String(size)}px`}
+  title={integration.label}
+>
+  {
+    icon ? (
+      <svg viewBox={`0 0 ${String(width)} ${String(height)}`} aria-hidden="true">
+        <Fragment set:html={icon.body} />
+      </svg>
+    ) : (
+      <span aria-hidden="true">{integration.label.slice(0, 1).toUpperCase()}</span>
+    )
+  }
+</span>
+
+<style>
+  .connection-logo {
+    display: inline-grid;
+    width: var(--connection-logo-size);
+    height: var(--connection-logo-size);
+    flex: 0 0 auto;
+    place-items: center;
+    color: var(--color-ink-950);
+    font: 750 0.66rem/1 var(--font-mono);
+  }
+
+  svg {
+    width: var(--connection-logo-size);
+    height: var(--connection-logo-size);
+  }
+</style>

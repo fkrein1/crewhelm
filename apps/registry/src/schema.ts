@@ -82,6 +82,8 @@ export const artifactVersions = sqliteTable(
       .notNull()
       .default("unreviewed"),
     projectionJson: text("projection_json").notNull(),
+    primaryModel: text("primary_model"),
+    fallbackModelsJson: text("fallback_models_json"),
     searchDocument: text("search_document"),
     semanticState: text("semantic_state", { enum: ["indexed", "pending"] }),
     publishedAt: integer("published_at").notNull(),
@@ -105,6 +107,7 @@ export const artifactVersions = sqliteTable(
       table.kind,
       table.publishedAt,
     ),
+    index("artifact_versions_primary_model_idx").on(table.kind, table.primaryModel),
   ],
 );
 

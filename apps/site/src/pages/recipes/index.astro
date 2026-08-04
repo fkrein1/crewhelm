@@ -1,0 +1,24 @@
+---
+import RecipeCatalog from "../../components/recipes/RecipeCatalog.astro";
+import RecipeExplorer from "../../components/recipes/RecipeExplorer.astro";
+import RecipeHeader from "../../components/recipes/RecipeHeader.astro";
+import SiteLayout from "../../layouts/SiteLayout.astro";
+import { recipePreviews } from "../../lib/recipe-catalog";
+
+export const prerender = true;
+
+const basePath = "/recipes";
+const recipes = [...recipePreviews];
+---
+
+<SiteLayout
+  title="Crewhelm Recipes — Ready-made Agent mandates"
+  description="Browse Crewhelm Recipes by outcome, integration, capability, and model. Open a Recipe to inspect its boundaries and requirements."
+>
+  <RecipeHeader />
+  <main id="main">
+    <RecipeExplorer {basePath} {recipes}>
+      <RecipeCatalog {basePath} {recipes} />
+    </RecipeExplorer>
+  </main>
+</SiteLayout>

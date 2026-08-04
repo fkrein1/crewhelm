@@ -117,8 +117,9 @@ function requireSingle(values, message) {
 /**
  * @param {string} outputDirectory
  * @param {string} file
+ * @returns {{ canonical: string, description: string, html: string, pathname: string }}
  */
-function validateDocsPage(outputDirectory, file) {
+function validateIndexablePage(outputDirectory, file) {
   const html = readFileSync(file, "utf8");
   const relative = path.relative(outputDirectory, file).replaceAll(path.sep, "/");
   const pathname = `/${relative.replace(/index\.html$/, "")}`;
@@ -135,16 +136,13 @@ function validateDocsPage(outputDirectory, file) {
     `${pathname} robots`,
   );
   const canonical = attribute(canonicalTag, "href");
-  const structuredDataTag = requireSingle(
-    html.match(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi) ?? [],
-    `${pathname} structured data`,
-  );
+  const description = decodeHtmlAttribute(attribute(descriptionTag, "content") ?? "");
 
   if (canonical !== new URL(pathname, canonicalOrigin).toString()) {
     throw new Error(`${pathname} has unexpected canonical ${canonical ?? "<missing>"}`);
   }
 
-  if (!attribute(descriptionTag, "content")) {
+  if (!description) {
     throw new Error(`${pathname} has an empty description`);
   }
 
@@ -154,18 +152,6 @@ function validateDocsPage(outputDirectory, file) {
 
   if (tags(html, "title").length !== 1 || tags(html, "h1").length !== 1) {
     throw new Error(`${pathname} must contain one title and one h1`);
-  }
-
-  const serializedStructuredData = structuredDataTag.replace(/^<script\b[^>]*>|<\/script>$/gi, "");
-  const structuredData = JSON.parse(serializedStructuredData);
-  if (
-    structuredData["@context"] !== "https://schema.org" ||
-    structuredData["@type"] !== (pathname === "/docs/" ? "CollectionPage" : "TechArticle") ||
-    structuredData.description !==
-      decodeHtmlAttribute(attribute(descriptionTag, "content") ?? "") ||
-    structuredData.url !== canonical
-  ) {
-    throw new Error(`${pathname} has inconsistent structured data`);
   }
 
   for (const anchor of tags(html, "a")) {
@@ -196,12 +182,37 @@ function validateDocsPage(outputDirectory, file) {
       }
     }
   }
+
+  return { canonical, description, html, pathname };
+}
+
+/**
+ * @param {string} outputDirectory
+ * @param {string} file
+ */
+function validateDocsPage(outputDirectory, file) {
+  const { canonical, description, html, pathname } = validateIndexablePage(outputDirectory, file);
+  const structuredDataTag = requireSingle(
+    html.match(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi) ?? [],
+    `${pathname} structured data`,
+  );
+  const serializedStructuredData = structuredDataTag.replace(/^<script\b[^>]*>|<\/script>$/gi, "");
+  const structuredData = JSON.parse(serializedStructuredData);
+  if (
+    structuredData["@context"] !== "https://schema.org" ||
+    structuredData["@type"] !== (pathname === "/docs/" ? "CollectionPage" : "TechArticle") ||
+    structuredData.description !== description ||
+    structuredData.url !== canonical
+  ) {
+    throw new Error(`${pathname} has inconsistent structured data`);
+  }
 }
 
 /** @param {string} outputDirectory */
 export function validateSiteOutput(outputDirectory) {
   const docsDirectory = path.join(outputDirectory, "docs");
   const docsPages = filesBelow(docsDirectory, ".html");
+  const recipePages = filesBelow(path.join(outputDirectory, "recipes"), ".html");
   const sourceDirectory = path.resolve(outputDirectory, "../src/content/docs/docs");
   const expectedRoutes = new Set(
     documentationSourceFiles(sourceDirectory).map((file) =>
@@ -226,6 +237,14 @@ export function validateSiteOutput(outputDirectory) {
     validateDocsPage(outputDirectory, page);
   }
 
+  if (recipePages.length !== 11) {
+    throw new Error(`expected 11 production Recipe pages, received ${recipePages.length}`);
+  }
+
+  for (const page of recipePages) {
+    validateIndexablePage(outputDirectory, page);
+  }
+
   const sitemap = filesBelow(outputDirectory, ".xml")
     .map((file) => readFileSync(file, "utf8"))
     .join("\n");
@@ -237,6 +256,17 @@ export function validateSiteOutput(outputDirectory) {
       throw new Error(`sitemap is missing ${canonical}`);
     }
   }
+  for (const page of recipePages) {
+    const relative = path.relative(outputDirectory, page).replaceAll(path.sep, "/");
+    const pathname = `/${relative.replace(/index\.html$/, "")}`;
+    const canonical = new URL(pathname, canonicalOrigin).toString();
+    if (!sitemap.includes(canonical)) {
+      throw new Error(`sitemap is missing ${canonical}`);
+    }
+  }
+  if (sitemap.includes("/recipes/explorations/")) {
+    throw new Error("sitemap includes a removed Recipe exploration route");
+  }
 
   const llms = readFileSync(path.join(outputDirectory, "llms.txt"), "utf8");
   for (const pathname of [
@@ -244,6 +274,7 @@ export function validateSiteOutput(outputDirectory) {
     "/docs/start/install/",
     "/docs/start/first-agent/",
     "/docs/reference/mcp-tools/",
+    "/recipes/",
   ]) {
     const url = new URL(pathname, canonicalOrigin).toString();
     if (!llms.includes(url)) {

@@ -1,0 +1,362 @@
+---
+import {
+  getRecipeModelLabel,
+  type RecipePreview,
+} from "../../lib/recipe-catalog";
+import ConnectionLogo from "./ConnectionLogo.astro";
+
+interface Props {
+  mode?: "dialog" | "page";
+  recipe: RecipePreview;
+}
+
+const { mode = "page", recipe } = Astro.props;
+const primaryModel = getRecipeModelLabel(recipe.inference.primaryModel);
+const fallbackModels = recipe.inference.fallbackModels.map(getRecipeModelLabel);
+const visibleCapabilities = recipe.capabilities.filter(
+  (capability) => capability !== "Workers AI",
+);
+const authoritySignals = [
+  recipe.authority.standingRead > 0
+    ? `${recipe.authority.standingRead} standing read`
+    : undefined,
+  recipe.authority.approvalWrite > 0
+    ? `${recipe.authority.approvalWrite} approval write`
+    : undefined,
+].filter((signal): signal is string => signal !== undefined);
+const automationSignals = [
+  recipe.automations.eventTriggers > 0 ? "Event triggered" : undefined,
+  recipe.automations.schedules > 0 ? "Scheduled" : undefined,
+].filter((signal): signal is string => signal !== undefined);
+---
+
+<article class:list={["recipe-detail", { "is-dialog": mode === "dialog" }]} data-recipe-detail={recipe.slug}>
+  <header class="detail-header">
+    {
+      mode === "dialog" ? (
+        <h2 class="detail-title" id={`recipe-title-${recipe.slug}`}>{recipe.title}</h2>
+      ) : (
+        <h1 class="detail-title" id={`recipe-title-${recipe.slug}`}>{recipe.title}</h1>
+      )
+    }
+    <p class="detail-summary">{recipe.summary}</p>
+  </header>
+
+  <div class="detail-grid">
+    <div class="detail-main">
+      <section aria-labelledby={`outcome-${recipe.slug}`}>
+        <p class="section-label">Outcome</p>
+        <h2 id={`outcome-${recipe.slug}`}>{recipe.outcome}</h2>
+        <p>{recipe.description}</p>
+      </section>
+
+      <div class="detail-support-grid">
+        <section aria-labelledby={`boundaries-${recipe.slug}`}>
+          <p class="section-label" id={`boundaries-${recipe.slug}`}>Boundaries</p>
+          <ul class="boundary-list">
+            {recipe.boundaries.map((boundary) => <li>{boundary}</li>)}
+          </ul>
+        </section>
+
+        <section aria-labelledby={`sample-${recipe.slug}`}>
+          <p class="section-label" id={`sample-${recipe.slug}`}>Example output</p>
+          <pre>{recipe.sample}</pre>
+        </section>
+      </div>
+    </div>
+
+    <aside class="detail-ledger" aria-label="Recipe requirements and authority">
+      <div class="ledger-head">
+        <span>Requirements</span>
+      </div>
+      <dl>
+        <div>
+          <dt>Model</dt>
+          <dd>{primaryModel}</dd>
+        </div>
+        {
+          fallbackModels.length > 0 && (
+            <div>
+              <dt>Fallback</dt>
+              <dd>{fallbackModels.join(" · ")}</dd>
+            </div>
+          )
+        }
+        <div>
+          <dt>Skill</dt>
+          <dd>{recipe.skill.name}</dd>
+        </div>
+      </dl>
+      {
+        recipe.integrations.length > 0 && (
+          <div class="ledger-section">
+            <p>Integrations</p>
+            <ul class="ledger-integrations">
+              {recipe.integrations.map((integration) => (
+                <li><ConnectionLogo {integration} size={14} /> {integration.label}</li>
+              ))}
+            </ul>
+          </div>
+        )
+      }
+      {
+        visibleCapabilities.length > 0 && (
+          <div class="ledger-section">
+            <p>Capabilities</p>
+            <ul>
+              {visibleCapabilities.map((capability) => <li>{capability}</li>)}
+            </ul>
+          </div>
+        )
+      }
+      {
+        automationSignals.length > 0 && (
+          <div class="ledger-section">
+            <p>Automation</p>
+            <p class="ledger-copy">{automationSignals.join(" · ")}</p>
+          </div>
+        )
+      }
+      {
+        authoritySignals.length > 0 && (
+          <div class="ledger-section">
+            <p>Authority</p>
+            <p class="ledger-copy">{authoritySignals.join(" · ")}</p>
+          </div>
+        )
+      }
+    </aside>
+  </div>
+</article>
+
+<style>
+  .recipe-detail {
+    background: var(--background);
+    color: var(--foreground);
+  }
+
+  .detail-header {
+    border-bottom: 1px solid var(--border-strong);
+    padding: clamp(1.25rem, 2.5vw, 2.25rem);
+  }
+
+  .ledger-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    font: 700 0.64rem/1.4 var(--font-mono);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .section-label {
+    margin: 0 0 0.65rem;
+    color: var(--primary);
+    font: 750 0.67rem/1.4 var(--font-mono);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .detail-title {
+    max-width: 18ch;
+    margin: 0;
+    font-size: clamp(2.5rem, 5vw, 4.75rem);
+    line-height: 0.94;
+    letter-spacing: -0.055em;
+  }
+
+  .detail-summary {
+    max-width: 46rem;
+    margin: 0.85rem 0 0;
+    color: var(--muted-foreground);
+    font-size: clamp(1rem, 1.8vw, 1.35rem);
+    line-height: 1.5;
+  }
+
+  .detail-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.75fr) minmax(17rem, 0.65fr);
+  }
+
+  .detail-main > section,
+  .detail-support-grid > section {
+    padding: clamp(1.5rem, 3vw, 3rem) clamp(1.25rem, 3vw, 3rem);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .detail-main h2 {
+    max-width: 34ch;
+    margin: 0;
+    font-size: clamp(1.5rem, 2.5vw, 2.5rem);
+    line-height: 1.08;
+    letter-spacing: -0.035em;
+  }
+
+  .detail-main p:not(.section-label) {
+    max-width: 47rem;
+    margin: 0.75rem 0 0;
+    color: var(--muted-foreground);
+    line-height: 1.65;
+  }
+
+  .detail-support-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detail-support-grid > section + section {
+    border-left: 1px solid var(--border);
+  }
+
+  .boundary-list {
+    display: grid;
+    gap: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .boundary-list li {
+    display: grid;
+    grid-template-columns: 1.35rem 1fr;
+    padding: 0.45rem 0;
+    font-size: 0.82rem;
+    line-height: 1.45;
+  }
+
+  .boundary-list li::before {
+    content: "×";
+    color: var(--danger);
+    font-family: var(--font-mono);
+  }
+
+  pre {
+    overflow: auto;
+    max-height: 13rem;
+    margin: 0;
+    border-left: 3px solid var(--primary);
+    background: var(--inverse);
+    padding: 1rem;
+    color: var(--inverse-foreground);
+    font: 0.76rem/1.7 var(--font-mono);
+    white-space: pre-wrap;
+  }
+
+  .detail-ledger {
+    border-left: 1px solid var(--border-strong);
+    padding: clamp(1.25rem, 2vw, 1.75rem);
+    background: var(--card);
+  }
+
+  .ledger-head {
+    border-bottom: 1px solid var(--border-strong);
+    padding-bottom: 0.75rem;
+  }
+
+  dl {
+    margin: 0.5rem 0 0;
+  }
+
+  dl > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    border-bottom: 1px solid var(--border);
+    padding: 0.7rem 0;
+  }
+
+  dt {
+    color: var(--muted-foreground);
+    font-size: 0.77rem;
+  }
+
+  dd {
+    max-width: 12rem;
+    margin: 0;
+    font: 750 0.72rem/1.35 var(--font-mono);
+    text-align: right;
+  }
+
+  .ledger-section {
+    margin-top: 1.25rem;
+  }
+
+  .ledger-section > p:not(.ledger-copy) {
+    margin: 0 0 0.8rem;
+    font: 750 0.65rem/1 var(--font-mono);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .ledger-section ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ledger-section li,
+  .ledger-copy {
+    margin: 0;
+    color: var(--muted-foreground);
+    font: 0.65rem/1.2 var(--font-mono);
+  }
+
+  .ledger-section li + li::before {
+    content: "·";
+    margin-right: 0.4rem;
+    color: var(--muted-foreground);
+  }
+
+  .ledger-integrations li {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .ledger-integrations li + li::before {
+    content: none;
+  }
+
+  .is-dialog .detail-header {
+    padding: 1rem 1.5rem 1.25rem;
+  }
+
+  .is-dialog .detail-title {
+    font-size: clamp(2.35rem, 4vw, 3.75rem);
+  }
+
+  .is-dialog .detail-main > section,
+  .is-dialog .detail-support-grid > section {
+    padding: 1.35rem 1.5rem;
+  }
+
+  .is-dialog .detail-main h2 {
+    font-size: clamp(1.4rem, 2.3vw, 2rem);
+  }
+
+  .is-dialog .detail-ledger {
+    padding: 1.25rem;
+  }
+
+  @media (max-width: 680px) {
+    .detail-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .detail-ledger {
+      border-top: 1px solid var(--border-strong);
+      border-left: 0;
+    }
+
+    .detail-support-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .detail-support-grid > section + section {
+      border-left: 0;
+    }
+  }
+</style>

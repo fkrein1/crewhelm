@@ -1,0 +1,45 @@
+---
+import Brand from "../Brand.astro";
+---
+
+<header class="recipe-header shell">
+  <Brand href="/" />
+  <nav aria-label="Primary navigation">
+    <a href="/recipes/" aria-current="page">Recipes</a>
+    <a href="/docs/">Docs</a>
+    <a href="https://github.com/fkrein1/crewhelm" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a>
+  </nav>
+</header>
+
+<style>
+  .recipe-header {
+    display: flex;
+    min-height: 5.25rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2rem;
+    border-bottom: 1px solid var(--border-strong);
+  }
+
+  nav {
+    display: flex;
+    align-items: center;
+    gap: clamp(1rem, 2.5vw, 2rem);
+    font-size: 0.78rem;
+    font-weight: 750;
+  }
+
+  a {
+    text-decoration: none;
+  }
+
+  a:hover,
+  a:focus-visible {
+    color: var(--primary);
+  }
+
+  a[aria-current="page"] {
+    border-bottom: 1px solid currentColor;
+    padding-block: 0.5rem;
+  }
+</style>

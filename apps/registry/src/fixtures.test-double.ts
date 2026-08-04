@@ -5,7 +5,10 @@ export function recipeFixture(): RecipePackage {
     agent: {
       capabilities: [
         {
-          configuration: { model: "@cf/meta/llama-3.1-8b-instruct" },
+          configuration: {
+            fallbackModels: ["@cf/openai/gpt-oss-20b"],
+            primaryModel: "@cf/meta/llama-4-scout-17b-16e-instruct",
+          },
           id: "inference.workers-ai",
           schemaVersion: 2,
         },
