@@ -139,11 +139,7 @@ const SCRIPT = String.raw`(() => {
     const credentialSection = section(result.plan.callbackUrl ? "2. Enter app credentials" : "Credentials");
     const credentialFields = document.createElement("div");
     credentialFields.className = "ch-field-list";
-    const permissionSection = section("Permissions");
-    const permissionFields = document.createElement("div");
-    permissionFields.className = "ch-field-list";
     for (const field of result.plan.fields) {
-      const isScopes = field.key.toLowerCase() === "scopes";
       const container = document.createElement("div");
       container.className = "ch-field";
       const label = document.createElement("label");
@@ -185,30 +181,18 @@ const SCRIPT = String.raw`(() => {
         wrap.append(reveal);
       }
       container.append(label, wrap);
-      if (isScopes) {
-        const hint = document.createElement("p");
-        hint.className = "ch-field-hint";
-        hint.append(text("Space-separated permissions requested by this app. Use only the access its approved tools need."));
-        container.append(hint);
-        permissionFields.append(container);
-      } else {
-        credentialFields.append(container);
-      }
+      credentialFields.append(container);
     }
     if (credentialFields.childElementCount > 0) {
       credentialSection.append(credentialFields);
       form.append(credentialSection);
     }
-    if (permissionFields.childElementCount > 0) {
-      permissionSection.append(permissionFields);
-      form.append(permissionSection);
-    }
     const trust = document.createElement("aside");
     trust.className = "ch-trust";
     const trustTitle = document.createElement("strong");
-    trustTitle.append(text("Handled securely"));
+    trustTitle.append(text("Security"));
     const trustCopy = document.createElement("p");
-    trustCopy.append(text("Crewhelm relays these values directly to Composio to configure authentication, clears this form, and does not retain the credentials."));
+    trustCopy.append(text("Sent securely to Composio for setup. Crewhelm clears the form and does not store these credentials."));
     trust.append(trustTitle, trustCopy);
     form.append(trust);
     const actions = document.createElement("div");

@@ -280,8 +280,8 @@ describe("Crewhelm Worker", () => {
     expect(scriptBody).toContain('[[1, "Configure app"], [2, "Connect account"]]');
     expect(scriptBody).toContain('input.type = field.secret ? "password" : "text"');
     expect(scriptBody).toContain('reveal.setAttribute("aria-pressed", "false")');
-    expect(scriptBody).toContain("Space-separated permissions requested by this app.");
-    expect(scriptBody).toContain("Crewhelm relays these values directly to Composio");
+    expect(scriptBody).not.toContain("Space-separated permissions requested by this app.");
+    expect(scriptBody).toContain("Crewhelm clears the form and does not store these credentials.");
 
     const wrongOrigin = await request("/setup/provider-auth/exchange", {
       body: JSON.stringify({ capability: capability.capability }),
