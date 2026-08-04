@@ -17,16 +17,25 @@ const visibleCapabilities = recipe.capabilities.filter(
   (capability) => capability !== "Workers AI",
 );
 const authoritySignals = [
-  recipe.authority.standingRead > 0
-    ? `${recipe.authority.standingRead} standing read`
+  recipe.requestedAuthority.standing.read > 0
+    ? `${recipe.requestedAuthority.standing.read} standing read`
     : undefined,
-  recipe.authority.approvalWrite > 0
-    ? `${recipe.authority.approvalWrite} approval write`
+  recipe.requestedAuthority.standing.write > 0
+    ? `${recipe.requestedAuthority.standing.write} standing write`
+    : undefined,
+  recipe.requestedAuthority.approvalRequired.read > 0
+    ? `${recipe.requestedAuthority.approvalRequired.read} approval read`
+    : undefined,
+  recipe.requestedAuthority.approvalRequired.write > 0
+    ? `${recipe.requestedAuthority.approvalRequired.write} approval write`
+    : undefined,
+  recipe.requestedAuthority.approvalRequired.destructive > 0
+    ? `${recipe.requestedAuthority.approvalRequired.destructive} destructive approval`
     : undefined,
 ].filter((signal): signal is string => signal !== undefined);
 const automationSignals = [
-  recipe.automations.eventTriggers > 0 ? "Event triggered" : undefined,
-  recipe.automations.schedules > 0 ? "Scheduled" : undefined,
+  recipe.operations.eventTriggers > 0 ? "Event triggered" : undefined,
+  recipe.operations.schedules > 0 ? "Scheduled" : undefined,
 ].filter((signal): signal is string => signal !== undefined);
 ---
 
@@ -51,16 +60,14 @@ const automationSignals = [
       </section>
 
       <div class="detail-support-grid">
-        <section aria-labelledby={`boundaries-${recipe.slug}`}>
-          <p class="section-label" id={`boundaries-${recipe.slug}`}>Boundaries</p>
-          <ul class="boundary-list">
-            {recipe.boundaries.map((boundary) => <li>{boundary}</li>)}
-          </ul>
+        <section aria-labelledby={`delivery-${recipe.slug}`}>
+          <p class="section-label" id={`delivery-${recipe.slug}`}>Delivery</p>
+          <p>{recipe.deliverables.map((deliverable) => deliverable === "json" ? "Structured JSON" : "Markdown").join(" · ")}</p>
         </section>
 
-        <section aria-labelledby={`sample-${recipe.slug}`}>
-          <p class="section-label" id={`sample-${recipe.slug}`}>Example output</p>
-          <pre>{recipe.sample}</pre>
+        <section aria-labelledby={`publisher-${recipe.slug}`}>
+          <p class="section-label" id={`publisher-${recipe.slug}`}>Published by</p>
+          <p>{recipe.publisher.displayName} · v{recipe.artifact.version}</p>
         </section>
       </div>
     </div>
@@ -82,10 +89,8 @@ const automationSignals = [
             </div>
           )
         }
-        <div>
-          <dt>Skill</dt>
-          <dd>{recipe.skill.name}</dd>
-        </div>
+        {recipe.requirements.skills.required > 0 && <div><dt>Skills</dt><dd>{recipe.requirements.skills.required} required</dd></div>}
+        <div><dt>Operation</dt><dd>{recipe.operations.primary === "workflow" ? "Workflow" : "Run"}</dd></div>
       </dl>
       {
         recipe.integrations.length > 0 && (
@@ -206,40 +211,6 @@ const automationSignals = [
 
   .detail-support-grid > section + section {
     border-left: 1px solid var(--border);
-  }
-
-  .boundary-list {
-    display: grid;
-    gap: 0;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .boundary-list li {
-    display: grid;
-    grid-template-columns: 1.35rem 1fr;
-    padding: 0.45rem 0;
-    font-size: 0.82rem;
-    line-height: 1.45;
-  }
-
-  .boundary-list li::before {
-    content: "×";
-    color: var(--danger);
-    font-family: var(--font-mono);
-  }
-
-  pre {
-    overflow: auto;
-    max-height: 13rem;
-    margin: 0;
-    border-left: 3px solid var(--primary);
-    background: var(--inverse);
-    padding: 1rem;
-    color: var(--inverse-foreground);
-    font: 0.76rem/1.7 var(--font-mono);
-    white-space: pre-wrap;
   }
 
   .detail-ledger {

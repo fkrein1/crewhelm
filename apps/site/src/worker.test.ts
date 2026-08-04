@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { routeSiteRequest, type SiteEnv } from "./worker.js";
+import { registryReadHeaders, routeSiteRequest, type SiteEnv } from "./site-registry-gateway.js";
 
 type FetchRequest = (request: Request) => Promise<Response>;
 
@@ -9,6 +9,22 @@ function service(fetch: FetchRequest): SiteEnv["ASSETS"] {
 }
 
 describe("site Registry gateway", () => {
+  it("preserves distinct Cloudflare client identities for SSR Registry reads", () => {
+    const first = registryReadHeaders(
+      new Request("https://crewhelm.app/recipes/", {
+        headers: { "cf-connecting-ip": "192.0.2.10" },
+      }),
+    );
+    const second = registryReadHeaders(
+      new Request("https://crewhelm.app/recipes/", {
+        headers: { "cf-connecting-ip": "192.0.2.11" },
+      }),
+    );
+
+    expect(first.get("cf-connecting-ip")).toBe("192.0.2.10");
+    expect(second.get("cf-connecting-ip")).toBe("192.0.2.11");
+    expect(first.get("accept")).toBe("application/json");
+  });
   it("forwards the fixed public prefix to the private Registry service", async () => {
     const registryFetch = vi.fn<FetchRequest>(async (request) =>
       Response.json({ body: await request.text(), path: new URL(request.url).pathname }),

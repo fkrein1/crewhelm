@@ -4,6 +4,7 @@ import {
   registryArtifactVersionEnvelopeSchema,
   registryPublishAuthorizationSchema,
   registryPublishResultSchema,
+  registryRecipeListResponseSchema,
   registryRecipeSearchResponseSchema,
 } from "@crewhelm/contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -297,6 +298,17 @@ describe("public Recipe Registry", () => {
       outcome: expect.stringContaining("evidence-backed brief"),
       publisher: { namespace: "octocat" },
     });
+
+    const listed = await SELF.fetch("https://registry.crewhelm.test/v1/recipes");
+    expect(listed.status).toBe(200);
+    expect(listed.headers.get("cache-control")).toContain("s-maxage=300");
+    const listBody = registryRecipeListResponseSchema.parse(await listed.json());
+    expect(listBody.listVersion).toBe(1);
+    expect(listBody.recipes).toContainEqual(
+      expect.objectContaining({
+        artifact: expect.objectContaining({ name: "research-brief-steward", version: 1 }),
+      }),
+    );
     const storedModels = await env.REGISTRY_DB.prepare(
       "SELECT primary_model, fallback_models_json FROM artifact_versions WHERE kind = 'recipe' AND namespace = ? AND name = ? AND version = ?",
     )
@@ -431,6 +443,21 @@ describe("public Recipe Registry", () => {
     expect(second.status).toBe(201);
     const fresh = await SELF.fetch(latestUrl, { headers: { "cache-control": "no-cache" } });
     expect(recipeRegistryProjectionSchema.parse(await fresh.json()).artifact.version).toBe(2);
+    const listed = registryRecipeListResponseSchema.parse(
+      await (await SELF.fetch("https://registry.crewhelm.test/v1/recipes?limit=24")).json(),
+    );
+    expect(
+      listed.recipes.filter(
+        ({ artifact }) =>
+          artifact.namespace === "hubot" && artifact.name === "fresh-latest-projection",
+      ),
+    ).toMatchObject([{ artifact: { version: 2 } }]);
+  });
+
+  it("rejects unbounded Recipe list requests", async () => {
+    const response = await SELF.fetch("https://registry.crewhelm.test/v1/recipes?limit=26");
+    expect(response.status).toBe(400);
+    expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
   it("caps a streaming publish body before buffering the complete request", async () => {

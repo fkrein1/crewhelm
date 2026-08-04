@@ -2,6 +2,7 @@ import {
   registryPublishBundleSchema,
   registryPublishResultSchema,
   recipeRegistryProjectionSchema,
+  registryRecipeListResponseSchema,
   registryRecipeSearchResponseSchema,
   registrySkillProjectionSchema,
   type RecipeRegistryProjection,
@@ -9,10 +10,12 @@ import {
   type RegistryPublishBundle,
   type RegistryPublishResult,
   type RegistryRecipeSearchResponse,
+  type RegistryRecipeListResponse,
   type RegistryRecipeSearchResult,
   type RegistrySkillProjection,
 } from "@crewhelm/contracts";
-import { and, asc, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, notExists, or, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
 
 import type { RegistryEnv } from "./env.js";
 import {
@@ -963,6 +966,47 @@ export async function searchRecipes(
     results: await lexicalSearch(env, query, limit),
     retrieval: "lexical_fallback",
     searchVersion: 1,
+  });
+}
+
+export async function listRecipes(
+  env: Pick<RegistryEnv, "REGISTRY_DB">,
+  limit: number,
+): Promise<RegistryRecipeListResponse> {
+  const database = registryDatabase(env.REGISTRY_DB);
+  const newerVersion = alias(artifactVersions, "newer_recipe_version");
+  const rows = await database
+    .select({ projectionJson: artifactVersions.projectionJson })
+    .from(artifactVersions)
+    .where(
+      and(
+        eq(artifactVersions.kind, "recipe"),
+        eq(artifactVersions.lifecycle, "published"),
+        notExists(
+          database
+            .select({ value: sql`1` })
+            .from(newerVersion)
+            .where(
+              and(
+                eq(newerVersion.kind, "recipe"),
+                eq(newerVersion.lifecycle, "published"),
+                eq(newerVersion.namespace, artifactVersions.namespace),
+                eq(newerVersion.name, artifactVersions.name),
+                gt(newerVersion.version, artifactVersions.version),
+              ),
+            ),
+        ),
+      ),
+    )
+    .orderBy(
+      desc(artifactVersions.publishedAt),
+      asc(artifactVersions.namespace),
+      asc(artifactVersions.name),
+    )
+    .limit(limit);
+  return registryRecipeListResponseSchema.parse({
+    listVersion: 1,
+    recipes: rows.map(({ projectionJson }) => parseRecipeProjection(projectionJson)),
   });
 }
 
