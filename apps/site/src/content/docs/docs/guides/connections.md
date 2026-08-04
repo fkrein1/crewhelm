@@ -12,6 +12,8 @@ sources:
   - docs/security/threat-model.md
   - packages/contracts/src/connection-attachments.ts
   - packages/contracts/src/integrations.ts
+  - packages/contracts/src/provider-auth-setup.ts
+  - apps/worker/src/http/provider-auth-setup.ts
 ---
 
 Connect an external provider through Composio, then expose only selected, version-pinned tools to
@@ -50,10 +52,15 @@ approval-gated.
      managed config, then creates the authorization link.
    - Several active configs: choose one returned safe reference and repeat `connect_provider` with
      its `authConfigId`.
-   - Custom setup required: no reservation is created. Do not put provider credentials in MCP;
-     configure the auth config in Composio, then repeat this step.
-4. Open the returned short-lived authorization URL yourself. Never send it to an Agent or another
-   person.
+   - Custom setup required: open the returned short-lived setup URL yourself. Enter the fields
+     shown in Crewhelm's browser page, then choose **Save and continue**. Do not put provider
+     credentials in MCP, chat, Agent context, or a Composio dashboard form. The browser sends them
+     to the Crewhelm Worker, which relays them directly to Composio and retains only safe auth-config
+     metadata. The setup link works once and expires quickly; request a new link if it is invalid,
+     expired, or already used.
+4. Choose **Authorize provider account** on the setup page, or open the returned short-lived
+   authorization URL yourself when setup was already ready. Never send either URL to an Agent or
+   another person.
 5. After provider authorization, pass the returned link result unchanged to
    `crewhelm_change_connections` with `operation.kind: "inspect_provider_connection"`. Exact
    inspection verifies and activates the returned provider account.
@@ -82,7 +89,10 @@ approval-gated.
 - If provider authorization expires or fails, inspect the exact Connection lifecycle and follow
   its returned next action. Do not infer success from the browser redirect alone.
 - A `setup_required` or `selection_required` result is a prerequisite, not an ambiguous write.
-  Resolve it and call `connect_provider` again; there is no reservation to recover.
+  Resolve a selection and call `connect_provider` again. For custom setup, use its returned browser
+  link. If credential submission reports rejection, obtain corrected credentials and request a new
+  link. If the provider outcome is unknown, do not resubmit; verify the auth config in Composio or
+  contact the operator first.
 - If a write returns an ambiguous reservation, retry the same facade request only as directed after
   `recoverAfter`.
 - Revoke a Connection through `crewhelm_recover` with `operation.kind: "revoke_connection"` and

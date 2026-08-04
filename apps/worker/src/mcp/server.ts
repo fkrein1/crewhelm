@@ -293,6 +293,8 @@ function createMcpServer(
         apiKey: env.COMPOSIO_API_KEY,
         signal,
       }),
+      publicOrigin: env.PUBLIC_ORIGIN,
+      signingSecret: env.BETTER_AUTH_SECRET,
     });
   });
 

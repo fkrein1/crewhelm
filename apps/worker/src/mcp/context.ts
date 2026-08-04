@@ -16,6 +16,7 @@ export interface OwnerControlPlaneClient {
   beginRemoteMcpOAuth?(authorityInput: unknown, input: unknown): Promise<unknown>;
   completeRemoteMcpOAuth?(authorityInput: unknown, input: unknown): Promise<unknown>;
   completeConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;
+  completeProviderAuthSetup?(input: unknown): Promise<unknown>;
   completeIntegrationEnablement(authorityInput: unknown, input: unknown): Promise<unknown>;
   configureFleetConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
   createBrief(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -32,6 +33,7 @@ export interface OwnerControlPlaneClient {
   getFleetConfiguration(authorityInput: unknown, input: unknown): Promise<unknown>;
   getSkill(authorityInput: unknown, input: unknown): Promise<unknown>;
   executeRemoteMcpTool?(input: unknown): Promise<unknown>;
+  exchangeProviderAuthSetup?(input: unknown): Promise<unknown>;
   inspectRun(authorityInput: unknown, input: unknown): Promise<unknown>;
   inspectAgentWorkflow?(authorityInput: unknown, input: unknown): Promise<unknown>;
   inspectAgentSession?(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -56,8 +58,13 @@ export interface OwnerControlPlaneClient {
   reserveRemoteMcpOAuthSetup?(authorityInput: unknown, input: unknown): Promise<unknown>;
   recipes?(authorityInput: unknown, input: unknown): Promise<unknown>;
   recordProviderAuthConfig?(authorityInput: unknown, input: unknown): Promise<unknown>;
+  prepareProviderAuthSetup?(authorityInput: unknown, input: unknown): Promise<unknown>;
+  providerAuthSetupAuthority?(input: unknown): Promise<unknown>;
+  readProviderAuthSetup?(input: unknown): Promise<unknown>;
+  rejectProviderAuthSetup?(input: unknown): Promise<unknown>;
   recipePublications?(authorityInput: unknown, input: unknown): Promise<unknown>;
   reserveIntegrationEnablement(authorityInput: unknown, input: unknown): Promise<unknown>;
+  reserveProviderAuthSetupConfiguration?(input: unknown): Promise<unknown>;
   reconcileToolExecution(authorityInput: unknown, input: unknown): Promise<unknown>;
   readBrief(authorityInput: unknown, input: unknown): Promise<unknown>;
   publishSkill(authorityInput: unknown, input: unknown): Promise<unknown>;

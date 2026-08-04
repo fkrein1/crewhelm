@@ -3,11 +3,13 @@ import {
   inspectProviderAuthInputSchema,
   inspectProviderAuthResultSchema,
   integrationSlugSchema,
+  providerCredentialFieldsSchema,
   providerAuthSchemeSchema,
   type InspectProviderAuthInput,
   type InspectProviderAuthResult,
   type ProviderAuthConfigReference,
   type ProviderAuthScheme,
+  type ProviderCredentialField,
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
@@ -45,10 +47,36 @@ const managedAuthConfigCreateSchema = z.looseObject({
     slug: integrationSlugSchema,
   }),
 });
+const customAuthConfigCreateSchema = z.looseObject({
+  auth_config: composioAuthConfigFieldsSchema.extend({
+    is_composio_managed: z.literal(false),
+  }),
+  toolkit: z.looseObject({
+    slug: integrationSlugSchema,
+  }),
+});
+const composioAuthFieldSchema = z.looseObject({
+  default: z.string().max(8_192).nullish(),
+  displayName: z.string().min(1).max(120),
+  is_secret: z.boolean().optional(),
+  name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/),
+  required: z.boolean(),
+  type: z.string().min(1).max(32),
+});
+const composioAuthConfigCreationFieldsSchema = z.looseObject({
+  optional: z.array(composioAuthFieldSchema).max(16),
+  required: z.array(composioAuthFieldSchema).max(16),
+});
 const composioToolkitSchema = z.looseObject({
   auth_config_details: z
     .array(
       z.looseObject({
+        auth_hint_url: z.string().max(2_048).nullish(),
+        fields: z
+          .looseObject({
+            auth_config_creation: composioAuthConfigCreationFieldsSchema,
+          })
+          .optional(),
         mode: z.string().min(1).max(64),
       }),
     )
@@ -74,13 +102,43 @@ export type CreateManagedIntegrationAuthConfigResult =
       ok: false;
     };
 
+export type CreateCustomIntegrationAuthConfigResult =
+  | {
+      authConfig: ProviderAuthConfigReference;
+      ok: true;
+    }
+  | {
+      error: "credentials_rejected" | "outcome_unknown";
+      ok: false;
+    };
+
+export type PrepareCustomIntegrationAuthConfigResult =
+  | {
+      callbackUrl?: string;
+      documentationUrl?: string;
+      fields: ProviderCredentialField[];
+      integrationName: string;
+      ok: true;
+    }
+  | { error: "unsupported" | "unavailable"; ok: false };
+
 export interface ComposioAuthConfigs {
   createManaged(input: {
     integrationSlug: string;
     name: string;
   }): Promise<CreateManagedIntegrationAuthConfigResult>;
+  createCustom(input: {
+    authScheme: ProviderAuthScheme;
+    credentials: Record<string, string>;
+    integrationSlug: string;
+    name: string;
+  }): Promise<CreateCustomIntegrationAuthConfigResult>;
   inspect(input: InspectProviderAuthInput): Promise<InspectProviderAuthResult>;
   isAvailable(): boolean;
+  prepareCustom(input: {
+    authScheme: ProviderAuthScheme;
+    integrationSlug: string;
+  }): Promise<PrepareCustomIntegrationAuthConfigResult>;
 }
 
 export interface ComposioAuthConfigsOptions {
@@ -93,7 +151,7 @@ export interface ComposioAuthConfigsOptions {
 export interface ComposioAuthConfigResponseEvent {
   durationMs: number;
   integrationSlug: string;
-  operation: "create" | "inspect_toolkit" | "list" | "recovery";
+  operation: "create" | "create_custom" | "inspect_toolkit" | "list" | "recovery";
   status: number;
 }
 
@@ -149,10 +207,11 @@ function normalizeAuthConfig(
       };
 }
 
-function normalizeCreatedManagedAuthConfig(
-  authConfig: z.infer<typeof managedAuthConfigCreateSchema>["auth_config"],
+function normalizeCreatedAuthConfig(
+  authConfig: z.infer<typeof composioAuthConfigFieldsSchema>,
   integrationSlug: string,
   name: string,
+  source: ProviderAuthConfigReference["source"],
 ): ProviderAuthConfigReference | null {
   const authScheme = normalizeScheme(authConfig.auth_scheme);
 
@@ -163,8 +222,38 @@ function normalizeCreatedManagedAuthConfig(
         authScheme,
         integrationSlug,
         name,
-        source: "composio_managed",
+        source,
       };
+}
+
+function safeDocumentationUrl(value: string | null | undefined): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.username === "" && url.password === ""
+      ? url.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeCredentialFields(
+  details: z.infer<typeof composioAuthConfigCreationFieldsSchema>,
+): ProviderCredentialField[] | null {
+  const fields = [...details.required, ...details.optional]
+    .filter((field) => field.name !== "oauth_redirect_uri")
+    .map((field) => ({
+      key: field.name,
+      label: field.displayName,
+      maximumLength: field.is_secret === false ? 2_048 : 8_192,
+      required: field.required,
+      secret: field.is_secret !== false,
+      type: "string" as const,
+    }));
+
+  const parsed = providerCredentialFieldsSchema.safeParse(fields);
+  return parsed.success ? parsed.data : null;
 }
 
 function containsSecret(value: unknown, secret: string): boolean {
@@ -224,10 +313,12 @@ export function createComposioAuthConfigs(
   async function listActive(
     integrationSlug: string,
     operation: Extract<ComposioAuthConfigResponseEvent["operation"], "list" | "recovery">,
-    managedOnly = false,
+    managed?: boolean,
   ): Promise<ProviderAuthConfigReference[] | undefined> {
     const endpoint = new URL(COMPOSIO_AUTH_CONFIGS_URL);
-    if (managedOnly) endpoint.searchParams.set("is_composio_managed", "true");
+    if (managed !== undefined) {
+      endpoint.searchParams.set("is_composio_managed", managed ? "true" : "false");
+    }
     endpoint.searchParams.set("limit", "50");
     endpoint.searchParams.set("show_disabled", "false");
     endpoint.searchParams.set("toolkit_slug", integrationSlug);
@@ -261,7 +352,7 @@ export function createComposioAuthConfigs(
         (item, index) =>
           item === null ||
           item.integrationSlug !== integrationSlug ||
-          (managedOnly && result.data.items[index]?.is_composio_managed !== true),
+          (managed !== undefined && result.data.items[index]?.is_composio_managed !== managed),
       )
     ) {
       return undefined;
@@ -273,6 +364,87 @@ export function createComposioAuthConfigs(
   }
 
   return {
+    async createCustom(input) {
+      const integrationSlug = integrationSlugSchema.safeParse(input.integrationSlug);
+      const authScheme = providerAuthSchemeSchema.safeParse(input.authScheme);
+      const name = z.string().min(1).max(160).safeParse(input.name);
+      const credentials = z
+        .record(z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/), z.string().max(8_192))
+        .refine((value) => Object.keys(value).length <= 16)
+        .safeParse(input.credentials);
+      if (
+        !apiKey.success ||
+        !integrationSlug.success ||
+        !authScheme.success ||
+        !name.success ||
+        !credentials.success
+      ) {
+        return { error: "outcome_unknown", ok: false };
+      }
+
+      try {
+        const startedAt = performance.now();
+        const response = await fetchImplementation(COMPOSIO_AUTH_CONFIGS_URL, {
+          body: JSON.stringify({
+            auth_config: {
+              authScheme: authScheme.data,
+              credentials: credentials.data,
+              name: name.data,
+              type: "use_custom_auth",
+            },
+            toolkit: { slug: integrationSlug.data },
+          }),
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+            "x-api-key": apiKey.data,
+          },
+          method: "POST",
+          redirect: "manual",
+          signal: signal(),
+        });
+        recordResponse("create_custom", response.status, integrationSlug.data, startedAt);
+        if (response.status === 400) return { error: "credentials_rejected", ok: false };
+
+        if (
+          response.status === 201 &&
+          response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
+        ) {
+          const body = await readBoundedJson(response, MAXIMUM_AUTH_CONFIG_RESPONSE_BYTES);
+          const created = body.ok
+            ? customAuthConfigCreateSchema.safeParse(body.value)
+            : { success: false as const };
+          if (created.success && created.data.toolkit.slug === integrationSlug.data) {
+            const authConfig = normalizeCreatedAuthConfig(
+              created.data.auth_config,
+              integrationSlug.data,
+              name.data,
+              "crewhelm_custom",
+            );
+            if (authConfig?.authScheme === authScheme.data) {
+              const secrets = Object.values(credentials.data);
+              if (
+                !containsSecret(authConfig, apiKey.data) &&
+                !secrets.some((secret) => secret.length > 0 && containsSecret(authConfig, secret))
+              ) {
+                return { authConfig, ok: true };
+              }
+            }
+          }
+        }
+
+        const recovered = await listActive(integrationSlug.data, "recovery", false);
+        const matches = recovered?.filter(
+          (config) => config.authScheme === authScheme.data && config.name === name.data,
+        );
+        const recoveredAuthConfig = matches?.length === 1 ? matches[0] : undefined;
+        return recoveredAuthConfig === undefined
+          ? { error: "outcome_unknown", ok: false }
+          : { authConfig: recoveredAuthConfig, ok: true };
+      } catch {
+        return { error: "outcome_unknown", ok: false };
+      }
+    },
     async createManaged(input) {
       const integrationSlug = integrationSlugSchema.safeParse(input.integrationSlug);
       const name = z.string().min(1).max(160).safeParse(input.name);
@@ -319,10 +491,11 @@ export function createComposioAuthConfigs(
             : { success: false as const };
 
           if (created.success && created.data.toolkit.slug === integrationSlug.data) {
-            const authConfig = normalizeCreatedManagedAuthConfig(
+            const authConfig = normalizeCreatedAuthConfig(
               created.data.auth_config,
               integrationSlug.data,
               name.data,
+              "composio_managed",
             );
 
             if (authConfig !== null && !containsSecret(authConfig, apiKey.data)) {
@@ -430,6 +603,73 @@ export function createComposioAuthConfigs(
     },
     isAvailable() {
       return apiKey.success;
+    },
+    async prepareCustom(input) {
+      const integrationSlug = integrationSlugSchema.safeParse(input.integrationSlug);
+      const authScheme = providerAuthSchemeSchema.safeParse(input.authScheme);
+      if (!apiKey.success || !integrationSlug.success || !authScheme.success) {
+        return { error: "unavailable", ok: false };
+      }
+
+      try {
+        const endpoint = new URL(
+          `${COMPOSIO_TOOLKITS_URL}/${encodeURIComponent(integrationSlug.data)}`,
+        );
+        endpoint.searchParams.set("version", "latest");
+        const startedAt = performance.now();
+        const response = await fetchImplementation(endpoint, {
+          headers: { accept: "application/json", "x-api-key": apiKey.data },
+          method: "GET",
+          redirect: "manual",
+          signal: signal(),
+        });
+        recordResponse("inspect_toolkit", response.status, integrationSlug.data, startedAt);
+        if (
+          response.status !== 200 ||
+          !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
+        ) {
+          return { error: "unavailable", ok: false };
+        }
+        const body = await readBoundedJson(response, MAXIMUM_TOOLKIT_RESPONSE_BYTES);
+        const toolkit = body.ok
+          ? composioToolkitSchema.safeParse(body.value)
+          : { success: false as const };
+        if (!toolkit.success || toolkit.data.slug !== integrationSlug.data) {
+          return { error: "unavailable", ok: false };
+        }
+        const matchingDetails = toolkit.data.auth_config_details.filter(
+          (detail) => normalizeScheme(detail.mode) === authScheme.data,
+        );
+        const details = matchingDetails.length === 1 ? matchingDetails[0] : undefined;
+        const creation = details?.fields?.auth_config_creation;
+        if (details === undefined || creation === undefined) {
+          return { error: "unsupported", ok: false };
+        }
+        if (
+          creation.required.some((field) => !field.required) ||
+          creation.optional.some((field) => field.required) ||
+          [...creation.required, ...creation.optional].some(
+            (field) =>
+              field.type.toLowerCase() !== "string" || (field.is_secret === true && field.default),
+          )
+        ) {
+          return { error: "unsupported", ok: false };
+        }
+        const fields = normalizeCredentialFields(creation);
+        if (fields === null) return { error: "unsupported", ok: false };
+        const documentationUrl = safeDocumentationUrl(details.auth_hint_url);
+        return {
+          ...(authScheme.data === "OAUTH2"
+            ? { callbackUrl: "https://backend.composio.dev/api/v3.1/toolkits/auth/callback" }
+            : {}),
+          ...(documentationUrl === undefined ? {} : { documentationUrl }),
+          fields,
+          integrationName: toolkit.data.name,
+          ok: true,
+        };
+      } catch {
+        return { error: "unavailable", ok: false };
+      }
     },
   };
 }

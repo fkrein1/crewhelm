@@ -210,6 +210,16 @@ are suppressed. An ambiguous create remains unknown unless a bounded follow-up r
 configuration exists. Selection and custom-setup prerequisites are known non-effects and never use
 that unknown outcome.
 
+Custom auth-config creation uses a separate browser handoff. MCP returns a signed, owner-bound
+capability in the URL fragment; the Worker clears it from browser-visible navigation before
+exchange, and the owner Durable Object accepts its digest only once. The resulting opaque browser
+session is HttpOnly, Secure, SameSite=Strict, expires with the frozen setup, and is checked against
+the exact owner, client, toolkit, auth scheme, and bounded credential-field plan. Mutation requests
+require the configured same origin. Raw credential values pass from the browser to the Worker and
+then to the fixed Composio auth-config endpoint; they are not sent to or stored in the owner control
+plane. Only a normalized custom auth-config reference crosses that boundary. Provider rejection is
+reported separately from an ambiguous write, and an ambiguous write is not automatically repeated.
+
 Connect Link callbacks are short-lived bearer capabilities visible to Composio and browser
 infrastructure. Crewhelm stores only a digest, authenticates the exact owner-local reservation,
 returns no identifiers, and treats the callback as lifecycle evidence rather than authorization.

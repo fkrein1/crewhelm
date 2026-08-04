@@ -21,6 +21,7 @@ export * from "./integrations.js";
 export * from "./mcp-authoring-drafts.js";
 export * from "./inference.js";
 export * from "./output-contracts.js";
+export * from "./provider-auth-setup.js";
 export * from "./recovery.js";
 export * from "./remote-mcp.js";
 export * from "./recipes.js";

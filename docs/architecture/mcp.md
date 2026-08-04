@@ -74,13 +74,16 @@ The facade may compose private commands when the intermediate value has no owner
 - `connect_provider` first inspects exact provider-auth readiness. It reuses one selected active
   managed or custom auth config, idempotently creates a managed config only when the toolkit says
   managed auth is available, or returns exact selection or setup prerequisites without reserving
-  an external effect. Once one config is ready, it records only safe auth-config metadata and
-  creates the owner authorization link.
+  a connection effect. Custom setup returns an owner-bound, single-use browser capability. The
+  browser exchanges it for a short HttpOnly session, renders a frozen bounded field plan, and sends
+  credential values only to the Worker for direct Composio relay. Once one config is ready, the
+  control plane records only safe auth-config metadata and creates the owner authorization link.
 - Recipe `prepare` ports an exact live Agent revision plus selected returned Schedules and Event
   Triggers into a reviewable public candidate.
 
 Each private step still validates scopes and persists replay state independently. Composio
-provider credentials never enter MCP arguments, results, logs, or Agent context.
+provider credentials never enter the owner control plane, MCP arguments or results, logs, or Agent
+context.
 
 Complex authoring uses owner-scoped durable drafts instead of carrying complete candidates through
 every model turn. `prepare_*` operations store one validated Recipe installation, Recipe

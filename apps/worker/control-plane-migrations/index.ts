@@ -34,6 +34,7 @@ import migration32 from "./0032_panoramic_speed_demon.sql";
 import migration33 from "./0033_safe_sir_ram.sql";
 import migration34 from "./0034_compact_misty_knight.sql";
 import migration35 from "./0035_hesitant_anita_blake.sql";
+import migration36 from "./0036_thin_rumiko_fujikawa.sql";
 
 export const controlPlaneMigrations = [
   {
@@ -215,6 +216,11 @@ export const controlPlaneMigrations = [
     name: "0035_hesitant_anita_blake",
     sql: migration35,
     version: 36,
+  },
+  {
+    name: "0036_thin_rumiko_fujikawa",
+    sql: migration36,
+    version: 37,
   },
 ] as const;
 

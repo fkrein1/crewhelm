@@ -25,6 +25,8 @@ import { readByteStreamChunk } from "./byte-stream.js";
 import { registerConnectionAuthorizationReturnRoutes } from "./connection-authorization-return.js";
 import { registerRemoteMcpBearerSetupRoutes } from "./remote-mcp-bearer-setup.js";
 import { registerRemoteMcpOAuthRoutes } from "./remote-mcp-oauth.js";
+import { registerProviderAuthSetupRoutes } from "./provider-auth-setup.js";
+import { PROVIDER_AUTH_SETUP_PATH } from "../provider-auth-setup/capability.js";
 import {
   REMOTE_MCP_BEARER_SETUP_PATH_PREFIX,
   REMOTE_MCP_OAUTH_CALLBACK_PATH,
@@ -355,6 +357,7 @@ export function createWorker(): Hono<{ Bindings: WorkerEnv }> {
   registerConnectionAuthorizationReturnRoutes(worker);
   registerRemoteMcpBearerSetupRoutes(worker);
   registerRemoteMcpOAuthRoutes(worker);
+  registerProviderAuthSetupRoutes(worker);
   worker.post("/webhooks/composio", (context) =>
     handleComposioWebhook(context.req.raw, context.env),
   );
@@ -386,6 +389,7 @@ function isRateLimitedPath(path: string): "auth" | "composio" | "mcp" | null {
     path.startsWith(CONNECTION_AUTHORIZATION_RETURN_PATH_PREFIX) ||
     path.startsWith(REMOTE_MCP_BEARER_SETUP_PATH_PREFIX) ||
     path.startsWith(REMOTE_MCP_OAUTH_SETUP_PATH_PREFIX) ||
+    path.startsWith(PROVIDER_AUTH_SETUP_PATH) ||
     path === REMOTE_MCP_OAUTH_CALLBACK_PATH ||
     path === REMOTE_MCP_OAUTH_CLIENT_METADATA_PATH ||
     path === "/oauth/login" ||

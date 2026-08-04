@@ -32,7 +32,9 @@ import { isUnknownRecord } from "./safe-values.js";
 export {
   createComposioAuthConfigs,
   type ComposioAuthConfigs,
+  type CreateCustomIntegrationAuthConfigResult,
   type CreateManagedIntegrationAuthConfigResult,
+  type PrepareCustomIntegrationAuthConfigResult,
 } from "./auth-configs.js";
 
 const COMPOSIO_TOOLKITS_URL = "https://backend.composio.dev/api/v3/toolkits";

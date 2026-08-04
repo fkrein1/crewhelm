@@ -327,6 +327,17 @@
     {
       "evidence": {
         "definitionVersion": 2,
+        "testFiles": ["apps/worker/src/http/server.test.ts"]
+      },
+      "id": "provider-auth-setup",
+      "pathPrefixes": [
+        "apps/worker/src/owner/provider-auth-setup/",
+        "apps/worker/src/provider-auth-setup/"
+      ]
+    },
+    {
+      "evidence": {
+        "definitionVersion": 2,
         "testFiles": [
           "apps/worker/src/http/server.test.ts",
           "apps/worker/src/mcp/server.test.ts",
