@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "node ../../scripts/build-site-worker.mjs",
-    "deploy:production": "pnpm run build -- --env production && wrangler deploy --env production",
+    "deploy:production": "pnpm run build && wrangler deploy",
     "dev": "astro dev",
     "preview": "astro preview",
     "typecheck": "tsc --noEmit --project tsconfig.worker.json && tsc --noEmit --project src/tsconfig.json"

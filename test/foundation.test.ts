@@ -1100,6 +1100,9 @@ describe("repository foundation", () => {
     expect(registryPackage["scripts"]).not.toHaveProperty("db:migrate:dev");
 
     const sitePackage = parseJsonObject(await read("apps/site/package.json"));
+    expect(sitePackage["scripts"]).toMatchObject({
+      "deploy:production": "pnpm run build && wrangler deploy",
+    });
     expect(sitePackage["scripts"]).not.toHaveProperty("deploy:dev");
 
     const registryConfig = await read("apps/registry/wrangler.jsonc");
@@ -1111,29 +1114,13 @@ describe("repository foundation", () => {
     const siteConfigSource = await read("apps/site/wrangler.jsonc");
     const siteConfig = parseJsoncObject(siteConfigSource);
     expect(siteConfig).toMatchObject({
-      env: {
-        preview: {
-          kv_namespaces: [{ binding: "SESSION", id: "2c54b9c67de54712bb33624f6a978448" }],
-          name: "crewhelm-site",
-          preview_urls: true,
-          services: [{ binding: "REGISTRY", service: "crewhelm-registry-dev" }],
-          vars: {
-            REGISTRY_ORIGIN: "https://crewhelm-registry-dev.fkrein.workers.dev",
-          },
-          workers_dev: false,
-        },
-        production: {
-          kv_namespaces: [{ binding: "SESSION", id: "713769259cd84b92a8f208b3d08fd755" }],
-          name: "crewhelm-site",
-          preview_urls: true,
-          services: [{ binding: "REGISTRY", service: "crewhelm-registry" }],
-          workers_dev: false,
-        },
-      },
-      name: "crewhelm-site-unconfigured",
-      preview_urls: false,
+      kv_namespaces: [{ binding: "SESSION", id: "713769259cd84b92a8f208b3d08fd755" }],
+      name: "crewhelm-site",
+      preview_urls: true,
+      services: [{ binding: "REGISTRY", service: "crewhelm-registry" }],
       workers_dev: false,
     });
+    expect(siteConfig).not.toHaveProperty("env");
     expect(siteConfigSource).not.toContain("dev.crewhelm.app");
   });
 
