@@ -1113,6 +1113,7 @@ describe("repository foundation", () => {
     expect(siteConfig).toMatchObject({
       env: {
         preview: {
+          kv_namespaces: [{ binding: "SESSION", id: "2c54b9c67de54712bb33624f6a978448" }],
           name: "crewhelm-site-preview",
           preview_urls: true,
           services: [{ binding: "REGISTRY", service: "crewhelm-registry-dev" }],
@@ -1122,8 +1123,9 @@ describe("repository foundation", () => {
           workers_dev: false,
         },
         production: {
+          kv_namespaces: [{ binding: "SESSION", id: "713769259cd84b92a8f208b3d08fd755" }],
           name: "crewhelm-site",
-          preview_urls: false,
+          preview_urls: true,
           services: [{ binding: "REGISTRY", service: "crewhelm-registry" }],
           workers_dev: false,
         },
