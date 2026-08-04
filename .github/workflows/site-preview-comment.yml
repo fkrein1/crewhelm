@@ -1,0 +1,42 @@
+name: Site preview comment
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/site-preview-comment.yml
+      - apps/site/**
+      - package.json
+      - packages/design/**
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - scripts/comment-site-preview.mjs
+      - scripts/validate-site-output.mjs
+
+concurrency:
+  group: site-preview-comment-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  checks: read
+  contents: read
+  issues: write
+
+jobs:
+  comment:
+    name: Publish site preview
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Publish preview links
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PREVIEW_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PREVIEW_COMMIT: ${{ github.event.pull_request.head.sha }}
+          PREVIEW_PR: ${{ github.event.pull_request.number }}
+          PREVIEW_REPOSITORY: ${{ github.repository }}
+        run: node scripts/comment-site-preview.mjs

@@ -110,7 +110,11 @@ function workflowPolicyErrors(name: string, workflow: Record<string, unknown>): 
   const triggers = workflowTriggers(workflow["on"]);
   const forbiddenTriggers = ["issue_comment", "pull_request_target", "workflow_run"];
   const expectedPermissions: Record<string, "read" | "write"> =
-    name === "codeql.yml" || name === "release-cli.yml" ? {} : { contents: "read" };
+    name === "codeql.yml" || name === "release-cli.yml"
+      ? {}
+      : name === "site-preview-comment.yml"
+        ? { checks: "read", contents: "read", issues: "write" }
+        : { contents: "read" };
 
   if (triggers.length === 0) {
     errors.push("Workflow must declare a trigger.");
