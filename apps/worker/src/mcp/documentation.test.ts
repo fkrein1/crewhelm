@@ -75,6 +75,107 @@ function annotationLabels(tool: McpTool): string[] {
   ];
 }
 
+function schemaObject(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function schemaType(schema: Record<string, unknown>): string {
+  if (typeof schema.$ref === "string") {
+    return schema.$ref.split("/").at(-1) ?? "referenced value";
+  }
+
+  if (Array.isArray(schema.enum)) {
+    return schema.enum.map((value) => JSON.stringify(value)).join(" | ");
+  }
+
+  if (Array.isArray(schema.anyOf)) {
+    return schema.anyOf
+      .map(schemaObject)
+      .filter((value): value is Record<string, unknown> => value !== null)
+      .map(schemaType)
+      .join(" | ");
+  }
+
+  if (schema.type === "array") {
+    const items = schemaObject(schema.items);
+    return items === null ? "array" : `array of ${schemaType(items)}`;
+  }
+
+  return typeof schema.type === "string" ? schema.type : "value";
+}
+
+function markdownText(value: string): string {
+  return value.replaceAll("|", "\\|").replaceAll("\n", " ");
+}
+
+function schemaDetails(schema: Record<string, unknown>): string {
+  const details: string[] = [];
+  if (typeof schema.description === "string") details.push(schema.description);
+
+  const constraints: [string, unknown][] = [
+    ["minimum", schema.minimum],
+    ["exclusive minimum", schema.exclusiveMinimum],
+    ["maximum", schema.maximum],
+    ["exclusive maximum", schema.exclusiveMaximum],
+    ["minimum length", schema.minLength],
+    ["maximum length", schema.maxLength],
+    ["minimum items", schema.minItems],
+    ["maximum items", schema.maxItems],
+    ["format", schema.format],
+    ["pattern", schema.pattern],
+    ["default", schema.default],
+  ];
+  const present = constraints
+    .filter(([, value]) => value !== undefined)
+    .map(([label, value]) => `${label}: \`${String(value)}\``);
+  if (present.length > 0) details.push(present.join("; "));
+
+  return markdownText(details.join(" ") || "—");
+}
+
+function renderSchemaTable(schema: Record<string, unknown>): string[] {
+  const properties = schemaObject(schema.properties);
+  if (properties === null || Object.keys(properties).length === 0) {
+    return ["No input fields."];
+  }
+
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  const rows = Object.entries(properties).map(([name, value]) => {
+    const property = schemaObject(value) ?? {};
+    return `| \`${name}\` | ${required.has(name) ? "Yes" : "No"} | ${markdownText(schemaType(property))} | ${schemaDetails(property)} |`;
+  });
+
+  return ["| Input | Required | Type | Details |", "| --- | --- | --- | --- |", ...rows];
+}
+
+function renderReferencedContracts(schema: Record<string, unknown>): string[] {
+  const definitions = schemaObject(schema.$defs);
+  if (definitions === null || Object.keys(definitions).length === 0) return [];
+
+  const lines = ["", "<details>", "<summary>Referenced input contracts</summary>", ""];
+  for (const [name, value] of Object.entries(definitions)) {
+    const definition = schemaObject(value) ?? {};
+    const table = renderSchemaTable(definition);
+    lines.push(`#### \`${name}\``, "");
+    if (table[0] === "No input fields.") {
+      lines.push(
+        `Type: ${markdownText(schemaType(definition))}.`,
+        `Details: ${schemaDetails(definition)}`,
+        "",
+      );
+    } else {
+      if (typeof definition.description === "string") {
+        lines.push(definition.description, "");
+      }
+      lines.push(...table, "");
+    }
+  }
+  lines.push("</details>");
+  return lines;
+}
+
 function renderTool({ operations, tool }: DocumentedTool): string {
   const lines = [`## \`${tool.name}\``, ""];
 
@@ -91,16 +192,24 @@ function renderTool({ operations, tool }: DocumentedTool): string {
     lines.push(`Attributes: ${labels.join(", ")}.`, "");
   }
 
-  lines.push(
-    "<details>",
-    "<summary>Discovery envelope</summary>",
-    "",
-    "```json",
-    JSON.stringify(tool.inputSchema, null, 2),
-    "```",
-    "",
-    "</details>",
-  );
+  if (operations.length > 0) {
+    lines.push(
+      "How to use this tool:",
+      "",
+      '1. Send `{"request":"operations"}` to list its subtools.',
+      '2. Send `{"request":"schema","name":"…"}` for one subtool’s exact inputs.',
+      '3. Send `{"request":"execute","name":"…","input":{…}}` to run it.',
+      "",
+      "| Subtool | Purpose |",
+      "| --- | --- |",
+      ...operations.map(
+        (operation) =>
+          `| \`${operation.name}\` | ${markdownText(operation.description.match(/^.*?[.!?](?:\s|$)/)?.[0].trim() ?? operation.description)} |`,
+      ),
+    );
+  } else {
+    lines.push("Call this tool directly. It has no subtools.");
+  }
 
   for (const operation of operations) {
     lines.push(
@@ -109,14 +218,8 @@ function renderTool({ operations, tool }: DocumentedTool): string {
       "",
       operation.description,
       "",
-      "<details>",
-      "<summary>Input schema</summary>",
-      "",
-      "```json",
-      JSON.stringify(operation.schema, null, 2),
-      "```",
-      "",
-      "</details>",
+      ...renderSchemaTable(operation.schema),
+      ...renderReferencedContracts(operation.schema),
     );
   }
 
