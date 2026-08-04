@@ -2,14 +2,31 @@ import cloudflare from "@astrojs/cloudflare";
 import sitemap from "@astrojs/sitemap";
 import starlight from "@astrojs/starlight";
 import tailwindcss from "@tailwindcss/vite";
+import type { AstroIntegration } from "astro";
 import { defineConfig, sessionDrivers } from "astro/config";
 
 import { docsSidebar } from "./src/lib/docs-manifest";
 import { CREWHELM_SITE, absoluteSiteUrl } from "./src/lib/seo";
 
+const previewBuild = process.env.CLOUDFLARE_ENV === "preview";
+const recipeRouteRendering = {
+  name: "crewhelm-recipe-route-rendering",
+  hooks: {
+    "astro:route:setup": ({ route }) => {
+      if (
+        route.component === "src/pages/recipes/index.astro" ||
+        route.component === "src/pages/recipes/[namespace]/[name].astro"
+      ) {
+        route.prerender = previewBuild;
+      }
+    },
+  },
+} satisfies AstroIntegration;
+
 export default defineConfig({
   adapter: cloudflare({ imageService: "compile" }),
   integrations: [
+    recipeRouteRendering,
     starlight({
       components: {
         Head: "./src/components/docs/Head.astro",
@@ -124,7 +141,7 @@ export default defineConfig({
       },
     }),
   ],
-  output: process.env.CLOUDFLARE_ENV === "preview" ? "static" : "server",
+  output: "server",
   session: {
     driver: sessionDrivers.lruCache(),
   },

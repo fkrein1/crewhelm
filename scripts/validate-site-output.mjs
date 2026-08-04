@@ -217,12 +217,27 @@ export function validateSiteOutput(outputDirectory) {
   if (existsSync(workerConfigurationPath)) {
     const workerConfiguration = JSON.parse(readFileSync(workerConfigurationPath, "utf8"));
     const workerFirst = workerConfiguration.assets?.run_worker_first;
-    if (
-      !Array.isArray(workerFirst) ||
-      !workerFirst.includes("/recipes") ||
-      !workerFirst.includes("/recipes/*")
-    ) {
-      throw new Error("Recipe SSR routes must run through the site Worker");
+    if (workerConfiguration.targetEnvironment === "preview") {
+      const services = workerConfiguration.services;
+      if (
+        (Array.isArray(workerFirst) &&
+          (workerFirst.includes("/recipes") || workerFirst.includes("/recipes/*"))) ||
+        (Array.isArray(services) && services.some((service) => service?.binding === "REGISTRY")) ||
+        !existsSync(path.join(publicDirectory, "recipes", "index.html"))
+      ) {
+        throw new Error("Recipe previews must be static and have no Registry runtime binding");
+      }
+    } else {
+      if (
+        !Array.isArray(workerFirst) ||
+        !workerFirst.includes("/recipes") ||
+        !workerFirst.includes("/recipes/*")
+      ) {
+        throw new Error("Recipe SSR routes must run through the site Worker");
+      }
+      if (existsSync(path.join(publicDirectory, "recipes", "index.html"))) {
+        throw new Error("Production Recipe routes must remain server-rendered");
+      }
     }
   }
   const docsDirectory = path.join(publicDirectory, "docs");
