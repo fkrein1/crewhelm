@@ -10,8 +10,8 @@ execution limits.
 
 ## Agent revision
 
-An immutable snapshot of an agent's configuration. A configuration change creates a new revision;
-a run records the revision it uses.
+An immutable snapshot of an Agent's configuration. A configuration change creates a new revision;
+a Run records the revision it uses.
 
 ## Bootstrap CLI
 
@@ -25,12 +25,12 @@ A bounded permission to perform a class of actions. Only the control plane can g
 ## Connection
 
 An owner's authorization relationship with an external provider or remote MCP server. A connection
-is represented to agents by an opaque identifier, never by the underlying credential.
+is represented to Agents by an opaque identifier, never by the underlying credential.
 
 ## Control plane
 
 The owner-authoritative source of truth for Agent, connection, and policy definitions, along with
-run admission and administrative lifecycle. Runtime execution state belongs to the Agent or
+Run admission and administrative lifecycle. Runtime execution state belongs to the Agent or
 Workflow performing it.
 
 ## MCP client
@@ -53,7 +53,7 @@ assets; it contains no credentials, grants no authority, and starts no work.
 
 ## Run
 
-One bounded attempt by an agent to complete a task under a fixed policy and budget snapshot.
+One bounded attempt by an Agent to complete a task under a fixed policy and budget snapshot.
 
 ## Schedule
 

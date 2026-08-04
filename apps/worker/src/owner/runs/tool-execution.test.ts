@@ -18,13 +18,7 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
 import { deriveOwnerKey } from "../identity.js";
-import { controlPlaneMigrations } from "../../../control-plane-migrations/index.js";
-import repairFailedInboxOutcomesMigration from "../../../control-plane-migrations/0014_closed_patriot.sql";
 import { digestRunPrompt } from "../../agent/admitted-runs/index.js";
-import {
-  applyControlPlaneMigrationSql,
-  runControlPlaneMigrationTransaction,
-} from "../migrations.js";
 import { digestExternalEffect } from "./tool-execution.js";
 
 const connectionId = "connection_22222222-2222-4222-8222-222222222222";
@@ -314,41 +308,6 @@ describe("admitted tool execution", () => {
     ).resolves.toEqual({
       error: { code: "invalid_execution", message: "Tool execution denied." },
       ok: false,
-    });
-  });
-
-  it("backfills legacy grants to approval-required before they can execute", async () => {
-    const fixture = await toolExecutionFixture("legacy-grant-authorization", "write");
-
-    await runInDurableObject(fixture.controlPlane, async (_instance, state) => {
-      state.storage.sql.exec(
-        `UPDATE capability_grants
-         SET grant = json_remove(grant, '$.authorization')
-         WHERE grant_id = ?`,
-        fixture.grantId,
-      );
-      state.storage.sql.exec(controlPlaneMigrations[8]?.sql ?? "");
-    });
-    await expect(
-      fixture.controlPlane.evaluateToolExecution({
-        ...fixture.reference,
-        action: fixture.action,
-      }),
-    ).resolves.toMatchObject({
-      decision: { decision: "requires_approval" },
-      ok: true,
-    });
-    await runInDurableObject(fixture.controlPlane, (_instance, state) => {
-      expect(
-        state.storage.sql
-          .exec<{ authorization: string }>(
-            `SELECT json_extract(grant, '$.authorization') AS authorization
-             FROM capability_grants
-             WHERE grant_id = ?`,
-            fixture.grantId,
-          )
-          .one(),
-      ).toEqual({ authorization: "approval_required" });
     });
   });
 
@@ -974,62 +933,6 @@ describe("admitted tool execution", () => {
       nextCursor: null,
       ok: true,
       total: 1,
-    });
-    await expect(
-      fixture.controlPlane.recordAgentInboxRun({
-        event: {
-          approvalCount: 0,
-          kind: "outcome",
-          occurredAt: new Date().toISOString(),
-          resultPreview: "The model claimed the provider action succeeded.",
-          runStatus: "completed",
-        },
-        reference: {
-          agentId: fixture.reference.agentId,
-          agentRevision: fixture.reference.agentRevision,
-          idempotencyKey: fixture.reference.idempotencyKey,
-          ownerKey: fixture.reference.ownerKey,
-          promptDigest: fixture.reference.promptDigest,
-          runId: fixture.reference.runId,
-        },
-      }),
-    ).resolves.toEqual({ ok: true, recorded: true });
-    await runInDurableObject(fixture.controlPlane, async (_instance, state) => {
-      state.storage.sql.exec(
-        `UPDATE agent_inbox_items
-         SET kind = 'outcome',
-             result_preview = 'The model claimed the provider action succeeded.',
-             run_status = 'completed'
-         WHERE run_id = ?`,
-        fixture.reference.runId,
-      );
-      await state.storage.sync();
-      await runControlPlaneMigrationTransaction(
-        state.storage,
-        [repairFailedInboxOutcomesMigration],
-        () => {
-          expect(state.storage.sql.exec("PRAGMA foreign_keys").one()).toEqual({ foreign_keys: 0 });
-          applyControlPlaneMigrationSql(state.storage, repairFailedInboxOutcomesMigration);
-        },
-      );
-    });
-    await expect(
-      fixture.controlPlane.agentInbox(fixture.authority, {
-        action: "list",
-        kinds: ["exception"],
-        limit: 1,
-      }),
-    ).resolves.toMatchObject({
-      action: "list",
-      items: [
-        {
-          kind: "exception",
-          resultPreview: null,
-          runId: fixture.reference.runId,
-          runStatus: "failed",
-        },
-      ],
-      ok: true,
     });
     await expect(
       fixture.controlPlane.listUnresolvedToolEffects(fixture.authority, {

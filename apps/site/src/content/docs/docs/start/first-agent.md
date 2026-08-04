@@ -7,7 +7,7 @@ area: agents
 availability: available
 sources:
   - CONTEXT.md
-  - docs/reference/mcp-tools.md
+  - docs/reference/mcp/index.md
   - docs/product/philosophy.md
   - packages/contracts/src/control-plane.ts
   - packages/contracts/src/model-catalog.ts

@@ -3,9 +3,21 @@ interface DocsPage {
   slug: string;
 }
 
+interface DocsGroup {
+  collapsed?: boolean;
+  items: readonly DocsPage[];
+  label: string;
+}
+
 interface DocsSection {
   label: string;
-  pages: readonly DocsPage[];
+  pages: readonly (DocsGroup | DocsPage)[];
+}
+
+interface DocsSidebarGroup {
+  collapsed?: boolean;
+  items: Array<DocsPage | DocsSidebarGroup>;
+  label: string;
 }
 
 export const DOCS_SECTIONS = [
@@ -50,18 +62,42 @@ export const DOCS_SECTIONS = [
     pages: [
       { label: "Access levels", slug: "docs/reference/access-levels" },
       { label: "Errors and recovery", slug: "docs/reference/errors" },
-      { label: "MCP tools", slug: "docs/reference/mcp-tools" },
+      {
+        collapsed: false,
+        items: [
+          { label: "Overview", slug: "docs/reference/mcp" },
+          { label: "Agents", slug: "docs/reference/mcp/agents" },
+          { label: "Automations", slug: "docs/reference/mcp/automations" },
+          { label: "Connections", slug: "docs/reference/mcp/connections" },
+          { label: "Models", slug: "docs/reference/mcp/models" },
+          { label: "Context", slug: "docs/reference/mcp/context" },
+          { label: "Recipes", slug: "docs/reference/mcp/recipes" },
+          { label: "Work", slug: "docs/reference/mcp/work" },
+          { label: "Recover", slug: "docs/reference/mcp/recover" },
+        ],
+        label: "MCP",
+      },
     ],
   },
 ] as const satisfies readonly DocsSection[];
 
 export const DOCS_ROUTES = DOCS_SECTIONS.flatMap(({ pages }) =>
-  pages.map(({ slug }) => `/${slug}/`),
+  pages.flatMap((page) =>
+    "slug" in page ? [`/${page.slug}/`] : page.items.map(({ slug }) => `/${slug}/`),
+  ),
 );
 
-export function docsSidebar(): Array<{ items: DocsPage[]; label: string }> {
+export function docsSidebar(): DocsSidebarGroup[] {
   return DOCS_SECTIONS.map(({ label, pages }) => ({
     label,
-    items: pages.map(({ label: pageLabel, slug }) => ({ label: pageLabel, slug })),
+    items: pages.map((page) =>
+      "slug" in page
+        ? { label: page.label, slug: page.slug }
+        : {
+            collapsed: page.collapsed,
+            items: page.items.map(({ label: pageLabel, slug }) => ({ label: pageLabel, slug })),
+            label: page.label,
+          },
+    ),
   }));
 }

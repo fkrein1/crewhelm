@@ -55,6 +55,7 @@ import {
   OPEN_CHANGE_FACADE as OPEN_CHANGE,
   OPEN_READ_FACADE as OPEN_READ,
   type FacadeOperation,
+  type FacadeThemeDefinition,
   type FacadeToolDefinition,
 } from "./facade-contract.js";
 import type { FacadeOperationKind } from "./facade-operation-descriptions.js";
@@ -2119,13 +2120,56 @@ const RECOVERY_FACADE_DEFINITIONS = [
   },
 ] satisfies readonly FacadeToolDefinition[];
 
-export const FACADE_TOOL_DEFINITIONS: readonly FacadeToolDefinition[] = [
-  ...AGENT_FACADE_DEFINITIONS,
-  ...WORK_FACADE_DEFINITIONS,
-  ...AUTOMATION_FACADE_DEFINITIONS,
-  ...CONNECTION_FACADE_DEFINITIONS,
-  ...MODEL_FACADE_DEFINITIONS,
-  ...CONTEXT_FACADE_DEFINITIONS,
-  ...RECIPE_FACADE_DEFINITIONS,
-  ...RECOVERY_FACADE_DEFINITIONS,
-];
+export const FACADE_THEME_DEFINITIONS = [
+  {
+    description: "Define, inspect, revise, and disable long-lived Agents.",
+    label: "Agents",
+    slug: "agents",
+    tools: AGENT_FACADE_DEFINITIONS,
+  },
+  {
+    description: "Create and inspect Schedules and connected Event Triggers.",
+    label: "Automations",
+    slug: "automations",
+    tools: AUTOMATION_FACADE_DEFINITIONS,
+  },
+  {
+    description: "Discover, authorize, grant, and revoke provider or remote MCP Connections.",
+    label: "Connections",
+    slug: "connections",
+    tools: CONNECTION_FACADE_DEFINITIONS,
+  },
+  {
+    description: "Inspect Cloudflare models and manage the owner-enabled model catalog.",
+    label: "Models",
+    slug: "models",
+    tools: MODEL_FACADE_DEFINITIONS,
+  },
+  {
+    description: "Manage fleet policy, capabilities, Skills, blueprints, and Briefs.",
+    label: "Context",
+    slug: "context",
+    tools: CONTEXT_FACADE_DEFINITIONS,
+  },
+  {
+    description: "Discover, install, author, and publish immutable Recipes and Skills.",
+    label: "Recipes",
+    slug: "recipes",
+    tools: RECIPE_FACADE_DEFINITIONS,
+  },
+  {
+    description: "Start and inspect Runs, conversations, approvals, inbox items, and Workflows.",
+    label: "Work",
+    slug: "work",
+    tools: WORK_FACADE_DEFINITIONS,
+  },
+  {
+    description: "Inspect unresolved external effects and take bounded recovery actions.",
+    label: "Recover",
+    slug: "recover",
+    tools: RECOVERY_FACADE_DEFINITIONS,
+  },
+] as const satisfies readonly FacadeThemeDefinition[];
+
+export const FACADE_TOOL_DEFINITIONS: readonly FacadeToolDefinition[] =
+  FACADE_THEME_DEFINITIONS.flatMap<FacadeToolDefinition>(({ tools }) => tools);

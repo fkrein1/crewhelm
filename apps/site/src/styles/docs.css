@@ -112,6 +112,11 @@ body {
   font-weight: 750;
 }
 
+.sidebar-content a[href^="/docs/reference/mcp/"],
+.sidebar-content details:has(> ul > li > a[href^="/docs/reference/mcp/"]) > summary .large {
+  font-size: 0.875rem;
+}
+
 .sidebar-content .top-level > li > details > summary,
 .sidebar-content .top-level > li > a {
   font-family: var(--font-mono);

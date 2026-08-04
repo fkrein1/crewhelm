@@ -17,8 +17,8 @@ capabilities before an operation reaches its owning module.
 
 | Access level | OAuth scope     | What it allows                                                                                                                       |
 | ------------ | --------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| View only    | `crewhelm:view` | Inspect fleet, Agent, Connection, authentication-configuration, and integration catalog state.                                       |
-| Use agents   | `crewhelm:use`  | Everything in View only, plus start and operate Runs and decide Run-time approvals.                                                  |
+| View only    | `crewhelm:view` | Inspect fleet, Agent, Connection, provider-authentication configuration, and integration catalog state.                              |
+| Use agents   | `crewhelm:use`  | Everything in View only, plus start and operate Runs and decide runtime approvals.                                                   |
 | Full control | `crewhelm:full` | Reconfigure Agents, integrations, Connections, automation, fleet policy, and other control-plane state, in addition to using Agents. |
 
 The installation owner defaults to Full control. Choose a narrower level when the MCP client does

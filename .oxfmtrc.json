@@ -1,7 +1,7 @@
 {
   "ignorePatterns": [
-    "apps/site/src/content/docs/docs/reference/mcp-tools.md",
-    "docs/reference/mcp-tools.md"
+    "apps/site/src/content/docs/docs/reference/mcp/*.md",
+    "docs/reference/mcp/*.md"
   ],
   "printWidth": 100,
   "semi": true,

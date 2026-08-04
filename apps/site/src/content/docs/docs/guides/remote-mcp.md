@@ -6,7 +6,7 @@ audience: owner
 area: remote-mcp
 availability: available
 sources:
-  - docs/reference/mcp-tools.md
+  - docs/reference/mcp/index.md
   - docs/architecture/mcp.md
   - docs/security/invariants.md
   - docs/security/threat-model.md

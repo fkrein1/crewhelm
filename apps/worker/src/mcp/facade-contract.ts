@@ -74,6 +74,23 @@ export interface FacadeToolDefinition {
   title: string;
 }
 
+export type FacadeThemeSlug =
+  | "agents"
+  | "automations"
+  | "connections"
+  | "context"
+  | "models"
+  | "recipes"
+  | "recover"
+  | "work";
+
+export interface FacadeThemeDefinition {
+  description: string;
+  label: string;
+  slug: FacadeThemeSlug;
+  tools: readonly FacadeToolDefinition[];
+}
+
 export const CLOSED_READ_FACADE: ToolAnnotations = {
   destructiveHint: false,
   idempotentHint: true,

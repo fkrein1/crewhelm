@@ -7,7 +7,7 @@ area: recovery
 availability: available
 sources:
   - docs/reference/errors.md
-  - docs/reference/mcp-tools.md
+  - docs/reference/mcp/index.md
   - packages/contracts/src/diagnostics.ts
   - packages/contracts/src/run-admission.ts
   - packages/contracts/src/agent-schedules.ts

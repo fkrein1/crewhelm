@@ -32,8 +32,9 @@ exact current state.
 - Start Agents without external grants, then add only demonstrated capabilities.
 - Prefer approval-required tool authority. Grant standing authority only for an exact reviewed
   action, bounded target, useful expiry, and small limits.
-- Remember that Schedules and Event Triggers create occurrences, not permission. Their Runs use the
-  Agent revision's current frozen authority.
+- Remember that Schedules and Event Triggers create occurrences, not permission. Each automation
+  revision freezes one exact Agent revision, and every occurrence still passes through normal Run
+  admission.
 - Review a remote MCP server's entire frozen catalog before attachment.
 - Use an AI Gateway daily limit when you require an installation-wide hard dollar ceiling.
 

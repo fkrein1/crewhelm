@@ -27,6 +27,10 @@ Each Agent directory owns conversation discovery and retention. Each isolated Se
 transcript and active execution. Workflows coordinate opaque identifiers and ordered stage events
 without receiving prompts or provider authority.
 
+Owner content storage holds immutable Skill files, versioned Brief content, and final Workflow
+deliverables. The owner-local control plane keeps their compact metadata, digests, provenance, and
+lifecycle state; it does not treat the content itself as authority.
+
 ## Credential custody
 
 Composio holds managed and custom provider credentials and refreshes supported OAuth credentials.

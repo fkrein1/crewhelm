@@ -10,8 +10,8 @@ The worker builds two catalogs:
 1. A private command catalog contains the exact handlers used by the control plane. These schemas
    retain revision checks, replay identities, provider snapshots, lifecycle actions, and other
    coordination fields.
-2. A public facade groups those commands into a small set of read and change surfaces for Agents,
-   Work, Automations, Connections, Context, Recipes, and Recovery.
+2. A public facade groups those commands into read and write surfaces for Agents,
+   Automations, Connections, Models, Context, Recipes, Work, and Recovery.
 
 The private catalog is not returned by `tools/list`. Each public facade advertises one compact
 `request`, `name`, and `input` envelope. The server returns operation descriptions and exact public
@@ -24,13 +24,13 @@ receives the same bounded request and enforces the same authority as it would fo
 Every public domain uses the same sequence:
 
 1. Start with `crewhelm_status` when the next task is unknown.
-2. Choose a read or change tool from the domain name and annotations.
+2. Choose a read or write tool from the domain name and annotations.
 3. Call that tool with `request: "operations"` and choose one returned operation name.
 4. Call it with `request: "schema"` and that name when the exact schema is not already available.
 5. Call it with `request: "execute"`, the name, and schema-valid `input`.
 6. Retain returned resource objects and pass them unchanged to later operations.
 
-Read and change tools remain separate even when they use the same private lifecycle handler. This
+Read and write tools remain separate even when they use the same private lifecycle handler. This
 keeps `readOnlyHint`, `destructiveHint`, and `openWorldHint` truthful before a client inspects the
 operation schema. Recipes follow the same boundary: discovery is read-only; preview, installation,
 and recovery use the change surface; publication remains an explicit destructive open-world tool.

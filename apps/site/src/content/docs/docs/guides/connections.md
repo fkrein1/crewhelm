@@ -6,7 +6,7 @@ audience: owner
 area: connections
 availability: available
 sources:
-  - docs/reference/mcp-tools.md
+  - docs/reference/mcp/index.md
   - docs/architecture/mcp.md
   - docs/architecture/system.md
   - docs/security/threat-model.md

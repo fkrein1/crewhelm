@@ -271,7 +271,7 @@ export function validateSiteOutput(outputDirectory) {
     "/docs/",
     "/docs/start/install/",
     "/docs/start/first-agent/",
-    "/docs/reference/mcp-tools/",
+    "/docs/reference/mcp/",
     "/recipes/",
   ]) {
     const url = new URL(pathname, canonicalOrigin).toString();

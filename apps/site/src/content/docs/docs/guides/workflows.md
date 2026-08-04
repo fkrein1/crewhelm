@@ -6,7 +6,7 @@ audience: owner
 area: workflows
 availability: available
 sources:
-  - docs/reference/mcp-tools.md
+  - docs/reference/mcp/index.md
   - docs/product/philosophy.md
   - docs/architecture/system.md
   - docs/security/invariants.md
