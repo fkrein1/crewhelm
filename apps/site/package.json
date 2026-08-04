@@ -4,24 +4,24 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "astro build && node ../../scripts/validate-site-output.mjs dist && wrangler deploy --dry-run --env production --outdir worker-dist",
-    "deploy:production": "pnpm run build && wrangler deploy --env production",
+    "build": "node ../../scripts/build-site-worker.mjs",
+    "deploy:production": "pnpm run build -- --env production && wrangler deploy --env production",
     "dev": "astro dev",
     "preview": "astro preview",
     "typecheck": "tsc --noEmit --project tsconfig.worker.json && tsc --noEmit --project src/tsconfig.json"
   },
   "dependencies": {
+    "@astrojs/cloudflare": "14.1.7",
     "@astrojs/sitemap": "3.7.3",
     "@astrojs/starlight": "0.41.6",
     "@crewhelm/design": "workspace:*",
-    "@iconify-json/logos": "1.2.11",
     "astro": "7.1.6"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20260724.1",
+    "@cloudflare/workers-types": "5.20260730.1",
     "@tailwindcss/vite": "4.3.3",
     "tailwindcss": "4.3.3",
     "vitest": "4.1.10",
-    "wrangler": "4.115.0"
+    "wrangler": "4.118.0"
   }
 }

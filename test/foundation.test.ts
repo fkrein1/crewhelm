@@ -31,6 +31,10 @@ function parseJsonObject(source: string): Record<string, unknown> {
   return value;
 }
 
+function parseJsoncObject(source: string): Record<string, unknown> {
+  return parseJsonObject(source.replaceAll(/,\s*(?=[}\]])/gu, ""));
+}
+
 function parseYamlObject(source: string): Record<string, unknown> {
   const document = parseDocument(source, { uniqueKeys: true });
 
@@ -1098,16 +1102,37 @@ describe("repository foundation", () => {
     const sitePackage = parseJsonObject(await read("apps/site/package.json"));
     expect(sitePackage["scripts"]).not.toHaveProperty("deploy:dev");
 
-    for (const [configPath, unconfiguredName] of [
-      ["apps/registry/wrangler.jsonc", "crewhelm-registry-unconfigured"],
-      ["apps/site/wrangler.jsonc", "crewhelm-site-unconfigured"],
-    ] as const) {
-      const config = await read(configPath);
-      expect(config).toContain(`"name": "${unconfiguredName}"`);
-      expect(config).not.toContain('"dev":');
-      expect(config).not.toContain("dev.crewhelm.app");
-      expect(config).not.toContain('-dev"');
-    }
+    const registryConfig = await read("apps/registry/wrangler.jsonc");
+    expect(registryConfig).toContain('"name": "crewhelm-registry-unconfigured"');
+    expect(registryConfig).not.toContain('"dev":');
+    expect(registryConfig).not.toContain("dev.crewhelm.app");
+    expect(registryConfig).not.toContain('-dev"');
+
+    const siteConfigSource = await read("apps/site/wrangler.jsonc");
+    const siteConfig = parseJsoncObject(siteConfigSource);
+    expect(siteConfig).toMatchObject({
+      env: {
+        preview: {
+          name: "crewhelm-site-preview",
+          preview_urls: true,
+          services: [{ binding: "REGISTRY", service: "crewhelm-registry-dev" }],
+          vars: {
+            REGISTRY_ORIGIN: "https://crewhelm-registry-dev.fkrein.workers.dev",
+          },
+          workers_dev: false,
+        },
+        production: {
+          name: "crewhelm-site",
+          preview_urls: false,
+          services: [{ binding: "REGISTRY", service: "crewhelm-registry" }],
+          workers_dev: false,
+        },
+      },
+      name: "crewhelm-site-unconfigured",
+      preview_urls: false,
+      workers_dev: false,
+    });
+    expect(siteConfigSource).not.toContain("dev.crewhelm.app");
   });
 
   it("versions the protected main ruleset", async () => {

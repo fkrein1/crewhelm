@@ -1,0 +1,61 @@
+---
+import RecipeDetail from "../../../components/recipes/RecipeDetail.astro";
+import RecipeHeader from "../../../components/recipes/RecipeHeader.astro";
+import SiteLayout from "../../../layouts/SiteLayout.astro";
+import { toRecipePreview } from "../../../lib/recipe-catalog";
+import { getRegistryRecipe } from "../../../lib/recipe-registry-server";
+
+export const prerender = false;
+
+const namespace = Astro.params.namespace;
+const name = Astro.params.name;
+if (!namespace || !name) return Astro.redirect("/404/", 302);
+
+let projection;
+try {
+  projection = await getRegistryRecipe(Astro.request, namespace, name);
+} catch {
+  return new Response("Recipe Registry unavailable", {
+    headers: { "cache-control": "no-store", "content-type": "text/plain; charset=utf-8" },
+    status: 503,
+  });
+}
+if (!projection) {
+  return new Response("Recipe not found", {
+    headers: { "cache-control": "no-store" },
+    status: 404,
+  });
+}
+const recipe = toRecipePreview(projection);
+Astro.response.headers.set("cache-control", "public, max-age=60, s-maxage=600, stale-while-revalidate=3600");
+---
+
+<SiteLayout title={`${recipe.title} — Crewhelm Recipe`} description={recipe.description}>
+  <RecipeHeader />
+  <main id="main" class="direct-recipe">
+    <div class="direct-bar shell">
+      <a href="/recipes/"><span aria-hidden="true">←</span> All Recipes</a>
+    </div>
+    <div class="shell detail-shell">
+      <RecipeDetail {recipe} />
+    </div>
+  </main>
+</SiteLayout>
+
+<style>
+  .direct-bar {
+    display: flex;
+    min-height: 4rem;
+    align-items: center;
+    font: 750 0.72rem/1 var(--font-mono);
+  }
+
+  .direct-bar a { text-underline-offset: 0.25rem; }
+
+  .detail-shell {
+    margin-bottom: 4rem;
+    border: 1px solid var(--border-strong);
+    padding: 0;
+    box-shadow: var(--shadow-signal);
+  }
+</style>

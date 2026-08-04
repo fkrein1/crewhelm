@@ -41,8 +41,26 @@ Registry OAuth credentials remain runtime Worker secrets and are not build input
 
 Workers Builds runs from `apps/registry` for the Registry Worker and `apps/site` for the site
 Worker. Registry deployment calls `pnpm deploy:production`; the site builds with `pnpm run build`
-and deploys with `pnpm exec wrangler deploy --env production`. Both projects track `main`, while
-non-production branch builds remain disabled.
+and deploys with `pnpm exec wrangler deploy --env production`. Both projects track `main`.
+
+Site pull requests also upload a version of the separate `crewhelm-site-preview` Worker. Its public
+preview URL routes Registry reads through a private service binding to `crewhelm-registry-dev`; it
+has no production route or production Registry binding. Keep the site Workers Build configured
+with:
+
+| Setting                              | Value                                               |
+| ------------------------------------ | --------------------------------------------------- |
+| Root directory                       | `/apps/site`                                        |
+| Production branch                    | `main`                                              |
+| Build command                        | `pnpm run build`                                    |
+| Production deploy command            | `pnpm exec wrangler deploy --env production`        |
+| Non-production branch deploy command | `pnpm exec wrangler versions upload --env preview`  |
+| Non-production branch builds         | Enabled                                             |
+| Build watch include paths            | `*`; every branch commit can produce a site preview |
+
+Preview URLs are public and have no Workers logs. Do not put secrets or production bindings in the
+preview environment. Disable non-production branch builds to stop new previews; existing uploaded
+versions remain inert unless their preview URL is requested.
 
 Restore a previous Worker version when code or routing must roll back. D1 migrations remain
 forward-only, so recovery repairs schema state forward.

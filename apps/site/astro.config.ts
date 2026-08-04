@@ -1,3 +1,4 @@
+import cloudflare from "@astrojs/cloudflare";
 import sitemap from "@astrojs/sitemap";
 import starlight from "@astrojs/starlight";
 import tailwindcss from "@tailwindcss/vite";
@@ -7,6 +8,7 @@ import { docsSidebar } from "./src/lib/docs-manifest";
 import { CREWHELM_SITE, absoluteSiteUrl } from "./src/lib/seo";
 
 export default defineConfig({
+  adapter: cloudflare({ imageService: "compile" }),
   integrations: [
     starlight({
       components: {

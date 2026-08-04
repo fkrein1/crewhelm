@@ -5,22 +5,43 @@
   "compatibility_date": "2026-07-29",
   "assets": {
     "binding": "ASSETS",
-    "directory": "./dist",
+    "directory": "./dist/client",
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "404-page",
-    "run_worker_first": ["/api/registry", "/api/registry/*"],
+    "run_worker_first": ["/api/registry", "/api/registry/*", "/recipes", "/recipes/*"],
   },
   "workers_dev": false,
   "preview_urls": false,
   "env": {
+    "preview": {
+      "name": "crewhelm-site-preview",
+      "assets": {
+        "binding": "ASSETS",
+        "directory": "./dist/client",
+        "html_handling": "auto-trailing-slash",
+        "not_found_handling": "404-page",
+        "run_worker_first": ["/api/registry", "/api/registry/*", "/recipes", "/recipes/*"],
+      },
+      "services": [
+        {
+          "binding": "REGISTRY",
+          "service": "crewhelm-registry-dev",
+        },
+      ],
+      "vars": {
+        "REGISTRY_ORIGIN": "https://crewhelm-registry-dev.fkrein.workers.dev",
+      },
+      "workers_dev": false,
+      "preview_urls": true,
+    },
     "production": {
       "name": "crewhelm-site",
       "assets": {
         "binding": "ASSETS",
-        "directory": "./dist",
+        "directory": "./dist/client",
         "html_handling": "auto-trailing-slash",
         "not_found_handling": "404-page",
-        "run_worker_first": ["/api/registry", "/api/registry/*"],
+        "run_worker_first": ["/api/registry", "/api/registry/*", "/recipes", "/recipes/*"],
       },
       "services": [
         {

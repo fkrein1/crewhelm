@@ -83,6 +83,15 @@ export const registryRecipeSearchResponseSchema = z.strictObject({
   searchVersion: z.literal(1),
 });
 
+export const registryRecipeListQuerySchema = z.strictObject({
+  limit: z.number().int().min(1).max(MAXIMUM_REGISTRY_SEARCH_RESULTS).default(25),
+});
+
+export const registryRecipeListResponseSchema = z.strictObject({
+  listVersion: z.literal(1),
+  recipes: z.array(recipeRegistryProjectionSchema).max(MAXIMUM_REGISTRY_SEARCH_RESULTS),
+});
+
 export const registryPublishRecipeSchema = z.strictObject({
   package: recipePackageSchema,
   version: recipeVersionSchema,
@@ -139,4 +148,5 @@ export type RegistryResolvedPublishAuthorization = z.infer<
 >;
 export type RegistryRecipeSearchResponse = z.infer<typeof registryRecipeSearchResponseSchema>;
 export type RegistryRecipeSearchResult = z.infer<typeof registryRecipeSearchResultSchema>;
+export type RegistryRecipeListResponse = z.infer<typeof registryRecipeListResponseSchema>;
 export type RegistrySearchQuery = z.infer<typeof registrySearchQuerySchema>;

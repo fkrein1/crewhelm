@@ -3,12 +3,23 @@ import RecipeCatalog from "../../components/recipes/RecipeCatalog.astro";
 import RecipeExplorer from "../../components/recipes/RecipeExplorer.astro";
 import RecipeHeader from "../../components/recipes/RecipeHeader.astro";
 import SiteLayout from "../../layouts/SiteLayout.astro";
-import { recipePreviews } from "../../lib/recipe-catalog";
+import { toRecipePreview } from "../../lib/recipe-catalog";
+import { listRegistryRecipes } from "../../lib/recipe-registry-server";
 
-export const prerender = true;
+export const prerender = false;
 
 const basePath = "/recipes";
-const recipes = [...recipePreviews];
+let unavailable = false;
+const recipes = await listRegistryRecipes(Astro.request)
+  .then((items) => items.map(toRecipePreview))
+  .catch(() => {
+    unavailable = true;
+    return [];
+  });
+Astro.response.headers.set(
+  "cache-control",
+  unavailable ? "no-store" : "public, max-age=30, s-maxage=300, stale-while-revalidate=600",
+);
 ---
 
 <SiteLayout
@@ -18,7 +29,7 @@ const recipes = [...recipePreviews];
   <RecipeHeader />
   <main id="main">
     <RecipeExplorer {basePath} {recipes}>
-      <RecipeCatalog {basePath} {recipes} />
+      <RecipeCatalog {recipes} {unavailable} />
     </RecipeExplorer>
   </main>
 </SiteLayout>
