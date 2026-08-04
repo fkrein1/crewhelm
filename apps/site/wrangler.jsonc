@@ -50,7 +50,7 @@
         },
       ],
       "workers_dev": false,
-      "preview_urls": false,
+      "preview_urls": true,
       "routes": [
         {
           "pattern": "crewhelm.app",
