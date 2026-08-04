@@ -1113,12 +1113,10 @@ describe("repository foundation", () => {
     const siteConfigSource = await read("apps/site/wrangler.jsonc");
     const siteConfig = parseJsoncObject(siteConfigSource);
     expect(siteConfig).toMatchObject({
-      compatibility_flags: ["global_fetch_strictly_public"],
       env: {
         preview: {
           name: "crewhelm-site-preview",
           preview_urls: true,
-          vars: { REGISTRY_PUBLIC_ORIGIN: "https://crewhelm.app" },
           workers_dev: false,
         },
         production: {

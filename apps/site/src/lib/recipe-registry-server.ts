@@ -1,5 +1,3 @@
-import { env as cloudflareEnv } from "cloudflare:workers";
-
 import type { SiteRecipeProjection } from "./recipe-catalog.js";
 import { registryReadHeaders } from "../site-registry-gateway.js";
 
@@ -106,11 +104,12 @@ interface RegistryService {
 }
 
 interface RecipeSiteEnv {
-  REGISTRY?: RegistryService;
-  REGISTRY_PUBLIC_ORIGIN?: string;
+  REGISTRY: RegistryService;
+  REGISTRY_ORIGIN?: string;
 }
 
-function registryOrigin(configuredOrigin: string): string {
+function registryOrigin(requestUrl: URL, configuredOrigin: string | undefined): string {
+  if (configuredOrigin === undefined) return requestUrl.origin;
   const origin = new URL(configuredOrigin);
   if (
     origin.protocol !== "https:" ||
@@ -127,14 +126,10 @@ function registryOrigin(configuredOrigin: string): string {
 }
 
 async function registryResponse(path: string, request: Request): Promise<Response> {
-  const runtime: RecipeSiteEnv = cloudflareEnv;
-  const headers = registryReadHeaders(request);
-  if (runtime.REGISTRY) {
-    return runtime.REGISTRY.fetch(new Request(new URL(path, request.url), { headers }));
-  }
-  if (!runtime.REGISTRY_PUBLIC_ORIGIN) throw new Error("Registry is unavailable");
-  const origin = registryOrigin(runtime.REGISTRY_PUBLIC_ORIGIN);
-  return fetch(new Request(new URL(`/api/registry${path}`, origin), { headers }));
+  const { env } = await import("cloudflare:workers");
+  const runtime: RecipeSiteEnv = env;
+  const url = new URL(path, registryOrigin(new URL(request.url), runtime.REGISTRY_ORIGIN));
+  return runtime.REGISTRY.fetch(new Request(url, { headers: registryReadHeaders(request) }));
 }
 
 async function registryJson(path: string, request: Request): Promise<unknown> {
@@ -143,12 +138,24 @@ async function registryJson(path: string, request: Request): Promise<unknown> {
   return response.json();
 }
 
-export async function listRegistryRecipes(request: Request): Promise<SiteRecipeProjection[]> {
-  const body = record(await registryJson("/v1/recipes?limit=25", request));
+function parseRecipeList(value: unknown): SiteRecipeProjection[] {
+  const body = record(value);
   if (body.listVersion !== 1 || !Array.isArray(body.recipes) || body.recipes.length > 25) {
     throw new Error("Invalid Registry response");
   }
   return body.recipes.map(parseRecipe);
+}
+
+export async function listRegistryRecipes(request: Request): Promise<SiteRecipeProjection[]> {
+  return parseRecipeList(await registryJson("/v1/recipes?limit=25", request));
+}
+
+export async function listPublicRegistryRecipes(): Promise<SiteRecipeProjection[]> {
+  const response = await fetch("https://crewhelm.app/api/registry/v1/recipes?limit=25", {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) throw new Error(`Registry read failed with ${response.status}`);
+  return parseRecipeList(await response.json());
 }
 
 export async function getRegistryRecipe(

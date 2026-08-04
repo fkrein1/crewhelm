@@ -43,12 +43,17 @@ Workers Builds runs from `apps/registry` for the Registry Worker and `apps/site`
 Worker. Registry deployment calls `pnpm deploy:production`; the site builds with `pnpm run build`
 and deploys with `pnpm exec wrangler deploy --env production`. Both projects track `main`.
 
-Site pull requests upload an isolated version of the connected `crewhelm-site` Worker. The preview
-version reads the live catalog through the public, read-only Registry API on `crewhelm.app`; it has
-no direct production Registry binding and is not promoted to the production route. Version preview
-URLs must remain enabled on the connected Worker because Workers Builds preserves that Worker
-identity even when Wrangler selects the `preview` environment. Keep the site Workers Build
-configured with:
+Site pull requests upload an isolated version of the connected `crewhelm-site` Worker. During a
+non-production branch build, Astro reads the public production Registry API on `crewhelm.app` and
+prerenders the Recipe catalog and each published Recipe as static preview assets. The preview has no
+production Registry binding, makes no runtime Registry subrequest, and is not promoted to the
+production route. A preview is a catalog snapshot; publish another branch commit to pick up Registry
+changes made after its build. Production keeps the Recipe routes server-rendered through the private
+Registry service binding.
+
+Version preview URLs must remain enabled on the connected Worker because Workers Builds preserves
+that Worker identity even when Wrangler selects the `preview` environment. Keep the site Workers
+Build configured with:
 
 | Setting                              | Value                                               |
 | ------------------------------------ | --------------------------------------------------- |
@@ -71,13 +76,6 @@ Astro's Cloudflare adapter enables KV-backed sessions by default. The site does 
 sessions, so its Astro config selects an in-memory session driver instead. Keep that override unless
 the site gains a deliberate, environment-isolated session store; implicit KV provisioning races
 with the existing production namespace and makes branch uploads fail.
-
-Preview Registry access is restricted to `GET` and `HEAD` and forwards only read headers. Keep
-`global_fetch_strictly_public` enabled so the preview Worker can use the public production route
-without bypassing its mapped Worker or zone controls.
-
-Preview-host requests also require Cloudflare's `global_fetch_strictly_public` compatibility flag
-so Astro can reach its Worker and asset surfaces without Cloudflare rejecting the same-zone fetch.
 
 Restore a previous Worker version when code or routing must roll back. D1 migrations remain
 forward-only, so recovery repairs schema state forward.

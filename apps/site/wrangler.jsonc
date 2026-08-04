@@ -3,7 +3,6 @@
   "name": "crewhelm-site-unconfigured",
   "main": "src/worker.ts",
   "compatibility_date": "2026-07-29",
-  "compatibility_flags": ["global_fetch_strictly_public"],
   "assets": {
     "binding": "ASSETS",
     "directory": "./dist/client",
@@ -21,10 +20,6 @@
         "directory": "./dist/client",
         "html_handling": "auto-trailing-slash",
         "not_found_handling": "404-page",
-        "run_worker_first": ["/api/registry", "/api/registry/*", "/recipes", "/recipes/*"],
-      },
-      "vars": {
-        "REGISTRY_PUBLIC_ORIGIN": "https://crewhelm.app",
       },
       "workers_dev": false,
       "preview_urls": true,

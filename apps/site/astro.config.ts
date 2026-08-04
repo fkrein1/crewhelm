@@ -124,6 +124,7 @@ export default defineConfig({
       },
     }),
   ],
+  output: process.env.CLOUDFLARE_ENV === "preview" ? "static" : "server",
   session: {
     driver: sessionDrivers.lruCache(),
   },

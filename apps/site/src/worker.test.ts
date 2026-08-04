@@ -74,52 +74,44 @@ describe("site Registry gateway", () => {
     expect(registryFetch).not.toHaveBeenCalled();
   });
 
-  it("uses the public read-only Registry route for preview requests", async () => {
+  it("uses the configured dev Registry origin for preview service requests", async () => {
     const registryFetch = vi.fn<FetchRequest>(async () => new Response("registry"));
-    vi.stubGlobal("fetch", registryFetch);
     const env = {
       ASSETS: service(async () => new Response("asset")),
-      REGISTRY_PUBLIC_ORIGIN: "https://crewhelm.app",
+      REGISTRY: service(registryFetch),
+      REGISTRY_ORIGIN: "https://crewhelm-registry-dev.fkrein.workers.dev",
     } satisfies SiteEnv;
 
-    try {
-      const response = await routeSiteRequest(
-        new Request(
-          "https://branch-crewhelm-site-preview.fkrein.workers.dev/api/registry/v1/recipes/search?q=research",
-          { headers: { cookie: "private=preview" } },
-        ),
-        env,
-      );
+    const response = await routeSiteRequest(
+      new Request(
+        "https://branch-crewhelm-site-preview.fkrein.workers.dev/api/registry/v1/recipes/search?q=research",
+      ),
+      env,
+    );
 
-      await expect(response.text()).resolves.toBe("registry");
-      const forwarded = registryFetch.mock.calls[0]?.[0];
-      expect(forwarded?.url).toBe("https://crewhelm.app/api/registry/v1/recipes/search?q=research");
-      expect(forwarded?.headers.has("cookie")).toBe(false);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    await expect(response.text()).resolves.toBe("registry");
+    const forwarded = registryFetch.mock.calls[0]?.[0];
+    expect(forwarded?.url).toBe(
+      "https://crewhelm-registry-dev.fkrein.workers.dev/v1/recipes/search?q=research",
+    );
   });
 
   it("fails closed when the configured Registry origin is not an exact HTTPS origin", async () => {
     const registryFetch = vi.fn<FetchRequest>(async () => new Response("registry"));
-    vi.stubGlobal("fetch", registryFetch);
     const env = {
       ASSETS: service(async () => new Response("asset")),
-      REGISTRY_PUBLIC_ORIGIN: "https://crewhelm.app/unexpected",
+      REGISTRY: service(registryFetch),
+      REGISTRY_ORIGIN: "https://crewhelm-registry-dev.fkrein.workers.dev/unexpected",
     } satisfies SiteEnv;
 
-    try {
-      const response = await routeSiteRequest(
-        new Request("https://preview.example/api/registry/v1/recipes/search?q=research"),
-        env,
-      );
+    const response = await routeSiteRequest(
+      new Request("https://preview.example/api/registry/v1/recipes/search?q=research"),
+      env,
+    );
 
-      expect(response.status).toBe(503);
-      await expect(response.json()).resolves.toEqual({ error: "unavailable" });
-      expect(registryFetch).not.toHaveBeenCalled();
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: "unavailable" });
+    expect(registryFetch).not.toHaveBeenCalled();
   });
 
   it("returns a compact non-cacheable response when the Registry binding fails", async () => {

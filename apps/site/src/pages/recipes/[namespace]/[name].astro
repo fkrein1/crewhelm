@@ -2,23 +2,39 @@
 import RecipeDetail from "../../../components/recipes/RecipeDetail.astro";
 import RecipeHeader from "../../../components/recipes/RecipeHeader.astro";
 import SiteLayout from "../../../layouts/SiteLayout.astro";
-import { toRecipePreview } from "../../../lib/recipe-catalog";
-import { getRegistryRecipe } from "../../../lib/recipe-registry-server";
+import { toRecipePreview, type SiteRecipeProjection } from "../../../lib/recipe-catalog";
+import {
+  getRegistryRecipe,
+  listPublicRegistryRecipes,
+} from "../../../lib/recipe-registry-server";
 
-export const prerender = false;
+export async function getStaticPaths() {
+  if (import.meta.env.CLOUDFLARE_ENV !== "preview") return [];
+  const recipes = await listPublicRegistryRecipes();
+  return recipes.map((projection) => ({
+    params: {
+      name: projection.artifact.name,
+      namespace: projection.artifact.namespace,
+    },
+    props: { projection },
+  }));
+}
 
+const previewBuild = import.meta.env.CLOUDFLARE_ENV === "preview";
 const namespace = Astro.params.namespace;
 const name = Astro.params.name;
 if (!namespace || !name) return Astro.redirect("/404/", 302);
 
-let projection;
-try {
-  projection = await getRegistryRecipe(Astro.request, namespace, name);
-} catch {
-  return new Response("Recipe Registry unavailable", {
-    headers: { "cache-control": "no-store", "content-type": "text/plain; charset=utf-8" },
-    status: 503,
-  });
+let projection = Astro.props.projection as SiteRecipeProjection | undefined;
+if (!previewBuild) {
+  try {
+    projection = await getRegistryRecipe(Astro.request, namespace, name);
+  } catch {
+    return new Response("Recipe Registry unavailable", {
+      headers: { "cache-control": "no-store", "content-type": "text/plain; charset=utf-8" },
+      status: 503,
+    });
+  }
 }
 if (!projection) {
   return new Response("Recipe not found", {
@@ -27,7 +43,12 @@ if (!projection) {
   });
 }
 const recipe = toRecipePreview(projection);
-Astro.response.headers.set("cache-control", "public, max-age=60, s-maxage=600, stale-while-revalidate=3600");
+if (!previewBuild) {
+  Astro.response.headers.set(
+    "cache-control",
+    "public, max-age=60, s-maxage=600, stale-while-revalidate=3600",
+  );
+}
 ---
 
 <SiteLayout title={`${recipe.title} — Crewhelm Recipe`} description={recipe.description}>

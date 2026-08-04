@@ -4,22 +4,31 @@ import RecipeExplorer from "../../components/recipes/RecipeExplorer.astro";
 import RecipeHeader from "../../components/recipes/RecipeHeader.astro";
 import SiteLayout from "../../layouts/SiteLayout.astro";
 import { toRecipePreview } from "../../lib/recipe-catalog";
-import { listRegistryRecipes } from "../../lib/recipe-registry-server";
+import {
+  listPublicRegistryRecipes,
+  listRegistryRecipes,
+} from "../../lib/recipe-registry-server";
 
-export const prerender = false;
-
+const previewBuild = import.meta.env.CLOUDFLARE_ENV === "preview";
 const basePath = "/recipes";
 let unavailable = false;
-const recipes = await listRegistryRecipes(Astro.request)
-  .then((items) => items.map(toRecipePreview))
-  .catch(() => {
-    unavailable = true;
-    return [];
-  });
-Astro.response.headers.set(
-  "cache-control",
-  unavailable ? "no-store" : "public, max-age=30, s-maxage=300, stale-while-revalidate=600",
-);
+let recipes;
+if (previewBuild) {
+  recipes = (await listPublicRegistryRecipes()).map(toRecipePreview);
+} else {
+  recipes = await listRegistryRecipes(Astro.request)
+    .then((items) => items.map(toRecipePreview))
+    .catch(() => {
+      unavailable = true;
+      return [];
+    });
+}
+if (!previewBuild) {
+  Astro.response.headers.set(
+    "cache-control",
+    unavailable ? "no-store" : "public, max-age=30, s-maxage=300, stale-while-revalidate=600",
+  );
+}
 ---
 
 <SiteLayout
