@@ -17,14 +17,17 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  checks: read
+  # The workflow defaults to read-only; only the internal-branch comment job can write.
   contents: read
-  issues: write
 
 jobs:
   comment:
     name: Publish site preview
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    permissions:
+      checks: read
+      contents: read
+      issues: write
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
