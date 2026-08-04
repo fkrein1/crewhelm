@@ -127,30 +127,6 @@ const jsonRpcToolResultSchema = z.looseObject({
   }),
 });
 
-function operationCatalogVariant(value: unknown, kind: string): Record<string, unknown> | null {
-  const object = z.looseObject({}).safeParse(value);
-  if (!object.success) return null;
-  const properties = z.looseObject({}).safeParse(object.data.properties);
-  const kindSchema = z.looseObject({ const: z.unknown() }).safeParse(properties.data?.kind);
-
-  if (kindSchema.success && kindSchema.data.const === kind) {
-    return object.data;
-  }
-
-  for (const nested of Object.values(object.data)) {
-    if (Array.isArray(nested)) {
-      for (const candidate of nested) {
-        const found = operationCatalogVariant(candidate, kind);
-        if (found !== null) return found;
-      }
-    } else {
-      const found = operationCatalogVariant(nested, kind);
-      if (found !== null) return found;
-    }
-  }
-
-  return null;
-}
 const jsonRpcToolListSchema = z.looseObject({
   result: z.looseObject({
     tools: z.array(
@@ -1082,82 +1058,83 @@ describe("authenticated MCP handler", () => {
     });
 
     const visibleCatalog = JSON.stringify(payload.result.tools);
-    const contextCatalog = JSON.stringify(byName.get(MCP_CHANGE_CONTEXT_TOOL_NAME)?.inputSchema);
-    const recipeReadCatalog = JSON.stringify(
-      byName.get(MCP_INSPECT_RECIPES_TOOL_NAME)?.inputSchema,
-    );
-    const recipeCatalog = JSON.stringify(byName.get(MCP_CHANGE_RECIPES_TOOL_NAME)?.inputSchema);
-    const publicationCatalog = JSON.stringify(
-      byName.get(MCP_PUBLISH_RECIPE_TOOL_NAME)?.inputSchema,
-    );
-    expect(visibleCatalog).toContain('"const":"create"');
-    expect(visibleCatalog).toContain('"const":"run"');
-    expect(visibleCatalog).toContain('"const":"create_event_trigger"');
-    expect(visibleCatalog).toContain('"pause_event_trigger"');
-    expect(visibleCatalog).toContain('"resume_event_trigger"');
-    expect(visibleCatalog).toContain('"delete_event_trigger"');
-    expect(visibleCatalog).toContain('"list_schedules"');
-    expect(visibleCatalog).toContain('"list_event_triggers"');
+    expect(byName.get(MCP_CHANGE_AGENTS_TOOL_NAME)?.inputSchema).toMatchObject({
+      properties: {
+        input: expect.objectContaining({ type: "object" }),
+        name: expect.objectContaining({ type: "string" }),
+        request: expect.objectContaining({
+          enum: ["operations", "schema", "execute"],
+          type: "string",
+        }),
+      },
+      type: "object",
+    });
+    expect(visibleCatalog).not.toContain('"const":"create"');
     expect(visibleCatalog).not.toContain('"expectedBranchRevision"');
     expect(visibleCatalog).not.toContain('"idempotencyKey"');
     expect(visibleCatalog).not.toContain("crewhelm_get_config");
     expect(visibleCatalog).not.toContain("legacy continuation");
-    expect(visibleCatalog).toContain('"conversation"');
-    expect(visibleCatalog).toContain('"connection"');
-    expect(contextCatalog).not.toContain('"mode":');
-    expect(contextCatalog).not.toContain('"maxAgents":');
-    expect(
-      JSON.stringify(
-        operationCatalogVariant(
-          byName.get(MCP_CHANGE_CONTEXT_TOOL_NAME)?.inputSchema,
-          "retire_skill",
+  });
+
+  it("discovers one facade progressively and executes against its exact hidden schema", async () => {
+    const authority = await ownerAuthority("progressive-facade");
+    const call = async (id: number, name: string, args: Record<string, unknown>) => {
+      const response = await handleAuthenticatedMcpRequest(
+        toolRequest(
+          JSON.stringify({
+            id,
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: { arguments: args, name },
+          }),
         ),
-      ),
-    ).not.toContain('"patch":');
-    expect(recipeCatalog).not.toContain('"request":');
-    expect(recipeCatalog).toContain('"const":"prepare_install"');
-    expect(recipeCatalog).toContain('"const":"set_setup"');
-    expect(recipeCatalog).toContain('"const":"discard_install_draft"');
-    expect(recipeReadCatalog).not.toContain('"requestKey":');
-    expect(
-      JSON.stringify(
-        operationCatalogVariant(byName.get(MCP_INSPECT_RECIPES_TOOL_NAME)?.inputSchema, "inspect"),
-      ),
-    ).toContain('"const":"recipe"');
-    expect(
-      JSON.stringify(
-        operationCatalogVariant(
-          byName.get(MCP_INSPECT_RECIPES_TOOL_NAME)?.inputSchema,
-          "read_skill",
-        ),
-      ),
-    ).toContain('"const":"skill"');
-    expect(publicationCatalog).not.toContain('"request":');
-    expect(publicationCatalog).toContain('"const":"discard_publish_draft"');
-    expect(contextCatalog).toContain('"const":"discard_package_draft"');
-    expect(
-      JSON.stringify(
-        operationCatalogVariant(
-          byName.get(MCP_CHANGE_CONTEXT_TOOL_NAME)?.inputSchema,
-          "preview_fleet_change",
-        ),
-      ),
-    ).not.toContain('"requestKey":');
-    expect(
-      z
-        .looseObject({ required: z.array(z.string()).optional() })
-        .parse(
-          operationCatalogVariant(byName.get(MCP_CHANGE_RECIPES_TOOL_NAME)?.inputSchema, "install"),
-        ).required,
-    ).not.toContain("requestKey");
-    expect(
-      JSON.stringify(
-        operationCatalogVariant(
-          byName.get(MCP_CHANGE_CONNECTIONS_TOOL_NAME)?.inputSchema,
-          "connect_provider",
-        ),
-      ),
-    ).toContain('"requestKey":');
+        env,
+        { authority },
+      );
+      return jsonRpcToolResultSchema.parse(await response.json()).result;
+    };
+
+    const operations = JSON.parse(
+      (await call(1, MCP_INSPECT_AGENTS_TOOL_NAME, { request: "operations" })).content[0]?.text ??
+        "null",
+    ) as unknown;
+    expect(operations).toMatchObject({
+      ok: true,
+      operations: expect.arrayContaining([
+        expect.objectContaining({ name: "list" }),
+        expect.objectContaining({ name: "inspect_revision" }),
+      ]),
+      tool: MCP_INSPECT_AGENTS_TOOL_NAME,
+    });
+    expect(JSON.stringify(operations)).not.toContain("crewhelm_start_run");
+
+    const described = JSON.parse(
+      (
+        await call(2, MCP_INSPECT_AGENTS_TOOL_NAME, {
+          name: "list",
+          request: "schema",
+        })
+      ).content[0]?.text ?? "null",
+    ) as unknown;
+    expect(described).toMatchObject({
+      ok: true,
+      operation: "list",
+      schema: expect.objectContaining({ type: "object" }),
+      tool: MCP_INSPECT_AGENTS_TOOL_NAME,
+    });
+    expect(JSON.stringify(described)).not.toContain('"kind"');
+
+    const executed = await call(3, MCP_INSPECT_AGENTS_TOOL_NAME, {
+      input: { limit: 10 },
+      name: "list",
+      request: "execute",
+    });
+    expect(executed.isError).toBe(false);
+    expect(listAgentsResultSchema.parse(JSON.parse(executed.content[0]?.text ?? ""))).toMatchObject(
+      {
+        ok: true,
+      },
+    );
   });
 
   it("returns owner control-plane status through the read-only MCP tool", async () => {
