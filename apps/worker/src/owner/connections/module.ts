@@ -2,6 +2,7 @@ import {
   CONNECTION_LINK_UNKNOWN_RECOVERY_MS,
   INTEGRATION_ENABLEMENT_UNKNOWN_RECOVERY_MS,
   MAXIMUM_INTEGRATION_ENABLEMENT_REQUESTS_PER_OWNER,
+  MAXIMUM_PROVIDER_AUTH_CONFIGS_PER_OWNER,
   MAXIMUM_CONNECTION_LINK_REQUESTS_PER_OWNER,
   completeConnectionLinkInputSchema,
   completeIntegrationEnablementInputSchema,
@@ -18,6 +19,9 @@ import {
   listConnectionsResultSchema,
   recordConnectionAuthorizationReturnInputSchema,
   recordConnectionAuthorizationReturnResultSchema,
+  recordProviderAuthConfigInputSchema,
+  recordProviderAuthConfigResultSchema,
+  providerAuthSchemeSchema,
   reserveIntegrationEnablementResultSchema,
   reserveConnectionLinkResultSchema,
   type ConnectionSummary,
@@ -31,6 +35,7 @@ import {
   type OwnerAuthority,
   type RecordConnectionAuthorizationReturnInput,
   type RecordConnectionAuthorizationReturnResult,
+  type RecordProviderAuthConfigResult,
   type ReserveIntegrationEnablementResult,
   type ReserveConnectionLinkResult,
 } from "@crewhelm/contracts";
@@ -45,6 +50,7 @@ import {
   connectionLinkRequests,
   connections,
   integrationEnablementRequests,
+  providerAuthConfigs,
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
 
@@ -60,6 +66,7 @@ type ConnectionAuthorizationReturnFailure = Extract<
   { ok: false }
 >;
 type IntegrationEnablementFailure = Extract<EnableIntegrationResult, { ok: false }>;
+type ProviderAuthConfigFailure = Extract<RecordProviderAuthConfigResult, { ok: false }>;
 type ConnectionNextAction = Extract<InspectConnectionResult, { ok: true }>["nextAction"];
 type VerifiedConnectionActivationResult =
   | { kind: "activated" }
@@ -116,7 +123,12 @@ async function digestConnectionLink(input: CreateConnectionLinkInput): Promise<s
 }
 
 async function digestIntegrationEnablement(input: EnableIntegrationInput): Promise<string> {
-  return digestCanonicalRequest(JSON.stringify({ integrationSlug: input.integrationSlug }));
+  return digestCanonicalRequest(
+    JSON.stringify({
+      authConfigId: input.authConfigId ?? null,
+      integrationSlug: input.integrationSlug,
+    }),
+  );
 }
 
 function isCanonicalComposioConnectUrl(value: string): boolean {
@@ -225,6 +237,18 @@ export function deniedIntegrationEnablement(
   };
 }
 
+export function deniedProviderAuthConfig(
+  code: ProviderAuthConfigFailure["error"]["code"],
+): ProviderAuthConfigFailure {
+  return {
+    error: {
+      code,
+      message: "Provider authentication configuration request denied.",
+    },
+    ok: false,
+  };
+}
+
 export class Connections {
   readonly #currentFleetConfiguration: () => FleetConfigurationData;
   readonly #database: Database;
@@ -249,7 +273,6 @@ export class Connections {
     if (!request.success) {
       return deniedIntegrationEnablement("invalid_request");
     }
-
     const requestDigest = await digestIntegrationEnablement(request.data);
     const currentTime = Date.now();
     const recoverAfter = currentTime + INTEGRATION_ENABLEMENT_UNKNOWN_RECOVERY_MS;
@@ -423,9 +446,14 @@ export class Connections {
     if (!request.success) {
       return deniedIntegrationEnablement("invalid_request");
     }
+    const normalizedAuthScheme = providerAuthSchemeSchema.safeParse(
+      request.data.authScheme.toUpperCase(),
+    );
+    if (!normalizedAuthScheme.success) return deniedIntegrationEnablement("invalid_request");
 
     return this.#database.transaction((transaction) => {
       const currentTime = Date.now();
+      const displayName = request.data.name;
 
       this.#expireIntegrationEnablements(transaction, currentTime);
       const row = transaction
@@ -449,8 +477,24 @@ export class Connections {
         return deniedIntegrationEnablement("invalid_request");
       }
 
+      const storedAuthConfig = transaction
+        .select()
+        .from(providerAuthConfigs)
+        .where(eq(providerAuthConfigs.authConfigId, request.data.authConfigId))
+        .get();
+
+      if (
+        storedAuthConfig !== undefined &&
+        (storedAuthConfig.integrationSlug !== request.data.integrationSlug ||
+          storedAuthConfig.authScheme !== normalizedAuthScheme.data ||
+          storedAuthConfig.source !== "composio_managed")
+      ) {
+        return deniedIntegrationEnablement("invalid_request");
+      }
+
       if (row.status === "completed") {
         if (
+          storedAuthConfig === undefined ||
           row.authConfigId !== request.data.authConfigId ||
           row.authScheme !== request.data.authScheme
         ) {
@@ -492,6 +536,22 @@ export class Connections {
         )
         .run();
       transaction
+        .insert(providerAuthConfigs)
+        .values({
+          authConfigId: request.data.authConfigId,
+          authScheme: normalizedAuthScheme.data,
+          createdAt: currentTime,
+          displayName,
+          integrationSlug: request.data.integrationSlug,
+          source: "composio_managed",
+          updatedAt: currentTime,
+        })
+        .onConflictDoUpdate({
+          set: { displayName, updatedAt: currentTime },
+          target: providerAuthConfigs.authConfigId,
+        })
+        .run();
+      transaction
         .insert(auditEvents)
         .values({
           action: "integration.enabled",
@@ -507,6 +567,81 @@ export class Connections {
         created: request.data.created,
         integrationSlug: request.data.integrationSlug,
         managed: true,
+        ok: true,
+      });
+    });
+  }
+
+  recordProviderAuthConfig(
+    authority: OwnerAuthority,
+    input: unknown,
+  ): RecordProviderAuthConfigResult {
+    const request = recordProviderAuthConfigInputSchema.safeParse(input);
+    if (!request.success) return deniedProviderAuthConfig("invalid_request");
+
+    return this.#database.transaction((transaction) => {
+      const existing = transaction
+        .select()
+        .from(providerAuthConfigs)
+        .where(eq(providerAuthConfigs.authConfigId, request.data.authConfigId))
+        .get();
+      const currentTime = Date.now();
+
+      if (existing !== undefined) {
+        if (
+          existing.integrationSlug !== request.data.integrationSlug ||
+          existing.authScheme !== request.data.authScheme ||
+          existing.source !== request.data.source
+        ) {
+          return deniedProviderAuthConfig("invalid_request");
+        }
+
+        if (existing.displayName !== request.data.name) {
+          transaction
+            .update(providerAuthConfigs)
+            .set({ displayName: request.data.name, updatedAt: currentTime })
+            .where(eq(providerAuthConfigs.authConfigId, request.data.authConfigId))
+            .run();
+        }
+
+        return recordProviderAuthConfigResultSchema.parse({
+          authConfig: request.data,
+          created: false,
+          ok: true,
+        });
+      }
+
+      const countAuthConfigs =
+        transaction.select({ value: count() }).from(providerAuthConfigs).get()?.value ?? 0;
+      if (countAuthConfigs >= MAXIMUM_PROVIDER_AUTH_CONFIGS_PER_OWNER) {
+        return deniedProviderAuthConfig("provider_auth_config_limit_exceeded");
+      }
+
+      transaction
+        .insert(providerAuthConfigs)
+        .values({
+          authConfigId: request.data.authConfigId,
+          authScheme: request.data.authScheme,
+          createdAt: currentTime,
+          displayName: request.data.name,
+          integrationSlug: request.data.integrationSlug,
+          source: request.data.source,
+          updatedAt: currentTime,
+        })
+        .run();
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: "integration.auth_config_recorded",
+          clientId: authority.clientId,
+          occurredAt: currentTime,
+          subjectId: request.data.authConfigId,
+        })
+        .run();
+
+      return recordProviderAuthConfigResultSchema.parse({
+        authConfig: request.data,
+        created: true,
         ok: true,
       });
     });
@@ -1104,13 +1239,9 @@ export class Connections {
       'untracked'
     )`;
     const integrationSlug = sql<string | null>`(
-      SELECT ${integrationEnablementRequests.integrationSlug}
-      FROM ${integrationEnablementRequests}
-      WHERE ${integrationEnablementRequests.authConfigId}
-        = "listed_connections"."auth_config_id"
-        AND ${integrationEnablementRequests.status} = 'completed'
-      ORDER BY ${integrationEnablementRequests.completedAt} DESC,
-        ${integrationEnablementRequests.reservationId} DESC
+      SELECT ${providerAuthConfigs.integrationSlug}
+      FROM ${providerAuthConfigs}
+      WHERE ${providerAuthConfigs.authConfigId} = "listed_connections"."auth_config_id"
       LIMIT 1
     )`;
     const rows = this.#database
@@ -1138,10 +1269,9 @@ export class Connections {
             ? undefined
             : sql`EXISTS (
                 SELECT 1
-                FROM ${integrationEnablementRequests}
-                WHERE ${integrationEnablementRequests.integrationSlug} = ${request.data.integration}
-                  AND ${integrationEnablementRequests.status} = 'completed'
-                  AND ${integrationEnablementRequests.authConfigId}
+                FROM ${providerAuthConfigs}
+                WHERE ${providerAuthConfigs.integrationSlug} = ${request.data.integration}
+                  AND ${providerAuthConfigs.authConfigId}
                     = "listed_connections"."auth_config_id"
               )`,
           request.data.status === undefined
@@ -1217,18 +1347,9 @@ export class Connections {
           )
           .get();
         const integration = transaction
-          .select({ slug: integrationEnablementRequests.integrationSlug })
-          .from(integrationEnablementRequests)
-          .where(
-            and(
-              eq(integrationEnablementRequests.authConfigId, row.authConfigId),
-              eq(integrationEnablementRequests.status, "completed"),
-            ),
-          )
-          .orderBy(
-            desc(integrationEnablementRequests.completedAt),
-            desc(integrationEnablementRequests.reservationId),
-          )
+          .select({ slug: providerAuthConfigs.integrationSlug })
+          .from(providerAuthConfigs)
+          .where(eq(providerAuthConfigs.authConfigId, row.authConfigId))
           .get();
 
         if (authorization?.status !== "returned") {
@@ -1319,19 +1440,9 @@ export class Connections {
       .limit(1)
       .get();
     const integration = this.#database
-      .select({ integrationSlug: integrationEnablementRequests.integrationSlug })
-      .from(integrationEnablementRequests)
-      .where(
-        and(
-          eq(integrationEnablementRequests.authConfigId, row.authConfigId),
-          eq(integrationEnablementRequests.status, "completed"),
-        ),
-      )
-      .orderBy(
-        desc(integrationEnablementRequests.completedAt),
-        desc(integrationEnablementRequests.reservationId),
-      )
-      .limit(1)
+      .select({ integrationSlug: providerAuthConfigs.integrationSlug })
+      .from(providerAuthConfigs)
+      .where(eq(providerAuthConfigs.authConfigId, row.authConfigId))
       .get();
     const timeline = this.#database
       .select({

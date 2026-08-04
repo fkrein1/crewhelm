@@ -954,6 +954,7 @@ async function connectProvider(
   const enabled = await catalog.dispatch(
     "crewhelm_enable_integration",
     {
+      authConfigId: input.authConfigId,
       idempotencyKey: childRequestKey(base, "enable"),
       integrationSlug: input.integrationSlug,
     },
@@ -968,7 +969,7 @@ async function connectProvider(
   }
   const parsed = enableIntegrationResultSchema.safeParse(value);
 
-  if (!parsed.success || !parsed.data.ok) return enabled;
+  if (!parsed.success || !parsed.data.ok || !("authConfigId" in parsed.data)) return enabled;
 
   return catalog.dispatch(
     "crewhelm_create_connection_link",
@@ -1449,7 +1450,8 @@ const CONNECTION_FACADE_DEFINITIONS = [
       { kind: "search_providers", privateTool: "crewhelm_search_integrations" },
       { kind: "search_actions", privateTool: "crewhelm_search_integration_tools" },
       { kind: "inspect_action", privateTool: "crewhelm_inspect_integration_tool" },
-      { kind: "list_auth", privateTool: "crewhelm_list_integration_auth_configs" },
+      { kind: "inspect_provider_auth", privateTool: "crewhelm_inspect_provider_auth" },
+      { kind: "list_auth_configs", privateTool: "crewhelm_list_integration_auth_configs" },
       {
         kind: "list_connections",
         omit: ["connectionId"],
@@ -1468,7 +1470,7 @@ const CONNECTION_FACADE_DEFINITIONS = [
       { kind: "authorize_provider", privateTool: "crewhelm_create_connection_link" },
       {
         kind: "connect_provider",
-        only: ["idempotencyKey", "integrationSlug"],
+        only: ["authConfigId", "idempotencyKey", "integrationSlug"],
         privateTool: "crewhelm_enable_integration",
         run: connectProvider,
       },

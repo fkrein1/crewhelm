@@ -11,4 +11,5 @@ export {
   deniedConnectionLink,
   deniedConnectionRead,
   deniedIntegrationEnablement,
+  deniedProviderAuthConfig,
 } from "./module.js";

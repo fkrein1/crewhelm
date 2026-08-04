@@ -1,6 +1,6 @@
 ---
 title: Connect an external integration
-description: Authorize a Composio-managed connected account and grant selected version-pinned tools to one Agent revision.
+description: Resolve provider authentication, authorize a Composio connected account, and grant selected version-pinned tools to one Agent revision.
 type: how-to
 audience: owner
 area: connections
@@ -11,6 +11,7 @@ sources:
   - docs/architecture/system.md
   - docs/security/threat-model.md
   - packages/contracts/src/connection-attachments.ts
+  - packages/contracts/src/integrations.ts
 ---
 
 Connect an external provider through Composio, then expose only selected, version-pinned tools to
@@ -25,9 +26,10 @@ one exact Agent revision.
 
 ## Authority and custody
 
-Composio holds provider credentials and refreshes them. Crewhelm stores an owner-local Connection
-and gives Agents only its opaque ID. Provider consent, Connection activation, tool attachment, and
-tool execution are separate steps.
+Composio holds provider credentials and refreshes supported OAuth credentials. Crewhelm stores an
+owner-local Connection plus safe auth-config metadata—never credential values—and gives Agents only
+the Connection's opaque ID. Provider auth-config setup, account consent, Connection activation,
+tool attachment, and tool execution are separate steps.
 
 Choose `approval_required` unless you explicitly intend to grant standing authority. Standing
 authority is exact-tool, revisioned, limited, and optional. Destructive actions remain
@@ -37,14 +39,25 @@ approval-gated.
 
 1. If the integration is unknown, call `crewhelm_inspect_connections` with
    `operation.kind: "search_providers"`. If it is known, skip search.
-2. Call `crewhelm_change_connections` with `operation.kind: "connect_provider"` and its returned
-   `integrationSlug`. Crewhelm enables the provider and creates its authorization link atomically.
-3. Open the returned short-lived authorization URL yourself. Never send it to an Agent or another
+2. Optionally call `crewhelm_inspect_connections` with
+   `operation.kind: "inspect_provider_auth"` and the exact `integrationSlug`. This read reports
+   whether authentication is ready, needs an auth-config choice, or needs owner setup. It creates
+   no reservation.
+3. Call `crewhelm_change_connections` with `operation.kind: "connect_provider"` and the exact
+   `integrationSlug`. Crewhelm behaves according to the current authentication state:
+   - One active auth config: Crewhelm uses it and creates the account authorization link.
+   - No active config with Composio-managed auth available: Crewhelm idempotently creates the
+     managed config, then creates the authorization link.
+   - Several active configs: choose one returned safe reference and repeat `connect_provider` with
+     its `authConfigId`.
+   - Custom setup required: no reservation is created. Do not put provider credentials in MCP;
+     configure the auth config in Composio, then repeat this step.
+4. Open the returned short-lived authorization URL yourself. Never send it to an Agent or another
    person.
-4. After provider authorization, pass the returned link result unchanged to
+5. After provider authorization, pass the returned link result unchanged to
    `crewhelm_change_connections` with `operation.kind: "inspect_provider_connection"`. Exact
    inspection verifies and activates the returned provider account.
-5. Keep the returned Connection object unchanged.
+6. Keep the returned Connection object unchanged.
 
 ## Grant selected tools to an Agent
 
@@ -68,6 +81,8 @@ approval-gated.
 
 - If provider authorization expires or fails, inspect the exact Connection lifecycle and follow
   its returned next action. Do not infer success from the browser redirect alone.
+- A `setup_required` or `selection_required` result is a prerequisite, not an ambiguous write.
+  Resolve it and call `connect_provider` again; there is no reservation to recover.
 - If a write returns an ambiguous reservation, retry the same facade request only as directed after
   `recoverAfter`.
 - Revoke a Connection through `crewhelm_recover` with `operation.kind: "revoke_connection"` and

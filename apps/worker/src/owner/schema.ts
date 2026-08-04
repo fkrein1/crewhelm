@@ -2215,6 +2215,47 @@ export const integrationEnablementRequests = sqliteTable(
   ],
 );
 
+export const providerAuthConfigs = sqliteTable(
+  "provider_auth_configs",
+  {
+    authConfigId: text("auth_config_id").primaryKey(),
+    integrationSlug: text("integration_slug").notNull(),
+    authScheme: text("auth_scheme", {
+      enum: ["OAUTH2", "API_KEY", "BEARER_TOKEN", "BASIC"],
+    }).notNull(),
+    source: text("source", {
+      enum: ["composio_managed", "crewhelm_custom"],
+    }).notNull(),
+    displayName: text("display_name").notNull(),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [
+    index("provider_auth_configs_integration").on(table.integrationSlug, table.authConfigId),
+    check(
+      "provider_auth_configs_integration_slug",
+      sql`length(${table.integrationSlug}) BETWEEN 1 AND 128`,
+    ),
+    check(
+      "provider_auth_configs_auth_scheme",
+      sql`${table.authScheme} IN ('OAUTH2', 'API_KEY', 'BEARER_TOKEN', 'BASIC')`,
+    ),
+    check(
+      "provider_auth_configs_source",
+      sql`${table.source} IN ('composio_managed', 'crewhelm_custom')`,
+    ),
+    check(
+      "provider_auth_configs_display_name",
+      sql`length(${table.displayName}) BETWEEN 1 AND 160`,
+    ),
+    check("provider_auth_configs_created_at_positive", sql`${table.createdAt} > 0`),
+    check(
+      "provider_auth_configs_updated_after_creation",
+      sql`${table.updatedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
 export const connectionAuthorizationReturns = sqliteTable(
   "connection_authorization_returns",
   {
@@ -2324,6 +2365,7 @@ export const controlPlaneSchema = {
   fleetConfigurationUpdates,
   integrationUsageEvents,
   integrationEnablementRequests,
+  providerAuthConfigs,
   mcpAuthoringDrafts,
   runAdmissions,
   runtimeToolExecutions,

@@ -4,6 +4,7 @@ import { connectionAuthConfigIdSchema } from "./connections.js";
 
 export const INTEGRATION_ENABLEMENT_UNKNOWN_RECOVERY_MS = 30 * 60 * 1_000;
 export const MAXIMUM_INTEGRATION_ENABLEMENT_REQUESTS_PER_OWNER = 5_000;
+export const MAXIMUM_PROVIDER_AUTH_CONFIGS_PER_OWNER = 5_000;
 const MAXIMUM_TOOL_PARAMETER_CONTAINER_ENTRIES = 512;
 const MAXIMUM_TOOL_PARAMETER_DEPTH = 24;
 const MAXIMUM_TOOL_PARAMETER_KEY_LENGTH = 256;
@@ -156,6 +157,64 @@ export const integrationCatalogSearchInputSchema = z.strictObject({
 export const integrationSlugSchema = z
   .string()
   .regex(/^[a-z0-9][a-z0-9_-]{0,127}$/, "Expected a Composio integration slug.");
+export const providerAuthSchemeSchema = z.enum(["OAUTH2", "API_KEY", "BEARER_TOKEN", "BASIC"]);
+export const providerAuthConfigSourceSchema = z.enum(["composio_managed", "crewhelm_custom"]);
+export const providerAuthConfigReferenceSchema = z.strictObject({
+  authConfigId: connectionAuthConfigIdSchema,
+  authScheme: providerAuthSchemeSchema,
+  integrationSlug: integrationSlugSchema,
+  name: z.string().min(1).max(160),
+  source: providerAuthConfigSourceSchema,
+});
+const providerAuthReadySchema = z.strictObject({
+  selected: providerAuthConfigReferenceSchema,
+  state: z.literal("ready"),
+});
+const providerAuthSelectionRequiredSchema = z.strictObject({
+  choices: z.array(providerAuthConfigReferenceSchema).min(2).max(50),
+  state: z.literal("selection_required"),
+});
+const providerAuthSetupRequiredSchema = z.strictObject({
+  availableSchemes: z.array(providerAuthSchemeSchema).min(1).max(4),
+  managedAuthAvailable: z.boolean(),
+  recommendedScheme: providerAuthSchemeSchema,
+  state: z.literal("setup_required"),
+});
+const providerAuthUnsupportedSchema = z.strictObject({
+  reason: z.enum(["auth_scheme_unsupported", "toolkit_unavailable"]),
+  state: z.literal("unsupported"),
+});
+export const providerAuthReadinessSchema = z.discriminatedUnion("state", [
+  providerAuthReadySchema,
+  providerAuthSelectionRequiredSchema,
+  providerAuthSetupRequiredSchema,
+  providerAuthUnsupportedSchema,
+]);
+const providerAuthPrerequisiteSchema = z.union([
+  providerAuthSelectionRequiredSchema,
+  providerAuthSetupRequiredSchema,
+  providerAuthUnsupportedSchema,
+]);
+export const inspectProviderAuthInputSchema = z.strictObject({
+  integrationSlug: integrationSlugSchema,
+});
+export const inspectProviderAuthResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    authentication: providerAuthReadinessSchema,
+    integration: z.strictObject({
+      name: z.string().min(1).max(160),
+      slug: integrationSlugSchema,
+    }),
+    ok: z.literal(true),
+  }),
+  z.strictObject({
+    error: z.strictObject({
+      code: z.enum(["insufficient_scope", "provider_auth_unavailable"]),
+      message: z.literal("Provider authentication request denied."),
+    }),
+    ok: z.literal(false),
+  }),
+]);
 export const integrationToolSlugSchema = z
   .string()
   .regex(/^[A-Z0-9][A-Z0-9_]{0,255}$/, "Expected a Composio tool slug.");
@@ -225,6 +284,7 @@ export const integrationEnablementReservationIdSchema = z
     "Expected an opaque integration enablement reservation ID.",
   );
 export const enableIntegrationInputSchema = z.strictObject({
+  authConfigId: connectionAuthConfigIdSchema.optional(),
   idempotencyKey: integrationEnablementIdempotencyKeySchema,
   integrationSlug: integrationSlugSchema,
 });
@@ -237,6 +297,7 @@ const integrationEnablementErrorSchema = z.strictObject({
     "integration_enablement_outcome_unknown",
     "integration_enablement_request_limit_exceeded",
     "integration_enablement_unavailable",
+    "provider_auth_unavailable",
     "invalid_authority",
     "invalid_request",
     "owner_mismatch",
@@ -250,13 +311,21 @@ const integrationEnablementErrorSchema = z.strictObject({
     })
     .optional(),
 });
-export const enableIntegrationResultSchema = z.discriminatedUnion("ok", [
+export const enableIntegrationResultSchema = z.union([
   z.strictObject({
     authConfigId: connectionAuthConfigIdSchema,
     authScheme: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
     created: z.boolean(),
     integrationSlug: integrationSlugSchema,
-    managed: z.literal(true),
+    managed: z.boolean(),
+    ok: z.literal(true),
+  }),
+  z.strictObject({
+    authentication: providerAuthPrerequisiteSchema,
+    integration: z.strictObject({
+      name: z.string().min(1).max(160),
+      slug: integrationSlugSchema,
+    }),
     ok: z.literal(true),
   }),
   z.strictObject({
@@ -290,8 +359,31 @@ export const completeIntegrationEnablementInputSchema = z.strictObject({
   created: z.boolean(),
   integrationSlug: integrationSlugSchema,
   managed: z.literal(true),
+  name: z.string().min(1).max(160),
   reservationId: integrationEnablementReservationIdSchema,
 });
+export const recordProviderAuthConfigInputSchema = providerAuthConfigReferenceSchema;
+export const recordProviderAuthConfigResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    authConfig: providerAuthConfigReferenceSchema,
+    created: z.boolean(),
+    ok: z.literal(true),
+  }),
+  z.strictObject({
+    error: z.strictObject({
+      code: z.enum([
+        "incompatible_schema",
+        "insufficient_scope",
+        "invalid_authority",
+        "invalid_request",
+        "owner_mismatch",
+        "provider_auth_config_limit_exceeded",
+      ]),
+      message: z.literal("Provider authentication configuration request denied."),
+    }),
+    ok: z.literal(false),
+  }),
+]);
 export const integrationToolSearchInputSchema = z.strictObject({
   cursor: integrationCatalogCursorSchema.optional(),
   integrationSlug: integrationSlugSchema
@@ -364,6 +456,8 @@ export const inspectIntegrationToolResultSchema = z.discriminatedUnion("ok", [
 
 export type InspectIntegrationToolInput = z.infer<typeof inspectIntegrationToolInputSchema>;
 export type InspectIntegrationToolResult = z.infer<typeof inspectIntegrationToolResultSchema>;
+export type InspectProviderAuthInput = z.infer<typeof inspectProviderAuthInputSchema>;
+export type InspectProviderAuthResult = z.infer<typeof inspectProviderAuthResultSchema>;
 export type CompleteIntegrationEnablementInput = z.infer<
   typeof completeIntegrationEnablementInputSchema
 >;
@@ -375,6 +469,11 @@ export type IntegrationAuthConfigListResult = z.infer<typeof integrationAuthConf
 export type IntegrationCatalogItem = z.infer<typeof integrationCatalogItemSchema>;
 export type IntegrationCatalogSearchInput = z.infer<typeof integrationCatalogSearchInputSchema>;
 export type IntegrationCatalogSearchResult = z.infer<typeof integrationCatalogSearchResultSchema>;
+export type ProviderAuthConfigReference = z.infer<typeof providerAuthConfigReferenceSchema>;
+export type ProviderAuthReadiness = z.infer<typeof providerAuthReadinessSchema>;
+export type ProviderAuthScheme = z.infer<typeof providerAuthSchemeSchema>;
+export type RecordProviderAuthConfigInput = z.infer<typeof recordProviderAuthConfigInputSchema>;
+export type RecordProviderAuthConfigResult = z.infer<typeof recordProviderAuthConfigResultSchema>;
 export type ReserveIntegrationEnablementResult = z.infer<
   typeof reserveIntegrationEnablementResultSchema
 >;

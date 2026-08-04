@@ -80,7 +80,8 @@ const EXPECTED_FACADE_OPERATIONS = {
     "search_providers",
     "search_actions",
     "inspect_action",
-    "list_auth",
+    "inspect_provider_auth",
+    "list_auth_configs",
     "list_connections",
   ],
   crewhelm_inspect_context: [

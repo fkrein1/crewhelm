@@ -40,6 +40,7 @@ describe("OwnerControlPlane connections", () => {
       created: true,
       integrationSlug: "github",
       managed: true,
+      name: "GitHub",
       reservationId: reservation.reservationId,
     };
 
@@ -160,6 +161,7 @@ describe("OwnerControlPlane connections", () => {
         created: true,
         integrationSlug: "github",
         managed: true,
+        name: "GitHub",
         reservationId: reservation.reservationId,
       }),
     ).resolves.toMatchObject({ created: true, ok: true });
@@ -179,6 +181,7 @@ describe("OwnerControlPlane connections", () => {
         created: true,
         integrationSlug: "slack",
         managed: true,
+        name: "Slack",
         reservationId: slackReservation.reservationId,
       }),
     ).resolves.toMatchObject({ created: true, ok: true });
@@ -588,6 +591,7 @@ describe("OwnerControlPlane connections", () => {
         created: true,
         integrationSlug: "todoist",
         managed: true,
+        name: "Todoist",
         reservationId: enablement.reservationId,
       }),
     ).resolves.toMatchObject({ ok: true });
