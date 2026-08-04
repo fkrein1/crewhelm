@@ -144,6 +144,7 @@ function agentCreationFailureCode(code: AgentCreationFailureCode): FailureCode {
     case "insufficient_scope":
     case "invalid_authority":
     case "invalid_request":
+    case "model_disabled":
     case "no_changes":
     case "owner_mismatch":
     case "revision_conflict":

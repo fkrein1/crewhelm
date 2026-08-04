@@ -45,6 +45,7 @@ const EXPECTED_FACADE_OPERATIONS = {
     "revise_brief",
     "delete_brief",
   ],
+  crewhelm_change_models: ["add_model", "remove_model", "set_default_model"],
   crewhelm_change_recipes: [
     "prepare_install",
     "set_setup",
@@ -96,6 +97,7 @@ const EXPECTED_FACADE_OPERATIONS = {
     "inspect_brief_revision",
     "read_brief",
   ],
+  crewhelm_inspect_models: ["search_models", "inspect_model", "list_enabled_models"],
   crewhelm_inspect_recipes: ["search", "inspect", "read_skill"],
   crewhelm_inspect_recovery: ["unresolved_effects"],
   crewhelm_inspect_work: [

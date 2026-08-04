@@ -87,6 +87,8 @@ import {
   type ListAgentSchedulesResult,
   type ConfigureFleetConfigurationResult,
   type GetFleetConfigurationResult,
+  type ConfigureModelCatalogResult,
+  type GetModelCatalogResult,
   type GetSkillResult,
   type ListAuditEventsResult,
   type ListSkillsResult,
@@ -132,10 +134,7 @@ import { DurableObject } from "cloudflare:workers";
 import { and, count, desc, eq, gte, isNull, lt, lte } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
-import {
-  availableAgentCapabilityPrerequisites,
-  defaultAgentModelForPrerequisites,
-} from "../agent-capabilities/registry.js";
+import { availableAgentCapabilityPrerequisites } from "../agent-capabilities/registry.js";
 import {
   AgentChannel,
   deniedAgentInbox,
@@ -158,6 +157,7 @@ import {
   deniedProviderAuthConfig,
 } from "./connections/index.js";
 import { FleetConfigurations, deniedFleetConfiguration } from "./configuration/index.js";
+import { ModelCatalogs, deniedModelCatalog } from "./model-catalog/index.js";
 import { RemoteMcpConnections } from "./remote-mcp-connections/index.js";
 import { ProviderAuthSetups } from "./provider-auth-setup/index.js";
 import { CONTROL_PLANE_SCHEMA_VERSION, migrateControlPlane } from "./migrations.js";
@@ -282,6 +282,8 @@ export function agentEventTriggerRequiredScope(
 
 export function scheduledRunFailureReason(code: StartRunFailureCode): AgentInboxDeferredReason {
   switch (code) {
+    case "model_disabled":
+      return "model_unavailable";
     case "admission_limit_exceeded":
     case "agent_not_found":
     case "agent_unavailable":
@@ -328,6 +330,7 @@ export class OwnerControlPlane extends DurableObject {
   readonly #agentSchedules: AgentSchedules;
   readonly #agentEventTriggers: AgentEventTriggers;
   readonly #fleetConfigurations: FleetConfigurations;
+  readonly #modelCatalogs: ModelCatalogs;
   readonly #aiGatewayUsage: AiGatewayUsage;
   readonly #skills: Skills;
   readonly #briefs: Briefs;
@@ -350,10 +353,8 @@ export class OwnerControlPlane extends DurableObject {
       environment.BRAVE_SEARCH_API_KEY !== undefined &&
         environment.BRAVE_SEARCH_API_KEY.trim().length > 0,
     );
-    this.#fleetConfigurations = new FleetConfigurations(
-      this.#database,
-      defaultAgentModelForPrerequisites(availableCapabilityPrerequisites),
-    );
+    this.#fleetConfigurations = new FleetConfigurations(this.#database);
+    this.#modelCatalogs = new ModelCatalogs(this.#database);
     this.#aiGatewayUsage = new AiGatewayUsage(
       this.#database,
       this.#storage,
@@ -375,6 +376,7 @@ export class OwnerControlPlane extends DurableObject {
       this.#database,
       this.#storage,
       () => this.#fleetConfigurations.current(),
+      () => this.#modelCatalogs.currentData(),
       this.#skills,
       this.#briefs,
       availableCapabilityPrerequisites,
@@ -392,6 +394,7 @@ export class OwnerControlPlane extends DurableObject {
     this.#agents = new AgentRegistry(
       this.#database,
       () => this.#fleetConfigurations.currentData(),
+      () => this.#modelCatalogs.currentData(),
       this.#skills,
       availableCapabilityPrerequisites,
     );
@@ -581,6 +584,23 @@ export class OwnerControlPlane extends DurableObject {
     }
 
     return this.#fleetConfigurations.configure(authorization.authority, input);
+  }
+
+  getModelCatalog(authorityInput: unknown, input: unknown): GetModelCatalogResult {
+    const authorization = this.#authorize(authorityInput, OWNER_READ_SCOPE);
+    return authorization.ok
+      ? this.#modelCatalogs.get(input)
+      : deniedModelCatalog(authorization.code);
+  }
+
+  async configureModelCatalog(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<ConfigureModelCatalogResult> {
+    const authorization = this.#authorize(authorityInput, AUTONOMY_WRITE_SCOPE);
+    return authorization.ok
+      ? this.#modelCatalogs.configure(authorization.authority, input)
+      : deniedModelCatalog(authorization.code);
   }
 
   listSkills(authorityInput: unknown, input: unknown): ListSkillsResult {

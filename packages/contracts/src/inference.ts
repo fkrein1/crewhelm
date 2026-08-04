@@ -1,41 +1,24 @@
 import * as z from "zod";
 
-export const WORKERS_AI_AGENT_MODELS = [
-  "@cf/ibm-granite/granite-4.0-h-micro",
+export const DEFAULT_RUNNABLE_AGENT_MODEL = "@cf/zai-org/glm-4.7-flash";
+export const CREWHELM_STARTER_AGENT_MODELS = [
+  DEFAULT_RUNNABLE_AGENT_MODEL,
   "@cf/meta/llama-4-scout-17b-16e-instruct",
-  "@cf/moonshotai/kimi-k2.6",
-  "@cf/moonshotai/kimi-k2.7-code",
-  "@cf/openai/gpt-oss-20b",
   "@cf/openai/gpt-oss-120b",
-  "@cf/qwen/qwen3-30b-a3b-fp8",
-  "@cf/zai-org/glm-4.7-flash",
-  "@cf/zai-org/glm-5.2",
 ] as const;
-
-export const AI_GATEWAY_AGENT_MODELS = [
-  "openai/gpt-5.6-luna",
-  "openai/gpt-5.6-sol",
-  "openai/gpt-5.6-terra",
-] as const;
-
-export const DEFAULT_AI_GATEWAY_AGENT_MODEL = "openai/gpt-5.6-luna";
-
-export const CLOUDFLARE_AI_AGENT_MODELS = [
-  ...WORKERS_AI_AGENT_MODELS,
-  DEFAULT_AI_GATEWAY_AGENT_MODEL,
-] as const;
-
-export const RUNNABLE_AGENT_MODELS = [
-  ...WORKERS_AI_AGENT_MODELS,
-  ...AI_GATEWAY_AGENT_MODELS,
-] as const;
-
-export const DEFAULT_RUNNABLE_AGENT_MODEL = DEFAULT_AI_GATEWAY_AGENT_MODEL;
 export const MAXIMUM_INFERENCE_FALLBACKS = 2;
 
-export const workersAiAgentModelSchema = z.enum(CLOUDFLARE_AI_AGENT_MODELS);
-export const aiGatewayAgentModelSchema = z.enum(AI_GATEWAY_AGENT_MODELS);
-export const runnableAgentModelSchema = z.enum(RUNNABLE_AGENT_MODELS);
+export const cloudflareAiModelIdSchema = z
+  .string()
+  .trim()
+  .min(3)
+  .max(160)
+  .regex(
+    /^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\/)?[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:/-]*$/,
+    "Expected an exact Cloudflare AI provider/model identifier.",
+  );
+
+export const runnableAgentModelSchema = cloudflareAiModelIdSchema;
 export const inferenceReasoningEffortSchema = z.enum(["low", "medium", "high"]);
 
 export type RunnableAgentModel = z.infer<typeof runnableAgentModelSchema>;

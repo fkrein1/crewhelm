@@ -210,10 +210,6 @@ function fleetConfiguration(minimumIntervalSeconds = 60) {
           maxCallsPerToolPerRun: 2,
           maxConcurrencyPerGrant: 1,
         },
-        models: {
-          allowed: ["@cf/zai-org/glm-4.7-flash"],
-          default: "@cf/zai-org/glm-4.7-flash",
-        },
         retention: {
           inboxSeconds: 2_592_000,
           runSeconds: 86_400,

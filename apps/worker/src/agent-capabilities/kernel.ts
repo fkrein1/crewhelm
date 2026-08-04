@@ -8,6 +8,7 @@ import {
   type AgentCapabilityDescriptor,
   type AgentRuntimePlan,
   type FleetConfigurationData,
+  type ModelCatalogData,
 } from "@crewhelm/contracts";
 import type * as z from "zod";
 
@@ -15,6 +16,7 @@ export type CapabilityCompilationContext = {
   availablePrerequisites: ReadonlySet<string>;
   checkPrerequisites: boolean;
   fleetConfiguration: FleetConfigurationData;
+  modelCatalog?: ModelCatalogData;
 };
 
 type RuntimeTool = NonNullable<AgentRuntimePlan["tools"]>[number];
@@ -51,6 +53,10 @@ export type CapabilityModuleResolution =
       ok: false;
     }
   | {
+      code: "model_disabled";
+      ok: false;
+    }
+  | {
       contributions: readonly CapabilityRuntimeContribution[];
       ok: true;
     };
@@ -84,7 +90,7 @@ export type CapabilityCompilationResult =
       runtimePlan: AgentRuntimePlan;
     }
   | {
-      code: "configuration_unavailable";
+      code: "configuration_unavailable" | "model_disabled";
       moduleId: string;
       ok: false;
     }

@@ -6,14 +6,13 @@ import {
   DEFAULT_FLEET_MAXIMUM_TOOL_CALLS_PER_TOOL_PER_RUN,
   DEFAULT_FLEET_MAXIMUM_TOOL_CONCURRENCY_PER_GRANT,
   DEFAULT_FLEET_MINIMUM_SCHEDULE_INTERVAL_SECONDS,
-  DEFAULT_AI_GATEWAY_AGENT_MODEL,
   DEFAULT_RUNNABLE_AGENT_MODEL,
-  RUNNABLE_AGENT_MODELS,
   defaultFleetCapacity,
   defaultFleetExecutionLimits,
   defaultFleetRetention,
   crewAgentSystemPrompt,
   fleetConfigurationDataSchema,
+  modelCatalogDataSchema,
 } from "@crewhelm/contracts";
 import { describe, expect, it } from "vitest";
 import * as z from "zod";
@@ -53,16 +52,21 @@ const fleetConfiguration = fleetConfigurationDataSchema.parse({
     maxCallsPerToolPerRun: DEFAULT_FLEET_MAXIMUM_TOOL_CALLS_PER_TOOL_PER_RUN,
     maxConcurrencyPerGrant: DEFAULT_FLEET_MAXIMUM_TOOL_CONCURRENCY_PER_GRANT,
   },
-  models: {
-    allowed: [...RUNNABLE_AGENT_MODELS].toSorted(),
-    default: "@cf/meta/llama-4-scout-17b-16e-instruct",
-  },
   retention: defaultFleetRetention,
   schedules: {
     minimumIntervalSeconds: DEFAULT_FLEET_MINIMUM_SCHEDULE_INTERVAL_SECONDS,
   },
 });
 const availablePrerequisites = new Set([WORKERS_AI_BINDING_PREREQUISITE]);
+const modelCatalog = modelCatalogDataSchema.parse({
+  defaultModel: DEFAULT_RUNNABLE_AGENT_MODEL,
+  enabledModels: [
+    "@cf/meta/llama-4-scout-17b-16e-instruct",
+    DEFAULT_RUNNABLE_AGENT_MODEL,
+    "openai/gpt-5.6-luna",
+    "openai/gpt-5.6-sol",
+  ].toSorted(),
+});
 
 function contextModule(id = "context.test"): AgentCapabilityModule<{ text: string }> {
   return {
@@ -99,7 +103,7 @@ describe("Agent capability registry", () => {
   it("routes the new Luna fleet default through Gateway or direct Cloudflare AI", () => {
     expect(
       defaultAgentModelForPrerequisites(availableAgentCapabilityPrerequisites("crewhelm")),
-    ).toBe(DEFAULT_AI_GATEWAY_AGENT_MODEL);
+    ).toBe(DEFAULT_RUNNABLE_AGENT_MODEL);
     expect(defaultAgentModelForPrerequisites(availableAgentCapabilityPrerequisites())).toBe(
       DEFAULT_RUNNABLE_AGENT_MODEL,
     );
@@ -111,26 +115,21 @@ describe("Agent capability registry", () => {
       aiGatewayCapabilityModule,
       workersAiCapabilityModule,
     ]);
-    const lunaFleetConfiguration = fleetConfigurationDataSchema.parse({
-      ...fleetConfiguration,
-      models: {
-        ...fleetConfiguration.models,
-        default: DEFAULT_RUNNABLE_AGENT_MODEL,
-      },
-    });
+    const lunaFleetConfiguration = fleetConfiguration;
 
     expect(
       registry.compile(undefined, {
         availablePrerequisites: availableAgentCapabilityPrerequisites("crewhelm"),
         checkPrerequisites: true,
         fleetConfiguration: lunaFleetConfiguration,
+        modelCatalog,
       }),
     ).toMatchObject({
       ok: true,
       runtimePlan: {
         inference: {
-          model: DEFAULT_AI_GATEWAY_AGENT_MODEL,
-          moduleId: "inference.ai-gateway",
+          model: DEFAULT_RUNNABLE_AGENT_MODEL,
+          moduleId: "inference.workers-ai",
         },
       },
     });
@@ -139,6 +138,7 @@ describe("Agent capability registry", () => {
         availablePrerequisites: availableAgentCapabilityPrerequisites(),
         checkPrerequisites: true,
         fleetConfiguration: lunaFleetConfiguration,
+        modelCatalog,
       }),
     ).toMatchObject({
       ok: true,
@@ -150,25 +150,20 @@ describe("Agent capability registry", () => {
       },
     });
 
-    const unavailableGatewayFleetConfiguration = fleetConfigurationDataSchema.parse({
-      ...fleetConfiguration,
-      models: {
-        ...fleetConfiguration.models,
-        default: "openai/gpt-5.6-sol",
-      },
-    });
+    const unavailableGatewayFleetConfiguration = fleetConfiguration;
     expect(
       registry.compile(undefined, {
         availablePrerequisites: availableAgentCapabilityPrerequisites(),
         checkPrerequisites: false,
         fleetConfiguration: unavailableGatewayFleetConfiguration,
+        modelCatalog,
       }),
     ).toMatchObject({
       ok: true,
       runtimePlan: {
         inference: {
-          model: "openai/gpt-5.6-sol",
-          moduleId: "inference.ai-gateway",
+          model: DEFAULT_RUNNABLE_AGENT_MODEL,
+          moduleId: "inference.workers-ai",
         },
       },
     });
@@ -189,6 +184,7 @@ describe("Agent capability registry", () => {
         availablePrerequisites: new Set([AI_GATEWAY_PREREQUISITE]),
         checkPrerequisites: true,
         fleetConfiguration,
+        modelCatalog,
       },
     );
 
@@ -217,6 +213,7 @@ describe("Agent capability registry", () => {
         availablePrerequisites: new Set(),
         checkPrerequisites: true,
         fleetConfiguration,
+        modelCatalog,
       }),
     ).toEqual({
       code: "capability_unavailable",
@@ -234,7 +231,7 @@ describe("Agent capability registry", () => {
             schemaVersion: 2,
           },
         ],
-        { availablePrerequisites, checkPrerequisites: true, fleetConfiguration },
+        { availablePrerequisites, checkPrerequisites: true, fleetConfiguration, modelCatalog },
       ),
     ).toEqual({ code: "invalid_configuration", ok: false });
     expect(
@@ -245,9 +242,9 @@ describe("Agent capability registry", () => {
             reasoningEffort: "high",
           }),
         ],
-        { availablePrerequisites, checkPrerequisites: true, fleetConfiguration },
+        { availablePrerequisites, checkPrerequisites: true, fleetConfiguration, modelCatalog },
       ),
-    ).toEqual({ code: "invalid_configuration", ok: false });
+    ).toMatchObject({ ok: true });
   });
 
   it("defaults and compiles Workers AI into a deterministic runtime plan", () => {
@@ -256,15 +253,16 @@ describe("Agent capability registry", () => {
       availablePrerequisites,
       checkPrerequisites: true,
       fleetConfiguration,
+      modelCatalog,
     });
 
     expect(result).toEqual({
-      capabilities: [workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct")],
+      capabilities: [workersAiCapabilityConfiguration(DEFAULT_RUNNABLE_AGENT_MODEL)],
       ok: true,
       runtimePlan: {
         inference: {
           fallbackModels: [],
-          model: "@cf/meta/llama-4-scout-17b-16e-instruct",
+          model: DEFAULT_RUNNABLE_AGENT_MODEL,
           moduleId: "inference.workers-ai",
           schemaVersion: 2,
         },
@@ -295,6 +293,7 @@ describe("Agent capability registry", () => {
         availablePrerequisites: new Set([WORKERS_AI_BINDING_PREREQUISITE, "cloudflare.sandbox"]),
         checkPrerequisites: true,
         fleetConfiguration,
+        modelCatalog,
       },
     );
 
@@ -339,6 +338,7 @@ describe("Agent capability registry", () => {
         availablePrerequisites: new Set([WORKERS_AI_BINDING_PREREQUISITE, "cloudflare.sandbox"]),
         checkPrerequisites: true,
         fleetConfiguration,
+        modelCatalog,
       },
     );
 
@@ -396,6 +396,7 @@ describe("Agent capability registry", () => {
         ]),
         checkPrerequisites: true,
         fleetConfiguration,
+        modelCatalog,
       }),
     ).toMatchObject({
       ok: true,
@@ -417,6 +418,7 @@ describe("Agent capability registry", () => {
         availablePrerequisites,
         checkPrerequisites: true,
         fleetConfiguration,
+        modelCatalog,
       }),
     ).toEqual({ code: "capability_unavailable", ok: false });
     expect(registry.catalog(new Set(), "tools.web-search")).toMatchObject([
@@ -549,6 +551,7 @@ describe("Agent capability registry", () => {
           availablePrerequisites: new Set(),
           checkPrerequisites: false,
           fleetConfiguration,
+          modelCatalog,
         },
       ),
     ).toMatchObject({ ok: true });
@@ -556,22 +559,20 @@ describe("Agent capability registry", () => {
 
   it("attributes policy unavailability to the module that owns the configuration", () => {
     const registry = new AgentCapabilityRegistry([workersAiCapabilityModule]);
-    const restrictedFleetConfiguration = fleetConfigurationDataSchema.parse({
-      ...fleetConfiguration,
-      models: {
-        allowed: ["@cf/meta/llama-4-scout-17b-16e-instruct"],
-        default: "@cf/meta/llama-4-scout-17b-16e-instruct",
-      },
+    const restrictedModelCatalog = modelCatalogDataSchema.parse({
+      defaultModel: "@cf/meta/llama-4-scout-17b-16e-instruct",
+      enabledModels: ["@cf/meta/llama-4-scout-17b-16e-instruct"],
     });
 
     expect(
       registry.compile([workersAiCapabilityConfiguration("@cf/zai-org/glm-4.7-flash")], {
         availablePrerequisites,
         checkPrerequisites: true,
-        fleetConfiguration: restrictedFleetConfiguration,
+        fleetConfiguration,
+        modelCatalog: restrictedModelCatalog,
       }),
     ).toEqual({
-      code: "configuration_unavailable",
+      code: "model_disabled",
       moduleId: "inference.workers-ai",
       ok: false,
     });
@@ -592,7 +593,7 @@ describe("Agent capability registry", () => {
         },
         workersAiCapabilityConfiguration("@cf/meta/llama-4-scout-17b-16e-instruct"),
       ],
-      { availablePrerequisites, checkPrerequisites: true, fleetConfiguration },
+      { availablePrerequisites, checkPrerequisites: true, fleetConfiguration, modelCatalog },
     );
 
     expect(result).toMatchObject({
@@ -625,7 +626,7 @@ describe("Agent capability registry", () => {
           schemaVersion: 1,
         },
       ],
-      code: "invalid_configuration",
+      code: "model_disabled",
       prerequisites: availablePrerequisites,
     },
     {
@@ -652,8 +653,9 @@ describe("Agent capability registry", () => {
         availablePrerequisites: prerequisites,
         checkPrerequisites: true,
         fleetConfiguration,
+        modelCatalog,
       }),
-    ).toEqual({ code, ok: false });
+    ).toMatchObject({ code, ok: false });
   });
 
   it("rejects singleton contribution collisions deterministically", () => {

@@ -6,9 +6,7 @@ import {
   DEFAULT_FLEET_MAXIMUM_TOOL_CALLS_PER_TOOL_PER_RUN,
   DEFAULT_FLEET_MAXIMUM_TOOL_CONCURRENCY_PER_GRANT,
   DEFAULT_FLEET_MINIMUM_SCHEDULE_INTERVAL_SECONDS,
-  DEFAULT_RUNNABLE_AGENT_MODEL,
   MAXIMUM_FLEET_CONFIGURATION_REVISIONS,
-  RUNNABLE_AGENT_MODELS,
   configureFleetConfigurationInputSchema,
   configureFleetConfigurationResultSchema,
   defaultFleetCapacity,
@@ -25,7 +23,6 @@ import {
   type FleetConfigurationPatch,
   type GetFleetConfigurationResult,
   type OwnerAuthority,
-  type RunnableAgentModel,
 } from "@crewhelm/contracts";
 import { and, eq } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
@@ -80,7 +77,6 @@ function mergeConfiguration(
     capacity: { ...current.capacity, ...patch.capacity },
     execution: { ...current.execution, ...patch.execution },
     integrations: { ...current.integrations, ...patch.integrations },
-    models: { ...current.models, ...patch.models },
     retention: { ...current.retention, ...patch.retention },
     schedules: { ...current.schedules, ...patch.schedules },
   });
@@ -100,14 +96,9 @@ export function deniedFleetConfiguration(code: Failure["error"]["code"]): Failur
 
 export class FleetConfigurations {
   readonly #database: Database;
-  readonly #initialDefaultModel: RunnableAgentModel;
 
-  constructor(
-    database: Database,
-    initialDefaultModel: RunnableAgentModel = DEFAULT_RUNNABLE_AGENT_MODEL,
-  ) {
+  constructor(database: Database) {
     this.#database = database;
-    this.#initialDefaultModel = initialDefaultModel;
   }
 
   currentData(): FleetConfigurationData {
@@ -327,10 +318,6 @@ export class FleetConfigurations {
         maxCallsPerRun: DEFAULT_FLEET_MAXIMUM_TOOL_CALLS_PER_RUN,
         maxCallsPerToolPerRun: DEFAULT_FLEET_MAXIMUM_TOOL_CALLS_PER_TOOL_PER_RUN,
         maxConcurrencyPerGrant: DEFAULT_FLEET_MAXIMUM_TOOL_CONCURRENCY_PER_GRANT,
-      },
-      models: {
-        allowed: [...RUNNABLE_AGENT_MODELS].toSorted(),
-        default: this.#initialDefaultModel,
       },
       retention: defaultFleetRetention,
       schedules: {

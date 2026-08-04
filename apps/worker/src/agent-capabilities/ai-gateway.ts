@@ -1,12 +1,11 @@
 import {
   agentCapabilityConfigurationSchema,
-  AI_GATEWAY_AGENT_MODELS,
+  crewhelmStarterModelCatalog,
   AI_GATEWAY_CAPABILITY_ID,
   AI_GATEWAY_CAPABILITY_SCHEMA_VERSION,
-  DEFAULT_AI_GATEWAY_AGENT_MODEL,
   type AgentCapabilityConfiguration,
 } from "@crewhelm/contracts";
-import * as z from "zod";
+import type * as z from "zod";
 
 import type { AgentCapabilityModule } from "./kernel.js";
 import {
@@ -19,12 +18,7 @@ import {
 export const AI_GATEWAY_PREREQUISITE = "gateway.ai";
 export { AI_GATEWAY_CAPABILITY_ID, AI_GATEWAY_CAPABILITY_SCHEMA_VERSION };
 
-const AI_GATEWAY_REASONING_MODELS = new Set(AI_GATEWAY_AGENT_MODELS);
-
-export const aiGatewayCapabilityConfigurationSchema = inferenceProfileConfigurationSchema(
-  AI_GATEWAY_AGENT_MODELS,
-  AI_GATEWAY_REASONING_MODELS,
-);
+export const aiGatewayCapabilityConfigurationSchema = inferenceProfileConfigurationSchema();
 
 export function aiGatewayCapabilityConfiguration(
   primaryModel: z.infer<typeof aiGatewayCapabilityConfigurationSchema>["primaryModel"],
@@ -49,23 +43,9 @@ export const aiGatewayCapabilityModule: AgentCapabilityModule<
   z.infer<typeof aiGatewayCapabilityConfigurationSchema>
 > = {
   configurationSchema: aiGatewayCapabilityConfigurationSchema,
-  defaultConfiguration: (context) => {
-    const model = z
-      .enum(AI_GATEWAY_AGENT_MODELS)
-      .safeParse(context.fleetConfiguration.models.default);
-
-    if (
-      model.success &&
-      model.data === DEFAULT_AI_GATEWAY_AGENT_MODEL &&
-      !context.availablePrerequisites.has(AI_GATEWAY_PREREQUISITE)
-    ) {
-      return undefined;
-    }
-
-    return model.success ? aiGatewayCapabilityConfiguration(model.data) : undefined;
-  },
+  defaultConfiguration: () => undefined,
   descriptor: {
-    configurationFields: inferenceConfigurationFields(AI_GATEWAY_AGENT_MODELS),
+    configurationFields: inferenceConfigurationFields(),
     description:
       "Selects an ordered third-party inference profile routed through Cloudflare AI Gateway.",
     id: AI_GATEWAY_CAPABILITY_ID,
@@ -84,5 +64,5 @@ export const aiGatewayCapabilityModule: AgentCapabilityModule<
     },
   },
   resolve: (configuration, context) =>
-    resolveInferenceProfile(configuration, context.fleetConfiguration),
+    resolveInferenceProfile(configuration, context.modelCatalog ?? crewhelmStarterModelCatalog),
 };

@@ -12,6 +12,7 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   connect_remote_mcp: "Create a public, bearer, or OAuth remote MCP Connection.",
   create: "Create a disabled Agent from one bounded definition.",
   create_brief: "Create one bounded owner-provided text Brief.",
+  add_model: "Inspect, preview, or enable one exact Cloudflare model ID.",
   create_event_trigger:
     "Create an Event Trigger that starts Runs from matching connected-app events for one exact Agent revision.",
   create_from_blueprint: "Preview or create a disabled Agent from one exact blueprint version.",
@@ -44,6 +45,7 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   inspect_conversation: "Inspect one exact retained Agent conversation.",
   inspect_event_trigger: "Inspect one exact Event Trigger.",
   inspect_fleet: "Inspect current fleet policy, capacity, retention, and execution defaults.",
+  inspect_model: "Inspect one exact current Cloudflare model ID.",
   inspect_provider_auth:
     "Inspect whether one provider is ready, requires an auth-config choice, or needs owner setup without reserving an effect.",
   inspect_provider_connection: "Inspect one exact provider Connection.",
@@ -70,6 +72,7 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   list_runs: "List bounded Runs, optionally filtered by Agent, state, or creation time.",
   list_schedules: "List Schedules for one exact Agent.",
   list_skills: "List available owner-local Skills.",
+  list_enabled_models: "List owner-enabled model IDs and the default.",
   list_workflows: "List bounded Workflows, optionally filtered by Agent or state.",
   pause_event_trigger:
     "Stop an existing Event Trigger from starting Runs without deleting its definition.",
@@ -87,6 +90,7 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
     "Preview one Skill or Agent blueprint package draft and its confirmation digest.",
   read_brief: "Read the content of one exact immutable Brief revision.",
   read_skill: "Read one text file from an exact public Skill package.",
+  remove_model: "Preview impacted Agents, then disable one model without rewriting history.",
   reauthenticate_remote_mcp:
     "Create a new authentication setup for one exact remote MCP Connection snapshot.",
   reconcile_effect:
@@ -103,6 +107,7 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   run: "Start or continue one owner-private conversation with an exact Agent revision.",
   search: "Search immutable public Recipes by bounded text query.",
   search_actions: "Search provider actions, optionally within one known integration.",
+  search_models: "Search current models by name, provider, task, or declared capability.",
   search_providers: "Search the complete integration provider catalog.",
   select_operations:
     "Choose the Schedule and Event Trigger operations for one Recipe installation draft.",
@@ -113,6 +118,7 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   set_event_triggers: "Replace the Event Trigger declarations in a Recipe publication draft.",
   set_inputs: "Replace the named public inputs in a Recipe publication draft.",
   set_name: "Replace the public Recipe name in a publication draft.",
+  set_default_model: "Preview or change the owner's default model.",
   set_primary_operation: "Replace the primary operation in a Recipe publication draft.",
   set_responsibility: "Replace the Agent responsibility in a Recipe publication draft.",
   set_sample_deliverable: "Replace the sample deliverable in a Recipe publication draft.",

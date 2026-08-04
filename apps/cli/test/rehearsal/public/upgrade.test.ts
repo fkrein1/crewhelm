@@ -16,7 +16,6 @@ import {
   DEFAULT_FLEET_MAXIMUM_TOOL_CONCURRENCY_PER_GRANT,
   DEFAULT_FLEET_MINIMUM_SCHEDULE_INTERVAL_SECONDS,
   DEFAULT_RUNNABLE_AGENT_MODEL,
-  RUNNABLE_AGENT_MODELS,
   defaultFleetCapacity,
   defaultFleetExecutionLimits,
   defaultFleetRetention,
@@ -328,10 +327,6 @@ function ownerFixtureSession(): TemporaryOwnerMcpSession {
               maxCallsPerRun: DEFAULT_FLEET_MAXIMUM_TOOL_CALLS_PER_RUN,
               maxCallsPerToolPerRun: DEFAULT_FLEET_MAXIMUM_TOOL_CALLS_PER_TOOL_PER_RUN,
               maxConcurrencyPerGrant: DEFAULT_FLEET_MAXIMUM_TOOL_CONCURRENCY_PER_GRANT,
-            },
-            models: {
-              allowed: [...RUNNABLE_AGENT_MODELS].toSorted(),
-              default: DEFAULT_RUNNABLE_AGENT_MODEL,
             },
             retention: defaultFleetRetention,
             schedules: {

@@ -8,6 +8,7 @@ import {
 import { auditEventSummarySchema } from "./audit.js";
 import { agentCapabilityConfigurationsSchema } from "./agent-capabilities.js";
 import { agentBlueprintProvenanceSchema } from "./agent-blueprint-identity.js";
+import { cloudflareAiModelIdSchema } from "./inference.js";
 
 export const AGENTS_READ_SCOPE = "agents:read";
 export const AGENTS_WRITE_SCOPE = "agents:write";
@@ -185,15 +186,7 @@ export const capabilityGrantIdSchema = z
   );
 export const MAXIMUM_REVISIONS_PER_AGENT = 1_000;
 export const agentNameSchema = z.string().trim().min(1).max(80);
-export const agentModelSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(160)
-  .regex(
-    /^(?:@cf\/)?[A-Za-z0-9][A-Za-z0-9._:/-]*$/,
-    "Expected a bounded provider/model identifier.",
-  );
+export const agentModelSchema = cloudflareAiModelIdSchema;
 export const agentInstructionsSchema = z
   .string()
   .min(1)
@@ -248,7 +241,7 @@ export const agentCreationIdempotencyKeySchema = agentMutationIdempotencyKeySche
 export const createAgentInputSchema = z.strictObject({
   capabilities: agentCapabilityConfigurationsSchema
     .describe(
-      "Optional capability module configuration. Omit to use the fleet's default inference module.",
+      "Optional capability module configuration. Omit to use the owner model catalog's default inference module.",
     )
     .optional(),
   executionLimits: agentExecutionLimitsSchema
@@ -304,6 +297,7 @@ const agentRequestErrorSchema = z.strictObject({
     "insufficient_scope",
     "invalid_authority",
     "invalid_request",
+    "model_disabled",
     "no_changes",
     "owner_mismatch",
     "revision_conflict",

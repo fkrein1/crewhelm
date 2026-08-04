@@ -42,8 +42,11 @@ describe("OwnerControlPlane agents", () => {
     const configuration = await stub.getFleetConfiguration(authority, {
       target: { kind: "fleet" },
     });
+    const modelCatalog = await stub.getModelCatalog(authority, {
+      target: { kind: "model-catalog" },
+    });
 
-    if (!configuration.ok) {
+    if (!configuration.ok || !modelCatalog.ok) {
       throw new Error("Expected fleet defaults.");
     }
 
@@ -59,14 +62,14 @@ describe("OwnerControlPlane agents", () => {
           {
             configuration: {
               fallbackModels: [],
-              primaryModel: configuration.configuration.data.models.default,
+              primaryModel: modelCatalog.catalog.data.defaultModel,
             },
             id: "inference.workers-ai",
             schemaVersion: 2,
           },
         ],
         executionLimits: configuration.configuration.data.execution,
-        model: configuration.configuration.data.models.default,
+        model: modelCatalog.catalog.data.defaultModel,
       },
       created: true,
       ok: true,

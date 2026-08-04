@@ -316,6 +316,14 @@
     {
       "evidence": {
         "definitionVersion": 2,
+        "testFiles": ["apps/worker/src/owner/durable-object.test.ts"]
+      },
+      "id": "owner-model-catalog",
+      "pathPrefixes": ["apps/worker/src/owner/model-catalog/"]
+    },
+    {
+      "evidence": {
+        "definitionVersion": 2,
         "testFiles": [
           "apps/worker/src/owner/connections/authorization-return.test.ts",
           "apps/worker/src/owner/connections/module.test.ts"

@@ -20,7 +20,7 @@ function packageInput(name = "research-helper"): AgentBlueprintPackage {
         {
           configuration: {
             fallbackModels: [],
-            primaryModel: "@cf/openai/gpt-oss-20b",
+            primaryModel: "@cf/openai/gpt-oss-120b",
           },
           id: "inference.workers-ai",
           schemaVersion: 2,

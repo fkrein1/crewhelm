@@ -70,7 +70,7 @@ Workflow presents its final deliverable without asking the owner to find the las
 - hosted multi-tenancy, organization roles, billing, or a graphical control center;
 - arbitrary executable recipes;
 - custom integrations already served well by Composio;
-- simultaneous support for every model or edge case; and
+- quality certification or behavioral guarantees for every provider model and edge case; and
 - hosted Agent execution or an opaque marketplace control plane.
 
 These constrain product investment, not the eventual reach of the underlying frameworks.

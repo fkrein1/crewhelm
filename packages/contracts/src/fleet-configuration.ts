@@ -7,7 +7,6 @@ import {
 import { agentExecutionLimitsSchema, agentMutationIdempotencyKeySchema } from "./control-plane.js";
 import { fleetCapacitySchema, fleetRetentionSchema } from "./fleet-capacity.js";
 import { MAXIMUM_RUN_MODEL_OUTPUT_TOKENS, runIntegrationLimitsSchema } from "./run-admission.js";
-import { RUNNABLE_AGENT_MODELS, runnableAgentModelSchema } from "./inference.js";
 
 export const DEFAULT_FLEET_INTEGRATION_CALLS_PER_DAY = 300;
 export const DEFAULT_FLEET_INTEGRATION_CALLS_PER_THIRTY_DAYS = 8_000;
@@ -43,16 +42,6 @@ const fleetExecutionLimitsSchema = z.strictObject({
   ),
   maxTurns: agentExecutionLimitsSchema.shape.maxTurns.describe("Maximum model turns for one run."),
 });
-const allowedFleetModelsSchema = z
-  .array(runnableAgentModelSchema)
-  .min(1)
-  .max(RUNNABLE_AGENT_MODELS.length)
-  .refine(
-    (models) => models.every((model, index) => index === 0 || (models[index - 1] ?? "") < model),
-    "Expected unique supported models in canonical order.",
-  )
-  .describe("Allowed supported model IDs, unique and sorted in ascending order.");
-
 export const fleetConfigurationDataSchema = z
   .strictObject({
     capacity: fleetCapacitySchema.describe(
@@ -93,14 +82,6 @@ export const fleetConfigurationDataSchema = z
         .max(16)
         .describe("Maximum simultaneous executions using one tool grant."),
     }),
-    models: z.strictObject({
-      allowed: allowedFleetModelsSchema.describe(
-        "Supported models that Agents in this fleet may select.",
-      ),
-      default: runnableAgentModelSchema.describe(
-        "Inference model used when Agent creation omits capability configuration.",
-      ),
-    }),
     schedules: z.strictObject({
       minimumIntervalSeconds: z
         .number()
@@ -127,10 +108,6 @@ export const fleetConfigurationDataSchema = z
     (configuration) =>
       configuration.execution.maxToolCalls <= configuration.integrations.maxCallsPerRun,
     "Agent tool calls must not exceed the fleet tool-call limit.",
-  )
-  .refine(
-    (configuration) => configuration.models.allowed.includes(configuration.models.default),
-    "The default model must be allowed.",
   )
   .refine(
     (configuration) => configuration.retention.runSeconds <= configuration.retention.inboxSeconds,
@@ -190,15 +167,6 @@ export const fleetConfigurationPatchSchema = z
       })
       .describe("Integration usage and loop controls.")
       .optional(),
-    models: z
-      .strictObject({
-        allowed: allowedFleetModelsSchema.optional(),
-        default: runnableAgentModelSchema
-          .describe("New inference model used when Agent creation omits capability configuration.")
-          .optional(),
-      })
-      .describe("Fleet model selection defaults and allowlist.")
-      .optional(),
     retention: fleetRetentionSchema
       .partial()
       .describe("Run-detail and operational-inbox retention in seconds.")
@@ -221,7 +189,6 @@ export const fleetConfigurationPatchSchema = z
       patch.execution !== undefined ||
       patch.capacity !== undefined ||
       patch.integrations !== undefined ||
-      patch.models !== undefined ||
       patch.retention !== undefined ||
       patch.schedules !== undefined,
     "Expected at least one configuration section.",

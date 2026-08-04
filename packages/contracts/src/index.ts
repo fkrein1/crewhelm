@@ -20,6 +20,7 @@ export * from "./health.js";
 export * from "./integrations.js";
 export * from "./mcp-authoring-drafts.js";
 export * from "./inference.js";
+export * from "./model-catalog.js";
 export * from "./output-contracts.js";
 export * from "./provider-auth-setup.js";
 export * from "./recovery.js";

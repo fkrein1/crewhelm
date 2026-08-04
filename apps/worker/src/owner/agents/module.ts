@@ -50,6 +50,7 @@ import {
   type ConfigureAgentConnectionInput,
   type ExternalToolCapabilityGrant,
   type FleetConfigurationData,
+  type ModelCatalogData,
   type LookupAgentConnectionConfigurationResult,
   type ResolvedConnectionForAttachment,
 } from "@crewhelm/contracts";
@@ -96,7 +97,7 @@ type StoredAgentRevisionSummaryRow = Pick<
 type ControlPlaneDatabase = DrizzleSqliteDODatabase<ControlPlaneDatabaseSchema>;
 type ConnectionAttachmentFailure = Extract<ConfigureAgentConnectionResult, { ok: false }>;
 export type ResolvedAgentDefinition =
-  | { ok: false }
+  | { code: "invalid_configuration" | "model_disabled"; ok: false }
   | {
       agent: {
         capabilities: AgentCapabilityConfigurations;
@@ -221,18 +222,21 @@ export function deniedConnectionAttachment(
 export class AgentRegistry {
   readonly #availableCapabilityPrerequisites: ReadonlySet<string>;
   readonly #currentFleetConfiguration: () => FleetConfigurationData;
+  readonly #currentModelCatalog: () => ModelCatalogData;
   readonly #database: ControlPlaneDatabase;
   readonly #skills: Skills;
 
   constructor(
     database: ControlPlaneDatabase,
     currentFleetConfiguration: () => FleetConfigurationData,
+    currentModelCatalog: () => ModelCatalogData,
     skills: Skills,
     availableCapabilityPrerequisites: ReadonlySet<string>,
   ) {
     this.#availableCapabilityPrerequisites = availableCapabilityPrerequisites;
     this.#database = database;
     this.#currentFleetConfiguration = currentFleetConfiguration;
+    this.#currentModelCatalog = currentModelCatalog;
     this.#skills = skills;
   }
 
@@ -992,7 +996,12 @@ export class AgentRegistry {
 
       const resolved = this.#resolveDefinition(request.data, transaction);
 
-      if (!resolved.ok || resolved.skills.some(({ state }) => state === "missing")) {
+      if (!resolved.ok) {
+        return deniedAgent(
+          resolved.code === "model_disabled" ? "model_disabled" : "invalid_request",
+        );
+      }
+      if (resolved.skills.some(({ state }) => state === "missing")) {
         return deniedAgent("invalid_request");
       }
 
@@ -1208,7 +1217,12 @@ export class AgentRegistry {
 
       const resolved = this.#resolveDefinition(request.data, transaction);
 
-      if (!resolved.ok || resolved.skills.some(({ state }) => state === "missing")) {
+      if (!resolved.ok) {
+        return deniedAgent(
+          resolved.code === "model_disabled" ? "model_disabled" : "invalid_request",
+        );
+      }
+      if (resolved.skills.some(({ state }) => state === "missing")) {
         return deniedAgent("invalid_request");
       }
 
@@ -1468,10 +1482,14 @@ export class AgentRegistry {
       availablePrerequisites: this.#availableCapabilityPrerequisites,
       checkPrerequisites: false,
       fleetConfiguration,
+      modelCatalog: this.#currentModelCatalog(),
     });
 
     if (!compiled.ok) {
-      return { ok: false };
+      return {
+        code: compiled.code === "model_disabled" ? "model_disabled" : "invalid_configuration",
+        ok: false,
+      };
     }
 
     const descriptors = agentCapabilityRegistry

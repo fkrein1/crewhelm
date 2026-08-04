@@ -34,6 +34,7 @@ export const DOCS_SECTIONS = [
       { label: "Install a Recipe", slug: "docs/guides/install-recipe" },
       { label: "Publish a Recipe", slug: "docs/guides/publish-recipe" },
       { label: "Connections", slug: "docs/guides/connections" },
+      { label: "Models", slug: "docs/guides/models" },
       { label: "Remote MCP", slug: "docs/guides/remote-mcp" },
       { label: "Schedules", slug: "docs/guides/schedules" },
       { label: "Event Triggers", slug: "docs/guides/event-triggers" },

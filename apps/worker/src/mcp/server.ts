@@ -62,6 +62,7 @@ import {
   MCP_CHANGE_AUTOMATIONS_TOOL_NAME,
   MCP_CHANGE_CONNECTIONS_TOOL_NAME,
   MCP_CHANGE_CONTEXT_TOOL_NAME,
+  MCP_CHANGE_MODELS_TOOL_NAME,
   MCP_CHANGE_RECIPES_TOOL_NAME,
   MCP_CHANGE_WORK_TOOL_NAME,
   MCP_FACADE_TOOL_COUNT,
@@ -69,6 +70,7 @@ import {
   MCP_INSPECT_AUTOMATIONS_TOOL_NAME,
   MCP_INSPECT_CONNECTIONS_TOOL_NAME,
   MCP_INSPECT_CONTEXT_TOOL_NAME,
+  MCP_INSPECT_MODELS_TOOL_NAME,
   MCP_INSPECT_RECOVERY_TOOL_NAME,
   MCP_INSPECT_RECIPES_TOOL_NAME,
   MCP_INSPECT_WORK_TOOL_NAME,
@@ -77,6 +79,7 @@ import {
   registerFacadeTools,
 } from "./facade-tools.js";
 import { createPrivateToolCatalog } from "./private-tool-catalog.js";
+import { registerModelTools } from "./model-tools.js";
 
 export {
   MCP_CONFIGURE_AGENT_CONNECTION_TOOL_NAME,
@@ -134,12 +137,14 @@ export {
   MCP_CHANGE_AUTOMATIONS_TOOL_NAME,
   MCP_CHANGE_CONNECTIONS_TOOL_NAME,
   MCP_CHANGE_CONTEXT_TOOL_NAME,
+  MCP_CHANGE_MODELS_TOOL_NAME,
   MCP_CHANGE_RECIPES_TOOL_NAME,
   MCP_CHANGE_WORK_TOOL_NAME,
   MCP_INSPECT_AGENTS_TOOL_NAME,
   MCP_INSPECT_AUTOMATIONS_TOOL_NAME,
   MCP_INSPECT_CONNECTIONS_TOOL_NAME,
   MCP_INSPECT_CONTEXT_TOOL_NAME,
+  MCP_INSPECT_MODELS_TOOL_NAME,
   MCP_INSPECT_RECOVERY_TOOL_NAME,
   MCP_INSPECT_RECIPES_TOOL_NAME,
   MCP_INSPECT_WORK_TOOL_NAME,
@@ -233,6 +238,7 @@ function createMcpServer(
   const server = new McpServer(MCP_SERVER_INFO, { instructions: MCP_SERVER_INSTRUCTIONS });
   const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
   const context = {
+    ai: env.AI,
     authority,
     availableAgentCapabilityPrerequisites: availableAgentCapabilityPrerequisites(
       env.AI_GATEWAY_ID,
@@ -244,6 +250,7 @@ function createMcpServer(
 
   const privateTools = createPrivateToolCatalog((privateServer) => {
     registerConfigurationTools(privateServer, context);
+    registerModelTools(privateServer, context);
     registerAgentTools(privateServer, context);
     registerAuthoringDraftTools(privateServer, context);
     registerBriefTools(privateServer, context);
