@@ -33,7 +33,8 @@ owner-local IDs, history, or runtime telemetry.
    models, and local Skill coordinates; converts selected recurring operations and attached
    Connections into portable declarations; and replaces exact recurring Brief references with named
    public inputs.
-3. Replace one editable section at a time with `operation.kind: "set_section"`. Use
+3. Replace one editable section at a time with its exact subtool, such as
+   `operation.kind: "set_discovery"` or `operation.kind: "set_primary_operation"`. Use
    `set_skill_decision` separately for each local Skill. Every edit returns a new draft revision;
    use that returned reference for the next edit. Keep the copied Agent executable definition
    exact.

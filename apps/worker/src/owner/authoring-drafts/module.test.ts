@@ -158,6 +158,44 @@ describe("OwnerControlPlane MCP authoring drafts", () => {
     ).resolves.toMatchObject({ error: { code: "draft_limit_exceeded" }, ok: false });
   });
 
+  it("preserves the fixed expiry when replacing a draft near its deadline", async () => {
+    const authority = await authorityFor("mcp-authoring-draft-fixed-expiry", [OWNER_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = mcpAuthoringDraftResultSchema.parse(
+      await Promise.resolve(
+        stub.mcpAuthoringDrafts(authority, {
+          action: "create",
+          content: skillTarget(),
+          idempotencyKey: "fixed-expiry-create",
+          kind: "skill-package",
+        }),
+      ),
+    );
+    if (!created.ok || created.action !== "create") throw new Error("Expected draft creation.");
+
+    const nearExpiry = Date.now() + 60_000;
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE mcp_authoring_drafts SET expires_at = ? WHERE draft_id = ?",
+        nearExpiry,
+        created.draft.id,
+      );
+    });
+
+    await expect(
+      stub.mcpAuthoringDrafts(authority, {
+        action: "replace",
+        content: skillTarget("edited-near-expiry"),
+        draft: created.draft,
+        idempotencyKey: "fixed-expiry-replace",
+      }),
+    ).resolves.toMatchObject({
+      action: "replace",
+      draft: { expiresAt: new Date(nearExpiry).toISOString(), revision: 2 },
+      ok: true,
+    });
+  });
+
   it("fails closed under concurrent creation and replacement", async () => {
     const authority = await authorityFor("mcp-authoring-draft-concurrency", [OWNER_WRITE_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);

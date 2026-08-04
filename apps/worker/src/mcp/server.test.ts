@@ -936,9 +936,8 @@ describe("authenticated MCP handler", () => {
             arguments: {
               operation: {
                 draft: publicationDraft,
-                kind: "set_section",
+                kind: "set_discovery",
                 requestKey: "publication-discovery-edit",
-                section: "discovery",
                 value: { ...recipe.discovery, description: "A reviewed publication draft." },
               },
             },
