@@ -7,11 +7,11 @@ import {
 import ConnectionLogo from "./ConnectionLogo.astro";
 
 interface Props {
-  basePath: string;
   recipes: readonly RecipePreview[];
+  unavailable?: boolean;
 }
 
-const { basePath, recipes } = Astro.props;
+const { recipes, unavailable = false } = Astro.props;
 
 const choices = recipes.map((recipe) => ({
   modelLabel: getRecipeModelLabel(recipe.inference.primaryModel),
@@ -40,7 +40,7 @@ const choices = recipes.map((recipe) => ({
             class="recipe-card"
             data-recipe-open
             data-recipe-slug={recipe.slug}
-            href={`${basePath}/${recipe.slug}/`}
+            href={recipe.route}
           >
             <h3>{recipe.title}</h3>
             <p class="card-outcome">{recipe.summary}</p>
@@ -80,6 +80,14 @@ const choices = recipes.map((recipe) => ({
       ))
     }
   </ul>
+  {
+    recipes.length === 0 && (
+      <div class="catalog-state" role={unavailable ? "alert" : "status"}>
+        <h2>{unavailable ? "The Recipe Registry is temporarily unavailable." : "No Recipes have been published yet."}</h2>
+        <p>{unavailable ? "Try this page again shortly." : "Published Recipes will appear here automatically."}</p>
+      </div>
+    )
+  }
 </section>
 
 <style>
@@ -139,6 +147,16 @@ const choices = recipes.map((recipe) => ({
     padding: clamp(1.25rem, 2vw, 1.75rem) 0 clamp(2.5rem, 6vw, 6rem);
     list-style: none;
   }
+
+  .catalog-state {
+    margin: clamp(1.25rem, 2vw, 1.75rem) 0 clamp(3rem, 7vw, 7rem);
+    border: 1px solid var(--choice-line);
+    padding: clamp(1.5rem, 4vw, 3.5rem);
+    background: var(--choice-paper);
+  }
+
+  .catalog-state h2 { margin: 0; font-size: clamp(1.35rem, 2vw, 2rem); }
+  .catalog-state p { margin: 0.5rem 0 0; color: var(--choice-muted); }
 
   .choice-item {
     min-width: 0;

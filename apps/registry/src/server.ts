@@ -3,6 +3,7 @@ import {
   MAXIMUM_SKILL_PACKAGE_BYTES,
   registryResolvePublishAuthorizationSchema,
   registryArtifactPathSchema,
+  registryRecipeListQuerySchema,
   registrySearchQuerySchema,
 } from "@crewhelm/contracts";
 import { Hono, type Context } from "hono";
@@ -26,6 +27,7 @@ import {
   publishBundle,
   RegistryConflictError,
   RegistryDeniedError,
+  listRecipes,
   searchRecipes,
 } from "./registry.js";
 
@@ -365,6 +367,27 @@ export function createRegistryServer(): App {
     if (!parsed.success) return compactError(context, 400);
     try {
       const result = await searchRecipes(context.env, parsed.data.query, parsed.data.limit);
+      context.header(
+        "cache-control",
+        "public, max-age=30, s-maxage=300, stale-while-revalidate=600",
+      );
+      return context.json(result);
+    } catch {
+      return compactError(context, 500);
+    }
+  });
+
+  app.get("/v1/recipes", async (context) => {
+    if (!(await allow(context.env.PUBLIC_READ_RATE_LIMIT, clientKey(context)))) {
+      return compactError(context, 429);
+    }
+    const parsed = registryRecipeListQuerySchema.safeParse({
+      limit:
+        context.req.query("limit") === undefined ? undefined : Number(context.req.query("limit")),
+    });
+    if (!parsed.success) return compactError(context, 400);
+    try {
+      const result = await listRecipes(context.env, parsed.data.limit);
       context.header(
         "cache-control",
         "public, max-age=30, s-maxage=300, stale-while-revalidate=600",
