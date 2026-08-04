@@ -29,7 +29,7 @@ jobs:
     permissions:
       checks: read
       contents: read
-      issues: write
+      issues: write # Create or update only this workflow's marked preview comment.
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
