@@ -100,6 +100,7 @@ const MIGRATION_INVENTORY_SQL = "SELECT name FROM d1_migrations ORDER BY id";
 const ALLOWED_AUTH_TABLES = new Set([
   "_cf_KV",
   "account",
+  "cloudflare_model_catalog_cache",
   "d1_migrations",
   "jwks",
   "mcpClientRegistration",

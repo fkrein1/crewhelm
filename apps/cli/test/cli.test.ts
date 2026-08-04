@@ -37,6 +37,7 @@ const EXPECTED_MIGRATIONS = [
 const AUTH_TABLES = [
   "_cf_KV",
   "account",
+  "cloudflare_model_catalog_cache",
   "d1_migrations",
   "jwks",
   "mcpClientRegistration",
