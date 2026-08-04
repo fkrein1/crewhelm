@@ -210,9 +210,23 @@ function validateDocsPage(outputDirectory, file) {
 
 /** @param {string} outputDirectory */
 export function validateSiteOutput(outputDirectory) {
-  const docsDirectory = path.join(outputDirectory, "docs");
+  const publicDirectory = existsSync(path.join(outputDirectory, "client"))
+    ? path.join(outputDirectory, "client")
+    : outputDirectory;
+  const workerConfigurationPath = path.join(outputDirectory, "server", "wrangler.json");
+  if (existsSync(workerConfigurationPath)) {
+    const workerConfiguration = JSON.parse(readFileSync(workerConfigurationPath, "utf8"));
+    const workerFirst = workerConfiguration.assets?.run_worker_first;
+    if (
+      !Array.isArray(workerFirst) ||
+      !workerFirst.includes("/recipes") ||
+      !workerFirst.includes("/recipes/*")
+    ) {
+      throw new Error("Recipe SSR routes must run through the site Worker");
+    }
+  }
+  const docsDirectory = path.join(publicDirectory, "docs");
   const docsPages = filesBelow(docsDirectory, ".html");
-  const recipePages = filesBelow(path.join(outputDirectory, "recipes"), ".html");
   const sourceDirectory = path.resolve(outputDirectory, "../src/content/docs/docs");
   const expectedRoutes = new Set(
     documentationSourceFiles(sourceDirectory).map((file) =>
@@ -221,7 +235,7 @@ export function validateSiteOutput(outputDirectory) {
   );
   const builtRoutes = new Set(
     docsPages.map((file) => {
-      const relative = path.relative(outputDirectory, file).replaceAll(path.sep, "/");
+      const relative = path.relative(publicDirectory, file).replaceAll(path.sep, "/");
       return `/${relative.replace(/index\.html$/, "")}`;
     }),
   );
@@ -234,30 +248,14 @@ export function validateSiteOutput(outputDirectory) {
   }
 
   for (const page of docsPages) {
-    validateDocsPage(outputDirectory, page);
+    validateDocsPage(publicDirectory, page);
   }
 
-  if (recipePages.length !== 11) {
-    throw new Error(`expected 11 production Recipe pages, received ${recipePages.length}`);
-  }
-
-  for (const page of recipePages) {
-    validateIndexablePage(outputDirectory, page);
-  }
-
-  const sitemap = filesBelow(outputDirectory, ".xml")
+  const sitemap = filesBelow(publicDirectory, ".xml")
     .map((file) => readFileSync(file, "utf8"))
     .join("\n");
   for (const page of docsPages) {
-    const relative = path.relative(outputDirectory, page).replaceAll(path.sep, "/");
-    const pathname = `/${relative.replace(/index\.html$/, "")}`;
-    const canonical = new URL(pathname, canonicalOrigin).toString();
-    if (!sitemap.includes(canonical)) {
-      throw new Error(`sitemap is missing ${canonical}`);
-    }
-  }
-  for (const page of recipePages) {
-    const relative = path.relative(outputDirectory, page).replaceAll(path.sep, "/");
+    const relative = path.relative(publicDirectory, page).replaceAll(path.sep, "/");
     const pathname = `/${relative.replace(/index\.html$/, "")}`;
     const canonical = new URL(pathname, canonicalOrigin).toString();
     if (!sitemap.includes(canonical)) {
@@ -268,7 +266,7 @@ export function validateSiteOutput(outputDirectory) {
     throw new Error("sitemap includes a removed Recipe exploration route");
   }
 
-  const llms = readFileSync(path.join(outputDirectory, "llms.txt"), "utf8");
+  const llms = readFileSync(path.join(publicDirectory, "llms.txt"), "utf8");
   for (const pathname of [
     "/docs/",
     "/docs/start/install/",
@@ -282,7 +280,7 @@ export function validateSiteOutput(outputDirectory) {
     }
   }
 
-  if (!existsSync(path.join(outputDirectory, "pagefind", "pagefind.js"))) {
+  if (!existsSync(path.join(publicDirectory, "pagefind", "pagefind.js"))) {
     throw new Error("Pagefind search output is missing");
   }
 }

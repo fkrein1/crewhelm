@@ -10,24 +10,28 @@ import {
   robotsText,
   serializeJsonLd,
 } from "../apps/site/src/lib/seo.js";
-import {
-  getRecipeChoiceSignals,
-  recipePreviews,
-  recipeSeedVersion,
-} from "../apps/site/src/lib/recipe-catalog.js";
+import { getRecipeChoiceSignals, toRecipePreview } from "../apps/site/src/lib/recipe-catalog.js";
 
-const seededRecipeSlugs = [
-  "research-brief-steward",
-  "meeting-follow-up-editor",
-  "decision-memo-advisor",
-  "csv-insight-analyst",
-  "content-calendar-planner",
-  "github-issue-triage",
-  "customer-feedback-synthesizer",
-  "sales-account-brief",
-  "incident-brief-coordinator",
-  "daily-meeting-prep",
-] as const;
+const recipePreview = toRecipePreview({
+  artifact: { kind: "recipe", name: "research-steward", namespace: "crewhelm", version: 2 },
+  deliverables: ["markdown"],
+  description: "Produces an evidence-backed brief.",
+  inference: { fallbackModels: [], primaryModel: "@cf/moonshotai/kimi-k2.6" },
+  operations: { eventTriggers: 1, primary: "workflow", schedules: 1 },
+  outcome: "A decision-ready research brief.",
+  publisher: { displayName: "Crewhelm", namespace: "crewhelm" },
+  requestedAuthority: {
+    approvalRequired: { destructive: 0, read: 0, write: 1 },
+    standing: { destructive: 0, read: 1, write: 0 },
+  },
+  requirements: {
+    capabilityIds: ["inference.workers-ai", "runtime.sandbox-code", "web.fetch", "web.search"],
+    integrations: ["github", "slack", "hubspot"],
+    skills: { optional: 0, required: 1 },
+  },
+  summary: "Researches a decision with cited evidence.",
+  title: "Research Steward",
+});
 
 describe("Crewhelm site discovery foundation", () => {
   it("follows the system color scheme without a user override", async () => {
@@ -99,52 +103,35 @@ describe("Crewhelm site discovery foundation", () => {
 });
 
 describe("Crewhelm Recipe catalog", () => {
-  it("mirrors the ten local Registry seed identities", () => {
-    expect(recipePreviews.map(({ slug }) => slug)).toEqual(seededRecipeSlugs);
-    expect(new Set(recipePreviews.map(({ slug }) => slug)).size).toBe(10);
-    expect(recipeSeedVersion).toBe(2);
-    expect(
-      recipePreviews.every(({ boundaries, outcome }) => boundaries.length > 0 && outcome),
-    ).toBe(true);
-  });
-
-  it("shows every connection in the seed and keeps writes approval-bound", () => {
-    expect([
-      ...new Set(
-        recipePreviews.flatMap(({ integrations }) => integrations.map(({ slug }) => slug)),
-      ),
-    ]).toEqual(["github", "slack", "hubspot", "googlecalendar"]);
-    expect(
-      recipePreviews.filter(({ authority }) => authority.approvalWrite > 0).map(({ slug }) => slug),
-    ).toEqual(["github-issue-triage", "incident-brief-coordinator"]);
+  it("builds namespaced catalog routes from Registry projections", () => {
+    expect(recipePreview.route).toBe("/recipes/crewhelm/research-steward/");
+    expect(recipePreview.slug).toBe("crewhelm/research-steward");
   });
 
   it("ranks and caps Recipe choice signals before showing a remainder", () => {
     const selection = getRecipeChoiceSignals({
-      ...recipePreviews[0],
-      automations: { eventTriggers: 1, schedules: 1 },
+      ...recipePreview,
       capabilities: ["Workers AI", "Python sandbox", "Web search", "Web fetch", "Browser"],
       integrations: [
         { label: "GitHub", slug: "github" },
         { label: "Slack", slug: "slack" },
         { label: "HubSpot", slug: "hubspot" },
       ],
-      operation: "Workflow",
     });
 
     expect(selection.integrations.map(({ label }) => label)).toEqual(["GitHub", "Slack"]);
-    expect(selection.signals).toEqual([{ kind: "capability", label: "Sandbox" }]);
+    expect(selection.signals).toEqual([{ kind: "capability", label: "Python sandbox" }]);
     expect(selection.hiddenCount).toBe(7);
     expect(selection.accessibleLabel).toContain("HubSpot");
     expect(selection.accessibleLabel).toContain("Workflow");
   });
 
   it("keeps the primary model outside the compressed feature ranking", () => {
-    const selection = getRecipeChoiceSignals(recipePreviews[0]);
+    const selection = getRecipeChoiceSignals({ ...recipePreview, integrations: [] });
 
     expect(selection.signals).toEqual([
+      { kind: "capability", label: "Sandbox" },
       { kind: "capability", label: "Fetch" },
-      { kind: "capability", label: "Search" },
     ]);
     expect(selection.accessibleLabel).not.toContain("Kimi K2.6");
   });
@@ -195,7 +182,10 @@ describe("Crewhelm Recipe catalog", () => {
         new URL("../apps/site/src/components/recipes/RecipeExplorer.astro", import.meta.url),
         "utf8",
       ),
-      readFile(new URL("../apps/site/src/pages/recipes/[slug].astro", import.meta.url), "utf8"),
+      readFile(
+        new URL("../apps/site/src/pages/recipes/[namespace]/[name].astro", import.meta.url),
+        "utf8",
+      ),
     ]);
 
     expect(explorer).toContain("<dialog");

@@ -24,7 +24,7 @@
         "definitionVersion": 2,
         "testFiles": ["apps/site/src/worker.test.ts"]
       },
-      "files": ["apps/site/src/worker.ts"],
+      "files": ["apps/site/src/site-registry-gateway.ts", "apps/site/src/worker.ts"],
       "id": "site-registry-gateway"
     },
     {
@@ -40,7 +40,10 @@
         "definitionVersion": 2,
         "testFiles": ["test/site-seo.test.ts"]
       },
-      "files": ["apps/site/src/lib/recipe-catalog.ts"],
+      "files": [
+        "apps/site/src/lib/recipe-catalog.ts",
+        "apps/site/src/lib/recipe-registry-server.ts"
+      ],
       "id": "site-recipes"
     },
     {
