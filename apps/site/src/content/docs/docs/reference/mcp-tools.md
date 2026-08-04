@@ -131,58 +131,11 @@ Create an owner-scoped Crewhelm Agent after confirming the owner's durable inten
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `capabilities` | No | array of S3 | Optional capability module configuration. Omit to use the fleet's default inference module. minimum items: `1`; maximum items: `16` |
-| `executionLimits` | No | CrewhelmAgentExecutionLimits | Optional Agent-specific ceilings. Omit to inherit the current fleet execution defaults. |
-| `instructions` | Yes | S6 | — |
-| `name` | Yes | S7 | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S3`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `configuration` | Yes | object | — |
-| `id` | Yes | string | minimum length: `3`; maximum length: `80`; pattern: `^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$` |
-| `schemaVersion` | Yes | integer | minimum: `1`; maximum: `1000` |
-
-#### `S4`
-
-Type: string \| number \| boolean \| null.
-Details: —
-
-#### `S5`
-
-Type: S4 \| array of S4 \| object.
-Details: —
-
-#### `CrewhelmAgentExecutionLimits`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `maxDurationSeconds` | Yes | integer | minimum: `1`; maximum: `3600` |
-| `maxModelTokens` | Yes | integer | minimum: `1`; maximum: `1000000` |
-| `maxToolCalls` | Yes | integer | minimum: `0`; maximum: `100` |
-| `maxTurns` | Yes | integer | minimum: `1`; maximum: `100` |
-
-#### `S6`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `8192`
-
-#### `S7`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `80`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `capabilities` | No | array of object | Optional capability module configuration. Omit to use the fleet's default inference module. minimum items: `1`; maximum items: `16` |
+| `executionLimits` | No | object | Optional Agent-specific ceilings. Omit to inherit the current fleet execution defaults. |
+| `instructions` | Yes | string | minimum length: `1`; maximum length: `8192` |
+| `name` | Yes | string | minimum length: `1`; maximum length: `80` |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `replace`
 
@@ -190,78 +143,12 @@ Replace an owner-scoped Crewhelm Agent definition and capability configuration w
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `capabilities` | Yes | array of S3 | minimum items: `1`; maximum items: `16` |
-| `executionLimits` | Yes | CrewhelmAgentExecutionLimits | — |
-| `instructions` | Yes | S6 | — |
-| `name` | Yes | S7 | — |
-| `agent` | Yes | CrewhelmAgentReference | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S3`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `configuration` | Yes | object | — |
-| `id` | Yes | string | minimum length: `3`; maximum length: `80`; pattern: `^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$` |
-| `schemaVersion` | Yes | integer | minimum: `1`; maximum: `1000` |
-
-#### `S4`
-
-Type: string \| number \| boolean \| null.
-Details: —
-
-#### `S5`
-
-Type: S4 \| array of S4 \| object.
-Details: —
-
-#### `CrewhelmAgentExecutionLimits`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `maxDurationSeconds` | Yes | integer | minimum: `1`; maximum: `3600` |
-| `maxModelTokens` | Yes | integer | minimum: `1`; maximum: `1000000` |
-| `maxToolCalls` | Yes | integer | minimum: `0`; maximum: `100` |
-| `maxTurns` | Yes | integer | minimum: `1`; maximum: `100` |
-
-#### `S6`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `8192`
-
-#### `S7`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `80`
-
-#### `CrewhelmAgentReference`
-
-Copy-ready Agent identity and immutable revision returned by Crewhelm.
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `id` | Yes | S1 | — |
-| `revision` | Yes | S2 | — |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `capabilities` | Yes | array of object | minimum items: `1`; maximum items: `16` |
+| `executionLimits` | Yes | object | — |
+| `instructions` | Yes | string | minimum length: `1`; maximum length: `8192` |
+| `name` | Yes | string | minimum length: `1`; maximum length: `80` |
+| `agent` | Yes | object | Copy-ready Agent identity and immutable revision returned by Crewhelm. |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `disable`
 
@@ -269,31 +156,7 @@ Disable up to 25 exact authenticated-owner Crewhelm Agent revisions and return o
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `agents` | Yes | array of CrewhelmAgentReference | minimum items: `1`; maximum items: `25` |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmAgentReference`
-
-Copy-ready Agent identity and immutable revision returned by Crewhelm.
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `id` | Yes | S1 | — |
-| `revision` | Yes | S2 | — |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-</details>
+| `agents` | Yes | array of object | minimum items: `1`; maximum items: `25` |
 
 ## `crewhelm_change_automations`
 
@@ -326,43 +189,9 @@ Create, update, or independently pause a named recurring responsibility bound to
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `schedule` | Yes | S27 | — |
-| `agent` | Yes | CrewhelmAgentReference | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S27`
-
-Type: value.
-Details: One bounded automation definition. Crewhelm validates its exact contract.
-
-#### `CrewhelmAgentReference`
-
-Copy-ready Agent identity and immutable revision returned by Crewhelm.
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `id` | Yes | S1 | — |
-| `revision` | Yes | S2 | — |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `schedule` | Yes | value | One bounded automation definition. Crewhelm validates its exact contract. |
+| `agent` | Yes | object | Copy-ready Agent identity and immutable revision returned by Crewhelm. |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `update_schedule`
 
@@ -370,43 +199,9 @@ Create, update, or independently pause a named recurring responsibility bound to
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `definition` | Yes | S27 | — |
-| `schedule` | Yes | CrewhelmScheduleReference | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S27`
-
-Type: value.
-Details: One bounded automation definition. Crewhelm validates its exact contract.
-
-#### `CrewhelmScheduleReference`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `agentId` | Yes | S1 | — |
-| `agentRevision` | Yes | S2 | — |
-| `id` | Yes | string | pattern: `^schedule_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `definition` | Yes | value | One bounded automation definition. Crewhelm validates its exact contract. |
+| `schedule` | Yes | object | — |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `pause_schedule`
 
@@ -414,37 +209,8 @@ Create, update, or independently pause a named recurring responsibility bound to
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `schedule` | Yes | CrewhelmScheduleReference | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmScheduleReference`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `agentId` | Yes | S1 | — |
-| `agentRevision` | Yes | S2 | — |
-| `id` | Yes | string | pattern: `^schedule_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `schedule` | Yes | object | — |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `create_event_trigger`
 
@@ -452,43 +218,9 @@ Create and manage Event Triggers that start a fresh Agent Run when a matching co
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `eventTrigger` | Yes | S27 | — |
-| `agent` | Yes | CrewhelmAgentReference | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S27`
-
-Type: value.
-Details: One bounded automation definition. Crewhelm validates its exact contract.
-
-#### `CrewhelmAgentReference`
-
-Copy-ready Agent identity and immutable revision returned by Crewhelm.
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `id` | Yes | S1 | — |
-| `revision` | Yes | S2 | — |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `eventTrigger` | Yes | value | One bounded automation definition. Crewhelm validates its exact contract. |
+| `agent` | Yes | object | Copy-ready Agent identity and immutable revision returned by Crewhelm. |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `update_event_trigger`
 
@@ -496,43 +228,9 @@ Create and manage Event Triggers that start a fresh Agent Run when a matching co
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `definition` | Yes | S27 | — |
-| `trigger` | Yes | CrewhelmEventTriggerReference | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S27`
-
-Type: value.
-Details: One bounded automation definition. Crewhelm validates its exact contract.
-
-#### `CrewhelmEventTriggerReference`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `agentId` | Yes | S1 | — |
-| `agentRevision` | Yes | S2 | — |
-| `id` | Yes | string | Opaque Event Trigger identity for exact lifecycle operations. pattern: `^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `definition` | Yes | value | One bounded automation definition. Crewhelm validates its exact contract. |
+| `trigger` | Yes | object | — |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `pause_event_trigger`
 
@@ -540,37 +238,8 @@ Create and manage Event Triggers that start a fresh Agent Run when a matching co
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `trigger` | Yes | CrewhelmEventTriggerReference | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmEventTriggerReference`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `agentId` | Yes | S1 | — |
-| `agentRevision` | Yes | S2 | — |
-| `id` | Yes | string | Opaque Event Trigger identity for exact lifecycle operations. pattern: `^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `trigger` | Yes | object | — |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `resume_event_trigger`
 
@@ -578,37 +247,8 @@ Create and manage Event Triggers that start a fresh Agent Run when a matching co
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `trigger` | Yes | CrewhelmEventTriggerReference | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmEventTriggerReference`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `agentId` | Yes | S1 | — |
-| `agentRevision` | Yes | S2 | — |
-| `id` | Yes | string | Opaque Event Trigger identity for exact lifecycle operations. pattern: `^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `trigger` | Yes | object | — |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `delete_event_trigger`
 
@@ -616,37 +256,8 @@ Create and manage Event Triggers that start a fresh Agent Run when a matching co
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `trigger` | Yes | CrewhelmEventTriggerReference | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmEventTriggerReference`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `agentId` | Yes | S1 | — |
-| `agentRevision` | Yes | S2 | — |
-| `id` | Yes | string | Opaque Event Trigger identity for exact lifecycle operations. pattern: `^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `trigger` | Yes | object | — |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ## `crewhelm_change_connections`
 
@@ -681,23 +292,8 @@ Enable managed authentication for a chosen integration. Pass the returned authCo
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `integrationSlug` | Yes | S29 | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S29`
-
-Type: string.
-Details: pattern: `^[a-z0-9][a-z0-9_-]{0,127}$`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `integrationSlug` | Yes | string | pattern: `^[a-z0-9][a-z0-9_-]{0,127}$` |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `authorize_provider`
 
@@ -706,17 +302,7 @@ Create a short-lived owner OAuth link from an exact authConfigId. Let the owner 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
 | `authConfigId` | Yes | string | pattern: `^ac_[A-Za-z0-9_-]{1,124}$` |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `connect_provider`
 
@@ -724,23 +310,8 @@ Enable managed authentication for a chosen integration. Pass the returned authCo
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `integrationSlug` | Yes | S29 | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S29`
-
-Type: string.
-Details: pattern: `^[a-z0-9][a-z0-9_-]{0,127}$`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `integrationSlug` | Yes | string | pattern: `^[a-z0-9][a-z0-9_-]{0,127}$` |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `inspect_provider_connection`
 
@@ -748,22 +319,7 @@ List bounded local connection summaries. Exact inspection with Connections write
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `connection` | Yes | S30 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S30`
-
-Type: object \| object.
-Details: —
-
-#### `S31`
-
-Type: string.
-Details: pattern: `^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
+| `connection` | Yes | object \| object | — |
 
 ### `grant_provider_actions`
 
@@ -771,66 +327,12 @@ Replace the exact integration tools exposed from one authorized connection on an
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `expiresAt` | Yes | S10 \| null | — |
-| `limits` | Yes | S32 | — |
+| `expiresAt` | Yes | string \| null | — |
+| `limits` | Yes | object | — |
 | `tools` | Yes | array of object | Selected integration-search results with owner-chosen authorization, sorted by slug:version. maximum items: `20` |
-| `agent` | Yes | CrewhelmAgentReference | — |
-| `connection` | Yes | S30 | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S10`
-
-Type: string.
-Details: format: `date-time`
-
-#### `S32`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `maxCallsPerRun` | Yes | integer | Owner-selected per-run call ceiling; choose the smallest useful value. minimum: `1`; maximum: `100` |
-| `maxConcurrency` | Yes | integer | Owner-selected concurrent-call ceiling; use 1 unless parallel calls are required. minimum: `1`; maximum: `16` |
-| `maxCostMicrousdPerCall` | Yes | integer | Owner-selected per-call cost ceiling in millionths of one US dollar. minimum: `0`; maximum: `1000000000000` |
-| `maxDurationMs` | Yes | integer | Owner-selected per-call wall-clock ceiling in milliseconds. minimum: `1`; maximum: `300000` |
-| `maxOutputBytes` | Yes | integer | Owner-selected per-call output ceiling in bytes. minimum: `1`; maximum: `10485760` |
-
-#### `CrewhelmAgentReference`
-
-Copy-ready Agent identity and immutable revision returned by Crewhelm.
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `id` | Yes | S1 | — |
-| `revision` | Yes | S2 | — |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S30`
-
-Type: object \| object.
-Details: —
-
-#### `S31`
-
-Type: string.
-Details: pattern: `^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `agent` | Yes | object | Copy-ready Agent identity and immutable revision returned by Crewhelm. |
+| `connection` | Yes | object \| object | — |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `connect_remote_mcp`
 
@@ -842,17 +344,7 @@ Connect, inspect, reauthenticate, or revoke one remote Streamable HTTP MCP Conne
 | `endpoint` | Yes | string | maximum length: `2048`; format: `uri` |
 | `name` | Yes | string | minimum length: `1`; maximum length: `80`; pattern: `^[ -~]+$` |
 | `oauthScopes` | No | array of string | maximum items: `32` |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `inspect_remote_mcp`
 
@@ -862,16 +354,6 @@ Connect, inspect, reauthenticate, or revoke one remote Streamable HTTP MCP Conne
 | --- | --- | --- | --- |
 | `connection` | Yes | object | — |
 
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S31`
-
-Type: string.
-Details: pattern: `^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
-
 ### `reauthenticate_remote_mcp`
 
 Connect, inspect, reauthenticate, or revoke one remote Streamable HTTP MCP Connection. Public endpoints connect directly. Bearer and OAuth endpoints use a short-lived browser setup link so credential material never enters MCP arguments or Agent context.
@@ -879,27 +361,7 @@ Connect, inspect, reauthenticate, or revoke one remote Streamable HTTP MCP Conne
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
 | `connection` | Yes | object | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S31`
-
-Type: string.
-Details: pattern: `^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S33`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `delete_remote_mcp`
 
@@ -908,27 +370,7 @@ Connect, inspect, reauthenticate, or revoke one remote Streamable HTTP MCP Conne
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
 | `connection` | Yes | object | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S31`
-
-Type: string.
-Details: pattern: `^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S33`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `grant_remote_mcp`
 
@@ -937,65 +379,11 @@ Attach the entire inspected, frozen tool catalog from one active remote MCP Conn
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
 | `authorization` | Yes | "approval_required" \| "standing" | One authorization mode applied to every tool in this frozen remote MCP catalog. |
-| `expiresAt` | Yes | S10 \| null | — |
-| `limits` | Yes | S32 | — |
-| `agent` | Yes | CrewhelmAgentReference | — |
+| `expiresAt` | Yes | string \| null | — |
+| `limits` | Yes | object | — |
+| `agent` | Yes | object | Copy-ready Agent identity and immutable revision returned by Crewhelm. |
 | `connection` | Yes | object | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S10`
-
-Type: string.
-Details: format: `date-time`
-
-#### `S32`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `maxCallsPerRun` | Yes | integer | Owner-selected per-run call ceiling; choose the smallest useful value. minimum: `1`; maximum: `100` |
-| `maxConcurrency` | Yes | integer | Owner-selected concurrent-call ceiling; use 1 unless parallel calls are required. minimum: `1`; maximum: `16` |
-| `maxCostMicrousdPerCall` | Yes | integer | Owner-selected per-call cost ceiling in millionths of one US dollar. minimum: `0`; maximum: `1000000000000` |
-| `maxDurationMs` | Yes | integer | Owner-selected per-call wall-clock ceiling in milliseconds. minimum: `1`; maximum: `300000` |
-| `maxOutputBytes` | Yes | integer | Owner-selected per-call output ceiling in bytes. minimum: `1`; maximum: `10485760` |
-
-#### `CrewhelmAgentReference`
-
-Copy-ready Agent identity and immutable revision returned by Crewhelm.
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `id` | Yes | S1 | — |
-| `revision` | Yes | S2 | — |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S31`
-
-Type: string.
-Details: pattern: `^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S33`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ## `crewhelm_change_context`
 
@@ -1041,36 +429,11 @@ Prepare skill. Draft and apply configuration packages or manage Briefs. Their co
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `expectedVersion` | No | S36 | — |
-| `id` | No | S34 | — |
-| `package` | Yes | CrewhelmConfigurationPackage | — |
-| `repairVersion` | No | S36 | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S36`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S34`
-
-Type: string.
-Details: pattern: `^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `CrewhelmConfigurationPackage`
-
-Type: value.
-Details: One bounded package. Crewhelm validates its exact contract.
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `expectedVersion` | No | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
+| `id` | No | string | pattern: `^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `package` | Yes | value | One bounded package. Crewhelm validates its exact contract. |
+| `repairVersion` | No | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `retire_skill`
 
@@ -1078,29 +441,9 @@ Preview fleet policy or preview/apply one bounded Skill or Agent blueprint chang
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `expectedVersion` | Yes | S36 | — |
-| `id` | Yes | S34 | — |
-| `confirm` | Yes | S37 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S36`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S34`
-
-Type: string.
-Details: pattern: `^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S37`
-
-Type: boolean.
-Details: Leave false to preview. Repeat the unchanged operation with true to apply it. default: `false`
-
-</details>
+| `expectedVersion` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
+| `id` | Yes | string | pattern: `^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `confirm` | Yes | boolean | Leave false to preview. Repeat the unchanged operation with true to apply it. default: `false` |
 
 ### `prepare_blueprint`
 
@@ -1108,35 +451,10 @@ Prepare blueprint. Draft and apply configuration packages or manage Briefs. Thei
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `expectedVersion` | No | S38 | — |
-| `id` | No | S35 | — |
-| `package` | Yes | CrewhelmConfigurationPackage | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S38`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S35`
-
-Type: string.
-Details: pattern: `^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `CrewhelmConfigurationPackage`
-
-Type: value.
-Details: One bounded package. Crewhelm validates its exact contract.
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `expectedVersion` | No | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
+| `id` | No | string | pattern: `^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `package` | Yes | value | One bounded package. Crewhelm validates its exact contract. |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `retire_blueprint`
 
@@ -1144,29 +462,9 @@ Preview fleet policy or preview/apply one bounded Skill or Agent blueprint chang
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `expectedVersion` | Yes | S38 | — |
-| `id` | Yes | S35 | — |
-| `confirm` | Yes | S37 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S38`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S35`
-
-Type: string.
-Details: pattern: `^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S37`
-
-Type: boolean.
-Details: Leave false to preview. Repeat the unchanged operation with true to apply it. default: `false`
-
-</details>
+| `expectedVersion` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
+| `id` | Yes | string | pattern: `^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `confirm` | Yes | boolean | Leave false to preview. Repeat the unchanged operation with true to apply it. default: `false` |
 
 ### `create_from_blueprint`
 
@@ -1174,30 +472,10 @@ Preview fleet policy or preview/apply one bounded Skill or Agent blueprint chang
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `id` | Yes | S35 | — |
+| `id` | Yes | string | pattern: `^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `parameters` | Yes | object | default: `[object Object]` |
-| `version` | No | S38 | — |
-| `confirm` | Yes | S37 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S35`
-
-Type: string.
-Details: pattern: `^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S38`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S37`
-
-Type: boolean.
-Details: Leave false to preview. Repeat the unchanged operation with true to apply it. default: `false`
-
-</details>
+| `version` | No | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
+| `confirm` | Yes | boolean | Leave false to preview. Repeat the unchanged operation with true to apply it. default: `false` |
 
 ### `preview_package`
 
@@ -1205,26 +483,7 @@ Preview package. Draft and apply configuration packages or manage Briefs. Their 
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `draft` | Yes | CrewhelmConfigurationDraftLocator | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmConfigurationDraftLocator`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `digest` | Yes | S39 | — |
-| `id` | Yes | string | pattern: `^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `kind` | Yes | "agent-blueprint-package" \| "skill-package" | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-</details>
+| `draft` | Yes | object | — |
 
 ### `apply_package`
 
@@ -1232,33 +491,9 @@ Apply package. Draft and apply configuration packages or manage Briefs. Their co
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `draft` | Yes | CrewhelmConfigurationDraftLocator | — |
-| `expectedConfirmationDigest` | Yes | S39 | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmConfigurationDraftLocator`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `digest` | Yes | S39 | — |
-| `id` | Yes | string | pattern: `^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `kind` | Yes | "agent-blueprint-package" \| "skill-package" | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `draft` | Yes | object | — |
+| `expectedConfirmationDigest` | Yes | string | pattern: `^[0-9a-f]{64}$` |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `discard_package_draft`
 
@@ -1266,26 +501,7 @@ Discard package draft. Draft and apply configuration packages or manage Briefs. 
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `draft` | Yes | CrewhelmConfigurationDraftLocator | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmConfigurationDraftLocator`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `digest` | Yes | S39 | — |
-| `id` | Yes | string | pattern: `^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `kind` | Yes | "agent-blueprint-package" \| "skill-package" | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-</details>
+| `draft` | Yes | object | — |
 
 ### `create_brief`
 
@@ -1293,30 +509,10 @@ Create or revise bounded owner-provided text Briefs, list compact metadata, insp
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `content` | Yes | S40 | — |
-| `mediaType` | Yes | S41 | — |
+| `content` | Yes | string | UTF-8 text without control characters, unpaired surrogates, or a leading BOM; maximum 32768 encoded bytes. minimum length: `1`; maximum length: `32768` |
+| `mediaType` | Yes | "application/json" \| "text/markdown" \| "text/plain" | — |
 | `name` | Yes | string | minimum length: `1`; maximum length: `80`; pattern: `^[A-Za-z0-9][A-Za-z0-9 ._-]*$` |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S40`
-
-Type: string.
-Details: UTF-8 text without control characters, unpaired surrogates, or a leading BOM; maximum 32768 encoded bytes. minimum length: `1`; maximum length: `32768`
-
-#### `S41`
-
-Type: "application/json" \| "text/markdown" \| "text/plain".
-Details: —
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `revise_brief`
 
@@ -1324,52 +520,10 @@ Create or revise bounded owner-provided text Briefs, list compact metadata, insp
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `content` | Yes | S40 | — |
-| `mediaType` | Yes | S41 | — |
-| `brief` | Yes | CrewhelmBriefReference | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S40`
-
-Type: string.
-Details: UTF-8 text without control characters, unpaired surrogates, or a leading BOM; maximum 32768 encoded bytes. minimum length: `1`; maximum length: `32768`
-
-#### `S41`
-
-Type: "application/json" \| "text/markdown" \| "text/plain".
-Details: —
-
-#### `CrewhelmBriefReference`
-
-Type: object \| S21 \| object.
-Details: Copy-ready Brief reference, summary, or create result returned by Crewhelm.
-
-#### `S19`
-
-Type: string.
-Details: pattern: `^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S20`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `100`
-
-#### `S21`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `currentRevision` | Yes | S20 | — |
-| `id` | Yes | S19 | — |
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `content` | Yes | string | UTF-8 text without control characters, unpaired surrogates, or a leading BOM; maximum 32768 encoded bytes. minimum length: `1`; maximum length: `32768` |
+| `mediaType` | Yes | "application/json" \| "text/markdown" \| "text/plain" | — |
+| `brief` | Yes | object \| object \| object | Copy-ready Brief reference, summary, or create result returned by Crewhelm. |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `delete_brief`
 
@@ -1377,40 +531,8 @@ Create or revise bounded owner-provided text Briefs, list compact metadata, insp
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `brief` | Yes | CrewhelmBriefReference | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmBriefReference`
-
-Type: object \| S21 \| object.
-Details: Copy-ready Brief reference, summary, or create result returned by Crewhelm.
-
-#### `S19`
-
-Type: string.
-Details: pattern: `^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S20`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `100`
-
-#### `S21`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `currentRevision` | Yes | S20 | — |
-| `id` | Yes | S19 | — |
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `brief` | Yes | object \| object \| object | Copy-ready Brief reference, summary, or create result returned by Crewhelm. |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ## `crewhelm_change_recipes`
 
@@ -1445,43 +567,8 @@ Prepare install. Draft, preview, install, or recover one immutable Recipe with o
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `requestKey` | No | S8 | — |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 | `target` | Yes | object | One exact immutable Recipe version at the configured canonical Registry origin. |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-#### `S42`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `80`; pattern: `^[a-z][a-z0-9-]*$`
-
-#### `S43`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `39`; pattern: `^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`
-
-#### `S44`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-#### `S45`
-
-Type: string.
-Details: maximum length: `2048`; format: `uri`
-
-</details>
 
 ### `set_setup`
 
@@ -1489,34 +576,10 @@ Set setup. Draft, preview, install, or recover one immutable Recipe with owner-l
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `draft` | Yes | CrewhelmRecipeInstallationDraftLocator | — |
+| `draft` | Yes | object | — |
 | `name` | Yes | string | minimum length: `1`; maximum length: `40`; pattern: `^[a-z][a-z0-9-]*$` |
-| `requestKey` | No | S8 | — |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 | `value` | Yes | string \| number \| boolean | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmRecipeInstallationDraftLocator`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `digest` | Yes | S39 | — |
-| `id` | Yes | string | pattern: `^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `kind` | Yes | string | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
 
 ### `bind_connection`
 
@@ -1524,44 +587,10 @@ Bind connection. Draft, preview, install, or recover one immutable Recipe with o
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `draft` | Yes | CrewhelmRecipeInstallationDraftLocator | — |
-| `connection` | Yes | S30 | — |
-| `requestKey` | No | S8 | — |
+| `draft` | Yes | object | — |
+| `connection` | Yes | object \| object | — |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 | `slot` | Yes | string | minimum length: `1`; maximum length: `40` |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmRecipeInstallationDraftLocator`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `digest` | Yes | S39 | — |
-| `id` | Yes | string | pattern: `^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `kind` | Yes | string | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-#### `S30`
-
-Type: object \| object.
-Details: —
-
-#### `S31`
-
-Type: string.
-Details: pattern: `^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
 
 ### `bind_brief`
 
@@ -1569,56 +598,10 @@ Bind brief. Draft, preview, install, or recover one immutable Recipe with owner-
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `draft` | Yes | CrewhelmRecipeInstallationDraftLocator | — |
-| `brief` | Yes | CrewhelmBriefReference | — |
+| `draft` | Yes | object | — |
+| `brief` | Yes | object \| object \| object | Copy-ready Brief reference, summary, or create result returned by Crewhelm. |
 | `inputName` | Yes | string | minimum length: `1`; maximum length: `40`; pattern: `^[a-z][a-z0-9-]*$` |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmRecipeInstallationDraftLocator`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `digest` | Yes | S39 | — |
-| `id` | Yes | string | pattern: `^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `kind` | Yes | string | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-#### `CrewhelmBriefReference`
-
-Type: object \| S21 \| object.
-Details: Copy-ready Brief reference, summary, or create result returned by Crewhelm.
-
-#### `S19`
-
-Type: string.
-Details: pattern: `^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S20`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `100`
-
-#### `S21`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `currentRevision` | Yes | S20 | — |
-| `id` | Yes | S19 | — |
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `select_optional_skill`
 
@@ -1626,45 +609,11 @@ Select optional skill. Draft, preview, install, or recover one immutable Recipe 
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `draft` | Yes | CrewhelmRecipeInstallationDraftLocator | — |
-| `name` | Yes | S42 | — |
-| `namespace` | Yes | S43 | — |
-| `requestKey` | No | S8 | — |
+| `draft` | Yes | object | — |
+| `name` | Yes | string | minimum length: `1`; maximum length: `80`; pattern: `^[a-z][a-z0-9-]*$` |
+| `namespace` | Yes | string | minimum length: `1`; maximum length: `39`; pattern: `^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$` |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 | `selected` | Yes | boolean | default: `true` |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmRecipeInstallationDraftLocator`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `digest` | Yes | S39 | — |
-| `id` | Yes | string | pattern: `^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `kind` | Yes | string | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-#### `S42`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `80`; pattern: `^[a-z][a-z0-9-]*$`
-
-#### `S43`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `39`; pattern: `^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
 
 ### `select_operations`
 
@@ -1672,38 +621,9 @@ Select operations. Draft, preview, install, or recover one immutable Recipe with
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `draft` | Yes | CrewhelmRecipeInstallationDraftLocator | — |
+| `draft` | Yes | object | — |
 | `operations` | Yes | object | default: `[object Object]` |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmRecipeInstallationDraftLocator`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `digest` | Yes | S39 | — |
-| `id` | Yes | string | pattern: `^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `kind` | Yes | string | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-#### `S47`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `80`; pattern: `^[a-z][a-z0-9-]*$`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `preview_install`
 
@@ -1711,26 +631,7 @@ Preview install. Draft, preview, install, or recover one immutable Recipe with o
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `draft` | Yes | CrewhelmRecipeInstallationDraftLocator | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmRecipeInstallationDraftLocator`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `digest` | Yes | S39 | — |
-| `id` | Yes | string | pattern: `^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `kind` | Yes | string | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-</details>
+| `draft` | Yes | object | — |
 
 ### `install`
 
@@ -1738,33 +639,9 @@ Install. Draft, preview, install, or recover one immutable Recipe with owner-loc
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `draft` | Yes | CrewhelmRecipeInstallationDraftLocator | — |
-| `expectedConfirmationDigest` | Yes | S39 | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmRecipeInstallationDraftLocator`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `digest` | Yes | S39 | — |
-| `id` | Yes | string | pattern: `^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `kind` | Yes | string | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `draft` | Yes | object | — |
+| `expectedConfirmationDigest` | Yes | string | pattern: `^[0-9a-f]{64}$` |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `discard_install_draft`
 
@@ -1772,26 +649,7 @@ Discard install draft. Draft, preview, install, or recover one immutable Recipe 
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `draft` | Yes | CrewhelmRecipeInstallationDraftLocator | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmRecipeInstallationDraftLocator`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `digest` | Yes | S39 | — |
-| `id` | Yes | string | pattern: `^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `kind` | Yes | string | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-</details>
+| `draft` | Yes | object | — |
 
 ### `recover_install`
 
@@ -1832,88 +690,12 @@ Talk with one exact Crewhelm Agent through a durable owner-private conversation.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `briefs` | No | S18 | — |
+| `briefs` | No | array of object \| object \| object | Copy-ready immutable Briefs returned by Crewhelm. maximum items: `8` |
 | `conversation` | No | object | Copy-ready conversation returned by Crewhelm. Omit it to start a new conversation. |
-| `outputContract` | No | S25 | — |
+| `outputContract` | No | value | Optional bounded output contract. Crewhelm validates its exact contract. |
 | `message` | Yes | string | minimum length: `1`; maximum length: `16384` |
-| `agent` | Yes | CrewhelmAgentReference | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S18`
-
-Type: array of CrewhelmBriefReference.
-Details: Copy-ready immutable Briefs returned by Crewhelm. maximum items: `8`
-
-#### `CrewhelmBriefReference`
-
-Type: object \| S21 \| object.
-Details: Copy-ready Brief reference, summary, or create result returned by Crewhelm.
-
-#### `S19`
-
-Type: string.
-Details: pattern: `^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S20`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `100`
-
-#### `S21`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `currentRevision` | Yes | S20 | — |
-| `id` | Yes | S19 | — |
-
-#### `S22`
-
-Type: integer.
-Details: Exact conversation revision previously returned by Crewhelm. exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S23`
-
-Type: S11.
-Details: Stable owner-private conversation identity.
-
-#### `S11`
-
-Type: string.
-Details: pattern: `^session_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S25`
-
-Type: value.
-Details: Optional bounded output contract. Crewhelm validates its exact contract.
-
-#### `CrewhelmAgentReference`
-
-Copy-ready Agent identity and immutable revision returned by Crewhelm.
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `id` | Yes | S1 | — |
-| `revision` | Yes | S2 | — |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `agent` | Yes | object | Copy-ready Agent identity and immutable revision returned by Crewhelm. |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `cancel_run`
 
@@ -1921,17 +703,7 @@ Cancel one authenticated-owner run only while no external tool effect has been d
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `runId` | Yes | S9 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S9`
-
-Type: string.
-Details: pattern: `^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
+| `runId` | Yes | string | pattern: `^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
 ### `decide_approval`
 
@@ -1941,17 +713,7 @@ Approve or reject one exact sensitive tool action waiting in an authenticated-ow
 | --- | --- | --- | --- |
 | `decision` | Yes | "approve" \| "reject" | — |
 | `executionId` | Yes | string | minimum length: `1`; maximum length: `255`; pattern: `^[A-Za-z0-9._:~-]+$` |
-| `runId` | Yes | S9 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S9`
-
-Type: string.
-Details: pattern: `^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
+| `runId` | Yes | string | pattern: `^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
 ### `acknowledge_inbox`
 
@@ -1960,17 +722,7 @@ Poll, summarize, or list compact inbox items across authenticated-owner Agents, 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
 | `itemId` | Yes | string | minimum length: `1`; maximum length: `255`; pattern: `^inbox_(?:run_[0-9a-f-]{36}\|deferred_[0-9a-f-]{36})$` |
-| `version` | Yes | S10 | Exact item version returned by Crewhelm to acknowledge. |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S10`
-
-Type: string.
-Details: format: `date-time`
-
-</details>
+| `version` | Yes | string | Exact item version returned by Crewhelm to acknowledge. format: `date-time` |
 
 ### `start_workflow`
 
@@ -1978,73 +730,12 @@ Coordinate a bounded multi-step objective as ordered durable Agent Runs. Skills 
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `briefs` | No | S18 | — |
+| `briefs` | No | array of object \| object \| object | Copy-ready immutable Briefs returned by Crewhelm. maximum items: `8` |
 | `objective` | Yes | string | minimum length: `1`; maximum length: `4096` |
-| `outputContract` | No | S25 | — |
+| `outputContract` | No | value | Optional bounded output contract. Crewhelm validates its exact contract. |
 | `stages` | Yes | array of object | minimum items: `2`; maximum items: `8` |
-| `agent` | Yes | CrewhelmAgentReference | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S18`
-
-Type: array of CrewhelmBriefReference.
-Details: Copy-ready immutable Briefs returned by Crewhelm. maximum items: `8`
-
-#### `CrewhelmBriefReference`
-
-Type: object \| S21 \| object.
-Details: Copy-ready Brief reference, summary, or create result returned by Crewhelm.
-
-#### `S19`
-
-Type: string.
-Details: pattern: `^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S20`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `100`
-
-#### `S21`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `currentRevision` | Yes | S20 | — |
-| `id` | Yes | S19 | — |
-
-#### `S25`
-
-Type: value.
-Details: Optional bounded output contract. Crewhelm validates its exact contract.
-
-#### `CrewhelmAgentReference`
-
-Copy-ready Agent identity and immutable revision returned by Crewhelm.
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `id` | Yes | S1 | — |
-| `revision` | Yes | S2 | — |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `agent` | Yes | object | Copy-ready Agent identity and immutable revision returned by Crewhelm. |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `cancel_workflow`
 
@@ -2052,24 +743,7 @@ Coordinate a bounded multi-step objective as ordered durable Agent Runs. Skills 
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `workflow` | Yes | CrewhelmWorkflowReference | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmWorkflowReference`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `workflowId` | Yes | S12 | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S12`
-
-Type: string.
-Details: pattern: `^workflow_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
+| `workflow` | Yes | object | — |
 
 ### `delete_workflow`
 
@@ -2077,30 +751,8 @@ Coordinate a bounded multi-step objective as ordered durable Agent Runs. Skills 
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `workflow` | Yes | CrewhelmWorkflowReference | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmWorkflowReference`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `workflowId` | Yes | S12 | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S12`
-
-Type: string.
-Details: pattern: `^workflow_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `workflow` | Yes | object | — |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `delete_conversation`
 
@@ -2108,39 +760,9 @@ Permanently delete one idle durable Agent session at its exact branch revision. 
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `agentId` | Yes | S1 | — |
+| `agentId` | Yes | string | pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `conversation` | Yes | object | Copy-ready conversation returned by Crewhelm Run or conversation inspection. |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S22`
-
-Type: integer.
-Details: Exact conversation revision previously returned by Crewhelm. exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S23`
-
-Type: S11.
-Details: Stable owner-private conversation identity.
-
-#### `S11`
-
-Type: string.
-Details: pattern: `^session_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ## `crewhelm_inspect_agents`
 
@@ -2169,26 +791,11 @@ List bounded Agent summaries for selection. Filter by name or status and use the
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `cursor` | No | S1 | — |
+| `cursor` | No | string | pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `limit` | Yes | integer | minimum: `1`; maximum: `25`; default: `25` |
 | `model` | No | string | Return Agents using this exact model. minimum length: `1`; maximum length: `160`; pattern: `^(?:@cf\/)?[A-Za-z0-9][A-Za-z0-9._:/-]*$` |
-| `name` | No | S7 | Return Agents whose names contain this value, case-insensitively for ASCII characters. |
+| `name` | No | string | Return Agents whose names contain this value, case-insensitively for ASCII characters. minimum length: `1`; maximum length: `80` |
 | `status` | No | "active" \| "disabled" | Return Agents in this lifecycle state. |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S7`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `80`
-
-</details>
 
 ### `inspect`
 
@@ -2196,17 +803,7 @@ Return the current immutable definition of one authenticated-owner Crewhelm Agen
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `id` | Yes | S1 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
+| `id` | Yes | string | pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
 ### `list_revisions`
 
@@ -2214,24 +811,9 @@ List bounded immutable revision summaries for one authenticated-owner Crewhelm A
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `cursor` | No | S2 | — |
-| `id` | Yes | S1 | — |
+| `cursor` | No | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
+| `id` | Yes | string | pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `limit` | Yes | integer | minimum: `1`; maximum: `25`; default: `25` |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
 
 ### `inspect_revision`
 
@@ -2239,23 +821,8 @@ Return one exact immutable historical definition of an authenticated-owner Crewh
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `id` | Yes | S1 | — |
-| `revision` | Yes | S2 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-</details>
+| `id` | Yes | string | pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
 
 ## `crewhelm_inspect_automations`
 
@@ -2288,16 +855,6 @@ List every bounded recurring responsibility for one Agent, including exact IDs, 
 | --- | --- | --- | --- |
 | `agent` | Yes | object | Copy-ready Agent identity returned by Crewhelm. |
 
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
-
 ### `inspect_schedule`
 
 Inspect one exact Agent schedule, its next dispatch time, and its most recent scheduled run. Omit scheduleId only when the Agent has at most one schedule.
@@ -2305,16 +862,6 @@ Inspect one exact Agent schedule, its next dispatch time, and its most recent sc
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
 | `schedule` | Yes | object | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
 
 ### `event_sources`
 
@@ -2324,16 +871,6 @@ Create and manage Event Triggers that start a fresh Agent Run when a matching co
 | --- | --- | --- | --- |
 | `connection` | Yes | object | — |
 
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S31`
-
-Type: string.
-Details: pattern: `^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
-
 ### `list_event_triggers`
 
 Create and manage Event Triggers that start a fresh Agent Run when a matching connected-app event occurs. Call sources with an exact Connection first, and optionally attach exact Brief revisions for context on every occurrence. Crewhelm owns delivery and recovery; provider payloads cannot choose Briefs.
@@ -2342,40 +879,13 @@ Create and manage Event Triggers that start a fresh Agent Run when a matching co
 | --- | --- | --- | --- |
 | `agent` | Yes | object | Copy-ready Agent identity returned by Crewhelm. |
 
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
-
 ### `inspect_event_trigger`
 
 Create and manage Event Triggers that start a fresh Agent Run when a matching connected-app event occurs. Call sources with an exact Connection first, and optionally attach exact Brief revisions for context on every occurrence. Crewhelm owns delivery and recovery; provider payloads cannot choose Briefs.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `trigger` | Yes | S26 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S26`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `agentId` | Yes | S1 | — |
-| `id` | Yes | string | Opaque Event Trigger identity for exact lifecycle operations. pattern: `^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
+| `trigger` | Yes | object | — |
 
 ### `event_history`
 
@@ -2384,24 +894,7 @@ Create and manage Event Triggers that start a fresh Agent Run when a matching co
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
 | `limit` | No | integer | minimum: `1`; maximum: `20` |
-| `trigger` | Yes | S26 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S26`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `agentId` | Yes | S1 | — |
-| `id` | Yes | string | Opaque Event Trigger identity for exact lifecycle operations. pattern: `^event_trigger_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
+| `trigger` | Yes | object | — |
 
 ## `crewhelm_inspect_connections`
 
@@ -2431,19 +924,9 @@ Choose an integration provider from the complete catalog. Skip this call when it
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `cursor` | No | S28 | — |
+| `cursor` | No | string | minimum length: `1`; maximum length: `2048` |
 | `limit` | Yes | integer | minimum: `1`; maximum: `50`; default: `20` |
 | `query` | No | string | minimum length: `3`; maximum length: `160` |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S28`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `2048`
-
-</details>
 
 ### `search_actions`
 
@@ -2451,25 +934,10 @@ Choose exact provider actions, normally filtered by an already selected integrat
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `cursor` | No | S28 | — |
-| `integrationSlug` | No | S29 | Limit action discovery to an already selected or connected integration. |
+| `cursor` | No | string | minimum length: `1`; maximum length: `2048` |
+| `integrationSlug` | No | string | Limit action discovery to an already selected or connected integration. pattern: `^[a-z0-9][a-z0-9_-]{0,127}$` |
 | `limit` | Yes | integer | minimum: `1`; maximum: `20`; default: `10` |
 | `query` | No | string | minimum length: `3`; maximum length: `160` |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S28`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `2048`
-
-#### `S29`
-
-Type: string.
-Details: pattern: `^[a-z0-9][a-z0-9_-]{0,127}$`
-
-</details>
 
 ### `inspect_action`
 
@@ -2486,24 +954,9 @@ List bounded pre-existing auth configurations for an integration. This recovery 
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `cursor` | No | S28 | — |
-| `integrationSlug` | Yes | S29 | — |
+| `cursor` | No | string | minimum length: `1`; maximum length: `2048` |
+| `integrationSlug` | Yes | string | pattern: `^[a-z0-9][a-z0-9_-]{0,127}$` |
 | `limit` | Yes | integer | minimum: `1`; maximum: `50`; default: `20` |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S28`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `2048`
-
-#### `S29`
-
-Type: string.
-Details: pattern: `^[a-z0-9][a-z0-9_-]{0,127}$`
-
-</details>
 
 ### `list_connections`
 
@@ -2512,20 +965,10 @@ List bounded local connection summaries. Exact inspection with Connections write
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
 | `authorizationOutcome` | No | "pending" \| "returned" \| "failed" \| "expired" \| "untracked" | Return connections with this latest owner-local authorization outcome. |
-| `cursor` | No | S31 | — |
+| `cursor` | No | string | pattern: `^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `integration` | No | string | Return connections created for this enabled integration. pattern: `^[a-z0-9][a-z0-9_-]{0,127}$` |
 | `limit` | Yes | integer | minimum: `1`; maximum: `20`; default: `20` |
 | `status` | No | "initiated" \| "active" \| "revoked" \| "unavailable" | Return connections in this lifecycle state. |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S31`
-
-Type: string.
-Details: pattern: `^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
 
 ## `crewhelm_inspect_context`
 
@@ -2574,20 +1017,10 @@ Get fleet policy, capability modules, Skills, or Agent blueprints through bounde
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `cursor` | No | S34 | — |
+| `cursor` | No | string | pattern: `^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `limit` | Yes | integer | minimum: `1`; maximum: `25`; default: `25` |
 | `name` | No | string | Return Skills whose names contain this value, case-insensitively. minimum length: `1`; maximum length: `80`; pattern: `^[a-z][a-z0-9-]*$` |
 | `status` | No | "active" \| "retired" | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S34`
-
-Type: string.
-Details: pattern: `^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
 
 ### `inspect_skill`
 
@@ -2595,23 +1028,8 @@ Get fleet policy, capability modules, Skills, or Agent blueprints through bounde
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `id` | Yes | S34 | — |
-| `version` | No | S36 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S34`
-
-Type: string.
-Details: pattern: `^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S36`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-</details>
+| `id` | Yes | string | pattern: `^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `version` | No | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
 
 ### `list_blueprints`
 
@@ -2619,21 +1037,11 @@ Get fleet policy, capability modules, Skills, or Agent blueprints through bounde
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `cursor` | No | S35 | — |
+| `cursor` | No | string | pattern: `^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `limit` | Yes | integer | minimum: `1`; maximum: `25`; default: `25` |
 | `name` | No | string | minimum length: `1`; maximum length: `80`; pattern: `^[a-z][a-z0-9-]*$` |
 | `status` | No | "active" \| "retired" | — |
 | `tag` | No | string | minimum length: `1`; maximum length: `40` |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S35`
-
-Type: string.
-Details: pattern: `^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
 
 ### `inspect_blueprint`
 
@@ -2641,23 +1049,8 @@ Get fleet policy, capability modules, Skills, or Agent blueprints through bounde
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `id` | Yes | S35 | — |
-| `version` | No | S38 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S35`
-
-Type: string.
-Details: pattern: `^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S38`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-</details>
+| `id` | Yes | string | pattern: `^blueprint_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `version` | No | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
 
 ### `list_briefs`
 
@@ -2665,19 +1058,9 @@ Create or revise bounded owner-provided text Briefs, list compact metadata, insp
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `cursor` | No | S19 | — |
+| `cursor` | No | string | pattern: `^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `limit` | No | integer | minimum: `1`; maximum: `25` |
 | `name` | No | string | minimum length: `1`; maximum length: `80`; pattern: `^[A-Za-z0-9][A-Za-z0-9 ._-]*$` |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S19`
-
-Type: string.
-Details: pattern: `^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
 
 ### `inspect_brief`
 
@@ -2685,17 +1068,7 @@ Create or revise bounded owner-provided text Briefs, list compact metadata, insp
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `id` | Yes | S19 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S19`
-
-Type: string.
-Details: pattern: `^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
+| `id` | Yes | string | pattern: `^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
 ### `inspect_brief_revision`
 
@@ -2703,34 +1076,7 @@ Create or revise bounded owner-provided text Briefs, list compact metadata, insp
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `brief` | Yes | CrewhelmBriefReference | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmBriefReference`
-
-Type: object \| S21 \| object.
-Details: Copy-ready Brief reference, summary, or create result returned by Crewhelm.
-
-#### `S19`
-
-Type: string.
-Details: pattern: `^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S20`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `100`
-
-#### `S21`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `currentRevision` | Yes | S20 | — |
-| `id` | Yes | S19 | — |
-
-</details>
+| `brief` | Yes | object \| object \| object | Copy-ready Brief reference, summary, or create result returned by Crewhelm. |
 
 ### `read_brief`
 
@@ -2738,34 +1084,7 @@ Create or revise bounded owner-provided text Briefs, list compact metadata, insp
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `brief` | Yes | CrewhelmBriefReference | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmBriefReference`
-
-Type: object \| S21 \| object.
-Details: Copy-ready Brief reference, summary, or create result returned by Crewhelm.
-
-#### `S19`
-
-Type: string.
-Details: pattern: `^brief_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S20`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `100`
-
-#### `S21`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `currentRevision` | Yes | S20 | — |
-| `id` | Yes | S19 | — |
-
-</details>
+| `brief` | Yes | object \| object \| object | Copy-ready Brief reference, summary, or create result returned by Crewhelm. |
 
 ## `crewhelm_inspect_recipes`
 
@@ -2804,36 +1123,6 @@ Search, inspect, and install immutable public Recipes and Skills. read_skill use
 | --- | --- | --- | --- |
 | `target` | Yes | object | One exact immutable Recipe version at the configured canonical Registry origin. |
 
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S42`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `80`; pattern: `^[a-z][a-z0-9-]*$`
-
-#### `S43`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `39`; pattern: `^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`
-
-#### `S44`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-#### `S45`
-
-Type: string.
-Details: maximum length: `2048`; format: `uri`
-
-</details>
-
 ### `read_skill`
 
 Search, inspect, and install immutable public Recipes and Skills. read_skill uses SKILL.md or a safe relative path. Preview with owner-local Connection and exact Brief bindings for selected recurring operations, then confirm the unchanged digest before installation.
@@ -2842,36 +1131,6 @@ Search, inspect, and install immutable public Recipes and Skills. read_skill use
 | --- | --- | --- | --- |
 | `path` | Yes | string | SKILL.md or a relative path under assets/, references/, or scripts/. minimum length: `1`; maximum length: `240` |
 | `target` | Yes | object | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S42`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `80`; pattern: `^[a-z][a-z0-9-]*$`
-
-#### `S43`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `39`; pattern: `^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`
-
-#### `S44`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-#### `S45`
-
-Type: string.
-Details: maximum length: `2048`; format: `uri`
-
-</details>
 
 ## `crewhelm_inspect_recovery`
 
@@ -2934,19 +1193,9 @@ Inspect one exact run instead of repeatedly listing runs. While active, poll con
 | --- | --- | --- | --- |
 | `includeDeliverable` | Yes | boolean | Include validated JSON deliverable content. Omit for compact inspection. default: `false` |
 | `includeUsage` | Yes | boolean | Include compact admitted and consumed run usage. default: `true` |
-| `runId` | Yes | S9 | — |
+| `runId` | Yes | string | pattern: `^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `timelineCursor` | Yes | integer | minimum: `0`; maximum: `9007199254740991`; default: `0` |
 | `timelineLimit` | Yes | integer | minimum: `1`; maximum: `50`; default: `20` |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S9`
-
-Type: string.
-Details: pattern: `^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
 
 ### `list_runs`
 
@@ -2954,33 +1203,13 @@ List compact run summaries across the fleet or for one Agent. Filter status by o
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `agentId` | No | S1 | Return runs for one exact Agent. |
-| `createdAfter` | No | S10 | Return runs created at or after this time. |
-| `createdBefore` | No | S10 | Return runs created at or before this time. |
-| `cursor` | No | S9 | — |
+| `agentId` | No | string | Return runs for one exact Agent. pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `createdAfter` | No | string | Return runs created at or after this time. format: `date-time` |
+| `createdBefore` | No | string | Return runs created at or before this time. format: `date-time` |
+| `cursor` | No | string | pattern: `^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `limit` | Yes | integer | minimum: `1`; maximum: `25`; default: `10` |
 | `status` | No | "queued" \| "running" \| "cancelling" \| "completed" \| "cancelled" \| "failed" \| string | Return runs in one projected state, or use "active" for queued, running, and cancelling runs. |
 | `trigger` | No | "manual" \| "schedule" \| "event_trigger" \| "workflow" | Return manual, scheduled, event-triggered, or workflow runs. |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S10`
-
-Type: string.
-Details: format: `date-time`
-
-#### `S9`
-
-Type: string.
-Details: pattern: `^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
 
 ### `list_approvals`
 
@@ -2988,17 +1217,7 @@ List sensitive tool actions waiting for this authenticated owner.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `runId` | Yes | S9 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S9`
-
-Type: string.
-Details: pattern: `^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
+| `runId` | Yes | string | pattern: `^run_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
 ### `list_conversations`
 
@@ -3006,24 +1225,9 @@ Recover durable owner-private conversations for one Agent when a conversation ha
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `agentId` | Yes | S1 | — |
-| `cursor` | No | S11 | — |
+| `agentId` | Yes | string | pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `cursor` | No | string | pattern: `^session_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `limit` | No | integer | minimum: `1`; maximum: `25` |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S11`
-
-Type: string.
-Details: pattern: `^session_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
 
 ### `inspect_conversation`
 
@@ -3031,23 +1235,8 @@ Recover durable owner-private conversations for one Agent when a conversation ha
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `agentId` | Yes | S1 | — |
-| `sessionId` | Yes | S11 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S11`
-
-Type: string.
-Details: pattern: `^session_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
+| `agentId` | Yes | string | pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `sessionId` | Yes | string | pattern: `^session_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
 ### `list_workflows`
 
@@ -3055,25 +1244,10 @@ Coordinate a bounded multi-step objective as ordered durable Agent Runs. Skills 
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `agentId` | No | S1 | Required for start; optional as an exact list filter. |
-| `cursor` | No | S12 | For list, continue after this workflowId. |
+| `agentId` | No | string | Required for start; optional as an exact list filter. pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `cursor` | No | string | For list, continue after this workflowId. pattern: `^workflow_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `limit` | No | integer | For list, bounded page size; defaults to 10. minimum: `1`; maximum: `25` |
 | `status` | No | "queued" \| "running" \| "waiting" \| "cancelling" \| "completed" \| "failed" \| "cancelled" \| string | For list, return one state or use "active" for unfinished workflows. |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S12`
-
-Type: string.
-Details: pattern: `^workflow_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
 
 ### `inspect_workflow`
 
@@ -3083,17 +1257,7 @@ Coordinate a bounded multi-step objective as ordered durable Agent Runs. Skills 
 | --- | --- | --- | --- |
 | `includePrompts` | No | boolean | For inspect only. Defaults false to avoid fetching frozen prompts. |
 | `includeDeliverable` | No | boolean | For inspect only. Defaults false to avoid fetching report content. |
-| `workflowId` | Yes | S12 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S12`
-
-Type: string.
-Details: pattern: `^workflow_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
+| `workflowId` | Yes | string | pattern: `^workflow_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
 ### `list_inbox`
 
@@ -3101,54 +1265,14 @@ Poll, summarize, or list compact inbox items across authenticated-owner Agents, 
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `agentId` | No | S13 | — |
-| `includeAcknowledged` | No | S14 | — |
-| `kinds` | No | S15 | — |
-| `needsAction` | No | S16 | — |
-| `occurredAfter` | No | S10 | Return items occurring after this time. |
-| `severities` | No | S17 | — |
+| `agentId` | No | string | Return items for one exact Agent. pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `includeAcknowledged` | No | boolean | Include acknowledged items; defaults to false. |
+| `kinds` | No | array of "action_required" \| "deferred" \| "exception" \| "outcome" | Return only these inbox kinds. minimum items: `1`; maximum items: `4` |
+| `needsAction` | No | boolean | Return only items that do or do not require an owner action. |
+| `occurredAfter` | No | string | Return items occurring after this time. format: `date-time` |
+| `severities` | No | array of "attention_required" \| "info" \| "warning" | Return only these deterministic severity classes. minimum items: `1`; maximum items: `3` |
 | `cursor` | No | string | Continue a list request after this opaque inbox item. minimum length: `1`; maximum length: `255`; pattern: `^inbox_(?:run_[0-9a-f-]{36}\|deferred_[0-9a-f-]{36})$` |
 | `limit` | No | integer | Maximum compact list items to return; defaults to 10. minimum: `1`; maximum: `25` |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S13`
-
-Type: S1.
-Details: Return items for one exact Agent.
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S14`
-
-Type: boolean.
-Details: Include acknowledged items; defaults to false.
-
-#### `S15`
-
-Type: array of "action_required" \| "deferred" \| "exception" \| "outcome".
-Details: Return only these inbox kinds. minimum items: `1`; maximum items: `4`
-
-#### `S16`
-
-Type: boolean.
-Details: Return only items that do or do not require an owner action.
-
-#### `S10`
-
-Type: string.
-Details: format: `date-time`
-
-#### `S17`
-
-Type: array of "attention_required" \| "info" \| "warning".
-Details: Return only these deterministic severity classes. minimum items: `1`; maximum items: `3`
-
-</details>
 
 ### `inbox_overview`
 
@@ -3156,52 +1280,12 @@ Poll, summarize, or list compact inbox items across authenticated-owner Agents, 
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `agentId` | No | S13 | — |
-| `includeAcknowledged` | No | S14 | — |
-| `kinds` | No | S15 | — |
-| `needsAction` | No | S16 | — |
-| `occurredAfter` | No | S10 | Return items occurring after this time. |
-| `severities` | No | S17 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S13`
-
-Type: S1.
-Details: Return items for one exact Agent.
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S14`
-
-Type: boolean.
-Details: Include acknowledged items; defaults to false.
-
-#### `S15`
-
-Type: array of "action_required" \| "deferred" \| "exception" \| "outcome".
-Details: Return only these inbox kinds. minimum items: `1`; maximum items: `4`
-
-#### `S16`
-
-Type: boolean.
-Details: Return only items that do or do not require an owner action.
-
-#### `S10`
-
-Type: string.
-Details: format: `date-time`
-
-#### `S17`
-
-Type: array of "attention_required" \| "info" \| "warning".
-Details: Return only these deterministic severity classes. minimum items: `1`; maximum items: `3`
-
-</details>
+| `agentId` | No | string | Return items for one exact Agent. pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `includeAcknowledged` | No | boolean | Include acknowledged items; defaults to false. |
+| `kinds` | No | array of "action_required" \| "deferred" \| "exception" \| "outcome" | Return only these inbox kinds. minimum items: `1`; maximum items: `4` |
+| `needsAction` | No | boolean | Return only items that do or do not require an owner action. |
+| `occurredAfter` | No | string | Return items occurring after this time. format: `date-time` |
+| `severities` | No | array of "attention_required" \| "info" \| "warning" | Return only these deterministic severity classes. minimum items: `1`; maximum items: `3` |
 
 ## `crewhelm_publish_recipe`
 
@@ -3233,45 +1317,11 @@ Prepare. Draft one Agent revision as a Recipe, authorize it, then preview or pub
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `agent` | Yes | CrewhelmAgentReference | — |
+| `agent` | Yes | object | Copy-ready Agent identity and immutable revision returned by Crewhelm. |
 | `eventTriggers` | Yes | array of object | maximum items: `8`; default: `` |
-| `license` | Yes | S48 | — |
+| `license` | Yes | string | minimum length: `1`; maximum length: `160`; pattern: `^[A-Za-z0-9().+ -]+$` |
 | `schedules` | Yes | array of object | maximum items: `8`; default: `` |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmAgentReference`
-
-Copy-ready Agent identity and immutable revision returned by Crewhelm.
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `id` | Yes | S1 | — |
-| `revision` | Yes | S2 | — |
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S2`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S48`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `160`; pattern: `^[A-Za-z0-9().+ -]+$`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `inspect_section`
 
@@ -3279,27 +1329,8 @@ Inspect section. Draft one Agent revision as a Recipe, authorize it, then previe
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `draft` | Yes | CrewhelmRecipePublicationDraftLocator | — |
+| `draft` | Yes | object | — |
 | `section` | Yes | "agent" \| "connections" \| "discovery" \| "inputs" \| "name" \| "operations" \| "responsibility" \| "sampleDeliverable" \| "setupParameters" \| "skills" | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmRecipePublicationDraftLocator`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `digest` | Yes | S39 | — |
-| `id` | Yes | string | pattern: `^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `kind` | Yes | string | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-</details>
 
 ### `set_section`
 
@@ -3307,34 +1338,10 @@ Set section. Draft one Agent revision as a Recipe, authorize it, then preview or
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `draft` | Yes | CrewhelmRecipePublicationDraftLocator | — |
-| `requestKey` | No | S8 | — |
+| `draft` | Yes | object | — |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 | `section` | Yes | "connections" \| "discovery" \| "inputs" \| "name" \| "operations" \| "responsibility" \| "sampleDeliverable" \| "setupParameters" | — |
 | `value` | Yes | value | One replacement section. Crewhelm validates the exact Recipe contract. |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmRecipePublicationDraftLocator`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `digest` | Yes | S39 | — |
-| `id` | Yes | string | pattern: `^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `kind` | Yes | string | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
 
 ### `set_skill_decision`
 
@@ -3343,69 +1350,8 @@ Set skill decision. Draft one Agent revision as a Recipe, authorize it, then pre
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
 | `decision` | Yes | value | — |
-| `draft` | Yes | CrewhelmRecipePublicationDraftLocator | — |
-| `requestKey` | No | S8 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S48`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `160`; pattern: `^[A-Za-z0-9().+ -]+$`
-
-#### `S49`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `id` | Yes | S34 | — |
-| `version` | Yes | S36 | — |
-
-#### `S34`
-
-Type: string.
-Details: pattern: `^skill_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-#### `S36`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-#### `S43`
-
-Type: string.
-Details: minimum length: `1`; maximum length: `39`; pattern: `^(?!-)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`
-
-#### `S45`
-
-Type: string.
-Details: maximum length: `2048`; format: `uri`
-
-#### `S44`
-
-Type: integer.
-Details: exclusive minimum: `0`; maximum: `9007199254740991`
-
-#### `CrewhelmRecipePublicationDraftLocator`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `digest` | Yes | S39 | — |
-| `id` | Yes | string | pattern: `^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `kind` | Yes | string | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S8`
-
-Type: string.
-Details: Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$`
-
-</details>
+| `draft` | Yes | object | — |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
 ### `authorize`
 
@@ -3422,27 +1368,8 @@ Preview or publish. Draft one Agent revision as a Recipe, authorize it, then pre
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
 | `authorization` | Yes | object | — |
-| `draft` | Yes | CrewhelmRecipePublicationDraftLocator | — |
-| `expectedConfirmationDigest` | No | S39 | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmRecipePublicationDraftLocator`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `digest` | Yes | S39 | — |
-| `id` | Yes | string | pattern: `^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `kind` | Yes | string | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-</details>
+| `draft` | Yes | object | — |
+| `expectedConfirmationDigest` | No | string | pattern: `^[0-9a-f]{64}$` |
 
 ### `discard_publish_draft`
 
@@ -3450,26 +1377,7 @@ Discard publish draft. Draft one Agent revision as a Recipe, authorize it, then 
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `draft` | Yes | CrewhelmRecipePublicationDraftLocator | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `CrewhelmRecipePublicationDraftLocator`
-
-| Input | Required | Type | Details |
-| --- | --- | --- | --- |
-| `digest` | Yes | S39 | — |
-| `id` | Yes | string | pattern: `^mcp_draft_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `kind` | Yes | string | — |
-| `revision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
-
-#### `S39`
-
-Type: string.
-Details: pattern: `^[0-9a-f]{64}$`
-
-</details>
+| `draft` | Yes | object | — |
 
 ## `crewhelm_recover`
 
@@ -3509,16 +1417,6 @@ Immediately disable one Crewhelm Agent or permanently revoke one connection or c
 | --- | --- | --- | --- |
 | `agent` | Yes | object | Copy-ready Agent identity returned by Crewhelm. |
 
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S1`
-
-Type: string.
-Details: pattern: `^agent_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
-
 ### `revoke_connection`
 
 Immediately disable one Crewhelm Agent or permanently revoke one connection or capability grant. Revoked connections must be reconnected before they can be used again.
@@ -3526,16 +1424,6 @@ Immediately disable one Crewhelm Agent or permanently revoke one connection or c
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
 | `connection` | Yes | object \| object | — |
-
-<details>
-<summary>Referenced input contracts</summary>
-
-#### `S31`
-
-Type: string.
-Details: pattern: `^connection_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-
-</details>
 
 ### `revoke_capability`
 
