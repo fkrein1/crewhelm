@@ -8,7 +8,7 @@ availability: available
 sources:
   - README.md
   - docs/reference/errors.md
-  - docs/reference/mcp-tools.md
+  - docs/reference/mcp/index.md
   - docs/security/threat-model.md
   - apps/cli/src/command.ts
   - packages/contracts/src/diagnostics.ts

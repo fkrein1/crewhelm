@@ -5,6 +5,7 @@ import * as z from "zod";
 
 import { deriveOwnerKey } from "../owner/identity.js";
 import { expectConstructibleAuthoringInputs, schemaObject } from "./facade-test-support.js";
+import { FACADE_THEME_DEFINITIONS } from "./facade-definitions.js";
 import { MCP_GETTING_STARTED_REFERENCE } from "./guidance.js";
 import {
   MCP_PROGRESSIVE_OPERATION_SCHEMA_SIZE_BUDGET_BYTES,
@@ -40,6 +41,7 @@ type DocumentedOperation = {
   schema: Record<string, unknown>;
 };
 type DocumentedTool = { operations: DocumentedOperation[]; tool: McpTool };
+type FacadeTheme = (typeof FACADE_THEME_DEFINITIONS)[number];
 
 const toolCallResponseSchema = z.looseObject({
   result: z.looseObject({
@@ -162,8 +164,8 @@ function renderJsonSchema(schema: Record<string, unknown>): string[] {
   ];
 }
 
-function renderTool({ operations, tool }: DocumentedTool): string {
-  const lines = [`## \`${tool.name}\``, ""];
+function renderTool({ operations, tool }: DocumentedTool, headingLevel = 2): string {
+  const lines = [`${"#".repeat(headingLevel)} \`${tool.name}\``, ""];
 
   if (tool.title) {
     lines.push(`**${tool.title}**`, "");
@@ -200,7 +202,7 @@ function renderTool({ operations, tool }: DocumentedTool): string {
   for (const operation of operations) {
     lines.push(
       "",
-      `### \`${operation.name}\``,
+      `${"#".repeat(headingLevel + 1)} \`${operation.name}\``,
       "",
       operation.description,
       "",
@@ -212,45 +214,151 @@ function renderTool({ operations, tool }: DocumentedTool): string {
   return lines.join("\n");
 }
 
-function renderReferenceBody(tools: DocumentedTool[], includeTitle: boolean): string {
-  const sections = tools
-    .toSorted((left, right) => left.tool.name.localeCompare(right.tool.name))
-    .map(renderTool);
-
+function authorityBoundary(): string[] {
   return [
-    ...(includeTitle ? ["# MCP tool reference", ""] : []),
     "This reference is generated from Crewhelm's authenticated MCP catalog and progressive operation schemas.",
     "Tool availability does not grant authority; every call is subject to the authenticated",
     "owner, approved OAuth scopes, and current control-plane policy.",
+  ];
+}
+
+function themeTools(theme: FacadeTheme, tools: DocumentedTool[]): DocumentedTool[] {
+  const documentedByName = new Map(tools.map((tool) => [tool.tool.name, tool]));
+
+  return theme.tools.map(({ name }) => {
+    const documented = documentedByName.get(name);
+    if (documented === undefined) throw new Error(`Missing documented facade tool: ${name}`);
+    return documented;
+  });
+}
+
+function toolNames(tools: DocumentedTool[]): string {
+  return tools.map(({ tool }) => `\`${tool.name}\``).join("<br />") || "—";
+}
+
+function renderOverviewBody(
+  tools: DocumentedTool[],
+  themeLink: (theme: FacadeTheme) => string,
+  includeTitle: boolean,
+): string {
+  const status = tools.find(({ tool }) => tool.name === "crewhelm_status");
+  if (status === undefined) throw new Error("Missing Crewhelm status tool documentation.");
+
+  const rows = FACADE_THEME_DEFINITIONS.map((theme) => {
+    const documented = themeTools(theme, tools);
+    const reads = documented.filter(({ tool }) => tool.annotations?.readOnlyHint === true);
+    const writes = documented.filter(({ tool }) => tool.annotations?.readOnlyHint !== true);
+    return `| [${theme.label}](${themeLink(theme)}) | ${theme.description} | ${toolNames(reads)} | ${toolNames(writes)} |`;
+  });
+
+  return [
+    ...(includeTitle ? ["# MCP Reference", ""] : []),
+    ...authorityBoundary(),
+    "",
+    "Choose a theme, then use its read tools to obtain exact coordinates before calling a write tool.",
+    "Recipes has two write tools because installation and publication have separate authority flows.",
+    "",
+    "| Theme | Outcome | Read tools | Write tools |",
+    "| --- | --- | --- | --- |",
+    ...rows,
     "",
     MCP_GETTING_STARTED_REFERENCE,
     "",
-    ...sections.flatMap((section) => [section, ""]),
+    renderTool(status),
+    "",
   ].join("\n");
 }
 
-function renderRepositoryReference(tools: DocumentedTool[]): string {
-  return [GENERATED_NOTICE, "", renderReferenceBody(tools, true)].join("\n");
+function renderThemeBody(
+  theme: FacadeTheme,
+  tools: DocumentedTool[],
+  includeTitle: boolean,
+): string {
+  const documented = themeTools(theme, tools);
+  const reads = documented.filter(({ tool }) => tool.annotations?.readOnlyHint === true);
+  const writes = documented.filter(({ tool }) => tool.annotations?.readOnlyHint !== true);
+  const sections = [
+    {
+      description: "Inspect state and obtain exact references without changing it.",
+      label: "Read tools",
+      tools: reads,
+    },
+    {
+      description: "Preview or perform bounded changes under the required owner authority.",
+      label: "Write tools",
+      tools: writes,
+    },
+  ];
+
+  return [
+    ...(includeTitle ? [`# MCP ${theme.label} reference`, ""] : []),
+    theme.description,
+    "",
+    ...authorityBoundary(),
+    "",
+    ...sections.flatMap((section) => [
+      `## ${section.label}`,
+      "",
+      section.description,
+      "",
+      ...section.tools.flatMap((tool) => [renderTool(tool, 3), ""]),
+    ]),
+  ].join("\n");
 }
 
-function renderSiteReference(tools: DocumentedTool[]): string {
+function renderRepositoryOverview(tools: DocumentedTool[]): string {
+  return [
+    GENERATED_NOTICE,
+    "",
+    renderOverviewBody(tools, (theme) => `./${theme.slug}.md`, true),
+  ].join("\n");
+}
+
+function renderRepositoryTheme(theme: FacadeTheme, tools: DocumentedTool[]): string {
+  return [GENERATED_NOTICE, "", renderThemeBody(theme, tools, true)].join("\n");
+}
+
+function siteFrontmatter(title: string, description: string): string[] {
   return [
     "---",
-    "title: MCP tool reference",
-    "description: Exact generated inputs and annotations for Crewhelm's authenticated MCP tools.",
+    `title: ${title}`,
+    `description: ${description}`,
     "type: reference",
     "audience: mcp-client",
-    "area: reference",
+    "area: mcp",
     "availability: available",
     "sources:",
     "  - apps/worker/src/mcp/documentation.test.ts",
+    "  - apps/worker/src/mcp/facade-definitions.ts",
     "  - apps/worker/src/mcp/server.ts",
     "tableOfContents: false",
     "---",
+  ];
+}
+
+function renderSiteOverview(tools: DocumentedTool[]): string {
+  return [
+    ...siteFrontmatter(
+      "MCP Reference",
+      "Choose a Crewhelm MCP theme, then inspect its generated read and write tool contracts.",
+    ),
     "",
     GENERATED_NOTICE,
     "",
-    renderReferenceBody(tools, false),
+    renderOverviewBody(tools, (theme) => `/docs/reference/mcp/${theme.slug}/`, false),
+  ].join("\n");
+}
+
+function renderSiteTheme(theme: FacadeTheme, tools: DocumentedTool[]): string {
+  return [
+    ...siteFrontmatter(
+      `MCP ${theme.label}`,
+      `Generated read and write tool contracts for Crewhelm ${theme.label.toLowerCase()}.`,
+    ),
+    "",
+    GENERATED_NOTICE,
+    "",
+    renderThemeBody(theme, tools, false),
   ].join("\n");
 }
 
@@ -384,14 +492,28 @@ describe("MCP documentation", () => {
     const response = await handleAuthenticatedMcpRequest(toolListRequest(), env, { authority });
     const payload = toolListResponseSchema.parse(await response.json());
     const tools = await discoverTools(authority, payload.result.tools);
-    const repositoryReference = renderRepositoryReference(tools);
-    const siteReference = renderSiteReference(tools);
+    const expectedToolNames = [
+      "crewhelm_status",
+      ...FACADE_THEME_DEFINITIONS.flatMap(({ tools: themeDefinitions }) =>
+        themeDefinitions.map(({ name }) => name),
+      ),
+    ].toSorted();
+    expect(tools.map(({ tool }) => tool.name).toSorted()).toEqual(expectedToolNames);
 
-    await expect(repositoryReference).toMatchFileSnapshot(
-      "../../../../docs/reference/mcp-tools.md",
+    await expect(renderRepositoryOverview(tools)).toMatchFileSnapshot(
+      "../../../../docs/reference/mcp/index.md",
     );
-    await expect(siteReference).toMatchFileSnapshot(
-      "../../../../apps/site/src/content/docs/docs/reference/mcp-tools.md",
+    await expect(renderSiteOverview(tools)).toMatchFileSnapshot(
+      "../../../../apps/site/src/content/docs/docs/reference/mcp/index.md",
     );
+
+    for (const theme of FACADE_THEME_DEFINITIONS) {
+      await expect(renderRepositoryTheme(theme, tools)).toMatchFileSnapshot(
+        `../../../../docs/reference/mcp/${theme.slug}.md`,
+      );
+      await expect(renderSiteTheme(theme, tools)).toMatchFileSnapshot(
+        `../../../../apps/site/src/content/docs/docs/reference/mcp/${theme.slug}.md`,
+      );
+    }
   });
 });

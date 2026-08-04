@@ -256,10 +256,9 @@ branding, stylesheet assets, and terminal color roles.
 6. Projections support discovery, never authority. Connect Links record setup lifecycle but do not
    activate or authorize connections.
 
-Control-plane migrations are ordered and checksummed; incompatible state fails closed. Upgrade
-compatibility is package-forward: current upgrade tooling can read the prior server's bounded
-fixtures, while an older strict CLI is not supported against a newer Worker. Installation upgrades
-replace and validate the packaged CLI and Worker together.
+The pre-alpha control-plane schema starts from one generated, checksummed bootstrap snapshot;
+incompatible state fails closed. Installation upgrades replace and validate the packaged CLI and
+Worker together.
 
 ## Dependency direction
 

@@ -36,7 +36,7 @@ used across the public site, browser handoffs, CLI, and future product surfaces.
 - **Integrations use the narrowest dependable plane.** Crewhelm uses Composio for its managed
   catalog and authentication, and can proxy a reviewed remote MCP Connection without rebuilding
   the server's provider adapter.
-- **Recipes are the eventual sharing unit.** A Recipe declares one portable mandate, bounded
+- **Recipes are the sharing unit.** A Recipe declares one portable mandate, bounded
   operations, inputs, deliverables, external requirements, authority requests, and limits without
   credentials or private history. Exact untrusted Skills are separate pinned dependencies; see the
   [Recipe product contract](recipes.md).

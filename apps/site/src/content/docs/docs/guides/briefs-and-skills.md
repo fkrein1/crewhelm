@@ -9,7 +9,7 @@ sources:
   - docs/product/philosophy.md
   - docs/architecture/system.md
   - docs/security/invariants.md
-  - docs/reference/mcp-tools.md
+  - docs/reference/mcp/index.md
   - apps/worker/src/agent-capabilities/skills.ts
   - packages/contracts/src/briefs.ts
 ---

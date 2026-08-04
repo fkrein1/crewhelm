@@ -94,7 +94,7 @@ export function llmsText(): string {
     `- [Publish a Recipe](${CREWHELM_SITE.url}/docs/guides/publish-recipe/): Publish one confirmed Agent revision and explicitly selected Skills as immutable public packages.`,
     `- [Authority and custody](${CREWHELM_SITE.url}/docs/concepts/authority-and-custody/): Understand where identity, credentials, policy, and execution live.`,
     `- [Diagnose and recover](${CREWHELM_SITE.url}/docs/guides/diagnose-and-recover/): Inspect failures and choose bounded recovery actions.`,
-    `- [MCP tool reference](${CREWHELM_SITE.url}/docs/reference/mcp-tools/): Inspect Crewhelm's authenticated MCP surface.`,
+    `- [MCP reference](${CREWHELM_SITE.url}/docs/reference/mcp/): Choose a theme, then inspect Crewhelm's generated read and write tool contracts.`,
     `- [GitHub repository](${CREWHELM_SITE.githubUrl}): Source code, contribution guidance, and implementation documentation.`,
     "",
   ].join("\n");

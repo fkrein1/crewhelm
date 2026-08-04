@@ -7,7 +7,7 @@ area: schedules
 availability: available
 sources:
   - CONTEXT.md
-  - docs/reference/mcp-tools.md
+  - docs/reference/mcp/index.md
   - docs/architecture/system.md
   - docs/security/invariants.md
   - packages/contracts/src/agent-schedules.ts

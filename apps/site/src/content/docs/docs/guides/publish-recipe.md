@@ -9,7 +9,7 @@ sources:
   - docs/product/recipes.md
   - docs/architecture/system.md
   - docs/security/invariants.md
-  - docs/reference/mcp-tools.md
+  - docs/reference/mcp/index.md
   - packages/contracts/src/recipe-publications.ts
 ---
 

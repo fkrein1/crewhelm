@@ -6,7 +6,7 @@ audience: owner
 area: agents
 availability: available
 sources:
-  - docs/reference/mcp-tools.md
+  - docs/reference/mcp/index.md
   - docs/architecture/system.md
   - packages/contracts/src/model-catalog.ts
   - apps/worker/src/mcp/model-tools.ts
