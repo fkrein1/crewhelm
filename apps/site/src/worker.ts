@@ -3,6 +3,7 @@ const REGISTRY_PUBLIC_PREFIX = "/api/registry";
 export interface SiteEnv {
   ASSETS: RequestService;
   REGISTRY: RequestService;
+  REGISTRY_ORIGIN?: string;
 }
 
 interface RequestService {
@@ -20,8 +21,23 @@ export async function routeSiteRequest(request: Request, env: SiteEnv): Promise<
   const internalPath = registryPath(url.pathname);
   if (internalPath === null) return env.ASSETS.fetch(request);
 
-  url.pathname = internalPath;
   try {
+    if (env.REGISTRY_ORIGIN !== undefined) {
+      const registryOrigin = new URL(env.REGISTRY_ORIGIN);
+      if (
+        registryOrigin.protocol !== "https:" ||
+        registryOrigin.pathname !== "/" ||
+        registryOrigin.search !== "" ||
+        registryOrigin.hash !== "" ||
+        registryOrigin.username !== "" ||
+        registryOrigin.password !== ""
+      ) {
+        throw new Error("Invalid Registry origin configuration.");
+      }
+      url.protocol = registryOrigin.protocol;
+      url.host = registryOrigin.host;
+    }
+    url.pathname = internalPath;
     return await env.REGISTRY.fetch(new Request(url, request));
   } catch {
     return Response.json(
