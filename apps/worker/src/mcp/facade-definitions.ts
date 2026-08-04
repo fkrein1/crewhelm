@@ -42,7 +42,9 @@ import {
   skillVersionSchema,
   toolCallIdSchema,
   cloudflareAiModelIdSchema,
+  browseCloudflareModelsInputSchema,
   modelCatalogRevisionNumberSchema,
+  searchCloudflareModelsInputSchema,
 } from "@crewhelm/contracts";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import * as z from "zod";
@@ -1598,10 +1600,16 @@ const MODEL_FACADE_DEFINITIONS = [
     name: MCP_INSPECT_MODELS_TOOL_NAME,
     operations: [
       {
+        action: "browse",
+        kind: "browse_models",
+        privateTool: "crewhelm_models",
+        publicSchema: browseCloudflareModelsInputSchema,
+      },
+      {
         action: "search",
         kind: "search_models",
-        only: ["capability", "limit", "provider", "query", "task"],
         privateTool: "crewhelm_models",
+        publicSchema: searchCloudflareModelsInputSchema,
       },
       {
         action: "inspect",

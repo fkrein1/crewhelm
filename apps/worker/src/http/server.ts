@@ -15,6 +15,7 @@ import {
 import { createCrewhelmAuth, verifyMcpAccessToken } from "../oauth/auth.js";
 import type { WorkerEnv } from "../env.js";
 import { handleAuthenticatedMcpRequest } from "../mcp/server.js";
+import { refreshCloudflareUnifiedModelCatalog } from "../mcp/cloudflare-unified-model-catalog.js";
 import {
   protectedResourceMetadata,
   purgeExpiredAuthRecords,
@@ -465,6 +466,11 @@ export default class CrewhelmWorker extends WorkerEntrypoint {
   }
 
   override scheduled(_controller: ScheduledController): void {
-    this.ctx.waitUntil(purgeExpiredAuthRecords(this.env));
+    this.ctx.waitUntil(
+      Promise.all([
+        purgeExpiredAuthRecords(this.env),
+        refreshCloudflareUnifiedModelCatalog(this.env.AUTH_DB),
+      ]).then(() => undefined),
+    );
   }
 }

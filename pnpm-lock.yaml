@@ -130,6 +130,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@ai-sdk/openai':
+        specifier: 4.0.20
+        version: 4.0.20(zod@4.4.3)
       '@ai-sdk/provider':
         specifier: 4.0.3
         version: 4.0.3

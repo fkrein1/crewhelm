@@ -97,7 +97,12 @@ const EXPECTED_FACADE_OPERATIONS = {
     "inspect_brief_revision",
     "read_brief",
   ],
-  crewhelm_inspect_models: ["search_models", "inspect_model", "list_enabled_models"],
+  crewhelm_inspect_models: [
+    "browse_models",
+    "search_models",
+    "inspect_model",
+    "list_enabled_models",
+  ],
   crewhelm_inspect_recipes: ["search", "inspect", "read_skill"],
   crewhelm_inspect_recovery: ["unresolved_effects"],
   crewhelm_inspect_work: [

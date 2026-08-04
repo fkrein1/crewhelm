@@ -5,6 +5,8 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   authorize_provider: "Create an authorization link for one enabled provider integration.",
   bind_brief: "Bind one exact Brief revision to a named Recipe input.",
   bind_connection: "Bind one provider Connection to a required Recipe slot.",
+  browse_models:
+    "Browse compact, pageable models and facets across Cloudflare-hosted and third-party providers.",
   cancel_run: "Cancel one Run before it dispatches an external tool effect.",
   cancel_workflow: "Stop future stages of one exact active Workflow revision.",
   connect_provider:
@@ -107,7 +109,7 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   run: "Start or continue one owner-private conversation with an exact Agent revision.",
   search: "Search immutable public Recipes by bounded text query.",
   search_actions: "Search provider actions, optionally within one known integration.",
-  search_models: "Search current models by name, provider, task, or declared capability.",
+  search_models: "Search detailed Workers AI metadata by name, provider, task, or capability.",
   search_providers: "Search the complete integration provider catalog.",
   select_operations:
     "Choose the Schedule and Event Trigger operations for one Recipe installation draft.",

@@ -112,6 +112,10 @@ import {
 } from "../../observability/execution.js";
 import { createRemoteMcpInputSchema } from "../../remote-mcp/schema.js";
 import { createInferenceFallbackModel, type InferenceAttemptEvent } from "./inference-fallback.js";
+import {
+  createCloudflareOpenAIResponsesModel,
+  isOpenAIResponsesModel,
+} from "./openai-responses-model.js";
 import { digestRunPrompt, digestToolInput } from "./protocol.js";
 import {
   runBoundedSandboxCleanup,
@@ -1923,7 +1927,11 @@ export class CrewSession extends Think {
       ...configuration.runtimePlan.inference.fallbackModels,
     ];
     const attempts = attemptOrder.map((modelId, attemptIndex) => {
-      const resolvedModel = super.resolveModel(attemptIndex === 0 ? selectedModel : modelId);
+      const attemptModel = attemptIndex === 0 ? selectedModel : modelId;
+      const resolvedModel =
+        typeof attemptModel === "string" && isOpenAIResponsesModel(attemptModel)
+          ? createCloudflareOpenAIResponsesModel(this.getAIBinding(), attemptModel)
+          : super.resolveModel(attemptModel);
 
       if (typeof resolvedModel === "string" || resolvedModel.specificationVersion !== "v4") {
         throw runtimeAdmissionError();

@@ -28,13 +28,102 @@ How to use this tool:
 
 | Subtool | Purpose |
 | --- | --- |
-| `search_models` | Search current models by name, provider, task, or declared capability. |
+| `browse_models` | Browse compact, pageable models and facets across Cloudflare-hosted and third-party providers. |
+| `search_models` | Search detailed Workers AI metadata by name, provider, task, or capability. |
 | `inspect_model` | Inspect one exact current Cloudflare model ID. |
 | `list_enabled_models` | List owner-enabled model IDs and the default. |
 
+#### `browse_models`
+
+Browse compact, pageable models and facets across Cloudflare-hosted and third-party providers.
+
+| Input | Required | Type | Details |
+| --- | --- | --- | --- |
+| `capability` | No | "function-calling" \| "reasoning" \| "vision" \| "zero-data-retention" | — |
+| `includeDescriptions` | No | boolean | default: `false` |
+| `limit` | No | integer | minimum: `1`; maximum: `100`; default: `50` |
+| `page` | No | integer | minimum: `1`; maximum: `500`; default: `1` |
+| `platform` | No | "cloudflare-hosted" \| "third-party" | — |
+| `provider` | No | string | minimum length: `1`; maximum length: `80` |
+| `query` | No | string | minimum length: `1`; maximum length: `120` |
+| `sort` | No | "relevance" \| "name" \| "newest" \| "oldest" | default: `relevance` |
+| `task` | No | string | minimum length: `1`; maximum length: `80` |
+
+<details>
+<summary>View exact JSON Schema</summary>
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "capability": {
+      "type": "string",
+      "enum": [
+        "function-calling",
+        "reasoning",
+        "vision",
+        "zero-data-retention"
+      ]
+    },
+    "includeDescriptions": {
+      "default": false,
+      "type": "boolean"
+    },
+    "limit": {
+      "default": 50,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "page": {
+      "default": 1,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "cloudflare-hosted",
+        "third-party"
+      ]
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "sort": {
+      "default": "relevance",
+      "type": "string",
+      "enum": [
+        "relevance",
+        "name",
+        "newest",
+        "oldest"
+      ]
+    },
+    "task": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+</details>
+
 #### `search_models`
 
-Search current models by name, provider, task, or declared capability.
+Search detailed Workers AI metadata by name, provider, task, or capability.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
@@ -126,11 +215,15 @@ List owner-enabled model IDs and the default.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `capability` | No | "function-calling" \| "reasoning" \| "vision" | — |
-| `limit` | No | integer | minimum: `1`; maximum: `25`; default: `10` |
+| `capability` | No | "function-calling" \| "reasoning" \| "vision" \| "zero-data-retention" | — |
+| `includeDescriptions` | No | boolean | — |
+| `limit` | No | integer | minimum: `1`; maximum: `100` |
 | `modelId` | No | string | minimum length: `3`; maximum length: `160`; pattern: `^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\/)?[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:/-]*$` |
+| `page` | No | integer | minimum: `1`; maximum: `500` |
+| `platform` | No | "cloudflare-hosted" \| "third-party" | — |
 | `provider` | No | string | minimum length: `1`; maximum length: `80` |
 | `query` | No | string | minimum length: `1`; maximum length: `120` |
+| `sort` | No | "relevance" \| "name" \| "newest" \| "oldest" | — |
 | `task` | No | string | minimum length: `1`; maximum length: `80` |
 
 <details>
@@ -146,20 +239,35 @@ List owner-enabled model IDs and the default.
       "enum": [
         "function-calling",
         "reasoning",
-        "vision"
+        "vision",
+        "zero-data-retention"
       ]
     },
+    "includeDescriptions": {
+      "type": "boolean"
+    },
     "limit": {
-      "default": 10,
       "type": "integer",
       "minimum": 1,
-      "maximum": 25
+      "maximum": 100
     },
     "modelId": {
       "type": "string",
       "minLength": 3,
       "maxLength": 160,
       "pattern": "^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\\/)?[A-Za-z0-9][A-Za-z0-9._-]*\\/[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "page": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "cloudflare-hosted",
+        "third-party"
+      ]
     },
     "provider": {
       "type": "string",
@@ -170,6 +278,15 @@ List owner-enabled model IDs and the default.
       "type": "string",
       "minLength": 1,
       "maxLength": 120
+    },
+    "sort": {
+      "type": "string",
+      "enum": [
+        "relevance",
+        "name",
+        "newest",
+        "oldest"
+      ]
     },
     "task": {
       "type": "string",

@@ -8,6 +8,7 @@
     "db:control-plane:generate": "node ./scripts/generate-control-plane-migrations.mjs"
   },
   "dependencies": {
+    "@ai-sdk/openai": "4.0.20",
     "@ai-sdk/provider": "4.0.3",
     "@better-auth/oauth-provider": "1.7.0-beta.10",
     "@cloudflare/sandbox": "0.12.4",

@@ -66,6 +66,7 @@ const EXPECTED_MIGRATIONS = [
   "0010_oauth_offline_access.sql",
   "0011_autonomy_write_scope.sql",
   "0012_access_levels.sql",
+  "0013_cloudflare_model_catalog_cache.sql",
 ] as const;
 // This is an uncompressed package-integrity guard, not Cloudflare's compressed upload limit.
 const MAX_WORKER_SCRIPT_BYTES = 11 * 1_048_576;
