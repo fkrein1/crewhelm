@@ -152,6 +152,20 @@ function renderSchemaTable(schema: Record<string, unknown>): string[] {
   return ["| Input | Required | Type | Details |", "| --- | --- | --- | --- |", ...rows];
 }
 
+function renderJsonSchema(schema: Record<string, unknown>): string[] {
+  return [
+    "",
+    "<details>",
+    "<summary>View exact JSON Schema</summary>",
+    "",
+    "```json",
+    JSON.stringify(schema, null, 2),
+    "```",
+    "",
+    "</details>",
+  ];
+}
+
 function renderTool({ operations, tool }: DocumentedTool): string {
   const lines = [`## \`${tool.name}\``, ""];
 
@@ -195,6 +209,7 @@ function renderTool({ operations, tool }: DocumentedTool): string {
       operation.description,
       "",
       ...renderSchemaTable(operation.schema),
+      ...renderJsonSchema(operation.schema),
     );
   }
 
