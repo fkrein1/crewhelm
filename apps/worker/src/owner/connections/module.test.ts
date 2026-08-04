@@ -562,9 +562,9 @@ describe("OwnerControlPlane connections", () => {
       recordConnectionAuthorizationReturnResultSchema.parse(
         await stub.recordConnectionAuthorizationReturn(input),
       ),
-    ).toEqual({ ok: true, outcome: "returned", recorded: true });
+    ).toMatchObject({ ok: true, outcome: "returned", recorded: true });
     await evictDurableObject(stub);
-    await expect(stub.recordConnectionAuthorizationReturn(input)).resolves.toEqual({
+    await expect(stub.recordConnectionAuthorizationReturn(input)).resolves.toMatchObject({
       ok: true,
       outcome: "returned",
       recorded: false,
@@ -710,6 +710,30 @@ describe("OwnerControlPlane connections", () => {
         stub.activateVerifiedConnection({ ...authority, scopes: [scope] }, activation),
       ).resolves.toEqual(fixedConnectionReadFailure("insufficient_scope"));
     }
+
+    await expect(
+      stub.activateVerifiedConnectionAuthorizationReturn({
+        ...activation,
+        authorizationToken: "a".repeat(43),
+        reservationId: reservation.reservationId,
+      }),
+    ).resolves.toEqual(fixedConnectionReadFailure("invalid_request"));
+    await expect(
+      stub.activateVerifiedConnectionAuthorizationReturn({
+        ...activation,
+        authorizationToken: reservation.authorizationToken,
+        reservationId: reservation.reservationId,
+      }),
+    ).resolves.toMatchObject({
+      connections: [
+        {
+          connectionId: completion.connectionLink.connectionId,
+          integrationSlug: "todoist",
+          status: "active",
+        },
+      ],
+      ok: true,
+    });
 
     await expect(stub.activateVerifiedConnection(authority, activation)).resolves.toMatchObject({
       connections: [
@@ -876,7 +900,7 @@ describe("OwnerControlPlane connections", () => {
     await runInDurableObject(stub, (_instance, state) => {
       state.storage.sql.exec("DROP TRIGGER reject_connection_authorization_return_audit");
     });
-    await expect(stub.recordConnectionAuthorizationReturn(input)).resolves.toEqual({
+    await expect(stub.recordConnectionAuthorizationReturn(input)).resolves.toMatchObject({
       ok: true,
       outcome: "returned",
       recorded: true,

@@ -6,6 +6,7 @@ import {
   MAXIMUM_CONNECTION_LINK_REQUESTS_PER_OWNER,
   completeConnectionLinkInputSchema,
   completeIntegrationEnablementInputSchema,
+  activateVerifiedAuthorizationReturnInputSchema,
   activateVerifiedConnectionInputSchema,
   connectionAuthorizationTokenSchema,
   connectionSummarySchema,
@@ -27,6 +28,7 @@ import {
   reserveIntegrationEnablementResultSchema,
   reserveConnectionLinkResultSchema,
   type ConnectionSummary,
+  type ActivateVerifiedConnectionInput,
   type CreateConnectionLinkInput,
   type CreateConnectionLinkResult,
   type EnableIntegrationInput,
@@ -1212,6 +1214,7 @@ export class Connections {
           authorizationStatus: connectionAuthorizationReturns.status,
           clientId: connectionLinkRequests.clientId,
           connectionId: connectionAuthorizationReturns.connectionId,
+          integrationSlug: providerAuthConfigs.integrationSlug,
           providerConnectionId: connections.providerConnectionId,
           requestStatus: connectionLinkRequests.status,
         })
@@ -1223,6 +1226,10 @@ export class Connections {
         .leftJoin(
           connections,
           eq(connections.connectionId, connectionAuthorizationReturns.connectionId),
+        )
+        .leftJoin(
+          providerAuthConfigs,
+          eq(providerAuthConfigs.authConfigId, connections.authConfigId),
         )
         .where(
           and(
@@ -1240,10 +1247,22 @@ export class Connections {
       const currentOutcome = row.authorizationStatus;
       const storedProviderConnectionId = row.providerConnectionId;
 
+      if (
+        row.connectionId === null ||
+        typeof storedProviderConnectionId !== "string" ||
+        row.integrationSlug === null
+      ) {
+        return deniedConnectionAuthorizationReturn();
+      }
+      const connection = {
+        connectionId: row.connectionId,
+        integrationSlug: row.integrationSlug,
+        providerConnectionId: storedProviderConnectionId,
+      };
+
       if (currentOutcome === "returned" || currentOutcome === "failed") {
         if (
           currentOutcome !== desiredOutcome ||
-          typeof storedProviderConnectionId !== "string" ||
           (request.data.providerConnectionId !== undefined &&
             request.data.providerConnectionId !== storedProviderConnectionId) ||
           (desiredOutcome === "returned" &&
@@ -1253,6 +1272,7 @@ export class Connections {
         }
 
         return recordConnectionAuthorizationReturnResultSchema.parse({
+          connection,
           ok: true,
           outcome: desiredOutcome,
           recorded: false,
@@ -1298,6 +1318,7 @@ export class Connections {
         .run();
 
       return recordConnectionAuthorizationReturnResultSchema.parse({
+        connection,
         ok: true,
         outcome: desiredOutcome,
         recorded: true,
@@ -1410,6 +1431,41 @@ export class Connections {
       return deniedConnectionRead("invalid_request");
     }
 
+    return this.#activateVerified(authority.clientId, request.data);
+  }
+
+  async activateVerifiedAuthorizationReturn(input: unknown): Promise<ListConnectionsResult> {
+    const request = activateVerifiedAuthorizationReturnInputSchema.safeParse(input);
+
+    if (!request.success) return deniedConnectionRead("invalid_request");
+    const tokenDigest = await digestCanonicalRequest(request.data.authorizationToken);
+    const callback = this.#database
+      .select({ clientId: connectionLinkRequests.clientId })
+      .from(connectionAuthorizationReturns)
+      .innerJoin(
+        connectionLinkRequests,
+        eq(connectionLinkRequests.reservationId, connectionAuthorizationReturns.reservationId),
+      )
+      .where(
+        and(
+          eq(connectionAuthorizationReturns.reservationId, request.data.reservationId),
+          eq(connectionAuthorizationReturns.tokenDigest, tokenDigest),
+          eq(connectionAuthorizationReturns.connectionId, request.data.connectionId),
+          eq(connectionAuthorizationReturns.status, "returned"),
+          gt(connectionAuthorizationReturns.expiresAt, Date.now()),
+        ),
+      )
+      .get();
+
+    return callback === undefined
+      ? deniedConnectionRead("invalid_request")
+      : this.#activateVerified(callback.clientId, request.data);
+  }
+
+  #activateVerified(
+    clientId: string,
+    request: ActivateVerifiedConnectionInput,
+  ): ListConnectionsResult {
     const activation = this.#database.transaction(
       (transaction): VerifiedConnectionActivationResult => {
         const row = transaction
@@ -1420,7 +1476,7 @@ export class Connections {
             status: connections.status,
           })
           .from(connections)
-          .where(eq(connections.connectionId, request.data.connectionId))
+          .where(eq(connections.connectionId, request.connectionId))
           .get();
 
         if (
@@ -1432,7 +1488,7 @@ export class Connections {
           return { kind: "rejected", reason: "connection_not_found" };
         }
 
-        if (row.providerConnectionId !== request.data.providerConnectionId) {
+        if (row.providerConnectionId !== request.providerConnectionId) {
           return { kind: "rejected", reason: "provider_connection_mismatch" };
         }
 
@@ -1443,7 +1499,7 @@ export class Connections {
         const authorization = transaction
           .select({ status: connectionAuthorizationReturns.status })
           .from(connectionAuthorizationReturns)
-          .where(eq(connectionAuthorizationReturns.connectionId, request.data.connectionId))
+          .where(eq(connectionAuthorizationReturns.connectionId, request.connectionId))
           .orderBy(
             desc(connectionAuthorizationReturns.completedAt),
             desc(connectionAuthorizationReturns.reservationId),
@@ -1459,15 +1515,15 @@ export class Connections {
           return { kind: "rejected", reason: "authorization_not_returned" };
         }
 
-        if (integration?.slug !== request.data.verifiedIntegrationSlug) {
+        if (integration?.slug !== request.verifiedIntegrationSlug) {
           return { kind: "rejected", reason: "integration_mismatch" };
         }
 
         if (row.status === "active") {
           transaction
             .update(connections)
-            .set({ accountLabel: request.data.accountLabel })
-            .where(eq(connections.connectionId, request.data.connectionId))
+            .set({ accountLabel: request.accountLabel })
+            .where(eq(connections.connectionId, request.connectionId))
             .run();
           return { kind: "activated" };
         }
@@ -1475,13 +1531,13 @@ export class Connections {
         const updated = transaction
           .update(connections)
           .set({
-            accountLabel: request.data.accountLabel,
+            accountLabel: request.accountLabel,
             status: "active",
           })
           .where(
             and(
-              eq(connections.connectionId, request.data.connectionId),
-              eq(connections.providerConnectionId, request.data.providerConnectionId),
+              eq(connections.connectionId, request.connectionId),
+              eq(connections.providerConnectionId, request.providerConnectionId),
               eq(connections.status, "initiated"),
             ),
           )
@@ -1496,9 +1552,9 @@ export class Connections {
           .insert(auditEvents)
           .values({
             action: "connection.activated",
-            clientId: authority.clientId,
+            clientId,
             occurredAt: Date.now(),
-            subjectId: request.data.connectionId,
+            subjectId: request.connectionId,
           })
           .run();
         return { kind: "activated" };
@@ -1506,7 +1562,7 @@ export class Connections {
     );
 
     return activation.kind === "activated"
-      ? this.list({ connectionId: request.data.connectionId })
+      ? this.list({ connectionId: request.connectionId })
       : deniedConnectionRead("invalid_request");
   }
 
