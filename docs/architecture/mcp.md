@@ -106,9 +106,9 @@ The authenticated initial catalog has explicit CI ceilings of 16 tools, 6 KiB of
 schemas, 12 KiB for the complete model-visible payload including server instructions, and 1 KiB
 for any one complete tool definition. These are review ceilings, not MCP protocol limits. Exact
 operation schemas are materialized individually after discovery. Shared local JSON Schema
-definitions use `$ref` rather than repeating common references and contracts. Schema growth must
-represent a typed owner decision or domain object; internal coordination fields do not justify
-public catalog growth.
+definitions are inlined because they rarely repeat within one progressively returned operation
+schema; each operation schema has its own 8 KiB CI ceiling. Schema growth must represent a typed
+owner decision or domain object; internal coordination fields do not justify public catalog growth.
 
 Large provider action catalogs remain progressively discoverable: search a provider only when it
 is unknown, search its actions only when needed, then grant exact versions to one Agent revision.

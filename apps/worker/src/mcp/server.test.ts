@@ -1123,6 +1123,8 @@ describe("authenticated MCP handler", () => {
       tool: MCP_INSPECT_AGENTS_TOOL_NAME,
     });
     expect(JSON.stringify(described)).not.toContain('"kind"');
+    expect(JSON.stringify(described)).not.toContain('"$ref"');
+    expect(JSON.stringify(described)).not.toContain('"$defs"');
 
     const executed = await call(3, MCP_INSPECT_AGENTS_TOOL_NAME, {
       input: { limit: 10 },

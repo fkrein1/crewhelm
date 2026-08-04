@@ -245,47 +245,6 @@ interface FacadeToolDefinition {
   title: string;
 }
 
-const sharedSchemaIds = new WeakMap<object, string>();
-let nextSharedSchemaId = 1;
-
-function registerLocalSchemaReferences(root: z.ZodType): void {
-  const counts = new Map<z.ZodType, number>();
-  const expanded = new Set<z.ZodType>();
-
-  function visit(value: unknown): void {
-    if (value instanceof z.ZodType) {
-      counts.set(value, (counts.get(value) ?? 0) + 1);
-      if (expanded.has(value)) return;
-      expanded.add(value);
-      const internals: unknown = Reflect.get(value, "_zod");
-      if (typeof internals === "object" && internals !== null) {
-        visit(Reflect.get(internals, "def"));
-      }
-      return;
-    }
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item);
-      return;
-    }
-    if (typeof value === "object" && value !== null) {
-      for (const nested of Object.values(value)) visit(nested);
-    }
-  }
-
-  visit(root);
-  for (const [schema, count] of counts) {
-    const metadata = z.globalRegistry.get(schema);
-    if (count < 2 || metadata?.id !== undefined) continue;
-    let id = sharedSchemaIds.get(schema);
-    if (id === undefined) {
-      id = `S${nextSharedSchemaId}`;
-      nextSharedSchemaId += 1;
-      sharedSchemaIds.set(schema, id);
-    }
-    z.globalRegistry.add(schema, { ...metadata, id });
-  }
-}
-
 const CLOSED_READ: ToolAnnotations = {
   destructiveHint: false,
   idempotentHint: true,
@@ -2110,7 +2069,6 @@ function legacyFacadeInputSchema(
   const operation = second === undefined ? first : z.union([first, second, ...schemas.slice(2)]);
 
   const schema = z.strictObject({ operation });
-  registerLocalSchemaReferences(schema);
   return schema;
 }
 
@@ -2122,6 +2080,45 @@ const progressiveFacadeInputSchema = z.looseObject({
 
 function operationPayloadSchema(catalog: PrivateToolCatalog, operation: FacadeOperation) {
   return operationSchema(catalog, operation).omit({ kind: true });
+}
+
+const jsonSchemaObjectSchema = z.record(z.string(), z.unknown());
+
+function inlineLocalSchemaReferences(schema: Record<string, unknown>): Record<string, unknown> {
+  const parsedDefinitions = jsonSchemaObjectSchema.safeParse(schema.$defs);
+  const definitions = parsedDefinitions.success ? parsedDefinitions.data : {};
+
+  function inline(value: unknown, resolving: ReadonlySet<string>): unknown {
+    if (Array.isArray(value)) return value.map((item) => inline(item, resolving));
+    const parsedObject = jsonSchemaObjectSchema.safeParse(value);
+    if (!parsedObject.success) return value;
+
+    const object = parsedObject.data;
+    if (typeof object.$ref === "string" && object.$ref.startsWith("#/$defs/")) {
+      const name = object.$ref.slice("#/$defs/".length);
+      const definition = definitions[name];
+      if (definition === undefined || resolving.has(name)) {
+        throw new Error(`Cannot inline Crewhelm schema reference: ${name}`);
+      }
+      const resolved = jsonSchemaObjectSchema.parse(
+        inline(definition, new Set([...resolving, name])),
+      );
+      const siblings = Object.fromEntries(
+        Object.entries(object)
+          .filter(([key]) => key !== "$ref")
+          .map(([key, nested]) => [key, inline(nested, resolving)]),
+      );
+      return { ...resolved, ...siblings };
+    }
+
+    return Object.fromEntries(
+      Object.entries(object)
+        .filter(([name]) => name !== "$defs")
+        .map(([name, nested]) => [name, inline(nested, resolving)]),
+    );
+  }
+
+  return jsonSchemaObjectSchema.parse(inline(schema, new Set()));
 }
 
 function progressiveResult(value: Record<string, unknown>): CallToolResult {
@@ -2309,11 +2306,10 @@ export function registerFacadeTools(server: McpServer, catalog: PrivateToolCatal
             parsed.data.name === undefined ? undefined : operations.get(parsed.data.name);
           if (selected === undefined) return progressiveError("Unknown Crewhelm operation.");
           const schema = operationPayloadSchema(catalog, selected);
-          registerLocalSchemaReferences(schema);
           return progressiveResult({
             ok: true,
             operation: selected.kind,
-            schema: z.toJSONSchema(schema),
+            schema: inlineLocalSchemaReferences(z.toJSONSchema(schema)),
             tool: definition.name,
           });
         }

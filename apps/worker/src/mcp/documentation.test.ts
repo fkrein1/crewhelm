@@ -5,7 +5,10 @@ import * as z from "zod";
 
 import { deriveOwnerKey } from "../owner/identity.js";
 import { MCP_GETTING_STARTED_REFERENCE } from "./guidance.js";
-import { handleAuthenticatedMcpRequest } from "./server.js";
+import {
+  MCP_PROGRESSIVE_OPERATION_SCHEMA_SIZE_BUDGET_BYTES,
+  handleAuthenticatedMcpRequest,
+} from "./server.js";
 
 const origin = "https://crewhelm.test";
 const toolListResponseSchema = z.looseObject({
@@ -76,9 +79,8 @@ function annotationLabels(tool: McpTool): string[] {
 }
 
 function schemaObject(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
+  const parsed = z.record(z.string(), z.unknown()).safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 function schemaType(schema: Record<string, unknown>): string {
@@ -150,32 +152,6 @@ function renderSchemaTable(schema: Record<string, unknown>): string[] {
   return ["| Input | Required | Type | Details |", "| --- | --- | --- | --- |", ...rows];
 }
 
-function renderReferencedContracts(schema: Record<string, unknown>): string[] {
-  const definitions = schemaObject(schema.$defs);
-  if (definitions === null || Object.keys(definitions).length === 0) return [];
-
-  const lines = ["", "<details>", "<summary>Referenced input contracts</summary>", ""];
-  for (const [name, value] of Object.entries(definitions)) {
-    const definition = schemaObject(value) ?? {};
-    const table = renderSchemaTable(definition);
-    lines.push(`#### \`${name}\``, "");
-    if (table[0] === "No input fields.") {
-      lines.push(
-        `Type: ${markdownText(schemaType(definition))}.`,
-        `Details: ${schemaDetails(definition)}`,
-        "",
-      );
-    } else {
-      if (typeof definition.description === "string") {
-        lines.push(definition.description, "");
-      }
-      lines.push(...table, "");
-    }
-  }
-  lines.push("</details>");
-  return lines;
-}
-
 function renderTool({ operations, tool }: DocumentedTool): string {
   const lines = [`## \`${tool.name}\``, ""];
 
@@ -219,7 +195,6 @@ function renderTool({ operations, tool }: DocumentedTool): string {
       operation.description,
       "",
       ...renderSchemaTable(operation.schema),
-      ...renderReferencedContracts(operation.schema),
     );
   }
 
@@ -340,6 +315,13 @@ async function discoverTools(
           request: "schema",
         }),
       );
+      const serializedSchema = JSON.stringify(described.schema);
+      expect(serializedSchema).not.toContain('"$ref"');
+      expect(serializedSchema).not.toContain('"$defs"');
+      expect(
+        new TextEncoder().encode(serializedSchema).byteLength,
+        `${tool.name}.${operation.name} progressive schema bytes`,
+      ).toBeLessThanOrEqual(MCP_PROGRESSIVE_OPERATION_SCHEMA_SIZE_BUDGET_BYTES);
       operations.push({
         description: operation.description,
         name: described.operation,
