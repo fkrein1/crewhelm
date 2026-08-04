@@ -41,26 +41,25 @@ Registry OAuth credentials remain runtime Worker secrets and are not build input
 
 Workers Builds runs from `apps/registry` for the Registry Worker and `apps/site` for the site
 Worker. Registry deployment calls `pnpm deploy:production`; the site builds with `pnpm run build`
-and deploys with `pnpm exec wrangler deploy --env production`. Both projects track `main`.
+and deploys with `pnpm exec wrangler deploy`. Both projects track `main`.
 
 Site pull requests upload an undeployed version of the connected `crewhelm-site` Worker. Its public
-preview URL routes Registry reads through a private service binding to `crewhelm-registry-dev`; the
-preview environment has no production route or production Registry binding. Keep the site Workers
-Build configured with:
+preview URL uses the same production Registry and KV bindings as a production deployment. Keep the
+site Workers Build configured with:
 
 | Setting                              | Value                                               |
 | ------------------------------------ | --------------------------------------------------- |
 | Root directory                       | `/apps/site`                                        |
 | Production branch                    | `main`                                              |
 | Build command                        | `pnpm run build`                                    |
-| Production deploy command            | `pnpm exec wrangler deploy --env production`        |
-| Non-production branch deploy command | `pnpm exec wrangler versions upload --env preview`  |
+| Production deploy command            | `pnpm exec wrangler deploy`                         |
+| Non-production branch deploy command | `pnpm exec wrangler versions upload`                |
 | Non-production branch builds         | Enabled                                             |
 | Build watch include paths            | `*`; every branch commit can produce a site preview |
 
-Preview URLs are public and have no Workers logs. Do not put secrets or production bindings in the
-preview environment. Disable non-production branch builds to stop new previews; existing uploaded
-versions remain inert unless their preview URL is requested.
+Preview URLs are public, have no Workers logs, and run unreviewed branch code with production
+bindings. Disable non-production branch builds to stop new previews; existing uploaded versions
+remain inert unless their preview URL is requested.
 
 Restore only a Worker version verified as a production deployment from `main` with the production
 Registry and KV bindings. Never deploy or roll back to a pull-request preview version. D1
