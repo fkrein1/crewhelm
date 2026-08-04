@@ -27,7 +27,7 @@ jobs:
     # This internal-branch job needs checks read access to discover the Cloudflare version and
     # issues write access to maintain one idempotent preview comment on the pull request.
     permissions:
-      checks: read
+      checks: read # Read the Cloudflare check output containing the uploaded version ID.
       contents: read
       issues: write # Create or update only this workflow's marked preview comment.
     runs-on: ubuntu-24.04
