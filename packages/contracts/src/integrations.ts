@@ -178,6 +178,12 @@ const providerAuthSetupRequiredSchema = z.strictObject({
   availableSchemes: z.array(providerAuthSchemeSchema).min(1).max(4),
   managedAuthAvailable: z.boolean(),
   recommendedScheme: providerAuthSchemeSchema,
+  setup: z
+    .strictObject({
+      expiresAt: z.iso.datetime(),
+      url: z.url().max(4_096),
+    })
+    .optional(),
   state: z.literal("setup_required"),
 });
 const providerAuthUnsupportedSchema = z.strictObject({

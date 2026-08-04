@@ -115,6 +115,10 @@ import {
   type DeleteBriefResult,
   type RecipeToolResult,
   type RecipePublicationToolResult,
+  type PrepareProviderAuthSetupResult,
+  type ProviderAuthSetupAuthorityResult,
+  type ProviderAuthSetupMutationResult,
+  type ProviderAuthSetupPlanResult,
 } from "@crewhelm/contracts";
 import {
   createComposioEventCatalog,
@@ -153,6 +157,7 @@ import {
 } from "./connections/index.js";
 import { FleetConfigurations, deniedFleetConfiguration } from "./configuration/index.js";
 import { RemoteMcpConnections } from "./remote-mcp-connections/index.js";
+import { ProviderAuthSetups } from "./provider-auth-setup/index.js";
 import { CONTROL_PLANE_SCHEMA_VERSION, migrateControlPlane } from "./migrations.js";
 import {
   auditEvents,
@@ -314,6 +319,7 @@ export class OwnerControlPlane extends DurableObject {
   readonly #agents: AgentRegistry;
   readonly #agentBlueprints: AgentBlueprints;
   readonly #connections: Connections;
+  readonly #providerAuthSetups: ProviderAuthSetups;
   readonly #remoteMcpConnections: RemoteMcpConnections;
   readonly #agentChannel: AgentChannel;
   readonly #authorityControls: AuthorityControls;
@@ -391,6 +397,7 @@ export class OwnerControlPlane extends DurableObject {
     this.#connections = new Connections(this.#database, this.#storage, () =>
       this.#fleetConfigurations.currentData(),
     );
+    this.#providerAuthSetups = new ProviderAuthSetups(this.#objectName, this.#database);
     this.#remoteMcpConnections = new RemoteMcpConnections(
       this.#database,
       () => this.#fleetConfigurations.currentData(),
@@ -1366,6 +1373,46 @@ export class OwnerControlPlane extends DurableObject {
     return authorization.ok
       ? this.#connections.reserveIntegrationEnablement(authorization.authority, input)
       : deniedIntegrationEnablement(authorization.code);
+  }
+
+  async prepareProviderAuthSetup(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<PrepareProviderAuthSetupResult> {
+    const authorization = this.#authorize(authorityInput, CONNECTION_CONFIGS_WRITE_SCOPE);
+    return authorization.ok
+      ? this.#providerAuthSetups.prepare(authorization.authority, input)
+      : {
+          error: {
+            code: authorization.code,
+            message: "Provider authentication setup request denied." as const,
+          },
+          ok: false as const,
+        };
+  }
+
+  exchangeProviderAuthSetup(input: unknown): ProviderAuthSetupPlanResult {
+    return this.#providerAuthSetups.exchange(input);
+  }
+
+  readProviderAuthSetup(input: unknown): ProviderAuthSetupPlanResult {
+    return this.#providerAuthSetups.read(input);
+  }
+
+  reserveProviderAuthSetupConfiguration(input: unknown): ProviderAuthSetupPlanResult {
+    return this.#providerAuthSetups.reserveConfiguration(input);
+  }
+
+  completeProviderAuthSetup(input: unknown): ProviderAuthSetupMutationResult {
+    return this.#providerAuthSetups.complete(input);
+  }
+
+  rejectProviderAuthSetup(input: unknown): ProviderAuthSetupMutationResult {
+    return this.#providerAuthSetups.reject(input);
+  }
+
+  providerAuthSetupAuthority(input: unknown): ProviderAuthSetupAuthorityResult {
+    return this.#providerAuthSetups.authority(input);
   }
 
   async completeIntegrationEnablement(

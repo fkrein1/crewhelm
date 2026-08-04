@@ -3337,14 +3337,59 @@ describe("authenticated MCP handler", () => {
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
         Response.json({
-          auth_config_details: [{ mode: "oauth2" }],
+          auth_config_details: [
+            {
+              fields: {
+                auth_config_creation: {
+                  optional: [],
+                  required: [
+                    {
+                      displayName: "Client secret",
+                      is_secret: true,
+                      name: "client_secret",
+                      required: true,
+                      type: "string",
+                    },
+                  ],
+                },
+              },
+              mode: "oauth2",
+            },
+          ],
           composio_managed_auth_schemes: [],
           name: "Spotify",
           no_auth: false,
           slug: "spotify",
         }),
       )
-      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }));
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
+      .mockResolvedValueOnce(
+        Response.json({
+          auth_config_details: [
+            {
+              fields: {
+                auth_config_creation: {
+                  optional: [],
+                  required: [
+                    {
+                      displayName: "Client secret",
+                      is_secret: true,
+                      name: "client_secret",
+                      required: true,
+                      type: "string",
+                    },
+                  ],
+                },
+              },
+              mode: "oauth2",
+            },
+          ],
+          composio_managed_auth_schemes: [],
+          name: "Spotify",
+          no_auth: false,
+          slug: "spotify",
+        }),
+      );
     const response = await handleAuthenticatedMcpRequest(
       toolRequest(
         JSON.stringify({
@@ -3402,14 +3447,59 @@ describe("authenticated MCP handler", () => {
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
         Response.json({
-          auth_config_details: [{ mode: "oauth2" }],
+          auth_config_details: [
+            {
+              fields: {
+                auth_config_creation: {
+                  optional: [],
+                  required: [
+                    {
+                      displayName: "Client secret",
+                      is_secret: true,
+                      name: "client_secret",
+                      required: true,
+                      type: "string",
+                    },
+                  ],
+                },
+              },
+              mode: "oauth2",
+            },
+          ],
           composio_managed_auth_schemes: [],
           name: "Spotify",
           no_auth: false,
           slug: "spotify",
         }),
       )
-      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }));
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
+      .mockResolvedValueOnce(
+        Response.json({
+          auth_config_details: [
+            {
+              fields: {
+                auth_config_creation: {
+                  optional: [],
+                  required: [
+                    {
+                      displayName: "Client secret",
+                      is_secret: true,
+                      name: "client_secret",
+                      required: true,
+                      type: "string",
+                    },
+                  ],
+                },
+              },
+              mode: "oauth2",
+            },
+          ],
+          composio_managed_auth_schemes: [],
+          name: "Spotify",
+          no_auth: false,
+          slug: "spotify",
+        }),
+      );
     const response = await handleAuthenticatedMcpRequest(
       toolRequest(
         JSON.stringify({
@@ -3436,11 +3526,18 @@ describe("authenticated MCP handler", () => {
 
     expect(payload.isError).toBe(false);
     expect(result).toMatchObject({
-      authentication: { managedAuthAvailable: false, state: "setup_required" },
+      authentication: {
+        managedAuthAvailable: false,
+        setup: {
+          expiresAt: expect.any(String),
+          url: expect.stringMatching(/^https:\/\/crewhelm\.test\/setup\/provider-auth#capability=/),
+        },
+        state: "setup_required",
+      },
       integration: { slug: "spotify" },
       ok: true,
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     await expect(
       runInDurableObject(
         env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
@@ -3451,9 +3548,16 @@ describe("authenticated MCP handler", () => {
           links: state.storage.sql
             .exec("SELECT count(*) AS count FROM connection_link_requests")
             .one(),
+          setups: state.storage.sql
+            .exec("SELECT count(*) AS count FROM provider_auth_setup_requests")
+            .one(),
         }),
       ),
-    ).resolves.toEqual({ enablements: { count: 0 }, links: { count: 0 } });
+    ).resolves.toEqual({
+      enablements: { count: 0 },
+      links: { count: 0 },
+      setups: { count: 1 },
+    });
   });
 
   it("connects through one existing custom auth config without managed enablement", async () => {

@@ -29,10 +29,13 @@ without receiving prompts or provider authority.
 
 ## Credential custody
 
-Composio holds managed provider credentials and refreshes them. Agents receive only opaque
-Connection identifiers and bounded use through Crewhelm's adapter. For a bearer or OAuth remote
-MCP Connection, Crewhelm encrypts credentials at rest in the owner control plane and never places
-them in MCP arguments, Agent state, model context, logs, audit results, or provider results.
+Composio holds managed and custom provider credentials and refreshes supported OAuth credentials.
+For custom setup, a short-lived Crewhelm browser session relays entered values directly from the
+Worker to Composio; the owner control plane stores only digests, a frozen safe field plan, and the
+resulting auth-config reference. Agents receive only opaque Connection identifiers and bounded use
+through Crewhelm's adapter. For a bearer or OAuth remote MCP Connection, Crewhelm encrypts
+credentials at rest in the owner control plane and never places them in MCP arguments, Agent state,
+model context, logs, audit results, or provider results.
 
 The bootstrap CLI briefly holds deployment authority. Local installation metadata contains
 non-secret coordinates, not deployed secret values.

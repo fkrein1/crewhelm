@@ -25,6 +25,7 @@ import type {
   WorkflowDeliverable,
   JsonValue,
   McpAuthoringDraftKind,
+  ProviderAuthSetupPlan,
 } from "@crewhelm/contracts";
 import {
   check,
@@ -2256,6 +2257,80 @@ export const providerAuthConfigs = sqliteTable(
   ],
 );
 
+export const providerAuthSetupRequests = sqliteTable(
+  "provider_auth_setup_requests",
+  {
+    setupId: text("setup_id").primaryKey(),
+    clientId: text("client_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    capabilityDigest: text("capability_digest").notNull().unique(),
+    capabilityExpiresAt: integer("capability_expires_at").notNull(),
+    setupExpiresAt: integer("setup_expires_at").notNull(),
+    sessionDigest: text("session_digest").unique(),
+    sessionExpiresAt: integer("session_expires_at"),
+    plan: text("plan", { mode: "json" }).$type<ProviderAuthSetupPlan>().notNull(),
+    status: text("status", {
+      enum: ["prepared", "exchanged", "submitting", "configured", "rejected", "outcome_unknown"],
+    }).notNull(),
+    authConfigId: text("auth_config_id"),
+    recoverAfter: integer("recover_after"),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("provider_auth_setup_requests_client_idempotency").on(
+      table.clientId,
+      table.idempotencyKey,
+    ),
+    index("provider_auth_setup_requests_status_expiry").on(table.status, table.setupExpiresAt),
+    check("provider_auth_setup_requests_request_digest", sql`length(${table.requestDigest}) = 64`),
+    check(
+      "provider_auth_setup_requests_capability_digest",
+      sql`length(${table.capabilityDigest}) = 64`,
+    ),
+    check(
+      "provider_auth_setup_requests_session_digest",
+      sql`${table.sessionDigest} IS NULL OR length(${table.sessionDigest}) = 64`,
+    ),
+    check("provider_auth_setup_requests_plan_json", sql`json_valid(${table.plan})`),
+    check(
+      "provider_auth_setup_requests_status",
+      sql`${table.status} IN ('prepared', 'exchanged', 'submitting', 'configured', 'rejected', 'outcome_unknown')`,
+    ),
+    check("provider_auth_setup_requests_created_at", sql`${table.createdAt} > 0`),
+    check("provider_auth_setup_requests_updated_at", sql`${table.updatedAt} >= ${table.createdAt}`),
+    check(
+      "provider_auth_setup_requests_expiry",
+      sql`${table.capabilityExpiresAt} > ${table.createdAt} AND ${table.setupExpiresAt} >= ${table.capabilityExpiresAt}`,
+    ),
+    check(
+      "provider_auth_setup_requests_session_state",
+      sql`(
+        (${table.status} = 'prepared' AND ${table.sessionDigest} IS NULL AND ${table.sessionExpiresAt} IS NULL)
+        OR
+        (${table.status} <> 'prepared' AND ${table.sessionDigest} IS NOT NULL AND ${table.sessionExpiresAt} IS NOT NULL)
+      )`,
+    ),
+    check(
+      "provider_auth_setup_requests_completion_state",
+      sql`(
+        (${table.status} = 'configured' AND ${table.authConfigId} IS NOT NULL)
+        OR
+        (${table.status} <> 'configured' AND ${table.authConfigId} IS NULL)
+      )`,
+    ),
+    check(
+      "provider_auth_setup_requests_recovery_state",
+      sql`(
+        (${table.status} IN ('submitting', 'outcome_unknown') AND ${table.recoverAfter} IS NOT NULL)
+        OR
+        (${table.status} NOT IN ('submitting', 'outcome_unknown') AND ${table.recoverAfter} IS NULL)
+      )`,
+    ),
+  ],
+);
+
 export const connectionAuthorizationReturns = sqliteTable(
   "connection_authorization_returns",
   {
@@ -2366,6 +2441,7 @@ export const controlPlaneSchema = {
   integrationUsageEvents,
   integrationEnablementRequests,
   providerAuthConfigs,
+  providerAuthSetupRequests,
   mcpAuthoringDrafts,
   runAdmissions,
   runtimeToolExecutions,

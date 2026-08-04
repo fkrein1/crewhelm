@@ -221,6 +221,156 @@ describe("Composio auth configurations", () => {
     });
   });
 
+  it("freezes bounded custom credential fields without exposing provider defaults", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        auth_config_details: [
+          {
+            auth_hint_url: "https://docs.example.com/github-app",
+            fields: {
+              auth_config_creation: {
+                optional: [
+                  {
+                    displayName: "Client label",
+                    is_secret: false,
+                    name: "client_label",
+                    required: false,
+                    type: "string",
+                  },
+                ],
+                required: [
+                  {
+                    displayName: "Client secret",
+                    is_secret: true,
+                    name: "client_secret",
+                    required: true,
+                    type: "string",
+                  },
+                  {
+                    displayName: "Redirect URI",
+                    is_secret: false,
+                    name: "oauth_redirect_uri",
+                    required: true,
+                    type: "string",
+                  },
+                ],
+              },
+            },
+            mode: "oauth2",
+          },
+        ],
+        composio_managed_auth_schemes: [],
+        name: "GitHub",
+        slug: "github",
+      }),
+    );
+
+    await expect(
+      createComposioAuthConfigs({ apiKey, fetch: fetchMock }).prepareCustom({
+        authScheme: "OAUTH2",
+        integrationSlug: "github",
+      }),
+    ).resolves.toEqual({
+      callbackUrl: "https://backend.composio.dev/api/v3.1/toolkits/auth/callback",
+      documentationUrl: "https://docs.example.com/github-app",
+      fields: [
+        {
+          key: "client_secret",
+          label: "Client secret",
+          maximumLength: 8192,
+          required: true,
+          secret: true,
+          type: "string",
+        },
+        {
+          key: "client_label",
+          label: "Client label",
+          maximumLength: 2048,
+          required: false,
+          secret: false,
+          type: "string",
+        },
+      ],
+      integrationName: "GitHub",
+      ok: true,
+    });
+  });
+
+  it("relays custom credentials once and returns only safe auth-config metadata", async () => {
+    const clientSecret = "custom-client-secret-value";
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse(
+        {
+          auth_config: {
+            auth_scheme: "OAUTH2",
+            id: "ac_github_custom",
+            is_composio_managed: false,
+          },
+          toolkit: { slug: "github" },
+        },
+        201,
+      ),
+    );
+
+    const result = await createComposioAuthConfigs({ apiKey, fetch: fetchMock }).createCustom({
+      authScheme: "OAUTH2",
+      credentials: { client_secret: clientSecret },
+      integrationSlug: "github",
+      name: "Crewhelm github deadbeef",
+    });
+
+    expect(result).toEqual({
+      authConfig: {
+        authConfigId: "ac_github_custom",
+        authScheme: "OAUTH2",
+        integrationSlug: "github",
+        name: "Crewhelm github deadbeef",
+        source: "crewhelm_custom",
+      },
+      ok: true,
+    });
+    expect(JSON.stringify(result)).not.toContain(clientSecret);
+    expect(JSON.stringify(result)).not.toContain(apiKey);
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    if (typeof init?.body !== "string") throw new TypeError("Expected serialized request.");
+    expect(JSON.parse(init.body)).toEqual({
+      auth_config: {
+        authScheme: "OAUTH2",
+        credentials: { client_secret: clientSecret },
+        name: "Crewhelm github deadbeef",
+        type: "use_custom_auth",
+      },
+      toolkit: { slug: "github" },
+    });
+  });
+
+  it("distinguishes rejected custom credentials from an ambiguous provider outcome", async () => {
+    const rejectedFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ error: "invalid credentials" }, { status: 400 }));
+    await expect(
+      createComposioAuthConfigs({ apiKey, fetch: rejectedFetch }).createCustom({
+        authScheme: "API_KEY",
+        credentials: { api_key: "rejected-secret" },
+        integrationSlug: "linear",
+        name: "Crewhelm linear rejected",
+      }),
+    ).resolves.toEqual({ error: "credentials_rejected", ok: false });
+
+    const unknownFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(jsonResponse({ items: [], next_cursor: null }));
+    await expect(
+      createComposioAuthConfigs({ apiKey, fetch: unknownFetch }).createCustom({
+        authScheme: "API_KEY",
+        credentials: { api_key: "unknown-secret" },
+        integrationSlug: "linear",
+        name: "Crewhelm linear unknown",
+      }),
+    ).resolves.toEqual({ error: "outcome_unknown", ok: false });
+  });
+
   it("recovers an ambiguous managed create and fails closed for unbounded reads", async () => {
     const recoveryFetch = vi
       .fn<typeof fetch>()

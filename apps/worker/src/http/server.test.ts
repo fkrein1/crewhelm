@@ -4,16 +4,23 @@ import {
   AUTONOMY_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
+  CONNECTION_CONFIGS_WRITE_SCOPE,
   healthReportSchema,
   ownerAuthoritySchema,
   OWNER_WRITE_SCOPE,
   remoteMcpConnectionOperationResultSchema,
+  PROVIDER_AUTH_SETUP_CAPABILITY_LIFETIME_MS,
+  PROVIDER_AUTH_SETUP_SESSION_LIFETIME_MS,
   RUNS_WRITE_SCOPE,
 } from "@crewhelm/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { createConnectionAuthorizationCallback } from "../owner/connections/index.js";
 import { createRemoteMcpBearerSetup } from "../remote-mcp/handoff.js";
+import {
+  createProviderAuthSetupCapability,
+  createProviderAuthSetupSession,
+} from "../provider-auth-setup/capability.js";
 import { createWorker } from "./server.js";
 import { deriveOwnerKey } from "../owner/identity.js";
 import { OAUTH_SCOPES } from "../oauth/scopes.js";
@@ -205,6 +212,242 @@ describe("Crewhelm Worker", () => {
       `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`,
     );
     expect(await mcpResponse.text()).not.toContain("/mcp");
+  });
+
+  it("relays browser credentials directly to Composio through a one-time setup session", async () => {
+    const ownerKey = await deriveOwnerKey({
+      issuer: "https://github.com",
+      subject: "provider-auth-browser",
+    });
+    const authority = ownerAuthoritySchema.parse({
+      clientId: "provider-auth-browser-client",
+      ownerKey,
+      scopes: [CONNECTION_CONFIGS_WRITE_SCOPE],
+    });
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(ownerKey);
+    const now = Date.now();
+    const setupId = "provider_auth_setup_12345678-1234-4123-8123-123456789abc";
+    const capabilityExpiresAt = now + PROVIDER_AUTH_SETUP_CAPABILITY_LIFETIME_MS;
+    const setupExpiresAt = now + PROVIDER_AUTH_SETUP_SESSION_LIFETIME_MS;
+    const capability = await createProviderAuthSetupCapability({
+      claims: { expiresAt: capabilityExpiresAt, ownerKey, setupId },
+      origin,
+      signingSecret: env.BETTER_AUTH_SECRET,
+    });
+    const plan = {
+      authorizeConnection: true,
+      authScheme: "OAUTH2" as const,
+      callbackUrl: "https://backend.composio.dev/api/v3.1/toolkits/auth/callback",
+      fieldSchemaDigest: "a".repeat(64),
+      fields: [
+        {
+          key: "client_secret",
+          label: "Client secret",
+          maximumLength: 8_192,
+          required: true,
+          secret: true,
+          type: "string" as const,
+        },
+      ],
+      integrationName: "GitHub",
+      integrationSlug: "github",
+      setupId,
+    };
+    await expect(
+      controlPlane.prepareProviderAuthSetup(authority, {
+        capabilityDigest: capability.capabilityDigest,
+        capabilityExpiresAt,
+        idempotencyKey: "provider-auth-browser",
+        plan,
+        setupExpiresAt,
+      }),
+    ).resolves.toMatchObject({ ok: true, state: "prepared" });
+
+    const page = await request("/setup/provider-auth");
+    expect(page.status).toBe(200);
+    expect(page.headers.get("content-security-policy")).toContain("script-src 'self'");
+    expect(page.headers.get("referrer-policy")).toBe("no-referrer");
+
+    const wrongOrigin = await request("/setup/provider-auth/exchange", {
+      body: JSON.stringify({ capability: capability.capability }),
+      headers: { "content-type": "application/json", origin: "https://attacker.example" },
+      method: "POST",
+    });
+    expect(wrongOrigin.status).toBe(400);
+
+    const exchanged = await request("/setup/provider-auth/exchange", {
+      body: JSON.stringify({ capability: capability.capability }),
+      headers: { "content-type": "application/json", origin },
+      method: "POST",
+    });
+    expect(exchanged.status).toBe(200);
+    const cookie = exchanged.headers.get("set-cookie") ?? "";
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("Secure");
+    expect(cookie).toContain("SameSite=Strict");
+    expect(cookie).not.toContain(capability.capability);
+    await expect(exchanged.json()).resolves.toMatchObject({ ok: true, plan, status: "exchanged" });
+
+    const replay = await request("/setup/provider-auth/exchange", {
+      body: JSON.stringify({ capability: capability.capability }),
+      headers: { "content-type": "application/json", origin },
+      method: "POST",
+    });
+    expect(replay.status).toBe(400);
+
+    const clientSecret = "browser-only-client-secret";
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            auth_config: {
+              auth_scheme: "OAUTH2",
+              id: "ac_github_browser_custom",
+              is_composio_managed: false,
+            },
+            toolkit: { slug: "github" },
+          },
+          { status: 201 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            connected_account_id: "ca_github_browser",
+            expires_at: new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+            link_token: "ln_github_browser",
+            redirect_url: "https://connect.composio.dev/link/ln_github_browser",
+          },
+          { status: 201 },
+        ),
+      );
+    const sessionCookie = cookie.split(";", 1)[0] ?? "";
+    const configured = await request("/setup/provider-auth/configure", {
+      body: JSON.stringify({ credentials: { client_secret: clientSecret } }),
+      headers: { "content-type": "application/json", cookie: sessionCookie, origin },
+      method: "POST",
+    });
+    expect(configured.status).toBe(200);
+    const configuredBody = await configured.text();
+    expect(configuredBody).not.toContain(clientSecret);
+    const [, customInit] = fetchMock.mock.calls[0] ?? [];
+    if (typeof customInit?.body !== "string") throw new Error("Expected custom auth body.");
+    expect(JSON.parse(customInit.body)).toMatchObject({
+      auth_config: {
+        credentials: {
+          client_secret: clientSecret,
+          oauth_redirect_uri: plan.callbackUrl,
+        },
+        type: "use_custom_auth",
+      },
+      toolkit: { slug: "github" },
+    });
+
+    const connected = await request("/setup/provider-auth/connect", {
+      body: "{}",
+      headers: { "content-type": "application/json", cookie: sessionCookie, origin },
+      method: "POST",
+    });
+    expect(connected.status).toBe(200);
+    await expect(connected.json()).resolves.toEqual({
+      ok: true,
+      url: "https://connect.composio.dev/link/ln_github_browser",
+    });
+
+    const stored = await runInDurableObject(controlPlane, (_instance, state) => [
+      ...state.storage.sql.exec("SELECT * FROM provider_auth_setup_requests").toArray(),
+      ...state.storage.sql.exec("SELECT * FROM provider_auth_configs").toArray(),
+    ]);
+    expect(JSON.stringify(stored)).not.toContain(clientSecret);
+    expect(JSON.stringify(stored)).not.toContain(capability.capability);
+    fetchMock.mockRestore();
+  });
+
+  it("does not widen a credential-setup session into connection authority", async () => {
+    const ownerKey = await deriveOwnerKey({
+      issuer: "https://github.com",
+      subject: "provider-auth-browser-no-connection-scope",
+    });
+    const authority = ownerAuthoritySchema.parse({
+      clientId: "provider-auth-config-only-client",
+      ownerKey,
+      scopes: [CONNECTION_CONFIGS_WRITE_SCOPE],
+    });
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(ownerKey);
+    const now = Date.now();
+    const setupId = "provider_auth_setup_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const capabilityExpiresAt = now + PROVIDER_AUTH_SETUP_CAPABILITY_LIFETIME_MS;
+    const capability = await createProviderAuthSetupCapability({
+      claims: { expiresAt: capabilityExpiresAt, ownerKey, setupId },
+      origin,
+      signingSecret: env.BETTER_AUTH_SECRET,
+    });
+    const plan = {
+      authorizeConnection: false,
+      authScheme: "API_KEY" as const,
+      fieldSchemaDigest: "b".repeat(64),
+      fields: [
+        {
+          key: "api_key",
+          label: "API key",
+          maximumLength: 8_192,
+          required: true,
+          secret: true,
+          type: "string" as const,
+        },
+      ],
+      integrationName: "Linear",
+      integrationSlug: "linear",
+      setupId,
+    };
+    await expect(
+      controlPlane.prepareProviderAuthSetup(authority, {
+        capabilityDigest: capability.capabilityDigest,
+        capabilityExpiresAt,
+        idempotencyKey: "provider-auth-config-only",
+        plan,
+        setupExpiresAt: now + PROVIDER_AUTH_SETUP_SESSION_LIFETIME_MS,
+      }),
+    ).resolves.toMatchObject({ ok: true, state: "prepared" });
+    const session = await createProviderAuthSetupSession({
+      ownerKey,
+      setupId,
+      signingSecret: env.BETTER_AUTH_SECRET,
+    });
+    await expect(
+      controlPlane.exchangeProviderAuthSetup({
+        capabilityDigest: capability.capabilityDigest,
+        sessionDigest: session.sessionDigest,
+        setupId,
+      }),
+    ).resolves.toMatchObject({ ok: true, status: "exchanged" });
+    await expect(
+      controlPlane.reserveProviderAuthSetupConfiguration({
+        sessionDigest: session.sessionDigest,
+        setupId,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      controlPlane.completeProviderAuthSetup({
+        authConfig: {
+          authConfigId: "ac_linear_custom",
+          authScheme: "API_KEY",
+          integrationSlug: "linear",
+          name: "Crewhelm linear custom",
+          source: "crewhelm_custom",
+        },
+        sessionDigest: session.sessionDigest,
+        setupId,
+      }),
+    ).resolves.toMatchObject({ authConfigId: "ac_linear_custom", ok: true });
+
+    await expect(
+      controlPlane.providerAuthSetupAuthority({
+        sessionDigest: session.sessionDigest,
+        setupId,
+      }),
+    ).resolves.toEqual({ error: "provider_auth_setup_denied", ok: false });
   });
 
   it("routes Composio payloads only to the fixed verifier before owner selection", async () => {

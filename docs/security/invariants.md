@@ -19,6 +19,17 @@ These constraints apply before a capability becomes reachable.
 8. **Verifiable supply chain.** Dependencies and automation are pinned, reviewed, minimally
    privileged, and released with provenance.
 
+A custom provider-auth setup capability is owner-, client-, toolkit-, scheme-, and field-plan-bound,
+single-use, and short-lived. It travels in the browser URL fragment, is never sent in an HTTP
+request, and is cleared before capability exchange. The setup page loads only same-origin
+requests. Exchange creates a shorter HttpOnly, Secure, SameSite=Strict session; all mutations
+require the configured same origin. Credential values are bounded against the frozen plan and flow
+only browser → Worker → Composio. The owner control plane stores capability and session digests,
+safe field metadata, state, and the resulting opaque auth-config reference—never credential values.
+Responses, errors, audit events, telemetry, URLs, and Agent or MCP context never contain the entered
+values. A provider rejection and an unknown provider outcome are distinct terminal states; unknown
+submission is not silently retried.
+
 A durable Workflow is coordination, not authority. Its owner record freezes a bounded ordered plan,
 exact Agent and fleet revisions, aggregate budget, and retention before execution. The Workflow
 runtime receives only opaque coordinates and cannot mint permits, add work, access provider

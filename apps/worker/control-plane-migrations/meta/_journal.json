@@ -253,6 +253,13 @@
       "when": 1785847179081,
       "tag": "0035_hesitant_anita_blake",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1785850840528,
+      "tag": "0036_thin_rumiko_fujikawa",
+      "breakpoints": true
     }
   ]
 }
