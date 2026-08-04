@@ -43,10 +43,11 @@ Workers Builds runs from `apps/registry` for the Registry Worker and `apps/site`
 Worker. Registry deployment calls `pnpm deploy:production`; the site builds with `pnpm run build`
 and deploys with `pnpm exec wrangler deploy --env production`. Both projects track `main`.
 
-Site pull requests also upload a version of the separate `crewhelm-site-preview` Worker. Its public
-preview URL routes Registry reads through a private service binding to `crewhelm-registry-dev`; it
-has no production route or production Registry binding. Keep the site Workers Build configured
-with:
+Site pull requests upload an isolated version of the connected `crewhelm-site` Worker. The preview
+version routes Registry reads through a private service binding to `crewhelm-registry-dev`; it is
+not promoted to the production route. Version preview URLs must remain enabled on the connected
+Worker because Workers Builds preserves that Worker identity even when Wrangler selects the
+`preview` environment. Keep the site Workers Build configured with:
 
 | Setting                              | Value                                               |
 | ------------------------------------ | --------------------------------------------------- |
@@ -58,9 +59,20 @@ with:
 | Non-production branch builds         | Enabled                                             |
 | Build watch include paths            | `*`; every branch commit can produce a site preview |
 
-Preview URLs are public and have no Workers logs. Do not put secrets or production bindings in the
-preview environment. Disable non-production branch builds to stop new previews; existing uploaded
-versions remain inert unless their preview URL is requested.
+Preview URLs are separate public `workers.dev` surfaces with no Workers logs and may not inherit
+the production custom domain's zone controls. This includes version URLs for production builds.
+Use Cloudflare Access before previews carry non-public content or bindings. Do not put secrets in
+either environment or add production-only bindings to the preview environment. Disable
+non-production branch builds to stop new previews; existing uploaded versions remain inert unless
+their preview URL is requested.
+
+Astro's Cloudflare adapter enables KV-backed sessions by default. The site does not use application
+sessions, so its Astro config selects an in-memory session driver instead. Keep that override unless
+the site gains a deliberate, environment-isolated session store; implicit KV provisioning races
+with the existing production namespace and makes branch uploads fail.
+
+Preview-host requests also require Cloudflare's `global_fetch_strictly_public` compatibility flag
+so Astro can reach its Worker and asset surfaces without Cloudflare rejecting the same-zone fetch.
 
 Restore a previous Worker version when code or routing must roll back. D1 migrations remain
 forward-only, so recovery repairs schema state forward.

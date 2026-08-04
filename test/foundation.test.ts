@@ -1111,6 +1111,7 @@ describe("repository foundation", () => {
     const siteConfigSource = await read("apps/site/wrangler.jsonc");
     const siteConfig = parseJsoncObject(siteConfigSource);
     expect(siteConfig).toMatchObject({
+      compatibility_flags: ["global_fetch_strictly_public"],
       env: {
         preview: {
           name: "crewhelm-site-preview",
@@ -1123,7 +1124,7 @@ describe("repository foundation", () => {
         },
         production: {
           name: "crewhelm-site",
-          preview_urls: false,
+          preview_urls: true,
           services: [{ binding: "REGISTRY", service: "crewhelm-registry" }],
           workers_dev: false,
         },
