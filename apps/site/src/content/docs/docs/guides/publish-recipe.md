@@ -28,10 +28,11 @@ owner-local IDs, history, or runtime telemetry.
 
 1. Call `crewhelm_publish_recipe` with `operation.kind: "prepare"`, the returned Agent, license, and
    selected Schedule and Event Trigger objects. Keep the returned draft reference unchanged.
-2. Inspect only the candidate sections you need with `operation.kind: "inspect_section"`. Crewhelm copies the Agent instructions, limits, portable
-   capabilities, and local Skill coordinates; converts selected recurring operations and attached
-   Connections into portable declarations; and replaces exact recurring Brief references with
-   named public inputs.
+2. Inspect only the candidate sections you need with `operation.kind: "inspect_section"`. Crewhelm
+   copies the Agent instructions, limits, portable capabilities, configured primary and fallback
+   models, and local Skill coordinates; converts selected recurring operations and attached
+   Connections into portable declarations; and replaces exact recurring Brief references with named
+   public inputs.
 3. Replace one editable section at a time with `operation.kind: "set_section"`. Use
    `set_skill_decision` separately for each local Skill. Every edit returns a new draft revision;
    use that returned reference for the next edit. Keep the copied Agent executable definition

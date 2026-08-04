@@ -290,8 +290,21 @@ describe("public Recipe Registry", () => {
     expect(latest.headers.get("cache-control")).toContain("s-maxage=600");
     const latestBody: unknown = await latest.json();
     expect(recipeRegistryProjectionSchema.parse(latestBody)).toMatchObject({
+      inference: {
+        fallbackModels: ["@cf/openai/gpt-oss-20b"],
+        primaryModel: "@cf/meta/llama-4-scout-17b-16e-instruct",
+      },
       outcome: expect.stringContaining("evidence-backed brief"),
       publisher: { namespace: "octocat" },
+    });
+    const storedModels = await env.REGISTRY_DB.prepare(
+      "SELECT primary_model, fallback_models_json FROM artifact_versions WHERE kind = 'recipe' AND namespace = ? AND name = ? AND version = ?",
+    )
+      .bind("octocat", "research-brief-steward", 1)
+      .first<{ fallback_models_json: string; primary_model: string }>();
+    expect(storedModels).toEqual({
+      fallback_models_json: '["@cf/openai/gpt-oss-20b"]',
+      primary_model: "@cf/meta/llama-4-scout-17b-16e-instruct",
     });
 
     const envelopeResponse = await SELF.fetch(

@@ -256,6 +256,15 @@ describe("Recipe contracts", () => {
     expect(recipePackageSchema.parse(packageInput())).toEqual(packageInput());
   });
 
+  it("requires projectable primary and fallback models", () => {
+    const recipe = packageInput();
+    const inference = recipe.agent.capabilities.find(({ id }) => id.startsWith("inference."));
+    if (!inference) throw new Error("Expected an inference capability fixture.");
+    inference.configuration = { model: "@cf/openai/gpt-oss-20b" };
+
+    expect(recipePackageSchema.safeParse(recipe).success).toBe(false);
+  });
+
   it("rejects owner-local Skill references in Agent capabilities", () => {
     const recipe = packageInput();
     recipe.agent.capabilities = [
@@ -486,6 +495,10 @@ describe("Recipe contracts", () => {
       },
       deliverables: ["json", "markdown"] as const,
       description: packageInput().discovery.description,
+      inference: {
+        fallbackModels: [],
+        primaryModel: "@cf/openai/gpt-oss-20b",
+      },
       limits: agentLimits,
       operations: {
         eventTriggers: 1,

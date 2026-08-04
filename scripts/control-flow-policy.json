@@ -40,6 +40,14 @@
         "definitionVersion": 2,
         "testFiles": ["test/site-seo.test.ts"]
       },
+      "files": ["apps/site/src/lib/recipe-catalog.ts"],
+      "id": "site-recipes"
+    },
+    {
+      "evidence": {
+        "definitionVersion": 2,
+        "testFiles": ["test/site-seo.test.ts"]
+      },
       "files": [
         "apps/site/src/lib/seo.ts",
         "apps/site/src/pages/llms.txt.ts",

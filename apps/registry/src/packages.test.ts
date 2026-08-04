@@ -110,6 +110,10 @@ describe("Registry packages", () => {
 
     expect(projection.title).toBe("Research Brief Steward");
     expect(projection.deliverables).toEqual(["markdown"]);
+    expect(projection.inference).toEqual({
+      fallbackModels: ["@cf/openai/gpt-oss-20b"],
+      primaryModel: "@cf/meta/llama-4-scout-17b-16e-instruct",
+    });
     expect(projection.requestedAuthority).toEqual({
       approvalRequired: { destructive: 0, read: 0, write: 0 },
       standing: { destructive: 0, read: 0, write: 1 },

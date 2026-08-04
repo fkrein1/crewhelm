@@ -83,6 +83,7 @@ export function llmsText(): string {
     "## Product",
     "",
     `- [Crewhelm](${CREWHELM_SITE.url}/): Product overview, operating model, architecture, and installation path.`,
+    `- [Recipes](${CREWHELM_SITE.url}/recipes/): Browse ready-made Agent mandates by outcome, integration, capability, and model.`,
     "",
     "## Source and documentation",
     "",

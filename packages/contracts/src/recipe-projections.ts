@@ -1,8 +1,9 @@
-import type {
-  RecipePackage,
-  RecipeRegistryProjection,
-  RegistrySkillPackage,
-  RegistrySkillProjection,
+import {
+  recipeRegistryInferenceSchema,
+  type RecipePackage,
+  type RecipeRegistryProjection,
+  type RegistrySkillPackage,
+  type RegistrySkillProjection,
 } from "./recipes.js";
 
 const secretPatterns = [
@@ -145,6 +146,7 @@ export function deriveRecipeProjectionFields(
   RecipeRegistryProjection,
   | "deliverables"
   | "description"
+  | "inference"
   | "limits"
   | "operations"
   | "outcome"
@@ -159,9 +161,17 @@ export function deriveRecipeProjectionFields(
     ...recipe.operations.eventTriggers.map(({ outputContract }) => outputContract.kind),
     ...recipe.operations.schedules.map(({ outputContract }) => outputContract.kind),
   ]);
+  const inferenceCapability = recipe.agent.capabilities.find(({ id }) =>
+    id.startsWith("inference."),
+  );
+  const inference = recipeRegistryInferenceSchema.parse({
+    fallbackModels: inferenceCapability?.configuration.fallbackModels,
+    primaryModel: inferenceCapability?.configuration.primaryModel,
+  });
   return {
     deliverables: [...deliverables].toSorted(),
     description: recipe.discovery.description,
+    inference,
     limits: recipe.agent.executionLimits,
     operations: {
       eventTriggers: recipe.operations.eventTriggers.length,
