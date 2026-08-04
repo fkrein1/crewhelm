@@ -18,6 +18,8 @@ import { isUnknownRecord } from "./safe-values.js";
 
 const COMPOSIO_AUTH_CONFIGS_URL = "https://backend.composio.dev/api/v3.1/auth_configs";
 const COMPOSIO_TOOLKITS_URL = "https://backend.composio.dev/api/v3.1/toolkits";
+const COMPOSIO_CUSTOM_OAUTH_CALLBACK_URL =
+  "https://backend.composio.dev/api/v3.1/toolkits/auth/callback";
 const AUTH_CONFIG_TIMEOUT_MS = 5_000;
 const MAXIMUM_AUTH_CONFIG_RESPONSE_BYTES = 256 * 1_024;
 const MAXIMUM_TOOLKIT_RESPONSE_BYTES = 256 * 1_024;
@@ -122,7 +124,14 @@ export type PrepareCustomIntegrationAuthConfigResult =
     }
   | { error: "unsupported" | "unavailable"; ok: false };
 
+export type ReconcileCustomIntegrationAuthConfigResult =
+  | { authConfig: ProviderAuthConfigReference; state: "configured" }
+  | { state: "absent" | "still_unknown" };
+
 export interface ComposioAuthConfigs {
+  activeCustom(input: {
+    integrationSlug: string;
+  }): Promise<ProviderAuthConfigReference[] | undefined>;
   createManaged(input: {
     integrationSlug: string;
     name: string;
@@ -139,6 +148,11 @@ export interface ComposioAuthConfigs {
     authScheme: ProviderAuthScheme;
     integrationSlug: string;
   }): Promise<PrepareCustomIntegrationAuthConfigResult>;
+  reconcileCustom(input: {
+    authScheme: ProviderAuthScheme;
+    integrationSlug: string;
+    name: string;
+  }): Promise<ReconcileCustomIntegrationAuthConfigResult>;
 }
 
 export interface ComposioAuthConfigsOptions {
@@ -363,14 +377,43 @@ export function createComposioAuthConfigs(
       .toSorted((left, right) => left.authConfigId.localeCompare(right.authConfigId));
   }
 
+  async function reconcileCustom(input: {
+    authScheme: ProviderAuthScheme;
+    integrationSlug: string;
+    name: string;
+  }): Promise<ReconcileCustomIntegrationAuthConfigResult> {
+    try {
+      const recovered = await listActive(input.integrationSlug, "recovery", false);
+      if (recovered === undefined) return { state: "still_unknown" };
+      const matches = recovered.filter(
+        (config) => config.authScheme === input.authScheme && config.name === input.name,
+      );
+      const match = matches[0];
+      return matches.length === 1 && match !== undefined
+        ? { authConfig: match, state: "configured" }
+        : { state: matches.length === 0 ? "absent" : "still_unknown" };
+    } catch {
+      return { state: "still_unknown" };
+    }
+  }
+
   return {
+    async activeCustom(input) {
+      const integrationSlug = integrationSlugSchema.safeParse(input.integrationSlug);
+      if (!apiKey.success || !integrationSlug.success) return undefined;
+      try {
+        return await listActive(integrationSlug.data, "list", false);
+      } catch {
+        return undefined;
+      }
+    },
     async createCustom(input) {
       const integrationSlug = integrationSlugSchema.safeParse(input.integrationSlug);
       const authScheme = providerAuthSchemeSchema.safeParse(input.authScheme);
       const name = z.string().min(1).max(160).safeParse(input.name);
       const credentials = z
         .record(z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/), z.string().max(8_192))
-        .refine((value) => Object.keys(value).length <= 16)
+        .refine((value) => Object.keys(value).length <= 17)
         .safeParse(input.credentials);
       if (
         !apiKey.success ||
@@ -378,6 +421,15 @@ export function createComposioAuthConfigs(
         !authScheme.success ||
         !name.success ||
         !credentials.success
+      ) {
+        return { error: "outcome_unknown", ok: false };
+      }
+      const credentialKeys = Object.keys(credentials.data);
+      const callback = credentials.data.oauth_redirect_uri;
+      if (
+        credentialKeys.filter((key) => key !== "oauth_redirect_uri").length > 16 ||
+        (callback !== undefined &&
+          (authScheme.data !== "OAUTH2" || callback !== COMPOSIO_CUSTOM_OAUTH_CALLBACK_URL))
       ) {
         return { error: "outcome_unknown", ok: false };
       }
@@ -433,16 +485,23 @@ export function createComposioAuthConfigs(
           }
         }
 
-        const recovered = await listActive(integrationSlug.data, "recovery", false);
-        const matches = recovered?.filter(
-          (config) => config.authScheme === authScheme.data && config.name === name.data,
-        );
-        const recoveredAuthConfig = matches?.length === 1 ? matches[0] : undefined;
-        return recoveredAuthConfig === undefined
-          ? { error: "outcome_unknown", ok: false }
-          : { authConfig: recoveredAuthConfig, ok: true };
+        const recovered = await reconcileCustom({
+          authScheme: authScheme.data,
+          integrationSlug: integrationSlug.data,
+          name: name.data,
+        });
+        return recovered.state === "configured"
+          ? { authConfig: recovered.authConfig, ok: true }
+          : { error: "outcome_unknown", ok: false };
       } catch {
-        return { error: "outcome_unknown", ok: false };
+        const recovered = await reconcileCustom({
+          authScheme: authScheme.data,
+          integrationSlug: integrationSlug.data,
+          name: name.data,
+        });
+        return recovered.state === "configured"
+          ? { authConfig: recovered.authConfig, ok: true }
+          : { error: "outcome_unknown", ok: false };
       }
     },
     async createManaged(input) {
@@ -565,7 +624,7 @@ export function createComposioAuthConfigs(
           });
         }
 
-        const authConfigs = await listActive(request.data.integrationSlug, "list");
+        const authConfigs = await listActive(request.data.integrationSlug, "list", true);
         if (
           authConfigs === undefined ||
           authConfigs.some((config) => !availableSchemes.includes(config.authScheme))
@@ -658,18 +717,20 @@ export function createComposioAuthConfigs(
         const fields = normalizeCredentialFields(creation);
         if (fields === null) return { error: "unsupported", ok: false };
         const documentationUrl = safeDocumentationUrl(details.auth_hint_url);
-        return {
+        const result: PrepareCustomIntegrationAuthConfigResult = {
           ...(authScheme.data === "OAUTH2"
-            ? { callbackUrl: "https://backend.composio.dev/api/v3.1/toolkits/auth/callback" }
+            ? { callbackUrl: COMPOSIO_CUSTOM_OAUTH_CALLBACK_URL }
             : {}),
           ...(documentationUrl === undefined ? {} : { documentationUrl }),
           fields,
           integrationName: toolkit.data.name,
           ok: true,
         };
+        return containsSecret(result, apiKey.data) ? { error: "unavailable", ok: false } : result;
       } catch {
         return { error: "unavailable", ok: false };
       }
     },
+    reconcileCustom,
   };
 }

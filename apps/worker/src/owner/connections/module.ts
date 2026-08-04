@@ -15,6 +15,8 @@ import {
   enableIntegrationResultSchema,
   inspectConnectionInputSchema,
   inspectConnectionResultSchema,
+  integrationAuthConfigListInputSchema,
+  integrationAuthConfigListResultSchema,
   listConnectionsInputSchema,
   listConnectionsResultSchema,
   recordConnectionAuthorizationReturnInputSchema,
@@ -31,6 +33,7 @@ import {
   type EnableIntegrationResult,
   type FleetConfigurationData,
   type InspectConnectionResult,
+  type IntegrationAuthConfigListResult,
   type ListConnectionsResult,
   type OwnerAuthority,
   type RecordConnectionAuthorizationReturnInput,
@@ -39,7 +42,7 @@ import {
   type ReserveIntegrationEnablementResult,
   type ReserveConnectionLinkResult,
 } from "@crewhelm/contracts";
-import { and, asc, count, desc, eq, gt, lte, min, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, lte, min, sql } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { alias } from "drizzle-orm/sqlite-core";
 
@@ -51,6 +54,7 @@ import {
   connections,
   integrationEnablementRequests,
   providerAuthConfigs,
+  providerAuthSetupRequests,
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
 
@@ -349,6 +353,27 @@ export class Connections {
           return deniedIntegrationEnablement("integration_enablement_in_progress");
         }
 
+        const configCount =
+          transaction.select({ value: count() }).from(providerAuthConfigs).get()?.value ?? 0;
+        const managedReservedCount =
+          transaction
+            .select({ value: count() })
+            .from(integrationEnablementRequests)
+            .where(eq(integrationEnablementRequests.status, "pending"))
+            .get()?.value ?? 0;
+        const customReservedCount =
+          transaction
+            .select({ value: count() })
+            .from(providerAuthSetupRequests)
+            .where(inArray(providerAuthSetupRequests.status, ["submitting", "outcome_unknown"]))
+            .get()?.value ?? 0;
+        if (
+          configCount + managedReservedCount + customReservedCount >=
+          MAXIMUM_PROVIDER_AUTH_CONFIGS_PER_OWNER
+        ) {
+          return deniedIntegrationEnablement("provider_auth_config_limit_exceeded");
+        }
+
         transaction
           .update(integrationEnablementRequests)
           .set({ recoverAfter, status: "pending" })
@@ -393,6 +418,27 @@ export class Connections {
 
       if (pending !== undefined) {
         return deniedIntegrationEnablement("integration_enablement_in_progress");
+      }
+
+      const configCount =
+        transaction.select({ value: count() }).from(providerAuthConfigs).get()?.value ?? 0;
+      const managedReservedCount =
+        transaction
+          .select({ value: count() })
+          .from(integrationEnablementRequests)
+          .where(eq(integrationEnablementRequests.status, "pending"))
+          .get()?.value ?? 0;
+      const customReservedCount =
+        transaction
+          .select({ value: count() })
+          .from(providerAuthSetupRequests)
+          .where(inArray(providerAuthSetupRequests.status, ["submitting", "outcome_unknown"]))
+          .get()?.value ?? 0;
+      if (
+        configCount + managedReservedCount + customReservedCount >=
+        MAXIMUM_PROVIDER_AUTH_CONFIGS_PER_OWNER
+      ) {
+        return deniedIntegrationEnablement("provider_auth_config_limit_exceeded");
       }
 
       const requestCount =
@@ -519,6 +565,15 @@ export class Connections {
         });
       }
 
+      const authConfigCount =
+        transaction.select({ value: count() }).from(providerAuthConfigs).get()?.value ?? 0;
+      if (
+        storedAuthConfig === undefined &&
+        authConfigCount >= MAXIMUM_PROVIDER_AUTH_CONFIGS_PER_OWNER
+      ) {
+        return deniedIntegrationEnablement("provider_auth_config_limit_exceeded");
+      }
+
       transaction
         .update(integrationEnablementRequests)
         .set({
@@ -616,6 +671,9 @@ export class Connections {
       if (countAuthConfigs >= MAXIMUM_PROVIDER_AUTH_CONFIGS_PER_OWNER) {
         return deniedProviderAuthConfig("provider_auth_config_limit_exceeded");
       }
+      if (request.data.source !== "composio_managed") {
+        return deniedProviderAuthConfig("invalid_request");
+      }
 
       transaction
         .insert(providerAuthConfigs)
@@ -647,6 +705,44 @@ export class Connections {
     });
   }
 
+  listProviderAuthConfigs(input: unknown): IntegrationAuthConfigListResult {
+    const request = integrationAuthConfigListInputSchema.safeParse(input);
+    if (!request.success) {
+      return integrationAuthConfigListResultSchema.parse({
+        error: {
+          code: "integration_catalog_unavailable",
+          message: "Integration catalog request denied.",
+        },
+        ok: false,
+      });
+    }
+
+    const predicates = [eq(providerAuthConfigs.integrationSlug, request.data.integrationSlug)];
+    if (request.data.cursor !== undefined) {
+      predicates.push(gt(providerAuthConfigs.authConfigId, request.data.cursor));
+    }
+    const rows = this.#database
+      .select()
+      .from(providerAuthConfigs)
+      .where(and(...predicates))
+      .orderBy(asc(providerAuthConfigs.authConfigId))
+      .limit(request.data.limit + 1)
+      .all();
+    const hasNextPage = rows.length > request.data.limit;
+    const page = rows.slice(0, request.data.limit);
+
+    return integrationAuthConfigListResultSchema.parse({
+      authConfigs: page.map((row) => ({
+        authConfigId: row.authConfigId,
+        authScheme: row.authScheme.toLowerCase(),
+        managed: row.source === "composio_managed",
+        name: row.displayName,
+      })),
+      nextCursor: hasNextPage ? (page.at(-1)?.authConfigId ?? null) : null,
+      ok: true,
+    });
+  }
+
   async reserve(authority: OwnerAuthority, input: unknown): Promise<ReserveConnectionLinkResult> {
     const request = createConnectionLinkInputSchema.safeParse(input);
 
@@ -664,6 +760,13 @@ export class Connections {
 
     return this.#database.transaction((transaction) => {
       this.#expireRequests(transaction, currentTime);
+
+      const authConfig = transaction
+        .select({ authConfigId: providerAuthConfigs.authConfigId })
+        .from(providerAuthConfigs)
+        .where(eq(providerAuthConfigs.authConfigId, request.data.authConfigId))
+        .get();
+      if (authConfig === undefined) return deniedConnectionLink("invalid_request");
 
       const existingRequest = transaction
         .select({

@@ -18,9 +18,13 @@ import {
   reserveIntegrationEnablementResultSchema,
   recordProviderAuthConfigResultSchema,
   prepareProviderAuthSetupResultSchema,
+  providerAuthConfigReferenceSchema,
   providerAuthSetupPlanSchema,
   PROVIDER_AUTH_SETUP_CAPABILITY_LIFETIME_MS,
   PROVIDER_AUTH_SETUP_SESSION_LIFETIME_MS,
+  type InspectProviderAuthResult,
+  type IntegrationAuthConfigListResult,
+  type ProviderAuthConfigReference,
 } from "@crewhelm/contracts";
 import type { ComposioAuthConfigs, ComposioCatalog } from "@crewhelm/composio";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -87,6 +91,111 @@ function unknownIntegrationEnablementMcpResult(operation: {
   });
 }
 
+function unavailableProviderAuthInspection(): InspectProviderAuthResult {
+  return {
+    error: {
+      code: "provider_auth_unavailable",
+      message: "Provider authentication request denied.",
+    },
+    ok: false,
+  };
+}
+
+function readinessReferences(
+  authentication: Extract<InspectProviderAuthResult, { ok: true }>["authentication"],
+): ProviderAuthConfigReference[] {
+  if (authentication.state === "ready") return [authentication.selected];
+  if (authentication.state === "selection_required") return authentication.choices;
+  return [];
+}
+
+function mergeOwnerProviderAuth(
+  provider: InspectProviderAuthResult,
+  owner: IntegrationAuthConfigListResult,
+  activeCustom: readonly ProviderAuthConfigReference[],
+): InspectProviderAuthResult {
+  if (!provider.ok || !owner.ok || owner.nextCursor !== null) {
+    return unavailableProviderAuthInspection();
+  }
+  if (provider.authentication.state === "unsupported") return provider;
+
+  const providerReferences = readinessReferences(provider.authentication);
+  if (providerReferences.some((reference) => reference.source !== "composio_managed")) {
+    return unavailableProviderAuthInspection();
+  }
+  if (activeCustom.some((reference) => reference.source !== "crewhelm_custom")) {
+    return unavailableProviderAuthInspection();
+  }
+  const activeCustomById = new Map(
+    activeCustom.map((reference) => [reference.authConfigId, reference]),
+  );
+  const ownerCustomReferences: ProviderAuthConfigReference[] = [];
+  for (const reference of owner.authConfigs.filter((item) => item.managed === false)) {
+    const parsed = providerAuthConfigReferenceSchema.safeParse({
+      authConfigId: reference.authConfigId,
+      authScheme: reference.authScheme.toUpperCase(),
+      integrationSlug: provider.integration.slug,
+      name: reference.name,
+      source: "crewhelm_custom",
+    });
+    const active = activeCustomById.get(reference.authConfigId);
+    if (
+      !parsed.success ||
+      active === undefined ||
+      active.authScheme !== parsed.data.authScheme ||
+      active.integrationSlug !== parsed.data.integrationSlug
+    ) {
+      continue;
+    }
+    ownerCustomReferences.push(parsed.data);
+  }
+
+  const references = [...providerReferences, ...ownerCustomReferences].toSorted((left, right) =>
+    left.authConfigId.localeCompare(right.authConfigId),
+  );
+  if (new Set(references.map((reference) => reference.authConfigId)).size !== references.length) {
+    return unavailableProviderAuthInspection();
+  }
+  if (references.length === 0) return provider;
+
+  return inspectProviderAuthResultSchema.parse({
+    authentication:
+      references.length === 1
+        ? { selected: references[0], state: "ready" }
+        : { choices: references, state: "selection_required" },
+    integration: provider.integration,
+    ok: true,
+  });
+}
+
+async function inspectOwnerProviderAuth(
+  context: McpToolContext,
+  authConfigs: ComposioAuthConfigs,
+  integrationSlug: string,
+): Promise<InspectProviderAuthResult> {
+  if (context.controlPlane.listProviderAuthConfigs === undefined) {
+    return unavailableProviderAuthInspection();
+  }
+
+  try {
+    const [providerResponse, ownerResponse, activeCustomResponse] = await Promise.all([
+      authConfigs.inspect({ integrationSlug }),
+      context.controlPlane.listProviderAuthConfigs(context.authority, {
+        integrationSlug,
+        limit: 50,
+      }),
+      authConfigs.activeCustom({ integrationSlug }),
+    ]);
+    const provider = inspectProviderAuthResultSchema.safeParse(providerResponse);
+    const owner = integrationAuthConfigListResultSchema.safeParse(ownerResponse);
+    return provider.success && owner.success && activeCustomResponse !== undefined
+      ? mergeOwnerProviderAuth(provider.data, owner.data, activeCustomResponse)
+      : unavailableProviderAuthInspection();
+  } catch {
+    return unavailableProviderAuthInspection();
+  }
+}
+
 async function enableIntegration(
   context: McpToolContext,
   configuration: IntegrationToolConfiguration,
@@ -127,18 +236,12 @@ async function enableIntegration(
     });
   }
 
-  let inspectionResponse: unknown;
-
-  try {
-    inspectionResponse = await authConfigs.inspect({
-      integrationSlug: request.data.integrationSlug,
-    });
-  } catch {
-    inspectionResponse = null;
-  }
-
-  const inspection = inspectProviderAuthResultSchema.safeParse(inspectionResponse);
-  if (!inspection.success || !inspection.data.ok) {
+  const inspection = await inspectOwnerProviderAuth(
+    context,
+    authConfigs,
+    request.data.integrationSlug,
+  );
+  if (!inspection.ok) {
     return integrationEnablementMcpResult({
       error: {
         code: "provider_auth_unavailable",
@@ -148,7 +251,7 @@ async function enableIntegration(
     });
   }
 
-  const readiness = inspection.data.authentication;
+  const readiness = inspection.authentication;
   let selected = readiness.state === "ready" ? readiness.selected : undefined;
 
   if (readiness.state === "ready" && request.data.authConfigId !== undefined) {
@@ -162,9 +265,9 @@ async function enableIntegration(
     selected = readiness.choices.find(
       (choice) => choice.authConfigId === request.data.authConfigId,
     );
-    if (selected === undefined) return integrationEnablementMcpResult(inspection.data);
+    if (selected === undefined) return integrationEnablementMcpResult(inspection);
   } else if (readiness.state === "unsupported") {
-    return integrationEnablementMcpResult(inspection.data);
+    return integrationEnablementMcpResult(inspection);
   } else if (readiness.state === "setup_required") {
     if (request.data.authConfigId !== undefined) {
       return integrationEnablementMcpResult({
@@ -189,7 +292,7 @@ async function enableIntegration(
       if (!prepared.ok) {
         return integrationEnablementMcpResult(
           prepared.error === "unsupported"
-            ? inspection.data
+            ? inspection
             : {
                 error: {
                   code: "provider_auth_unavailable",
@@ -266,9 +369,9 @@ async function enableIntegration(
         signingSecret: configuration.signingSecret,
       });
       return integrationEnablementMcpResult({
-        ...inspection.data,
+        ...inspection,
         authentication: {
-          ...inspection.data.authentication,
+          ...inspection.authentication,
           setup: {
             expiresAt: new Date(setup.data.capabilityExpiresAt).toISOString(),
             url: returnedCapability.url,
@@ -368,7 +471,7 @@ async function enableIntegration(
   try {
     providerResult = await authConfigs.createManaged({
       integrationSlug: request.data.integrationSlug,
-      name: inspection.data.integration.name,
+      name: inspection.integration.name,
     });
   } catch {
     return unknownIntegrationEnablementMcpResult(reservation.data);
@@ -443,12 +546,7 @@ async function inspectProviderAuth(
     );
   }
 
-  let result: unknown;
-  try {
-    result = await authConfigs.inspect(request.data);
-  } catch {
-    result = null;
-  }
+  const result = await inspectOwnerProviderAuth(context, authConfigs, request.data.integrationSlug);
 
   return validatedToolResult(result, inspectProviderAuthResultSchema, {
     code: "invalid_integration_response",
@@ -510,14 +608,22 @@ export function registerIntegrationTools(
         readOnlyHint: true,
       },
       description:
-        "List bounded active auth configurations for an integration when exact selection or recovery is needed.",
+        "List bounded owner-held auth-config references for an integration; use provider-auth inspection for current activity.",
       inputSchema: integrationAuthConfigListInputSchema,
       title: "List integration auth configurations",
     },
     async (input) =>
       connectionConfigurationToolResult(
         authority,
-        () => catalog.listAuthConfigs(input),
+        () =>
+          context.controlPlane.listProviderAuthConfigs?.(authority, input) ??
+          Promise.resolve({
+            error: {
+              code: "integration_catalog_unavailable",
+              message: "Integration catalog request denied.",
+            },
+            ok: false,
+          }),
         integrationAuthConfigListResultSchema,
       ),
   );

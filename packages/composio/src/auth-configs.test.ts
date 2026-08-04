@@ -30,7 +30,7 @@ function toolkit(
 }
 
 describe("Composio auth configurations", () => {
-  it("inspects one existing custom configuration as ready without writing", async () => {
+  it("does not expose installation-level custom configurations during readiness", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(toolkit("spotify", { name: "Spotify" })))
@@ -54,18 +54,11 @@ describe("Composio auth configurations", () => {
         integrationSlug: "spotify",
       }),
     ).resolves.toEqual({
-      authentication: {
-        selected: {
-          authConfigId: "ac_spotify_custom",
-          authScheme: "OAUTH2",
-          integrationSlug: "spotify",
-          name: "Spotify app",
-          source: "crewhelm_custom",
-        },
-        state: "ready",
+      error: {
+        code: "provider_auth_unavailable",
+        message: "Provider authentication request denied.",
       },
-      integration: { name: "Spotify", slug: "spotify" },
-      ok: true,
+      ok: false,
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const [toolkitEndpoint] = fetchMock.mock.calls[0] ?? [];
@@ -76,7 +69,7 @@ describe("Composio auth configurations", () => {
     expect(toolkitEndpoint.href).toContain("/api/v3.1/toolkits/spotify?version=latest");
     expect(configsEndpoint).toBeInstanceOf(URL);
     if (!(configsEndpoint instanceof URL)) throw new TypeError("Expected auth-config URL.");
-    expect(configsEndpoint.searchParams.get("is_composio_managed")).toBeNull();
+    expect(configsEndpoint.searchParams.get("is_composio_managed")).toBe("true");
     expect(configsEndpoint.searchParams.get("toolkit_slug")).toBe("spotify");
     expect(configsInit?.method).toBe("GET");
   });
@@ -90,7 +83,7 @@ describe("Composio auth configurations", () => {
       .mockResolvedValueOnce(
         jsonResponse({
           items: [
-            { ...existingConfig, id: "ac_z_custom", is_composio_managed: false, name: "Custom" },
+            { ...existingConfig, id: "ac_z_managed", name: "Second managed" },
             existingConfig,
           ],
           next_cursor: null,
@@ -105,7 +98,7 @@ describe("Composio auth configurations", () => {
       authentication: {
         choices: [
           { authConfigId: "ac_github_managed", source: "composio_managed" },
-          { authConfigId: "ac_z_custom", source: "crewhelm_custom" },
+          { authConfigId: "ac_z_managed", source: "composio_managed" },
         ],
         state: "selection_required",
       },
@@ -344,6 +337,72 @@ describe("Composio auth configurations", () => {
     });
   });
 
+  it("allows sixteen OAuth fields plus only the fixed callback field", async () => {
+    const credentials = Object.fromEntries(
+      Array.from({ length: 16 }, (_, index) => [`field${index}`, `value-${index}`]),
+    );
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse(
+        {
+          auth_config: {
+            auth_scheme: "OAUTH2",
+            id: "ac_boundary_custom",
+            is_composio_managed: false,
+          },
+          toolkit: { slug: "github" },
+        },
+        201,
+      ),
+    );
+
+    await expect(
+      createComposioAuthConfigs({ apiKey, fetch: fetchMock }).createCustom({
+        authScheme: "OAUTH2",
+        credentials: {
+          ...credentials,
+          oauth_redirect_uri: "https://backend.composio.dev/api/v3.1/toolkits/auth/callback",
+        },
+        integrationSlug: "github",
+        name: "Crewhelm boundary",
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("recovers a transport-ambiguous custom create by its collision-resistant exact name", async () => {
+    const name = "Crewhelm 12345678-1234-4123-8123-123456789abc";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new Error("transport timeout"))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [
+            {
+              auth_scheme: "API_KEY",
+              id: "ac_recovered_custom",
+              is_composio_managed: false,
+              name,
+              status: "ENABLED",
+              toolkit: { slug: "linear" },
+            },
+          ],
+          next_cursor: null,
+        }),
+      );
+
+    await expect(
+      createComposioAuthConfigs({ apiKey, fetch: fetchMock }).createCustom({
+        authScheme: "API_KEY",
+        credentials: { api_key: "ambiguous-secret" },
+        integrationSlug: "linear",
+        name,
+      }),
+    ).resolves.toMatchObject({
+      authConfig: { authConfigId: "ac_recovered_custom", name },
+      ok: true,
+    });
+  });
+
   it("distinguishes rejected custom credentials from an ambiguous provider outcome", async () => {
     const rejectedFetch = vi
       .fn<typeof fetch>()
@@ -421,5 +480,41 @@ describe("Composio auth configurations", () => {
 
     expect(result).toMatchObject({ ok: false });
     expect(JSON.stringify(result)).not.toContain(apiKey);
+  });
+
+  it("rejects provider preparation metadata that reflects the installation API key", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        auth_config_details: [
+          {
+            fields: {
+              auth_config_creation: {
+                optional: [],
+                required: [
+                  {
+                    displayName: apiKey,
+                    is_secret: true,
+                    name: "api_key",
+                    required: true,
+                    type: "string",
+                  },
+                ],
+              },
+            },
+            mode: "api_key",
+          },
+        ],
+        composio_managed_auth_schemes: [],
+        name: "Linear",
+        slug: "linear",
+      }),
+    );
+
+    await expect(
+      createComposioAuthConfigs({ apiKey, fetch: fetchMock }).prepareCustom({
+        authScheme: "API_KEY",
+        integrationSlug: "linear",
+      }),
+    ).resolves.toEqual({ error: "unavailable", ok: false });
   });
 });

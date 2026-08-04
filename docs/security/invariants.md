@@ -22,13 +22,19 @@ These constraints apply before a capability becomes reachable.
 A custom provider-auth setup capability is owner-, client-, toolkit-, scheme-, and field-plan-bound,
 single-use, and short-lived. It travels in the browser URL fragment, is never sent in an HTTP
 request, and is cleared before capability exchange. The setup page loads only same-origin
-requests. Exchange creates a shorter HttpOnly, Secure, SameSite=Strict session; all mutations
-require the configured same origin. Credential values are bounded against the frozen plan and flow
+requests. Exchange creates a bounded HttpOnly, Secure, SameSite=Strict session with an immutable
+recovery deadline; reconciliation cannot extend it. All mutations require the configured same
+origin. Credential values are bounded against the frozen plan and flow
 only browser → Worker → Composio. The owner control plane stores capability and session digests,
 safe field metadata, state, and the resulting opaque auth-config reference—never credential values.
 Responses, errors, audit events, telemetry, URLs, and Agent or MCP context never contain the entered
-values. A provider rejection and an unknown provider outcome are distinct terminal states; unknown
-submission is not silently retried.
+values. A provider rejection is terminal; an unknown or interrupted submission remains sealed and
+retains capacity until exact, full-setup-ID reconciliation proves either one matching config or no
+effect. It is never silently retried. Managed creation and custom setup reserve the same bounded
+owner auth-config capacity before provider egress. Connection reservation accepts only an
+auth-config reference already held by that owner. Readiness exposes globally discoverable managed
+configs, but exposes a custom config only when an owner-held Crewhelm record intersects the bounded
+active custom set returned by Composio.
 
 A durable Workflow is coordination, not authority. Its owner record freezes a bounded ordered plan,
 exact Agent and fleet revisions, aggregate budget, and retention before execution. The Workflow

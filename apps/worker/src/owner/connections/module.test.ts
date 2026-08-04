@@ -1,4 +1,5 @@
 import {
+  CONNECTION_CONFIGS_READ_SCOPE,
   CONNECTION_CONFIGS_WRITE_SCOPE,
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
@@ -18,6 +19,22 @@ import {
   fixedConnectionLinkFailure,
   fixedConnectionReadFailure,
 } from "../testkit.js";
+
+async function seedProviderAuthConfigs(
+  stub: ReturnType<typeof env.OWNER_CONTROL_PLANE.getByName>,
+): Promise<void> {
+  await runInDurableObject(stub, (_instance, state) => {
+    state.storage.sql.exec(`
+      INSERT OR IGNORE INTO provider_auth_configs
+        (auth_config_id, integration_slug, auth_scheme, source, display_name, created_at, updated_at)
+      VALUES
+        ('ac_github_managed', 'github', 'OAUTH2', 'composio_managed', 'GitHub', 1, 1),
+        ('ac_linear_managed', 'linear', 'API_KEY', 'composio_managed', 'Linear', 1, 1),
+        ('ac_slack_capacity', 'slack', 'OAUTH2', 'composio_managed', 'Slack', 1, 1),
+        ('ac_todoist_verified', 'todoist', 'OAUTH2', 'composio_managed', 'Todoist', 1, 1)
+    `);
+  });
+}
 
 describe("OwnerControlPlane connections", () => {
   it("reserves, completes, replays, and audits integration enablement", async () => {
@@ -137,6 +154,54 @@ describe("OwnerControlPlane connections", () => {
       error: { code: "integration_enablement_outcome_unknown" },
       ok: false,
     });
+  });
+
+  it("keeps auth-config discovery and connection reservation owner-local", async () => {
+    const authority = await authorityFor("owner-auth-configs", [
+      CONNECTION_CONFIGS_READ_SCOPE,
+      CONNECTION_CONFIGS_WRITE_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const other = await authorityFor("other-auth-configs", [CONNECTION_CONFIGS_READ_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const authConfig = {
+      authConfigId: "ac_owner_managed",
+      authScheme: "OAUTH2" as const,
+      integrationSlug: "github",
+      name: "Owner managed",
+      source: "composio_managed" as const,
+    };
+
+    await expect(stub.recordProviderAuthConfig(authority, authConfig)).resolves.toMatchObject({
+      created: true,
+      ok: true,
+    });
+    await expect(
+      stub.recordProviderAuthConfig(authority, {
+        ...authConfig,
+        authConfigId: "ac_unowned_custom",
+        source: "crewhelm_custom",
+      }),
+    ).resolves.toMatchObject({ error: { code: "invalid_request" }, ok: false });
+    await expect(
+      stub.listProviderAuthConfigs(authority, { integrationSlug: "github", limit: 50 }),
+    ).resolves.toMatchObject({
+      authConfigs: [{ authConfigId: "ac_owner_managed", managed: true }],
+      nextCursor: null,
+      ok: true,
+    });
+    await expect(
+      env.OWNER_CONTROL_PLANE.getByName(other.ownerKey).listProviderAuthConfigs(other, {
+        integrationSlug: "github",
+        limit: 50,
+      }),
+    ).resolves.toMatchObject({ authConfigs: [], nextCursor: null, ok: true });
+    await expect(
+      stub.reserveConnectionLink(
+        authority,
+        connectionLinkInput("unowned-custom", "ac_unowned_custom"),
+      ),
+    ).resolves.toMatchObject({ error: { code: "invalid_request" }, ok: false });
   });
 
   it("filters owner-local connection summaries by integration, status, and authorization outcome", async () => {
@@ -285,6 +350,7 @@ describe("OwnerControlPlane connections", () => {
       CONNECTIONS_WRITE_SCOPE,
     ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    await seedProviderAuthConfigs(stub);
     const current = await stub.getFleetConfiguration(authority, { target: { kind: "fleet" } });
 
     if (!current.ok) {
@@ -322,6 +388,7 @@ describe("OwnerControlPlane connections", () => {
   it("reserves, completes, replays, audits, and survives eviction without credentials", async () => {
     const authority = await authorityFor("112", [CONNECTIONS_WRITE_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    await seedProviderAuthConfigs(stub);
     const input = connectionLinkInput("connection-link-112");
     const reservation = await stub.reserveConnectionLink(authority, input);
 
@@ -457,6 +524,7 @@ describe("OwnerControlPlane connections", () => {
   it("records an exact connection authorization return once without claiming activation", async () => {
     const authority = await authorityFor("126", [CONNECTIONS_READ_SCOPE, CONNECTIONS_WRITE_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    await seedProviderAuthConfigs(stub);
     const reservation = await stub.reserveConnectionLink(
       authority,
       connectionLinkInput("authorization-return-126"),
@@ -512,7 +580,7 @@ describe("OwnerControlPlane connections", () => {
           authConfigId: "ac_github_managed",
           connectionId: completion.connectionLink.connectionId,
           createdAt: expect.any(String),
-          integrationSlug: null,
+          integrationSlug: "github",
           providerConnectionId,
           status: "initiated",
         },
@@ -691,6 +759,7 @@ describe("OwnerControlPlane connections", () => {
     const authority = await authorityFor("127", [CONNECTIONS_WRITE_SCOPE]);
     const other = await authorityFor("128", [CONNECTIONS_WRITE_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    await seedProviderAuthConfigs(stub);
     const reservation = await stub.reserveConnectionLink(
       authority,
       connectionLinkInput("authorization-return-127"),
@@ -746,6 +815,7 @@ describe("OwnerControlPlane connections", () => {
   it("rolls back an authorization return when audit persistence fails", async () => {
     const authority = await authorityFor("130", [CONNECTIONS_WRITE_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    await seedProviderAuthConfigs(stub);
     const reservation = await stub.reserveConnectionLink(
       authority,
       connectionLinkInput("authorization-return-rollback-130"),
@@ -918,6 +988,7 @@ describe("OwnerControlPlane connections", () => {
   it("rolls back a connection-link reservation when audit persistence fails", async () => {
     const authority = await authorityFor("120", [CONNECTIONS_WRITE_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    await seedProviderAuthConfigs(stub);
 
     await runInDurableObject(stub, (_instance, state) => {
       state.storage.sql.exec(`
@@ -952,6 +1023,7 @@ describe("OwnerControlPlane connections", () => {
   it("rolls back a connection-link completion when audit persistence fails", async () => {
     const authority = await authorityFor("121", [CONNECTIONS_WRITE_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    await seedProviderAuthConfigs(stub);
     const reservation = await stub.reserveConnectionLink(
       authority,
       connectionLinkInput("rollback-completion-121"),
@@ -1035,6 +1107,7 @@ describe("OwnerControlPlane connections", () => {
       "https://second-client.example/mcp.json",
     );
     const stub = env.OWNER_CONTROL_PLANE.getByName(first.ownerKey);
+    await seedProviderAuthConfigs(stub);
     const [firstResult, concurrentResult] = await Promise.all([
       stub.reserveConnectionLink(first, connectionLinkInput("first-key")),
       stub.reserveConnectionLink(first, connectionLinkInput("concurrent-key")),
@@ -1055,6 +1128,7 @@ describe("OwnerControlPlane connections", () => {
   it("holds an unknown connection-link outcome until its bounded recovery window passes", async () => {
     const authority = await authorityFor("114", [CONNECTIONS_WRITE_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    await seedProviderAuthConfigs(stub);
     const firstInput = connectionLinkInput("unknown-114");
     const reservation = await stub.reserveConnectionLink(authority, firstInput);
 
@@ -1098,6 +1172,7 @@ describe("OwnerControlPlane connections", () => {
     const other = await authorityFor("116", [CONNECTIONS_WRITE_SCOPE]);
     const insufficient = await authorityFor("115", [OWNER_READ_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    await seedProviderAuthConfigs(stub);
 
     await expect(
       stub.reserveConnectionLink(insufficient, connectionLinkInput("denied-115")),
@@ -1162,6 +1237,7 @@ describe("OwnerControlPlane connections", () => {
   it("bounds owner-local connection and link-intent storage", async () => {
     const connectionAuthority = await authorityFor("117", [CONNECTIONS_WRITE_SCOPE]);
     const connectionStub = env.OWNER_CONTROL_PLANE.getByName(connectionAuthority.ownerKey);
+    await seedProviderAuthConfigs(connectionStub);
 
     await runInDurableObject(connectionStub, (_instance, state) => {
       state.storage.sql.exec(`
@@ -1191,6 +1267,7 @@ describe("OwnerControlPlane connections", () => {
 
     const requestAuthority = await authorityFor("118", [CONNECTIONS_WRITE_SCOPE]);
     const requestStub = env.OWNER_CONTROL_PLANE.getByName(requestAuthority.ownerKey);
+    await seedProviderAuthConfigs(requestStub);
 
     await runInDurableObject(requestStub, (_instance, state) => {
       state.storage.sql.exec(`
@@ -1217,5 +1294,47 @@ describe("OwnerControlPlane connections", () => {
     await expect(
       requestStub.reserveConnectionLink(requestAuthority, connectionLinkInput("request-cap-118")),
     ).resolves.toEqual(fixedConnectionLinkFailure("connection_link_request_limit_exceeded"));
+  });
+
+  it("reserves shared auth-config capacity before managed provider creation", async () => {
+    const authority = await authorityFor("managed-auth-capacity", [CONNECTION_CONFIGS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(`
+        WITH RECURSIVE sequence(value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT value + 1 FROM sequence WHERE value < 50
+        )
+        INSERT INTO provider_auth_configs
+          (auth_config_id, integration_slug, auth_scheme, source, display_name, created_at, updated_at)
+        SELECT
+          'ac_capacity_' || value,
+          'provider-' || value,
+          'OAUTH2',
+          'composio_managed',
+          'Provider ' || value,
+          1,
+          1
+        FROM sequence
+      `);
+    });
+
+    await expect(
+      stub.reserveIntegrationEnablement(authority, {
+        idempotencyKey: "managed-auth-capacity",
+        integrationSlug: "github",
+      }),
+    ).resolves.toMatchObject({
+      error: { code: "provider_auth_config_limit_exceeded" },
+      ok: false,
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec("SELECT count(*) AS count FROM integration_enablement_requests")
+          .one(),
+      ),
+    ).resolves.toEqual({ count: 0 });
   });
 });

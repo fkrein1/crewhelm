@@ -590,6 +590,22 @@ async function ownerAuthority(subject = "123456", scopes: OwnerScope[] = [OWNER_
   });
 }
 
+async function seedProviderAuthConfig(
+  ownerKey: string,
+  authConfigId = "ac_github_managed",
+  integrationSlug = "github",
+): Promise<void> {
+  await runInDurableObject(env.OWNER_CONTROL_PLANE.getByName(ownerKey), (_instance, state) => {
+    state.storage.sql.exec(
+      `INSERT OR IGNORE INTO provider_auth_configs
+         (auth_config_id, integration_slug, auth_scheme, source, display_name, created_at, updated_at)
+       VALUES (?, ?, 'OAUTH2', 'composio_managed', 'GitHub', 1, 1)`,
+      authConfigId,
+      integrationSlug,
+    );
+  });
+}
+
 function toolRequest(body: string, additionalHeaders?: HeadersInit): Request {
   const headers = new Headers(additionalHeaders);
   headers.set("accept", "application/json, text/event-stream");
@@ -3272,26 +3288,21 @@ describe("authenticated MCP handler", () => {
     });
   });
 
-  it("lists enabled Composio auth configurations for connection configuration", async () => {
+  it("lists only owner-held auth configurations for connection configuration", async () => {
     const authority = await ownerAuthority("mcp-auth-config-owner", [
       CONNECTION_CONFIGS_READ_SCOPE,
       INTEGRATIONS_READ_SCOPE,
     ]);
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json({
-        items: [
-          {
-            auth_scheme: "API_KEY",
-            credentials: { api_key: "provider-secret" },
-            id: "ac_posthog_project",
-            is_composio_managed: false,
-            name: "PostHog project",
-            status: "ENABLED",
-            toolkit: { slug: "posthog" },
-          },
-        ],
-        next_cursor: null,
-      }),
+    await runInDurableObject(
+      env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+      (_instance, state) => {
+        state.storage.sql.exec(`
+          INSERT INTO provider_auth_configs
+            (auth_config_id, integration_slug, auth_scheme, source, display_name, created_at, updated_at)
+          VALUES ('ac_posthog_project', 'posthog', 'API_KEY', 'crewhelm_custom',
+                  'PostHog project', 1, 1)
+        `);
+      },
     );
     const response = await handleAuthenticatedMcpRequest(
       toolRequest(
@@ -3312,7 +3323,6 @@ describe("authenticated MCP handler", () => {
     const result = jsonRpcToolResultSchema.parse(payload).result;
     const text = result.content[0]?.text ?? "";
 
-    expect(fetchMock).toHaveBeenCalledOnce();
     expect(result.isError).toBe(false);
     expect(integrationAuthConfigListResultSchema.parse(JSON.parse(text))).toEqual({
       authConfigs: [
@@ -3363,33 +3373,7 @@ describe("authenticated MCP handler", () => {
         }),
       )
       .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
-      .mockResolvedValueOnce(
-        Response.json({
-          auth_config_details: [
-            {
-              fields: {
-                auth_config_creation: {
-                  optional: [],
-                  required: [
-                    {
-                      displayName: "Client secret",
-                      is_secret: true,
-                      name: "client_secret",
-                      required: true,
-                      type: "string",
-                    },
-                  ],
-                },
-              },
-              mode: "oauth2",
-            },
-          ],
-          composio_managed_auth_schemes: [],
-          name: "Spotify",
-          no_auth: false,
-          slug: "spotify",
-        }),
-      );
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }));
     const response = await handleAuthenticatedMcpRequest(
       toolRequest(
         JSON.stringify({
@@ -3422,7 +3406,7 @@ describe("authenticated MCP handler", () => {
       integration: { name: "Spotify", slug: "spotify" },
       ok: true,
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     await expect(
       runInDurableObject(
         env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
@@ -3472,6 +3456,7 @@ describe("authenticated MCP handler", () => {
           slug: "spotify",
         }),
       )
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
       .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
       .mockResolvedValueOnce(
         Response.json({
@@ -3537,7 +3522,7 @@ describe("authenticated MCP handler", () => {
       integration: { slug: "spotify" },
       ok: true,
     });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
     await expect(
       runInDurableObject(
         env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
@@ -3565,6 +3550,17 @@ describe("authenticated MCP handler", () => {
       CONNECTION_CONFIGS_WRITE_SCOPE,
       CONNECTIONS_WRITE_SCOPE,
     ]);
+    await runInDurableObject(
+      env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+      (_instance, state) => {
+        state.storage.sql.exec(`
+          INSERT INTO provider_auth_configs
+            (auth_config_id, integration_slug, auth_scheme, source, display_name, created_at, updated_at)
+          VALUES ('ac_spotify_custom', 'spotify', 'OAUTH2', 'crewhelm_custom',
+                  'Spotify app', 1, 1)
+        `);
+      },
+    );
     const expiresAt = new Date(Date.now() + 10 * 60 * 1_000).toISOString();
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -3592,6 +3588,7 @@ describe("authenticated MCP handler", () => {
           next_cursor: null,
         }),
       )
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
       .mockResolvedValueOnce(
         Response.json(
           {
@@ -3631,7 +3628,7 @@ describe("authenticated MCP handler", () => {
     expect(
       createConnectionLinkResultSchema.parse(JSON.parse(payload.content[0]?.text ?? "")),
     ).toMatchObject({ connectionLink: { expiresAt }, created: true, ok: true });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
     await expect(
       runInDurableObject(
         env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
@@ -3665,6 +3662,17 @@ describe("authenticated MCP handler", () => {
       CONNECTION_CONFIGS_WRITE_SCOPE,
       CONNECTIONS_WRITE_SCOPE,
     ]);
+    await runInDurableObject(
+      env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+      (_instance, state) => {
+        state.storage.sql.exec(`
+          INSERT INTO provider_auth_configs
+            (auth_config_id, integration_slug, auth_scheme, source, display_name, created_at, updated_at)
+          VALUES ('ac_github_custom', 'github', 'OAUTH2', 'crewhelm_custom',
+                  'Custom GitHub', 1, 1)
+        `);
+      },
+    );
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
@@ -3687,6 +3695,13 @@ describe("authenticated MCP handler", () => {
               status: "ENABLED",
               toolkit: { slug: "github" },
             },
+          ],
+          next_cursor: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          items: [
             {
               auth_scheme: "OAUTH2",
               id: "ac_github_managed",
@@ -3734,7 +3749,7 @@ describe("authenticated MCP handler", () => {
       },
       ok: true,
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     await expect(
       runInDurableObject(
         env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
@@ -3748,6 +3763,17 @@ describe("authenticated MCP handler", () => {
     const authority = await ownerAuthority("mcp-auth-selection-exact-owner", [
       CONNECTION_CONFIGS_WRITE_SCOPE,
     ]);
+    await runInDurableObject(
+      env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+      (_instance, state) => {
+        state.storage.sql.exec(`
+          INSERT INTO provider_auth_configs
+            (auth_config_id, integration_slug, auth_scheme, source, display_name, created_at, updated_at)
+          VALUES ('ac_github_custom', 'github', 'OAUTH2', 'crewhelm_custom',
+                  'Custom GitHub', 1, 1)
+        `);
+      },
+    );
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
         Response.json({
@@ -3769,6 +3795,13 @@ describe("authenticated MCP handler", () => {
               status: "ENABLED",
               toolkit: { slug: "github" },
             },
+          ],
+          next_cursor: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          items: [
             {
               auth_scheme: "OAUTH2",
               id: "ac_github_managed",
@@ -3849,6 +3882,7 @@ describe("authenticated MCP handler", () => {
       )
       .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
       .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
       .mockResolvedValueOnce(
         Response.json(
           {
@@ -3883,6 +3917,7 @@ describe("authenticated MCP handler", () => {
           slug: "github",
         }),
       )
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
       .mockResolvedValueOnce(
         Response.json({
           items: [{ ...authConfig, name: "GitHub" }],
@@ -3957,19 +3992,21 @@ describe("authenticated MCP handler", () => {
     expect(
       listConnectionsResultSchema.parse(JSON.parse(inspected.content[0]?.text ?? "")),
     ).toMatchObject({ connections: [{ connectionId: first.connectionLink.connectionId }] });
-    expect(fetchMock).toHaveBeenCalledTimes(7);
+    expect(fetchMock).toHaveBeenCalledTimes(9);
     const toolkitEndpoint = fetchMock.mock.calls[0]?.[0];
-    const listEndpoint = fetchMock.mock.calls[1]?.[0];
+    const listEndpoint = fetchMock.mock.calls[2]?.[0];
 
     if (!(toolkitEndpoint instanceof URL) || !(listEndpoint instanceof URL)) {
       throw new TypeError("Expected Composio toolkit and auth-config URLs.");
     }
 
     expect(toolkitEndpoint.href).toContain("/api/v3.1/toolkits/github?version=latest");
-    expect(listEndpoint.href).toContain("/api/v3.1/auth_configs?limit=50");
-    expect(fetchMock.mock.calls[2]?.[0]).toBeInstanceOf(URL);
-    expect(fetchMock.mock.calls[3]?.[0]).toBe("https://backend.composio.dev/api/v3.1/auth_configs");
-    expect(fetchMock.mock.calls[4]?.[0]).toBe(
+    expect(listEndpoint.pathname).toBe("/api/v3.1/auth_configs");
+    expect(listEndpoint.searchParams.get("limit")).toBe("50");
+    expect(listEndpoint.searchParams.get("is_composio_managed")).toBe("true");
+    expect(fetchMock.mock.calls[3]?.[0]).toBeInstanceOf(URL);
+    expect(fetchMock.mock.calls[4]?.[0]).toBe("https://backend.composio.dev/api/v3.1/auth_configs");
+    expect(fetchMock.mock.calls[5]?.[0]).toBe(
       "https://backend.composio.dev/api/v3.1/connected_accounts/link",
     );
   });
@@ -4072,6 +4109,7 @@ describe("authenticated MCP handler", () => {
 
   it("creates and exactly replays a private Composio Connect Link through MCP", async () => {
     const authority = await ownerAuthority("mcp-connection-link-owner", [CONNECTIONS_WRITE_SCOPE]);
+    await seedProviderAuthConfig(authority.ownerKey);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1_000).toISOString();
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       Response.json(
@@ -4480,6 +4518,7 @@ describe("authenticated MCP handler", () => {
     const authority = await ownerAuthority("mcp-unknown-connection-owner", [
       CONNECTIONS_WRITE_SCOPE,
     ]);
+    await seedProviderAuthConfig(authority.ownerKey);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("secret timeout"));
     const requestBody = JSON.stringify({
       id: 143,
@@ -4649,6 +4688,8 @@ describe("authenticated MCP handler", () => {
       CONNECTIONS_WRITE_SCOPE,
     ]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+
+    await seedProviderAuthConfig(authority.ownerKey);
 
     await runInDurableObject(stub, (_instance, state) => {
       state.storage.sql.exec(`
