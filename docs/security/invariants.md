@@ -36,6 +36,13 @@ auth-config reference already held by that owner. Readiness exposes globally dis
 configs, but exposes a custom config only when an owner-held Crewhelm record intersects the bounded
 active custom set returned by Composio.
 
+A successful provider authorization return may verify and activate only the exact Connection bound
+to its unexpired, digest-stored callback token and reservation. The same-origin return page performs
+at most six read-only provider checks spaced two seconds apart, then stops with an explicit delayed
+state;
+manual checks reuse that same narrow capability. Provider identity and toolkit must match before
+activation, and callback verification cannot list, select, or activate another Connection.
+
 A durable Workflow is coordination, not authority. Its owner record freezes a bounded ordered plan,
 exact Agent and fleet revisions, aggregate budget, and retention before execution. The Workflow
 runtime receives only opaque coordinates and cannot mint permits, add work, access provider

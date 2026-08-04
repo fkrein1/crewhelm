@@ -200,6 +200,11 @@ export const recordConnectionAuthorizationReturnInputSchema = z.strictObject({
 });
 export const recordConnectionAuthorizationReturnResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
+    connection: z.strictObject({
+      connectionId: connectionIdSchema,
+      integrationSlug: connectionSummarySchema.shape.integrationSlug.unwrap(),
+      providerConnectionId: composioConnectedAccountIdSchema,
+    }),
     ok: z.literal(true),
     outcome: z.enum(["returned", "failed"]),
     recorded: z.boolean(),
@@ -212,6 +217,11 @@ export const recordConnectionAuthorizationReturnResultSchema = z.discriminatedUn
     ok: z.literal(false),
   }),
 ]);
+export const activateVerifiedAuthorizationReturnInputSchema =
+  activateVerifiedConnectionInputSchema.extend({
+    authorizationToken: connectionAuthorizationTokenSchema,
+    reservationId: connectionLinkReservationIdSchema,
+  });
 export const listConnectionsResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     connections: z.array(connectionSummarySchema).max(MAXIMUM_CONNECTION_LIST_ITEMS),
@@ -268,6 +278,9 @@ export const inspectConnectionResultSchema = z.discriminatedUnion("ok", [
 
 export type CompleteConnectionLinkInput = z.infer<typeof completeConnectionLinkInputSchema>;
 export type ActivateVerifiedConnectionInput = z.infer<typeof activateVerifiedConnectionInputSchema>;
+export type ActivateVerifiedAuthorizationReturnInput = z.infer<
+  typeof activateVerifiedAuthorizationReturnInputSchema
+>;
 export type ConnectionAuthorizationOutcome = z.infer<typeof connectionAuthorizationOutcomeSchema>;
 export type ConnectionSummary = z.infer<typeof connectionSummarySchema>;
 export type CreateConnectionLinkInput = z.infer<typeof createConnectionLinkInputSchema>;

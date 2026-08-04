@@ -828,7 +828,7 @@ describe("Crewhelm Worker", () => {
     expect(consoleError).not.toHaveBeenCalled();
   });
 
-  it("records a successful Composio browser return without claiming activation", async () => {
+  it("records and verifies a successful Composio browser return through its exact callback", async () => {
     const fixture = await connectionAuthorizationFixture("callback-success");
     const returnUrl = new URL(fixture.callbackUrl);
 
@@ -840,16 +840,18 @@ describe("Crewhelm Worker", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(response.headers.get("content-security-policy")).toContain("connect-src 'self'");
+    expect(response.headers.get("content-security-policy")).toContain("script-src 'self'");
     expect(response.headers.get("content-security-policy")).toContain("style-src 'self'");
     expect(response.headers.get("referrer-policy")).toBe("no-referrer");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     expect(response.headers.get("x-frame-options")).toBe("DENY");
-    expect(body).toContain("Connection authorization returned.");
+    expect(body).toContain("Verifying connection…");
     expect(body).toContain('href="/oauth/styles.css"');
     expect(body).toContain('data-tone="positive"');
     expect(body).toContain('class="ch-brand" role="img" aria-label="Crewhelm"');
     expect(body).toContain('class="ch-brand__mark"');
-    expect(body).not.toMatch(/active|connected/i);
+    expect(body).not.toMatch(/connection ready/i);
     expect(body).not.toContain(fixture.providerConnectionId);
     expect(body).not.toContain(fixture.reservation.authorizationToken);
     await expect(fixture.controlPlane.listConnections(fixture.authority, {})).resolves.toEqual({
@@ -873,6 +875,42 @@ describe("Crewhelm Worker", () => {
 
     expect(replay.status).toBe(200);
     await expect(replay.text()).resolves.toBe(body);
+
+    const script = await request("/connections/composio/callback/app.js");
+    const scriptBody = await script.text();
+    expect(script.status).toBe(200);
+    expect(scriptBody).toContain("void verify(6)");
+    expect(scriptBody).toContain("void verify(1)");
+    expect(scriptBody).toContain("window.setTimeout(resolve, 2000)");
+    expect(body).toContain("Check again");
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(
+        Response.json({
+          alias: "Test GitHub",
+          id: fixture.providerConnectionId,
+          status: "ACTIVE",
+          toolkit: { slug: "github" },
+        }),
+      );
+    const checkUrl = new URL(returnUrl);
+    checkUrl.searchParams.set("check", "1");
+    const pending = await worker.fetch(new Request(checkUrl), env);
+    expect(pending.status).toBe(200);
+    await expect(pending.json()).resolves.toEqual({ state: "pending" });
+    const checked = await worker.fetch(new Request(checkUrl), env);
+    expect(checked.status).toBe(200);
+    await expect(checked.json()).resolves.toEqual({ state: "connected" });
+    await expect(
+      fixture.controlPlane.listConnections(fixture.authority, {}),
+    ).resolves.toMatchObject({
+      connections: [{ accountLabel: "Test GitHub", status: "active" }],
+      ok: true,
+    });
+    fetchMock.mockRestore();
+
     returnUrl.searchParams.set("status", "failed");
     const oppositeReturn = await worker.fetch(new Request(returnUrl), env);
 

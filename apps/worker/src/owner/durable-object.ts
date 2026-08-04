@@ -1484,6 +1484,12 @@ export class OwnerControlPlane extends DurableObject {
       : Promise.resolve(deniedConnectionAuthorizationReturn());
   }
 
+  activateVerifiedConnectionAuthorizationReturn(input: unknown): Promise<ListConnectionsResult> {
+    return this.#migrationReady
+      ? this.#connections.activateVerifiedAuthorizationReturn(input)
+      : Promise.resolve(deniedConnectionRead("invalid_request"));
+  }
+
   override async alarm(): Promise<void> {
     if (!this.#migrationReady) {
       return;
