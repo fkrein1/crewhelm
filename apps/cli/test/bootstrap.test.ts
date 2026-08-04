@@ -1843,16 +1843,146 @@ describe("Cloudflare bootstrap", () => {
           .filter(({ message }) => message.startsWith("Checking the deployed control plane"))
           .map(({ message }) => message),
       ).toEqual([
-        "Checking the deployed control plane (attempt 1 of 10)",
-        "Checking the deployed control plane (attempt 2 of 10)",
-        "Checking the deployed control plane (attempt 3 of 10)",
-        "Checking the deployed control plane (attempt 4 of 10)",
-        "Checking the deployed control plane (attempt 5 of 10)",
-        "Checking the deployed control plane (attempt 6 of 10)",
-        "Checking the deployed control plane (attempt 7 of 10)",
-        "Checking the deployed control plane (attempt 8 of 10)",
-        "Checking the deployed control plane (attempt 9 of 10)",
+        "Checking the deployed control plane (attempt 1 of 16)",
+        "Checking the deployed control plane (attempt 2 of 16)",
+        "Checking the deployed control plane (attempt 3 of 16)",
+        "Checking the deployed control plane (attempt 4 of 16)",
+        "Checking the deployed control plane (attempt 5 of 16)",
+        "Checking the deployed control plane (attempt 6 of 16)",
+        "Checking the deployed control plane (attempt 7 of 16)",
+        "Checking the deployed control plane (attempt 8 of 16)",
+        "Checking the deployed control plane (attempt 9 of 16)",
       ]);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("tolerates delayed edge propagation before requiring a stable fingerprint", async () => {
+    const fixture = await createDeploymentAssets();
+    const dependencies = createDependencies(fixture.assets, successfulReuseWrangler());
+    const normalFetch = dependencies.fetch;
+    const wait = vi.fn<(milliseconds: number) => Promise<void>>(async () => {});
+    let healthReads = 0;
+    dependencies.wait = wait;
+    dependencies.fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+
+        if (url.pathname === "/health" && ++healthReads >= 2 && healthReads <= 14) {
+          return Response.json({
+            deployment: { fingerprint: "b".repeat(64), protocolVersion: 1 },
+            service: "crewhelm",
+            status: "ok",
+          });
+        }
+
+        return normalFetch(input, init);
+      });
+
+    try {
+      await expect(bootstrapDeployment(REUSE_OPTIONS, dependencies)).resolves.toMatchObject({
+        deployment: { action: "updated" },
+        ok: true,
+      });
+      expect(healthReads).toBe(17);
+      expect(wait.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([
+        1_000, 1_000, 1_000, 1_000, 1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000,
+        30_000, 5_000, 5_000,
+      ]);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("reports recoverable fingerprint details when edge verification expires", async () => {
+    const fixture = await createDeploymentAssets();
+    const dependencies = createDependencies(fixture.assets, successfulReuseWrangler());
+    const normalFetch = dependencies.fetch;
+    const wait = vi.fn<(milliseconds: number) => Promise<void>>(async () => {});
+    const staleFingerprint = "b".repeat(64);
+    let healthReads = 0;
+    dependencies.wait = wait;
+    dependencies.fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+
+        if (url.pathname === "/health" && ++healthReads >= 2) {
+          return Response.json({
+            deployment: { fingerprint: staleFingerprint, protocolVersion: 1 },
+            service: "crewhelm",
+            status: "ok",
+          });
+        }
+
+        return normalFetch(input, init);
+      });
+
+    try {
+      let failure: unknown;
+
+      try {
+        await bootstrapDeployment(REUSE_OPTIONS, dependencies);
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure).toMatchObject({ name: "BootstrapError", stage: "deployment" });
+      expect(String(failure)).toContain(
+        `Expected fingerprint ${deploymentFingerprints.get(fixture.assets)}`,
+      );
+      expect(String(failure)).toContain(
+        `last observed fingerprint ${staleFingerprint} (protocol 1)`,
+      );
+      expect(String(failure)).toContain(
+        "rerun crewhelm up to continue verification without recreating existing resources",
+      );
+      expect(healthReads).toBe(17);
+      expect(wait).toHaveBeenCalledTimes(15);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("distinguishes aligned fingerprints from failing public diagnostics", async () => {
+    const fixture = await createDeploymentAssets();
+    const dependencies = createDependencies(fixture.assets, successfulReuseWrangler());
+    const normalFetch = dependencies.fetch;
+    const wait = vi.fn<(milliseconds: number) => Promise<void>>(async () => {});
+    let protectedResourceReads = 0;
+    dependencies.wait = wait;
+    dependencies.fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+
+        if (
+          url.pathname === "/.well-known/oauth-protected-resource" &&
+          ++protectedResourceReads >= 2
+        ) {
+          return Response.json({}, { status: 503 });
+        }
+
+        return normalFetch(input, init);
+      });
+
+    try {
+      let failure: unknown;
+
+      try {
+        await bootstrapDeployment(REUSE_OPTIONS, dependencies);
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure).toMatchObject({ name: "BootstrapError", stage: "deployment" });
+      expect(String(failure)).toContain("packaged fingerprint is aligned");
+      expect(String(failure)).toContain("mcp-protected-resource (http_status)");
+      expect(String(failure)).toContain("Run crewhelm doctor for details");
+      expect(String(failure)).not.toContain("Cloudflare may still be propagating");
+      expect(wait).toHaveBeenCalledTimes(15);
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
     }

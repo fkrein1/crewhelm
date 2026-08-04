@@ -81,8 +81,10 @@ const MINIMUM_DERIVED_RATE_LIMIT_NAMESPACE_ID = 10_000n;
 const MAXIMUM_RATE_LIMIT_NAMESPACE_ID = 2_147_483_647n;
 const RATE_LIMIT_NAMESPACE_PAIR_COUNT =
   (MAXIMUM_RATE_LIMIT_NAMESPACE_ID - MINIMUM_DERIVED_RATE_LIMIT_NAMESPACE_ID + 1n) / 2n;
+// Reserve 155 seconds for edge propagation, then two five-second samples for stability.
 const DEPLOYMENT_VERIFICATION_DELAYS_MS = [
-  1_000, 1_000, 1_000, 1_000, 1_000, 2_000, 4_000, 8_000, 16_000,
+  1_000, 1_000, 1_000, 1_000, 1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000, 30_000,
+  5_000, 5_000,
 ] as const;
 const SANDBOX_PROVISIONING_DELAYS_MS = [
   1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000, 30_000, 30_000,
@@ -836,6 +838,7 @@ async function verifyDeployedControlPlane(
 ): Promise<DoctorReport> {
   const attempts = [...DEPLOYMENT_VERIFICATION_DELAYS_MS, undefined];
   let consecutiveMatches = 0;
+  let lastDoctor: DoctorReport | undefined;
   let stableMilliseconds = 0;
 
   for (const [index, delay] of attempts.entries()) {
@@ -848,6 +851,7 @@ async function verifyDeployedControlPlane(
       expectedDeploymentFingerprint,
       fetch: dependencies.fetch,
     });
+    lastDoctor = doctor;
 
     const matched = doctor.ok && doctor.deployment.alignment === "aligned";
 
@@ -875,10 +879,22 @@ async function verifyDeployedControlPlane(
     }
   }
 
-  throw commandFailed(
-    "deployment",
-    "Worker deployment completed, but the packaged build fingerprint could not be verified.",
-  );
+  const observedDeployment = lastDoctor?.deployment.worker;
+  const observedIdentity = observedDeployment
+    ? `last observed fingerprint ${observedDeployment.fingerprint} (protocol ${String(observedDeployment.protocolVersion)})`
+    : "no valid deployment fingerprint was observed";
+  const failedChecks = lastDoctor?.checks
+    .filter((check) => check.status !== "pass")
+    .map((check) => `${check.name} (${check.code})`)
+    .join(", ");
+  const failureMessage =
+    lastDoctor?.deployment.alignment === "cli_outdated"
+      ? `The public Worker reports ${observedIdentity} and requires a newer Crewhelm CLI. Upgrade the CLI before retrying.`
+      : lastDoctor?.deployment.alignment === "aligned"
+        ? `The Worker deployment is present in Cloudflare and its packaged fingerprint is aligned, but public diagnostics did not become healthy before verification stopped. Failing checks: ${failedChecks || "unknown"}. Run crewhelm doctor for details, then rerun crewhelm up after resolving the endpoint failures.`
+        : `The Worker deployment is present in Cloudflare, but the public edge did not stably serve the packaged build before verification stopped. Expected fingerprint ${expectedDeploymentFingerprint}; ${observedIdentity}. Cloudflare may still be propagating the deployment; rerun crewhelm up to continue verification without recreating existing resources.`;
+
+  throw commandFailed("deployment", failureMessage);
 }
 
 async function createPrivateWorkspace(): Promise<string> {
