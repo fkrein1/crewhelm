@@ -24,6 +24,8 @@ jobs:
   comment:
     name: Publish site preview
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    # This internal-branch job needs checks read access to discover the Cloudflare version and
+    # issues write access to maintain one idempotent preview comment on the pull request.
     permissions:
       checks: read
       contents: read
