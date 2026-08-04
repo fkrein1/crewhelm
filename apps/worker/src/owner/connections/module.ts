@@ -3,6 +3,8 @@ import {
   INTEGRATION_ENABLEMENT_UNKNOWN_RECOVERY_MS,
   MAXIMUM_INTEGRATION_ENABLEMENT_REQUESTS_PER_OWNER,
   MAXIMUM_CONNECTION_LINK_REQUESTS_PER_OWNER,
+  abandonIntegrationEnablementInputSchema,
+  abandonIntegrationEnablementResultSchema,
   completeConnectionLinkInputSchema,
   completeIntegrationEnablementInputSchema,
   activateVerifiedConnectionInputSchema,
@@ -21,6 +23,7 @@ import {
   reserveIntegrationEnablementResultSchema,
   reserveConnectionLinkResultSchema,
   type ConnectionSummary,
+  type AbandonIntegrationEnablementResult,
   type CreateConnectionLinkInput,
   type CreateConnectionLinkResult,
   type EnableIntegrationInput,
@@ -310,7 +313,11 @@ export class Connections {
         }
 
         const pending = transaction
-          .select({ reservationId: integrationEnablementRequests.reservationId })
+          .select({
+            clientId: integrationEnablementRequests.clientId,
+            recoverAfter: integrationEnablementRequests.recoverAfter,
+            reservationId: integrationEnablementRequests.reservationId,
+          })
           .from(integrationEnablementRequests)
           .where(
             and(
@@ -323,6 +330,13 @@ export class Connections {
           .all()[0];
 
         if (pending !== undefined) {
+          if (pending.clientId === authority.clientId) {
+            return deniedIntegrationEnablement("integration_enablement_outcome_unknown", {
+              nextAction: "retry_same_request",
+              recoverAfter: new Date(pending.recoverAfter).toISOString(),
+              reservationId: pending.reservationId,
+            });
+          }
           return deniedIntegrationEnablement("integration_enablement_in_progress");
         }
 
@@ -356,7 +370,11 @@ export class Connections {
       }
 
       const pending = transaction
-        .select({ reservationId: integrationEnablementRequests.reservationId })
+        .select({
+          clientId: integrationEnablementRequests.clientId,
+          recoverAfter: integrationEnablementRequests.recoverAfter,
+          reservationId: integrationEnablementRequests.reservationId,
+        })
         .from(integrationEnablementRequests)
         .where(
           and(
@@ -369,6 +387,13 @@ export class Connections {
         .all()[0];
 
       if (pending !== undefined) {
+        if (pending.clientId === authority.clientId) {
+          return deniedIntegrationEnablement("integration_enablement_outcome_unknown", {
+            nextAction: "retry_same_request",
+            recoverAfter: new Date(pending.recoverAfter).toISOString(),
+            reservationId: pending.reservationId,
+          });
+        }
         return deniedIntegrationEnablement("integration_enablement_in_progress");
       }
 
@@ -411,6 +436,74 @@ export class Connections {
         reservationId,
         state: "dispatch",
       });
+    });
+  }
+
+  abandonIntegrationEnablement(
+    authority: OwnerAuthority,
+    input: unknown,
+  ): AbandonIntegrationEnablementResult {
+    const request = abandonIntegrationEnablementInputSchema.safeParse(input);
+
+    if (!request.success) {
+      return abandonIntegrationEnablementResultSchema.parse(
+        deniedIntegrationEnablement("invalid_request"),
+      );
+    }
+
+    return this.#database.transaction((transaction) => {
+      const row = transaction
+        .select({
+          integrationSlug: integrationEnablementRequests.integrationSlug,
+          status: integrationEnablementRequests.status,
+        })
+        .from(integrationEnablementRequests)
+        .where(
+          and(
+            eq(integrationEnablementRequests.clientId, authority.clientId),
+            eq(integrationEnablementRequests.reservationId, request.data.reservationId),
+          ),
+        )
+        .all()[0];
+
+      if (row === undefined || row.integrationSlug !== request.data.integrationSlug) {
+        return abandonIntegrationEnablementResultSchema.parse(
+          deniedIntegrationEnablement("invalid_request"),
+        );
+      }
+
+      if (row.status === "completed") {
+        return abandonIntegrationEnablementResultSchema.parse(
+          deniedIntegrationEnablement("integration_enablement_outcome_unknown"),
+        );
+      }
+
+      if (row.status === "abandoned") {
+        return abandonIntegrationEnablementResultSchema.parse({ abandoned: false, ok: true });
+      }
+
+      transaction
+        .update(integrationEnablementRequests)
+        .set({ status: "abandoned" })
+        .where(
+          and(
+            eq(integrationEnablementRequests.clientId, authority.clientId),
+            eq(integrationEnablementRequests.reservationId, request.data.reservationId),
+            eq(integrationEnablementRequests.status, "pending"),
+          ),
+        )
+        .run();
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: "integration.enablement_abandoned",
+          clientId: authority.clientId,
+          occurredAt: Date.now(),
+          subjectId: request.data.reservationId,
+        })
+        .run();
+
+      return abandonIntegrationEnablementResultSchema.parse({ abandoned: true, ok: true });
     });
   }
 

@@ -17,6 +17,7 @@ describe("integration observability", () => {
       durationMs: 128,
       integrationSlug: "github",
       operation: "create",
+      outcome: "provider_rejected",
       status: 403,
     });
 
@@ -25,6 +26,7 @@ describe("integration observability", () => {
       durationMs: 128,
       integrationSlug: "github",
       operation: "create",
+      outcome: "provider_rejected",
       status: 403,
     });
   });
@@ -57,6 +59,7 @@ describe("integration observability", () => {
       durationMs: 128,
       integrationSlug: "github",
       operation: "create",
+      outcome: "provider_rejected",
       secret,
       status: 403,
     });

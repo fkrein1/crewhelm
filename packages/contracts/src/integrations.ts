@@ -235,6 +235,7 @@ const integrationEnablementErrorSchema = z.strictObject({
     "insufficient_scope",
     "integration_enablement_in_progress",
     "integration_enablement_outcome_unknown",
+    "integration_enablement_rejected",
     "integration_enablement_request_limit_exceeded",
     "integration_enablement_unavailable",
     "invalid_authority",
@@ -292,6 +293,14 @@ export const completeIntegrationEnablementInputSchema = z.strictObject({
   managed: z.literal(true),
   reservationId: integrationEnablementReservationIdSchema,
 });
+export const abandonIntegrationEnablementInputSchema = z.strictObject({
+  integrationSlug: integrationSlugSchema,
+  reservationId: integrationEnablementReservationIdSchema,
+});
+export const abandonIntegrationEnablementResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({ abandoned: z.boolean(), ok: z.literal(true) }),
+  z.strictObject({ error: integrationEnablementErrorSchema, ok: z.literal(false) }),
+]);
 export const integrationToolSearchInputSchema = z.strictObject({
   cursor: integrationCatalogCursorSchema.optional(),
   integrationSlug: integrationSlugSchema
@@ -366,6 +375,12 @@ export type InspectIntegrationToolInput = z.infer<typeof inspectIntegrationToolI
 export type InspectIntegrationToolResult = z.infer<typeof inspectIntegrationToolResultSchema>;
 export type CompleteIntegrationEnablementInput = z.infer<
   typeof completeIntegrationEnablementInputSchema
+>;
+export type AbandonIntegrationEnablementInput = z.infer<
+  typeof abandonIntegrationEnablementInputSchema
+>;
+export type AbandonIntegrationEnablementResult = z.infer<
+  typeof abandonIntegrationEnablementResultSchema
 >;
 export type EnableIntegrationInput = z.infer<typeof enableIntegrationInputSchema>;
 export type EnableIntegrationResult = z.infer<typeof enableIntegrationResultSchema>;

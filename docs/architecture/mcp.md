@@ -80,6 +80,12 @@ Each private step still validates scopes and persists replay state independently
 credentials remain in provider or Crewhelm custody and never enter MCP arguments, results, logs, or
 Agent context.
 
+An ambiguous managed-authentication write retains its owner-local reservation. A later
+`connect_provider` call first queries Composio again: it completes the reservation from an exact
+discovered configuration. An empty, unavailable, or invalid lookup preserves the reservation and
+does not redispatch before `recoverAfter`; after that boundary the normal lookup-before-create flow
+repeats. A conclusive provider rejection may abandon the reservation immediately.
+
 Complex authoring uses owner-scoped durable drafts instead of carrying complete candidates through
 every model turn. `prepare_*` operations store one validated Recipe installation, Recipe
 publication, Skill, or Agent-blueprint package in `OwnerControlPlane` SQLite and return a compact

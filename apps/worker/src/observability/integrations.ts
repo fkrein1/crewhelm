@@ -9,7 +9,8 @@ const integrationProviderResponseEventSchema = z.discriminatedUnion("operation",
       durationMs: durationMsSchema,
       integrationSlug: integrationSlugSchema,
       operation: z.enum(["create", "lookup", "recovery"]),
-      status: providerStatusSchema,
+      outcome: z.enum(["accepted", "invalid_response", "network_error", "provider_rejected"]),
+      status: providerStatusSchema.nullable(),
     })
     .strict(),
   z

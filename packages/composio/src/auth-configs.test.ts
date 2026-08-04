@@ -84,12 +84,14 @@ describe("Composio managed auth configurations", () => {
       durationMs: expect.any(Number),
       integrationSlug: "github",
       operation: "lookup",
+      outcome: "accepted",
       status: 200,
     });
     expect(onResponse).toHaveBeenNthCalledWith(2, {
       durationMs: expect.any(Number),
       integrationSlug: "github",
       operation: "create",
+      outcome: "accepted",
       status: 201,
     });
 
@@ -134,19 +136,51 @@ describe("Composio managed auth configurations", () => {
       durationMs: expect.any(Number),
       integrationSlug: "github",
       operation: "lookup",
+      outcome: "accepted",
       status: 200,
     });
     expect(onResponse).toHaveBeenNthCalledWith(2, {
       durationMs: expect.any(Number),
       integrationSlug: "github",
       operation: "create",
+      outcome: "invalid_response",
       status: 503,
     });
     expect(onResponse).toHaveBeenNthCalledWith(3, {
       durationMs: expect.any(Number),
       integrationSlug: "github",
       operation: "recovery",
+      outcome: "accepted",
       status: 200,
+    });
+  });
+
+  it("reports a conclusive provider rejection without claiming an unknown effect", async () => {
+    const onResponse = vi.fn<(event: unknown) => void>();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ items: [], next_cursor: null }))
+      .mockResolvedValueOnce(jsonResponse({ message: "unsupported" }, 400))
+      .mockResolvedValueOnce(jsonResponse({ items: [], next_cursor: null }));
+
+    await expect(
+      createComposioAuthConfigs({ apiKey, fetch: fetchMock, onResponse }).ensureManaged({
+        integrationSlug: "spotify",
+      }),
+    ).resolves.toEqual({
+      error: {
+        code: "integration_enablement_rejected",
+        message: "Integration enablement request denied.",
+      },
+      externalEffect: "none",
+      ok: false,
+    });
+    expect(onResponse).toHaveBeenCalledWith({
+      durationMs: expect.any(Number),
+      integrationSlug: "spotify",
+      operation: "create",
+      outcome: "provider_rejected",
+      status: 400,
     });
   });
 

@@ -55,9 +55,10 @@ export type EnsureManagedIntegrationAuthConfigResult =
     }
   | {
       error: {
-        code: "integration_enablement_outcome_unknown";
+        code: "integration_enablement_outcome_unknown" | "integration_enablement_rejected";
         message: "Integration enablement request denied.";
       };
+      externalEffect: "none" | "unknown";
       ok: false;
     };
 
@@ -66,6 +67,12 @@ export interface ComposioAuthConfigs {
     input: Pick<EnableIntegrationInput, "integrationSlug">,
   ): Promise<EnsureManagedIntegrationAuthConfigResult>;
   isAvailable(): boolean;
+  lookupManaged(
+    input: Pick<EnableIntegrationInput, "integrationSlug">,
+  ): Promise<
+    | { authConfig: ManagedIntegrationAuthConfig | null; ok: true }
+    | { error: { code: "integration_enablement_outcome_unknown" }; ok: false }
+  >;
 }
 
 export interface ComposioAuthConfigsOptions {
@@ -79,7 +86,8 @@ export interface ComposioAuthConfigResponseEvent {
   durationMs: number;
   integrationSlug: string;
   operation: "create" | "lookup" | "recovery";
-  status: number;
+  outcome: "accepted" | "invalid_response" | "network_error" | "provider_rejected";
+  status: number | null;
 }
 
 function outcomeUnknown(): EnsureManagedIntegrationAuthConfigResult {
@@ -88,6 +96,18 @@ function outcomeUnknown(): EnsureManagedIntegrationAuthConfigResult {
       code: "integration_enablement_outcome_unknown",
       message: "Integration enablement request denied.",
     },
+    externalEffect: "unknown",
+    ok: false,
+  };
+}
+
+function outcomeRejected(): EnsureManagedIntegrationAuthConfigResult {
+  return {
+    error: {
+      code: "integration_enablement_rejected",
+      message: "Integration enablement request denied.",
+    },
+    externalEffect: "none",
     ok: false,
   };
 }
@@ -143,7 +163,8 @@ export function createComposioAuthConfigs(
 
   function recordResponse(
     operation: ComposioAuthConfigResponseEvent["operation"],
-    status: number,
+    outcome: ComposioAuthConfigResponseEvent["outcome"],
+    status: number | null,
     integrationSlug: string,
     startedAt: number,
   ) {
@@ -152,6 +173,7 @@ export function createComposioAuthConfigs(
         durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
         integrationSlug,
         operation,
+        outcome,
         status,
       });
     } catch {
@@ -175,26 +197,36 @@ export function createComposioAuthConfigs(
     endpoint.searchParams.set("show_disabled", "false");
     endpoint.searchParams.set("toolkit_slug", integrationSlug);
     const startedAt = performance.now();
-    const response = await fetchImplementation(endpoint, {
-      headers: {
-        accept: "application/json",
-        "x-api-key": apiKey.success ? apiKey.data : "",
-      },
-      method: "GET",
-      redirect: "manual",
-      signal: signal(),
-    });
-    recordResponse(operation, response.status, integrationSlug, startedAt);
+    let response: Response;
+
+    try {
+      response = await fetchImplementation(endpoint, {
+        headers: {
+          accept: "application/json",
+          "x-api-key": apiKey.success ? apiKey.data : "",
+        },
+        method: "GET",
+        redirect: "manual",
+        signal: signal(),
+      });
+    } catch (error) {
+      recordResponse(operation, "network_error", null, integrationSlug, startedAt);
+      throw error;
+    }
 
     if (
       response.status !== 200 ||
       !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
     ) {
+      recordResponse(operation, "invalid_response", response.status, integrationSlug, startedAt);
       return undefined;
     }
 
     const body = await readBoundedJson(response, MAXIMUM_AUTH_CONFIG_RESPONSE_BYTES);
-    if (!body.ok) return undefined;
+    if (!body.ok) {
+      recordResponse(operation, "invalid_response", response.status, integrationSlug, startedAt);
+      return undefined;
+    }
     const result = managedAuthConfigListSchema.safeParse(body.value);
 
     if (
@@ -202,8 +234,11 @@ export function createComposioAuthConfigs(
       result.data.items.some((item) => item.toolkit.slug !== integrationSlug) ||
       (result.data.items.length === 0 && result.data.next_cursor != null)
     ) {
+      recordResponse(operation, "invalid_response", response.status, integrationSlug, startedAt);
       return undefined;
     }
+
+    recordResponse(operation, "accepted", response.status, integrationSlug, startedAt);
 
     const selected = result.data.items
       .map((item) => normalize(item, item.toolkit.slug))
@@ -234,25 +269,31 @@ export function createComposioAuthConfigs(
         }
 
         const startedAt = performance.now();
-        const response = await fetchImplementation(COMPOSIO_AUTH_CONFIGS_URL, {
-          body: JSON.stringify({
-            auth_config: {
-              credentials: {},
-              restrict_to_following_tools: [],
-              type: "use_composio_managed_auth",
+        let response: Response;
+
+        try {
+          response = await fetchImplementation(COMPOSIO_AUTH_CONFIGS_URL, {
+            body: JSON.stringify({
+              auth_config: {
+                credentials: {},
+                restrict_to_following_tools: [],
+                type: "use_composio_managed_auth",
+              },
+              toolkit: { slug: integrationSlug.data },
+            }),
+            headers: {
+              accept: "application/json",
+              "content-type": "application/json",
+              "x-api-key": apiKey.data,
             },
-            toolkit: { slug: integrationSlug.data },
-          }),
-          headers: {
-            accept: "application/json",
-            "content-type": "application/json",
-            "x-api-key": apiKey.data,
-          },
-          method: "POST",
-          redirect: "manual",
-          signal: signal(),
-        });
-        recordResponse("create", response.status, integrationSlug.data, startedAt);
+            method: "POST",
+            redirect: "manual",
+            signal: signal(),
+          });
+        } catch (error) {
+          recordResponse("create", "network_error", null, integrationSlug.data, startedAt);
+          throw error;
+        }
 
         if (
           response.status === 201 &&
@@ -266,25 +307,64 @@ export function createComposioAuthConfigs(
           if (created.success && created.data.toolkit.slug === integrationSlug.data) {
             const authConfig = normalize(created.data.auth_config, created.data.toolkit.slug);
 
+            recordResponse("create", "accepted", response.status, integrationSlug.data, startedAt);
             return containsSecret(authConfig, apiKey.data)
               ? outcomeUnknown()
               : { authConfig, created: true, ok: true };
           }
         }
 
+        const providerRejected =
+          response.status >= 400 &&
+          response.status < 500 &&
+          ![408, 409, 425, 429].includes(response.status);
+        recordResponse(
+          "create",
+          providerRejected ? "provider_rejected" : "invalid_response",
+          response.status,
+          integrationSlug.data,
+          startedAt,
+        );
+
         const recovered = await findManaged(integrationSlug.data, "recovery");
 
-        return recovered === null ||
-          recovered === undefined ||
-          containsSecret(recovered, apiKey.data)
-          ? outcomeUnknown()
-          : { authConfig: recovered, created: false, ok: true };
+        if (
+          recovered !== null &&
+          recovered !== undefined &&
+          !containsSecret(recovered, apiKey.data)
+        ) {
+          return { authConfig: recovered, created: false, ok: true };
+        }
+
+        return providerRejected && recovered === null ? outcomeRejected() : outcomeUnknown();
       } catch {
         return outcomeUnknown();
       }
     },
     isAvailable() {
       return apiKey.success;
+    },
+    async lookupManaged(input) {
+      const integrationSlug = integrationSlugSchema.safeParse(input.integrationSlug);
+
+      if (!apiKey.success || !integrationSlug.success) {
+        return { error: { code: "integration_enablement_outcome_unknown" }, ok: false };
+      }
+
+      try {
+        const authConfig = await findManaged(integrationSlug.data, "recovery");
+
+        if (
+          authConfig === undefined ||
+          (authConfig !== null && containsSecret(authConfig, apiKey.data))
+        ) {
+          return { error: { code: "integration_enablement_outcome_unknown" }, ok: false };
+        }
+
+        return { authConfig, ok: true };
+      } catch {
+        return { error: { code: "integration_enablement_outcome_unknown" }, ok: false };
+      }
     },
   };
 }

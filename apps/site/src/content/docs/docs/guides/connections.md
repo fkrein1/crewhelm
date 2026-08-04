@@ -68,8 +68,12 @@ approval-gated.
 
 - If provider authorization expires or fails, inspect the exact Connection lifecycle and follow
   its returned next action. Do not infer success from the browser redirect alone.
-- If a write returns an ambiguous reservation, retry the same facade request only as directed after
-  `recoverAfter`.
+- If provider enablement has an ambiguous outcome, retry the same facade operation. Crewhelm first
+  checks Composio again: it adopts a discovered authentication configuration, or releases an
+  attempt that Composio conclusively rejected. An empty or uncertain lookup preserves the
+  reservation and returns `recoverAfter` without redispatching; after that boundary Crewhelm
+  repeats its lookup-before-create flow.
+- Other ambiguous Connection writes remain pinned until their returned `recoverAfter`.
 - Revoke a Connection through `crewhelm_recover` with `operation.kind: "revoke_connection"` and
   the returned Connection object to stop local use immediately. Provider-side consent and
   credential deletion remain Composio's responsibility.

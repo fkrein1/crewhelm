@@ -1,6 +1,7 @@
 import type { OwnerAuthority } from "@crewhelm/contracts";
 
 export interface OwnerControlPlaneClient {
+  abandonIntegrationEnablement?(authorityInput: unknown, input: unknown): Promise<unknown>;
   activateVerifiedConnection?(authorityInput: unknown, input: unknown): Promise<unknown>;
   agentInbox(authorityInput: unknown, input: unknown): Promise<unknown>;
   agentEventTriggers?(authorityInput: unknown, input: unknown): Promise<unknown>;

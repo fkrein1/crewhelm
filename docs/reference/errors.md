@@ -21,6 +21,9 @@ guess whether its Run started.
 ## Ambiguous writes
 
 Unknown integration or connection writes return `reservationId`, `recoverAfter`, and
-`retry_same_request`. Retry the same facade request: before `recoverAfter` Crewhelm does not
-redispatch; afterward that request renews the reservation. Preserve an explicit `requestKey` when
-one was supplied. Reconcile external effects only from independent evidence.
+`retry_same_request`. Preserve an explicit `requestKey` when one was supplied. A repeated
+integration-enablement request first queries Composio: Crewhelm completes the reservation from a
+discovered configuration. An empty or uncertain lookup preserves the reservation until
+`recoverAfter`; a conclusive provider rejection may release it immediately. Other Connection
+writes do not redispatch before `recoverAfter`. Reconcile external effects only from independent
+evidence.

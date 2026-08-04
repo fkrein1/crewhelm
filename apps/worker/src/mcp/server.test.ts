@@ -3448,6 +3448,129 @@ describe("authenticated MCP handler", () => {
     );
   });
 
+  it("rechecks an ambiguous enablement and waits for recovery before retrying", async () => {
+    const authority = await ownerAuthority("mcp-enable-spotify-recovery-owner", [
+      CONNECTION_CONFIGS_WRITE_SCOPE,
+      CONNECTIONS_READ_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1_000).toISOString();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            auth_config: {
+              auth_scheme: "OAUTH2",
+              id: "ac_spotify_recovered",
+              is_composio_managed: true,
+            },
+            toolkit: { slug: "spotify" },
+          },
+          { status: 201 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            connected_account_id: "ca_spotify_recovered",
+            expires_at: expiresAt,
+            experimental: { account_type: "PRIVATE" },
+            link_token: "ln_spotify_recovered",
+            redirect_url: "https://connect.composio.dev/link/ln_spotify_recovered",
+          },
+          { status: 201 },
+        ),
+      );
+    const connect = async (requestKey: string) => {
+      const response = await handleAuthenticatedMcpRequest(
+        toolRequest(
+          JSON.stringify({
+            id: 142,
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: {
+              arguments: {
+                operation: { integrationSlug: "spotify", kind: "connect_provider", requestKey },
+              },
+              name: MCP_CHANGE_CONNECTIONS_TOOL_NAME,
+            },
+          }),
+        ),
+        env,
+        { authority },
+      );
+
+      return jsonRpcToolResultSchema.parse(await response.json()).result;
+    };
+    const first = await connect("spotify-recovery-first");
+
+    expect(first.isError).toBe(true);
+    expect(
+      enableIntegrationResultSchema.parse(JSON.parse(first.content[0]?.text ?? "")),
+    ).toMatchObject({
+      error: { code: "integration_enablement_outcome_unknown" },
+      ok: false,
+    });
+
+    const second = await connect("spotify-recovery-second");
+
+    expect(second.isError).toBe(true);
+    expect(
+      enableIntegrationResultSchema.parse(JSON.parse(second.content[0]?.text ?? "")),
+    ).toMatchObject({
+      error: { code: "integration_enablement_outcome_unknown" },
+      ok: false,
+    });
+    await runInDurableObject(
+      env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+      (_instance, state) => {
+        state.storage.sql.exec(
+          "UPDATE integration_enablement_requests SET recover_after = 1 WHERE status = 'pending'",
+        );
+      },
+    );
+
+    const third = await connect("spotify-recovery-second");
+    const connected = createConnectionLinkResultSchema.parse(
+      JSON.parse(third.content[0]?.text ?? ""),
+    );
+
+    expect(third.isError).toBe(false);
+    expect(connected).toMatchObject({
+      connectionLink: { url: "https://connect.composio.dev/link/ln_spotify_recovered" },
+      created: true,
+      ok: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(7);
+    await expect(
+      runInDurableObject(
+        env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+        (_instance, state) =>
+          state.storage.sql
+            .exec(
+              `SELECT action FROM audit_events
+               WHERE action IN (
+                 'integration.enablement_reserved',
+                 'integration.enablement_abandoned',
+                 'integration.enabled'
+               )
+               ORDER BY event_id`,
+            )
+            .toArray(),
+      ),
+    ).resolves.toEqual([
+      { action: "integration.enablement_reserved" },
+      { action: "integration.enablement_reserved" },
+      { action: "integration.enabled" },
+    ]);
+  });
+
   it("does not widen an existing all-scope token into integration enablement", async () => {
     const authority = await ownerAuthority("mcp-enable-github-denied-owner", [
       OWNER_READ_SCOPE,

@@ -138,6 +138,50 @@ describe("OwnerControlPlane connections", () => {
     });
   });
 
+  it("releases a pending integration reservation after a confirmed provider rejection", async () => {
+    const authority = await authorityFor("enable-provider-rejected", [
+      CONNECTION_CONFIGS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const input = {
+      idempotencyKey: "enable-spotify-rejected",
+      integrationSlug: "spotify",
+    };
+    const reservation = await stub.reserveIntegrationEnablement(authority, input);
+
+    if (!reservation.ok || reservation.state !== "dispatch") {
+      throw new Error("Expected integration enablement reservation.");
+    }
+
+    await expect(
+      stub.abandonIntegrationEnablement(authority, {
+        integrationSlug: "spotify",
+        reservationId: reservation.reservationId,
+      }),
+    ).resolves.toEqual({ abandoned: true, ok: true });
+    await expect(
+      stub.abandonIntegrationEnablement(authority, {
+        integrationSlug: "spotify",
+        reservationId: reservation.reservationId,
+      }),
+    ).resolves.toEqual({ abandoned: false, ok: true });
+    await expect(stub.reserveIntegrationEnablement(authority, input)).resolves.toMatchObject({
+      ok: true,
+      reservationId: reservation.reservationId,
+      state: "dispatch",
+    });
+
+    const audit = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql.exec("SELECT action FROM audit_events ORDER BY event_id").toArray(),
+    );
+
+    expect(audit).toEqual([
+      { action: "integration.enablement_reserved" },
+      { action: "integration.enablement_abandoned" },
+      { action: "integration.enablement_reserved" },
+    ]);
+  });
+
   it("filters owner-local connection summaries by integration, status, and authorization outcome", async () => {
     const authority = await authorityFor("connection-filters", [
       CONNECTION_CONFIGS_WRITE_SCOPE,

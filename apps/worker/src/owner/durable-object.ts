@@ -1,6 +1,7 @@
 import {
   agentInboxInputSchema,
   agentEventTriggersInputSchema,
+  abandonIntegrationEnablementResultSchema,
   AGENTS_READ_SCOPE,
   AGENTS_WRITE_SCOPE,
   AUTONOMY_WRITE_SCOPE,
@@ -32,6 +33,7 @@ import {
   type AgentInboxResult,
   type AgentEventTriggerOccurrence,
   type AgentEventTriggersInput,
+  type AbandonIntegrationEnablementResult,
   type CancelRunResult,
   type BatchDisableAgentsResult,
   type CreateAgentResult,
@@ -1364,6 +1366,19 @@ export class OwnerControlPlane extends DurableObject {
     return authorization.ok
       ? this.#connections.reserveIntegrationEnablement(authorization.authority, input)
       : deniedIntegrationEnablement(authorization.code);
+  }
+
+  async abandonIntegrationEnablement(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<AbandonIntegrationEnablementResult> {
+    const authorization = this.#authorize(authorityInput, CONNECTION_CONFIGS_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#connections.abandonIntegrationEnablement(authorization.authority, input)
+      : abandonIntegrationEnablementResultSchema.parse(
+          deniedIntegrationEnablement(authorization.code),
+        );
   }
 
   async completeIntegrationEnablement(

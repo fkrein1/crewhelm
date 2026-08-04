@@ -77,9 +77,10 @@ endpoint are supplied, an exact-origin mismatch stops before network access.
 ## Recover ambiguous control writes
 
 When an integration or Connection write returns `reservationId`, `recoverAfter`, and
-`retry_same_request`, preserve the exact facade request. Before `recoverAfter`, Crewhelm does not
-redispatch. Afterward, retry only the same request so Crewhelm can renew or
-reconcile the reservation.
+`retry_same_request`, preserve the exact facade request. Retrying integration enablement lets
+Crewhelm query Composio and adopt a found authentication configuration. An empty or uncertain
+lookup, or another Connection write, preserves the reservation until `recoverAfter` rather than
+redispatching an ambiguous effect.
 
 ## Verify recovery
 

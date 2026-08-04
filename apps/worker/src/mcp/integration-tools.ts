@@ -124,6 +124,36 @@ async function enableIntegration(
   }
 
   if (!reservation.data.ok) {
+    const operation = reservation.data.error.operation;
+
+    if (
+      reservation.data.error.code === "integration_enablement_outcome_unknown" &&
+      operation !== undefined
+    ) {
+      const recovered = await authConfigs.lookupManaged({
+        integrationSlug: request.data.integrationSlug,
+      });
+
+      if (recovered.ok && recovered.authConfig !== null) {
+        let completionResponse: unknown;
+
+        try {
+          completionResponse = await controlPlane.completeIntegrationEnablement(authority, {
+            ...recovered.authConfig,
+            created: false,
+            reservationId: operation.reservationId,
+          });
+        } catch {
+          return unknownIntegrationEnablementMcpResult(operation);
+        }
+
+        const completed = enableIntegrationResultSchema.safeParse(completionResponse);
+        return completed.success
+          ? integrationEnablementMcpResult(completed.data)
+          : unknownIntegrationEnablementMcpResult(operation);
+      }
+    }
+
     return integrationEnablementMcpResult(reservation.data);
   }
 
@@ -149,9 +179,34 @@ async function enableIntegration(
   }
 
   if (!providerResult.ok) {
+    if (
+      providerResult.externalEffect === "none" &&
+      controlPlane.abandonIntegrationEnablement !== undefined
+    ) {
+      let abandonment: unknown;
+
+      try {
+        abandonment = await controlPlane.abandonIntegrationEnablement(authority, {
+          integrationSlug: request.data.integrationSlug,
+          reservationId: reservation.data.reservationId,
+        });
+      } catch {
+        return unknownIntegrationEnablementMcpResult(reservation.data);
+      }
+
+      if (
+        typeof abandonment !== "object" ||
+        abandonment === null ||
+        !("ok" in abandonment) ||
+        abandonment.ok !== true
+      ) {
+        return unknownIntegrationEnablementMcpResult(reservation.data);
+      }
+    }
+
     return providerResult.error.code === "integration_enablement_outcome_unknown"
       ? unknownIntegrationEnablementMcpResult(reservation.data)
-      : integrationEnablementMcpResult(providerResult);
+      : integrationEnablementMcpResult({ error: providerResult.error, ok: false });
   }
 
   const completion = completeIntegrationEnablementInputSchema.safeParse({
