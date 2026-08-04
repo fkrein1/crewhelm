@@ -1123,7 +1123,7 @@ describe("repository foundation", () => {
         },
         production: {
           name: "crewhelm-site",
-          preview_urls: false,
+          preview_urls: true,
           services: [{ binding: "REGISTRY", service: "crewhelm-registry" }],
           workers_dev: false,
         },
