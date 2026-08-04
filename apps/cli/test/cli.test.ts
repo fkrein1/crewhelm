@@ -32,6 +32,7 @@ const EXPECTED_MIGRATIONS = [
   "0010_oauth_offline_access.sql",
   "0011_autonomy_write_scope.sql",
   "0012_access_levels.sql",
+  "0013_cloudflare_model_catalog_cache.sql",
 ] as const;
 const AUTH_TABLES = [
   "_cf_KV",

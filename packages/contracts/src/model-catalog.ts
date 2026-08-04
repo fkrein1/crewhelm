@@ -14,6 +14,9 @@ import {
 export const MAXIMUM_ENABLED_AGENT_MODELS = 64;
 export const MAXIMUM_MODEL_CATALOG_REVISIONS = 1_000;
 export const MAXIMUM_MODEL_DISCOVERY_ITEMS = 25;
+export const MAXIMUM_MODEL_BROWSE_ITEMS = 100;
+export const MAXIMUM_MODEL_BROWSE_PAGES = 500;
+export const MAXIMUM_MODEL_BROWSE_SCAN_ITEMS = 500;
 export const MAXIMUM_MODEL_DISCOVERY_SCAN_ITEMS = 250;
 export const CLOUDFLARE_AI_MODEL_CATALOG_URL = "https://developers.cloudflare.com/ai/models/";
 export const CLOUDFLARE_AI_PRICING_URL =
@@ -152,6 +155,34 @@ export const configureModelCatalogResultSchema = z.discriminatedUnion("ok", [
 ]);
 
 export const modelDiscoveryCapabilitySchema = z.enum(["function-calling", "reasoning", "vision"]);
+export const modelBrowseCapabilitySchema = z.enum([
+  "function-calling",
+  "reasoning",
+  "vision",
+  "zero-data-retention",
+]);
+export const modelBrowsePlatformSchema = z.enum(["cloudflare-hosted", "third-party"]);
+export const modelBrowseFreshnessSchema = z.enum(["live", "last-known-good", "bundled-fallback"]);
+export const modelRuntimeCompatibilitySchema = z.enum(["compatible", "incompatible"]);
+export const modelRuntimeCompatibilityEvidenceSchema = z.enum([
+  "declared-tool-support",
+  "adapter-inferred-tool-support",
+  "unsupported-task",
+  "unsupported-request-format",
+  "tool-support-undeclared",
+]);
+export const modelBrowseSortSchema = z.enum(["relevance", "name", "newest", "oldest"]);
+export const browseCloudflareModelsInputSchema = z.strictObject({
+  capability: modelBrowseCapabilitySchema.optional(),
+  includeDescriptions: z.boolean().default(false),
+  limit: z.number().int().min(1).max(MAXIMUM_MODEL_BROWSE_ITEMS).default(50),
+  page: z.number().int().min(1).max(MAXIMUM_MODEL_BROWSE_PAGES).default(1),
+  platform: modelBrowsePlatformSchema.optional(),
+  provider: z.string().trim().min(1).max(80).optional(),
+  query: z.string().trim().min(1).max(120).optional(),
+  sort: modelBrowseSortSchema.default("relevance"),
+  task: z.string().trim().min(1).max(80).optional(),
+});
 export const searchCloudflareModelsInputSchema = z.strictObject({
   capability: modelDiscoveryCapabilitySchema.optional(),
   limit: z.number().int().min(1).max(MAXIMUM_MODEL_DISCOVERY_ITEMS).default(10),
@@ -189,7 +220,8 @@ export const cloudflareModelCatalogItemSchema = z.strictObject({
     status: z.enum(["catalog-reported", "reference-only"]),
   }),
   provider: z.string().min(1).max(120),
-  runtimeCompatibility: z.enum(["compatible", "incompatible"]),
+  runtimeCompatibility: modelRuntimeCompatibilitySchema,
+  runtimeCompatibilityEvidence: modelRuntimeCompatibilityEvidenceSchema,
   source: z.strictObject({
     catalog: z.url(),
     retrievedAt: z.iso.datetime(),
@@ -201,10 +233,55 @@ export const cloudflareModelCatalogItemSchema = z.strictObject({
   }),
 });
 
+export const cloudflareModelBrowseItemSchema = z.strictObject({
+  capabilities: z.array(modelBrowseCapabilitySchema).max(8),
+  createdAt: z.iso.datetime().nullable(),
+  description: z.string().max(500),
+  freshness: modelBrowseFreshnessSchema,
+  id: cloudflareAiModelIdSchema,
+  name: z.string().min(1).max(240),
+  platform: modelBrowsePlatformSchema,
+  provider: z.string().min(1).max(120),
+  requestFormats: z.array(z.string().min(1).max(80)).max(8),
+  runtimeCompatibility: modelRuntimeCompatibilitySchema,
+  runtimeCompatibilityEvidence: modelRuntimeCompatibilityEvidenceSchema,
+  task: z.string().min(1).max(120),
+});
+export const cloudflareModelBrowseResultItemSchema = cloudflareModelBrowseItemSchema
+  .omit({ description: true })
+  .extend({ description: z.string().max(500).optional() });
+const modelBrowseFacetSchema = z.strictObject({
+  count: z.number().int().positive().safe(),
+  value: z.string().min(1).max(120),
+});
 const cloudflareModelDiscoveryErrorSchema = z.strictObject({
   code: z.enum(["catalog_unavailable", "invalid_request", "model_unavailable"]),
   message: z.literal("Cloudflare model discovery request denied."),
 });
+export const browseCloudflareModelsResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    facets: z.strictObject({
+      capabilities: z.array(modelBrowseFacetSchema).max(16),
+      platforms: z.array(modelBrowseFacetSchema).max(4),
+      providers: z.array(modelBrowseFacetSchema).max(120),
+      tasks: z.array(modelBrowseFacetSchema).max(64),
+    }),
+    models: z.array(cloudflareModelBrowseResultItemSchema).max(MAXIMUM_MODEL_BROWSE_ITEMS),
+    nextPage: z.number().int().min(2).max(MAXIMUM_MODEL_BROWSE_PAGES).nullable(),
+    ok: z.literal(true),
+    page: z.number().int().min(1).max(MAXIMUM_MODEL_BROWSE_PAGES),
+    retrievedAt: z.iso.datetime(),
+    snapshot: z.strictObject({
+      refreshedAt: z.iso.datetime(),
+      sourceCommit: z.string().regex(/^[a-f0-9]{40}$/),
+      sourceUrl: z.url(),
+      status: z.enum(["last-known-good", "bundled-fallback"]),
+    }),
+    source: z.literal(CLOUDFLARE_AI_MODEL_CATALOG_URL),
+    total: z.number().int().nonnegative().max(MAXIMUM_MODEL_BROWSE_SCAN_ITEMS),
+  }),
+  z.strictObject({ error: cloudflareModelDiscoveryErrorSchema, ok: z.literal(false) }),
+]);
 export const searchCloudflareModelsResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     models: z.array(cloudflareModelCatalogItemSchema).max(MAXIMUM_MODEL_DISCOVERY_ITEMS),
@@ -224,5 +301,7 @@ export type GetModelCatalogResult = z.infer<typeof getModelCatalogResultSchema>;
 export type ModelCatalog = z.infer<typeof modelCatalogSchema>;
 export type ModelCatalogData = z.infer<typeof modelCatalogDataSchema>;
 export type CloudflareModelCatalogItem = z.infer<typeof cloudflareModelCatalogItemSchema>;
+export type CloudflareModelBrowseItem = z.infer<typeof cloudflareModelBrowseItemSchema>;
+export type BrowseCloudflareModelsResult = z.infer<typeof browseCloudflareModelsResultSchema>;
 export type SearchCloudflareModelsResult = z.infer<typeof searchCloudflareModelsResultSchema>;
 export type InspectCloudflareModelResult = z.infer<typeof inspectCloudflareModelResultSchema>;

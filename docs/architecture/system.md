@@ -14,7 +14,7 @@ flowchart LR
     Worker --> Auth["Auth D1"]
     Worker --> Owner["OwnerControlPlane"]
     Worker --> Registry["Public Recipe Registry"]
-    Worker --> ModelCatalog["Live Cloudflare AI catalog"]
+    Worker --> ModelCatalog["Cloudflare AI catalog"]
     Owner --> Content["Immutable owner content / R2"]
     Owner --> Agent["CrewAgent directory"]
     Agent --> Workflow["AgentTaskWorkflow"]
@@ -49,7 +49,7 @@ through the Agent object during migration.
 | Sandbox container     | One runtime-tool call's ephemeral process and filesystem; never owner authority or credentials; its backing Durable Object is purged after teardown                                                                                                                                                                                                                                  |
 | Search/fetch adapter  | Bounded public evidence reads; provider credentials stay in the Worker and exact source handles expire with their Run                                                                                                                                                                                                                                                                |
 | Cloudflare AI         | Direct model execution through the Workers AI binding when no dedicated Gateway is configured                                                                                                                                                                                                                                                                                        |
-| Cloudflare AI catalog | Live provider model inventory, task, declared capability metadata, and pricing references; never owner policy, release ordering, or a Crewhelm quality verdict                                                                                                                                                                                                                       |
+| Cloudflare AI catalog | Live Workers AI inventory plus a synchronized last-known-good third-party catalog, with task, declared capability metadata, source commit, and pricing references; never owner policy, release ordering, or a Crewhelm quality verdict                                                                                                                                               |
 | AI Gateway            | Optional installation-wide hard spend ceiling and model-call cost metadata                                                                                                                                                                                                                                                                                                           |
 | Composio              | Auth-config and connected-account credentials plus supported credential refresh                                                                                                                                                                                                                                                                                                      |
 | Remote MCP server     | Untrusted tool catalog and tool results; Crewhelm retains encrypted bearer or OAuth credentials                                                                                                                                                                                                                                                                                      |
@@ -192,10 +192,18 @@ silently replayed. Retrieved titles, snippets, URLs, and page text remain untrus
 Model selection has three independent inputs. Cloudflare supplies live availability and provider
 metadata. The owner-enabled catalog controls which exact IDs may be admitted. Crewhelm's runtime
 enforces protocol compatibility and deterministic execution limits without maintaining a
-“tested” verdict. Missing capability metadata remains unspecified rather than unsupported. The
-catalog search is current inventory, while Cloudflare's changelog remains the release-history
-source. Agent revisions and Run admissions pin exact model IDs; disabling one model
-blocks new admission without rewriting immutable history.
+“tested” verdict. Missing capability metadata remains unspecified rather than unsupported.
+Cloudflare-hosted browse entries come from the live Workers AI binding. The hourly Worker schedule
+checks Cloudflare's versioned `catalog-models` source for a new commit, bounds and validates every
+third-party record, and atomically replaces one D1 cache row only after the complete refresh
+succeeds. MCP reads use that last-known-good row or a bundled fallback and expose its source commit,
+refresh time, and status. Detailed Workers AI search remains on the AI binding. Cloudflare's
+changelog remains the release-history source. Agent-compatible browse results require text
+generation, a request format handled by an installed runtime adapter, and declared or
+adapter-inferred tool support. OpenAI catalog slugs use the Responses adapter, Anthropic slugs use
+Anthropic Messages, compatible chat providers use Chat Completions, and `@cf/*` IDs use Workers AI.
+Agent revisions and Run admissions pin exact model IDs; disabling one model blocks new admission
+without rewriting immutable history.
 
 Configuration changes invalidate unconsumed authority. The optional AI Gateway provides the
 fleet-wide dollar ceiling. The

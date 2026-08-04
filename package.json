@@ -14,6 +14,7 @@
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint --type-aware --type-check --deny-warnings --report-unused-disable-directives .",
+    "models:snapshot": "tsx apps/worker/scripts/generate-cloudflare-unified-model-catalog.mjs && oxfmt --write apps/worker/src/mcp/cloudflare-unified-model-catalog.snapshot.ts",
     "registry:dev": "tsx ./scripts/crewhelm-registry-development.ts",
     "testing:up": "tsx ./scripts/crewhelm-testing-up.ts",
     "release:check": "node apps/cli/scripts/release-package.mjs",

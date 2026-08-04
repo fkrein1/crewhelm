@@ -1,5 +1,7 @@
 import type { OwnerAuthority } from "@crewhelm/contracts";
 
+import type { CloudflareUnifiedModelCatalogSnapshot } from "./cloudflare-unified-model-catalog.js";
+
 export interface OwnerControlPlaneClient {
   activateVerifiedConnection?(authorityInput: unknown, input: unknown): Promise<unknown>;
   agentInbox(authorityInput: unknown, input: unknown): Promise<unknown>;
@@ -87,6 +89,7 @@ export interface OwnerControlPlaneClient {
 export interface McpEnvironment {
   AI?: Ai;
   AI_GATEWAY_ID?: string | undefined;
+  AUTH_DB?: D1Database;
   BETTER_AUTH_SECRET: string;
   BRAVE_SEARCH_API_KEY?: string | undefined;
   CODE_SANDBOX?: unknown;
@@ -98,7 +101,7 @@ export interface McpEnvironment {
 }
 
 export interface CloudflareModelDiscoveryClient {
-  models(params?: AiModelsSearchParams): Promise<AiModelsSearchObject[]>;
+  models(params?: AiModelsSearchParams): Promise<unknown[]>;
 }
 
 export interface McpToolContext {
@@ -106,4 +109,5 @@ export interface McpToolContext {
   authority: OwnerAuthority;
   availableAgentCapabilityPrerequisites: ReadonlySet<string>;
   controlPlane: OwnerControlPlaneClient;
+  modelCatalog?: { read(): Promise<CloudflareUnifiedModelCatalogSnapshot> };
 }

@@ -32,6 +32,7 @@ import {
   registerConfigurationTools,
 } from "./configuration-tools.js";
 import type { McpEnvironment } from "./context.js";
+import { readCloudflareUnifiedModelCatalog } from "./cloudflare-unified-model-catalog.js";
 import {
   MCP_SERVER_INSTRUCTIONS,
   mcpControlPlaneStatusResultSchema,
@@ -237,6 +238,7 @@ function createMcpServer(
 ): McpServer {
   const server = new McpServer(MCP_SERVER_INFO, { instructions: MCP_SERVER_INSTRUCTIONS });
   const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+  const authDatabase = env.AUTH_DB;
   const context = {
     ai: env.AI,
     authority,
@@ -246,6 +248,13 @@ function createMcpServer(
       env.BRAVE_SEARCH_API_KEY !== undefined && env.BRAVE_SEARCH_API_KEY.trim().length > 0,
     ),
     controlPlane,
+    ...(authDatabase === undefined
+      ? {}
+      : {
+          modelCatalog: {
+            read: () => readCloudflareUnifiedModelCatalog(authDatabase),
+          },
+        }),
   };
 
   const privateTools = createPrivateToolCatalog((privateServer) => {

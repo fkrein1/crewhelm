@@ -179,10 +179,16 @@
       "id": "admitted-runs-core"
     },
     {
-      "files": ["apps/worker/src/agent/admitted-runs/inference-fallback.ts"],
+      "files": [
+        "apps/worker/src/agent/admitted-runs/inference-fallback.ts",
+        "apps/worker/src/agent/admitted-runs/openai-responses-model.ts"
+      ],
       "evidence": {
         "definitionVersion": 2,
-        "testFiles": ["apps/worker/src/agent/admitted-runs/inference-fallback.test.ts"]
+        "testFiles": [
+          "apps/worker/src/agent/admitted-runs/inference-fallback.test.ts",
+          "apps/worker/src/agent/admitted-runs/openai-responses-model.test.ts"
+        ]
       },
       "id": "admitted-runs-inference"
     },

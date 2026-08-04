@@ -64,6 +64,7 @@ const EXPECTED_MIGRATIONS = [
   "0010_oauth_offline_access.sql",
   "0011_autonomy_write_scope.sql",
   "0012_access_levels.sql",
+  "0013_cloudflare_model_catalog_cache.sql",
 ] as const;
 const WORKER_TEXT_MODULE = "0000000000000000000000000000000000000000-0000_test.sql";
 const deploymentFingerprints = new Map<string, string>();
@@ -277,6 +278,10 @@ async function createDeploymentAssets(): Promise<{ assets: string; root: string 
   await writeFile(resolve(assets, "migrations", "0011_autonomy_write_scope.sql"), "SELECT 1;\n");
   await writeFile(resolve(assets, "migrations", "0012_access_levels.sql"), "SELECT 1;\n");
   await writeFile(
+    resolve(assets, "migrations", "0013_cloudflare_model_catalog_cache.sql"),
+    "SELECT 1;\n",
+  );
+  await writeFile(
     resolve(assets, "wrangler-template.json"),
     JSON.stringify({
       ai: { binding: "AI" },
@@ -456,6 +461,7 @@ function successfulReuseWrangler(events: string[] = []): RunWrangler {
             "0010_oauth_offline_access.sql",
             "0011_autonomy_write_scope.sql",
             "0012_access_levels.sql",
+            "0013_cloudflare_model_catalog_cache.sql",
           ])
         : queryResult(AUTH_TABLES);
     }
@@ -1688,6 +1694,7 @@ describe("Cloudflare bootstrap", () => {
               "0010_oauth_offline_access.sql",
               "0011_autonomy_write_scope.sql",
               "0012_access_levels.sql",
+              "0013_cloudflare_model_catalog_cache.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
@@ -2068,6 +2075,7 @@ describe("Cloudflare bootstrap", () => {
               "0010_oauth_offline_access.sql",
               "0011_autonomy_write_scope.sql",
               "0012_access_levels.sql",
+              "0013_cloudflare_model_catalog_cache.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
@@ -3293,6 +3301,7 @@ describe("Cloudflare bootstrap", () => {
               "0010_oauth_offline_access.sql",
               "0011_autonomy_write_scope.sql",
               "0012_access_levels.sql",
+              "0013_cloudflare_model_catalog_cache.sql",
             ])
           : queryResult(AUTH_TABLES);
       }
