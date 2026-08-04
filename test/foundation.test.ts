@@ -1117,7 +1117,7 @@ describe("repository foundation", () => {
         preview: {
           name: "crewhelm-site-preview",
           preview_urls: true,
-          workers_dev: false,
+          workers_dev: true,
         },
         production: {
           name: "crewhelm-site",

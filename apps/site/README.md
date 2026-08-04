@@ -72,6 +72,11 @@ either environment or add production-only bindings to the preview environment. D
 non-production branch builds to stop new previews; existing uploaded versions remain inert unless
 their preview URL is requested.
 
+The preview environment keeps the connected `crewhelm-site` Worker reachable on `workers.dev` so
+Cloudflare can route its branch and commit aliases. The production environment disables the base
+`workers.dev` route and serves only the custom domain. Preview Recipe pages are static public
+Registry projections and carry no production Registry binding.
+
 Astro's Cloudflare adapter enables KV-backed sessions by default. The site does not use application
 sessions, so its Astro config selects an in-memory session driver instead. Keep that override unless
 the site gains a deliberate, environment-isolated session store; implicit KV provisioning races
