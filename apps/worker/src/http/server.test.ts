@@ -274,6 +274,14 @@ describe("Crewhelm Worker", () => {
     expect(page.status).toBe(200);
     expect(page.headers.get("content-security-policy")).toContain("script-src 'self'");
     expect(page.headers.get("referrer-policy")).toBe("no-referrer");
+    const script = await request("/setup/provider-auth/app.js");
+    const scriptBody = await script.text();
+    expect(script.status).toBe(200);
+    expect(scriptBody).toContain('[[1, "Configure app"], [2, "Connect account"]]');
+    expect(scriptBody).toContain('input.type = field.secret ? "password" : "text"');
+    expect(scriptBody).toContain('reveal.setAttribute("aria-pressed", "false")');
+    expect(scriptBody).toContain("Space-separated permissions requested by this app.");
+    expect(scriptBody).toContain("Crewhelm relays these values directly to Composio");
 
     const wrongOrigin = await request("/setup/provider-auth/exchange", {
       body: JSON.stringify({ capability: capability.capability }),

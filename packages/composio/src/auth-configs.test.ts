@@ -230,6 +230,12 @@ describe("Composio auth configurations", () => {
                     required: false,
                     type: "string",
                   },
+                  {
+                    displayName: "Scopes",
+                    name: "scopes",
+                    required: false,
+                    type: "string",
+                  },
                 ],
                 required: [
                   {
@@ -278,6 +284,14 @@ describe("Composio auth configurations", () => {
         {
           key: "client_label",
           label: "Client label",
+          maximumLength: 2048,
+          required: false,
+          secret: false,
+          type: "string",
+        },
+        {
+          key: "scopes",
+          label: "Scopes",
           maximumLength: 2048,
           required: false,
           secret: false,

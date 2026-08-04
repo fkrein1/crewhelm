@@ -35,7 +35,7 @@ const PAGE = renderWorkerPage({
   body: `      <p class="ch-copy" id="status">Preparing secure provider authentication…</p>
       <div id="setup"></div>`,
   context: "provider credential handoff",
-  heading: "Configure provider authentication.",
+  heading: "Connect a provider.",
   scriptPath: SCRIPT_PATH,
   title: "Configure provider authentication",
   tone: "warning",
@@ -45,7 +45,30 @@ const SCRIPT = String.raw`(() => {
   "use strict";
   const status = document.getElementById("status");
   const setup = document.getElementById("setup");
+  const heading = document.querySelector("h1");
+  document.querySelector(".ch-panel").classList.add("ch-panel--form");
   const text = (value) => document.createTextNode(value);
+  const section = (title) => {
+    const element = document.createElement("section");
+    element.className = "ch-form-section";
+    const sectionHeading = document.createElement("h2");
+    sectionHeading.append(text(title));
+    element.append(sectionHeading);
+    return element;
+  };
+  const renderSteps = (current, authorizeConnection) => {
+    if (!authorizeConnection) return document.createDocumentFragment();
+    const steps = document.createElement("div");
+    steps.className = "ch-steps";
+    for (const [number, label] of [[1, "Configure app"], [2, "Connect account"]]) {
+      const step = document.createElement("div");
+      step.className = "ch-step";
+      if (number === current) step.setAttribute("aria-current", "step");
+      step.append(text("Step " + number + " · " + label));
+      steps.append(step);
+    }
+    return steps;
+  };
   const fail = (message) => {
     status.textContent = message;
     setup.replaceChildren();
@@ -66,8 +89,13 @@ const SCRIPT = String.raw`(() => {
     if (result.status === "configured") return renderCompleted(result.plan);
     if (result.status === "rejected") return fail("These credentials were rejected. Request a new setup link and try again.");
     if (result.status === "outcome_unknown") return renderUnknown(result);
-    status.textContent = "Enter the credentials required by " + result.plan.integrationName + ".";
+    heading.textContent = "Connect " + result.plan.integrationName + ".";
+    status.textContent = result.plan.authorizeConnection
+      ? "First, configure the developer app Crewhelm will use. Then you will authorize your account."
+      : "Enter the configuration required by " + result.plan.integrationName + ".";
     const form = document.createElement("form");
+    form.className = "ch-form";
+    form.append(renderSteps(1, result.plan.authorizeConnection));
     if (result.plan.documentationUrl) {
       const help = document.createElement("p");
       help.className = "ch-copy";
@@ -80,27 +108,109 @@ const SCRIPT = String.raw`(() => {
       form.append(help);
     }
     if (result.plan.callbackUrl) {
-      const callback = document.createElement("p");
-      callback.className = "ch-copy";
-      callback.append(text("Use this OAuth callback URL in the provider app: "));
-      const code = document.createElement("code");
-      code.append(text(result.plan.callbackUrl));
-      callback.append(code);
+      const callback = section("1. Register the callback URL");
+      const explanation = document.createElement("p");
+      explanation.className = "ch-field-hint";
+      explanation.append(text("Add this exact URL as an authorized redirect URI in the provider's developer app."));
+      const wrap = document.createElement("div");
+      wrap.className = "ch-input-wrap ch-input-wrap--action";
+      const callbackInput = document.createElement("input");
+      callbackInput.className = "ch-input ch-input--code";
+      callbackInput.readOnly = true;
+      callbackInput.value = result.plan.callbackUrl;
+      callbackInput.setAttribute("aria-label", "OAuth callback URL");
+      const copy = document.createElement("button");
+      copy.className = "ch-input-action";
+      copy.type = "button";
+      copy.append(text("Copy"));
+      copy.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(callbackInput.value);
+          copy.textContent = "Copied";
+        } catch {
+          callbackInput.focus();
+          callbackInput.select();
+        }
+      });
+      wrap.append(callbackInput, copy);
+      callback.append(explanation, wrap);
       form.append(callback);
     }
+    const credentialSection = section(result.plan.callbackUrl ? "2. Enter app credentials" : "Credentials");
+    const credentialFields = document.createElement("div");
+    credentialFields.className = "ch-field-list";
+    const permissionSection = section("Permissions");
+    const permissionFields = document.createElement("div");
+    permissionFields.className = "ch-field-list";
     for (const field of result.plan.fields) {
+      const isScopes = field.key.toLowerCase() === "scopes";
+      const container = document.createElement("div");
+      container.className = "ch-field";
       const label = document.createElement("label");
       label.htmlFor = "field-" + field.key;
       label.append(text(field.label));
+      if (field.required) {
+        const required = document.createElement("span");
+        required.className = "ch-required";
+        required.append(text("Required"));
+        label.append(required);
+      }
       const input = document.createElement("input");
       input.autocomplete = "off";
+      input.className = "ch-input";
       input.id = label.htmlFor;
       input.maxLength = field.maximumLength;
       input.name = field.key;
       input.required = field.required;
       input.type = field.secret ? "password" : "text";
-      form.append(label, input);
+      input.spellcheck = false;
+      input.setAttribute("autocapitalize", "none");
+      const wrap = document.createElement("div");
+      wrap.className = "ch-input-wrap";
+      wrap.append(input);
+      if (field.secret) {
+        wrap.classList.add("ch-input-wrap--action");
+        const reveal = document.createElement("button");
+        reveal.className = "ch-input-action";
+        reveal.type = "button";
+        reveal.setAttribute("aria-controls", input.id);
+        reveal.setAttribute("aria-pressed", "false");
+        reveal.append(text("Show"));
+        reveal.addEventListener("click", () => {
+          const visible = input.type === "text";
+          input.type = visible ? "password" : "text";
+          reveal.textContent = visible ? "Show" : "Hide";
+          reveal.setAttribute("aria-pressed", String(!visible));
+        });
+        wrap.append(reveal);
+      }
+      container.append(label, wrap);
+      if (isScopes) {
+        const hint = document.createElement("p");
+        hint.className = "ch-field-hint";
+        hint.append(text("Space-separated permissions requested by this app. Use only the access its approved tools need."));
+        container.append(hint);
+        permissionFields.append(container);
+      } else {
+        credentialFields.append(container);
+      }
     }
+    if (credentialFields.childElementCount > 0) {
+      credentialSection.append(credentialFields);
+      form.append(credentialSection);
+    }
+    if (permissionFields.childElementCount > 0) {
+      permissionSection.append(permissionFields);
+      form.append(permissionSection);
+    }
+    const trust = document.createElement("aside");
+    trust.className = "ch-trust";
+    const trustTitle = document.createElement("strong");
+    trustTitle.append(text("Handled securely"));
+    const trustCopy = document.createElement("p");
+    trustCopy.append(text("Crewhelm relays these values directly to Composio to configure authentication, clears this form, and does not retain the credentials."));
+    trust.append(trustTitle, trustCopy);
+    form.append(trust);
     const actions = document.createElement("div");
     actions.className = "ch-actions";
     const submit = document.createElement("button");
@@ -141,6 +251,7 @@ const SCRIPT = String.raw`(() => {
     setup.replaceChildren(form);
   };
   const renderCompleted = (plan) => {
+    heading.textContent = "Connect your " + plan.integrationName + " account.";
     status.textContent = plan.integrationName + " authentication is configured.";
     if (!plan.authorizeConnection) {
       setup.replaceChildren(text("You can close this window and continue from your MCP client."));
@@ -162,7 +273,7 @@ const SCRIPT = String.raw`(() => {
       }
     });
     actions.append(button);
-    setup.replaceChildren(actions);
+    setup.replaceChildren(renderSteps(2, true), actions);
   };
   const renderUnknown = (result) => {
     status.textContent = "The provider may have created the authentication configuration. Do not submit credentials again.";
