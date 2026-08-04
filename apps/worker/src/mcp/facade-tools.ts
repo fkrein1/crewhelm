@@ -2095,7 +2095,10 @@ function operationSchema(catalog: PrivateToolCatalog, operation: FacadeOperation
   return z.strictObject({ kind: kindSchema, ...publicShape });
 }
 
-function facadeInputSchema(catalog: PrivateToolCatalog, operations: readonly FacadeOperation[]) {
+function legacyFacadeInputSchema(
+  catalog: PrivateToolCatalog,
+  operations: readonly FacadeOperation[],
+) {
   const schemas = operations
     .filter((operation) => operation.schemaAlias === undefined)
     .map((operation) => operationSchema(catalog, operation));
@@ -2109,6 +2112,64 @@ function facadeInputSchema(catalog: PrivateToolCatalog, operations: readonly Fac
   const schema = z.strictObject({ operation });
   registerLocalSchemaReferences(schema);
   return schema;
+}
+
+const progressiveFacadeInputSchema = z.looseObject({
+  input: z.record(z.string(), z.unknown()).optional(),
+  name: z.string().min(1).max(64).optional(),
+  request: z.enum(["operations", "schema", "execute"]).optional(),
+});
+
+function operationPayloadSchema(catalog: PrivateToolCatalog, operation: FacadeOperation) {
+  return operationSchema(catalog, operation).omit({ kind: true });
+}
+
+function progressiveResult(value: Record<string, unknown>): CallToolResult {
+  return {
+    content: [{ text: JSON.stringify(value), type: "text" }],
+    isError: false,
+    structuredContent: value,
+  };
+}
+
+function progressiveError(message: string): CallToolResult {
+  return {
+    content: [{ text: message, type: "text" }],
+    isError: true,
+  };
+}
+
+const PRIVATE_TOOL_DESCRIPTION_NAMES: Readonly<Record<string, string>> = {
+  crewhelm_create_connection_link: "authorize_provider",
+  crewhelm_enable_integration: "enable_provider",
+  crewhelm_search_integration_tools: "search_actions",
+  crewhelm_start_run: "run",
+};
+
+function operationDescription(
+  catalog: PrivateToolCatalog,
+  operation: FacadeOperation,
+  facadeDescription: string,
+): string {
+  const description = catalog.description(operation.privateTool)?.trim();
+  const name = operation.kind.replaceAll("_", " ");
+  if (
+    description === undefined ||
+    description.length === 0 ||
+    description.startsWith("Private bounded owner-scoped")
+  ) {
+    return `${name[0]?.toUpperCase() ?? ""}${name.slice(1)}. ${facadeDescription}`;
+  }
+
+  return Object.entries(PRIVATE_TOOL_DESCRIPTION_NAMES).reduce(
+    (publicDescription, [privateName, publicName]) =>
+      publicDescription.replaceAll(privateName, publicName),
+    description,
+  );
+}
+
+function catalogDescription(description: string): string {
+  return description.match(/^.*?[.!?](?:\s|$)/)?.[0].trim() ?? description;
 }
 
 function derivedRequestKey(extra: unknown): string {
@@ -2215,34 +2276,79 @@ export function registerFacadeTools(server: McpServer, catalog: PrivateToolCatal
       definition.operations.map((operation) => [operation.kind, operation] as const),
     );
 
-    const inputSchema = facadeInputSchema(catalog, definition.operations);
+    const legacyInputSchema = legacyFacadeInputSchema(catalog, definition.operations);
 
     server.registerTool(
       definition.name,
       {
         annotations: definition.annotations,
-        description: definition.description,
-        inputSchema,
+        description: catalogDescription(definition.description),
+        inputSchema: progressiveFacadeInputSchema,
         title: definition.title,
       },
       async (input, extra): Promise<CallToolResult> => {
-        const parsed = inputSchema.safeParse(input);
+        const parsed = progressiveFacadeInputSchema.safeParse(input);
 
         if (!parsed.success) {
-          return {
-            content: [{ text: "Invalid Crewhelm operation.", type: "text" }],
-            isError: true,
-          };
+          return progressiveError("Invalid Crewhelm request.");
         }
 
-        const operation = z.looseObject({ kind: z.string() }).parse(parsed.data.operation);
+        if (parsed.data.request === "operations") {
+          return progressiveResult({
+            ok: true,
+            operations: definition.operations.map((operation) => ({
+              description: operationDescription(catalog, operation, definition.description),
+              name: operation.kind,
+            })),
+            tool: definition.name,
+          });
+        }
+
+        if (parsed.data.request === "schema") {
+          const selected =
+            parsed.data.name === undefined ? undefined : operations.get(parsed.data.name);
+          if (selected === undefined) return progressiveError("Unknown Crewhelm operation.");
+          const schema = operationPayloadSchema(catalog, selected);
+          registerLocalSchemaReferences(schema);
+          return progressiveResult({
+            ok: true,
+            operation: selected.kind,
+            schema: z.toJSONSchema(schema),
+            tool: definition.name,
+          });
+        }
+
+        if (parsed.data.request === "execute") {
+          const selected =
+            parsed.data.name === undefined ? undefined : operations.get(parsed.data.name);
+          if (selected === undefined) return progressiveError("Unknown Crewhelm operation.");
+          const payload = operationPayloadSchema(catalog, selected).safeParse(
+            parsed.data.input ?? {},
+          );
+          if (!payload.success) return progressiveError("Invalid Crewhelm operation input.");
+
+          try {
+            const operation = { kind: selected.kind, ...payload.data };
+            return selected.run === undefined
+              ? await catalog.dispatch(
+                  selected.privateTool,
+                  privateInput(catalog, selected, operation, extra),
+                  extra,
+                )
+              : await selected.run(catalog, operation, extra);
+          } catch {
+            return progressiveError("Invalid Crewhelm operation.");
+          }
+        }
+
+        const legacy = legacyInputSchema.safeParse(input);
+        if (!legacy.success) return progressiveError("Invalid Crewhelm request.");
+
+        const operation = z.looseObject({ kind: z.string() }).parse(legacy.data.operation);
         const selected = operations.get(operation.kind);
 
         if (selected === undefined) {
-          return {
-            content: [{ text: "Unknown Crewhelm operation.", type: "text" }],
-            isError: true,
-          };
+          return progressiveError("Unknown Crewhelm operation.");
         }
 
         try {
@@ -2254,10 +2360,7 @@ export function registerFacadeTools(server: McpServer, catalog: PrivateToolCatal
               )
             : await selected.run(catalog, operation, extra);
         } catch {
-          return {
-            content: [{ text: "Invalid Crewhelm operation.", type: "text" }],
-            isError: true,
-          };
+          return progressiveError("Invalid Crewhelm operation.");
         }
       },
     );

@@ -8,6 +8,7 @@ type PrivateToolHandler = (
 ) => CallToolResult | Promise<CallToolResult>;
 
 interface PrivateToolConfiguration {
+  description?: string;
   inputSchema?: z.ZodRawShape | z.ZodType;
 }
 
@@ -17,6 +18,7 @@ interface PrivateToolRegistration {
 }
 
 export interface PrivateToolCatalog {
+  description(name: string): string | undefined;
   dispatch(name: string, input: unknown, extra: unknown): Promise<CallToolResult>;
   inputSchema(name: string): z.ZodType;
 }
@@ -69,6 +71,9 @@ export function createPrivateToolCatalog(
   }
 
   return {
+    description(name) {
+      return exact(name).configuration.description;
+    },
     async dispatch(name, input, extra) {
       const tool = exact(name);
       const parsed = await normalizedInputSchema(name).safeParseAsync(input);

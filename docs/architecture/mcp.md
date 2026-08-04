@@ -13,10 +13,11 @@ The worker builds two catalogs:
 2. A public facade groups those commands into a small set of read and change surfaces for Agents,
    Work, Automations, Connections, Context, Recipes, and Recovery.
 
-The private catalog is not returned by `tools/list`. A facade operation validates its public typed
-input, reconstructs the exact private request, and dispatches through the existing handler. The
-control plane therefore receives the same bounded request and enforces the same authority as it
-would for a direct command.
+The private catalog is not returned by `tools/list`. Each public facade advertises one compact
+`request`, `name`, and `input` envelope. The server returns operation descriptions and exact public
+schemas only when requested, validates execution against the selected schema, reconstructs the
+exact private request, and dispatches through the existing handler. The control plane therefore
+receives the same bounded request and enforces the same authority as it would for a direct command.
 
 ## Selection model
 
@@ -24,9 +25,10 @@ Every public domain uses the same sequence:
 
 1. Start with `crewhelm_status` when the next task is unknown.
 2. Choose a read or change tool from the domain name and annotations.
-3. Choose one operation by its `kind`.
-4. Pass only that operation's typed fields.
-5. Retain returned resource objects and pass them unchanged to later operations.
+3. Call that tool with `request: "operations"` and choose one returned operation name.
+4. Call it with `request: "schema"` and that name when the exact schema is not already available.
+5. Call it with `request: "execute"`, the name, and schema-valid `input`.
+6. Retain returned resource objects and pass them unchanged to later operations.
 
 Read and change tools remain separate even when they use the same private lifecycle handler. This
 keeps `readOnlyHint`, `destructiveHint`, and `openWorldHint` truthful before a client inspects the
@@ -100,9 +102,10 @@ Growing collections use bounded list operations followed by exact inspection. Fl
 at most 25 compact summaries and stay within their response budgets. Exact reads retain detailed
 configuration, grants, prompts, outputs, and timelines only when requested.
 
-The authenticated catalog has explicit CI ceilings of 16 tools, 74 KiB of serialized input
-schemas, 80 KiB for the complete model-visible payload including server instructions, and 10 KiB
-for any one complete tool definition. These are review ceilings, not MCP protocol limits. Shared local JSON Schema
+The authenticated initial catalog has explicit CI ceilings of 16 tools, 6 KiB of serialized input
+schemas, 12 KiB for the complete model-visible payload including server instructions, and 1 KiB
+for any one complete tool definition. These are review ceilings, not MCP protocol limits. Exact
+operation schemas are materialized individually after discovery. Shared local JSON Schema
 definitions use `$ref` rather than repeating common references and contracts. Schema growth must
 represent a typed owner decision or domain object; internal coordination fields do not justify
 public catalog growth.
