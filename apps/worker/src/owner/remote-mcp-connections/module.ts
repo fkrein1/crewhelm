@@ -18,6 +18,8 @@ import {
   remoteMcpConnectionOperationResultSchema,
   remoteMcpConnectionSchema,
   remoteMcpApiKeyCredentialSchema,
+  reauthenticateRemoteMcpConnectionInputSchema,
+  reauthenticateRemoteMcpConnectionResultSchema,
   type BeginRemoteMcpOAuthResult,
   type CompleteRemoteMcpOAuthResult,
   type CreateRemoteMcpConnectionResult,
@@ -30,6 +32,7 @@ import {
   type RemoteMcpAuthKind,
   type RemoteMcpCatalog,
   type RemoteMcpConnectionOperationResult,
+  type ReauthenticateRemoteMcpConnectionResult,
 } from "@crewhelm/contracts";
 import { and, count, eq, gt, inArray, lt } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
@@ -50,6 +53,8 @@ import {
   type RemoteMcpOAuthCredential,
 } from "../../remote-mcp/oauth.js";
 import {
+  createRemoteMcpApiKeySetup,
+  createRemoteMcpBearerSetup,
   createRemoteMcpOAuthSetup,
   createRemoteMcpOAuthState,
   REMOTE_MCP_OAUTH_CALLBACK_PATH,
@@ -257,7 +262,7 @@ export class RemoteMcpConnections {
     this.#publicOrigin = publicOrigin;
   }
 
-  async reserveOAuth(
+  async reserveAuthentication(
     authority: OwnerAuthority,
     input: unknown,
   ): Promise<RemoteMcpConnectionOperationResult> {
@@ -270,6 +275,54 @@ export class RemoteMcpConnections {
       )
     ) {
       return denied("invalid_request");
+    }
+
+    if (request.data.action === "reauthenticate") {
+      const target = storedConnection(this.#database, request.data.connectionId);
+      if (
+        target === undefined ||
+        !["active", "unavailable"].includes(target.status) ||
+        target.accountLabel === null
+      ) {
+        return denied("connection_not_found");
+      }
+      if (target.snapshotDigest !== request.data.snapshotDigest) {
+        return denied("revision_conflict");
+      }
+      if (target.authKind === "api_key" || target.authKind === "bearer") {
+        const claims = {
+          connectionId: target.connectionId,
+          endpoint: target.endpoint,
+          expiresAt: Date.now() + OAUTH_REQUEST_TTL_MS,
+          idempotencyKey: request.data.idempotencyKey,
+          name: target.accountLabel,
+          operation: "reauthenticate" as const,
+          ownerKey: authority.ownerKey,
+          snapshotDigest: target.snapshotDigest,
+        };
+        const setup = await (target.authKind === "api_key"
+          ? createRemoteMcpApiKeySetup({
+              claims: {
+                ...claims,
+                apiKeyHeaderName: remoteMcpApiKeyCredentialSchema.shape.headerName.parse(
+                  target.apiKeyHeaderName,
+                ),
+              },
+              origin: this.#publicOrigin,
+              signingSecret: this.#encryptionSecret,
+            })
+          : createRemoteMcpBearerSetup({
+              claims,
+              origin: this.#publicOrigin,
+              signingSecret: this.#encryptionSecret,
+            }));
+        return remoteMcpConnectionOperationResultSchema.parse({
+          ok: true,
+          setup,
+          state: "setup_required",
+        });
+      }
+      if (target.authKind !== "oauth") return denied("invalid_request");
     }
 
     const currentTime = Date.now();
@@ -1192,6 +1245,137 @@ export class RemoteMcpConnections {
       connection: present(row),
       created: true,
       ok: true,
+    });
+  }
+
+  async reauthenticate(
+    authority: OwnerAuthority,
+    input: unknown,
+  ): Promise<ReauthenticateRemoteMcpConnectionResult> {
+    const request = reauthenticateRemoteMcpConnectionInputSchema.safeParse(input);
+    if (!request.success) return denied("invalid_request");
+
+    const catalog = remoteMcpCatalogSchema.safeParse(request.data.catalog);
+    if (!catalog.success) return denied("invalid_request");
+    const serializedCatalog = JSON.stringify(catalog.data);
+    if (
+      encoder.encode(serializedCatalog).byteLength !== request.data.catalogBytes ||
+      (await sha256(serializedCatalog)) !== request.data.snapshotDigest
+    ) {
+      return denied("invalid_request");
+    }
+
+    const digest = await requestDigest(this.#encryptionSecret, request.data);
+    const priorMutation = this.#database
+      .select()
+      .from(remoteMcpConnectionMutations)
+      .where(
+        and(
+          eq(remoteMcpConnectionMutations.clientId, authority.clientId),
+          eq(remoteMcpConnectionMutations.idempotencyKey, request.data.idempotencyKey),
+        ),
+      )
+      .get();
+    if (priorMutation !== undefined) {
+      if (priorMutation.operation !== "reauthenticate" || priorMutation.requestDigest !== digest) {
+        return denied("idempotency_conflict");
+      }
+      const replay = storedConnection(this.#database, priorMutation.connectionId);
+      return replay === undefined
+        ? denied("connection_not_found")
+        : reauthenticateRemoteMcpConnectionResultSchema.parse({
+            connection: present(replay),
+            ok: true,
+            reauthenticated: false,
+          });
+    }
+
+    const existing = storedConnection(this.#database, request.data.connectionId);
+    if (existing === undefined) return denied("connection_not_found");
+    if (existing.snapshotDigest !== request.data.snapshotDigest) {
+      return denied("revision_conflict");
+    }
+    if (
+      !["active", "unavailable"].includes(existing.status) ||
+      existing.authKind !== request.data.authKind ||
+      existing.serverName !== request.data.server.name ||
+      existing.serverVersion !== request.data.server.version ||
+      (request.data.authKind === "api_key" &&
+        existing.apiKeyHeaderName !== request.data.apiKey.headerName)
+    ) {
+      return denied("connection_not_found");
+    }
+
+    const credential =
+      request.data.authKind === "api_key" ? request.data.apiKey.value : request.data.bearerToken;
+    const encrypted = await encryptCredential(
+      this.#encryptionSecret,
+      existing.connectionId,
+      credential,
+    );
+    const occurredAt = Date.now();
+
+    this.#database.transaction((transaction) => {
+      const current = storedConnection(transaction, existing.connectionId);
+      if (
+        current === undefined ||
+        !["active", "unavailable"].includes(current.status) ||
+        current.authKind !== existing.authKind ||
+        current.apiKeyHeaderName !== existing.apiKeyHeaderName ||
+        current.snapshotDigest !== existing.snapshotDigest ||
+        current.serverName !== existing.serverName ||
+        current.serverVersion !== existing.serverVersion ||
+        current.credentialCiphertext !== existing.credentialCiphertext ||
+        current.credentialNonce !== existing.credentialNonce
+      ) {
+        throw new Error("Remote MCP reauthentication target changed.");
+      }
+      transaction
+        .update(remoteMcpConnections)
+        .set({
+          credentialCiphertext: encrypted.ciphertext,
+          credentialNonce: encrypted.nonce,
+        })
+        .where(eq(remoteMcpConnections.connectionId, existing.connectionId))
+        .run();
+      transaction
+        .update(connections)
+        .set({ status: "active" })
+        .where(
+          and(
+            eq(connections.connectionId, existing.connectionId),
+            eq(connections.provider, "remote_mcp"),
+          ),
+        )
+        .run();
+      transaction
+        .insert(remoteMcpConnectionMutations)
+        .values({
+          clientId: authority.clientId,
+          connectionId: existing.connectionId,
+          idempotencyKey: request.data.idempotencyKey,
+          occurredAt,
+          operation: "reauthenticate",
+          requestDigest: digest,
+        })
+        .run();
+      transaction
+        .insert(auditEvents)
+        .values({
+          action: "connection.remote_mcp_reauthenticated",
+          clientId: authority.clientId,
+          occurredAt,
+          subjectId: existing.connectionId,
+        })
+        .run();
+    });
+
+    const reauthenticated = storedConnection(this.#database, existing.connectionId);
+    if (reauthenticated === undefined) throw new Error("Remote MCP reauthentication failed.");
+    return reauthenticateRemoteMcpConnectionResultSchema.parse({
+      connection: present(reauthenticated),
+      ok: true,
+      reauthenticated: true,
     });
   }
 

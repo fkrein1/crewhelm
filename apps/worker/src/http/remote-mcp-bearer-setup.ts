@@ -4,6 +4,7 @@ import {
   createRemoteMcpConnectionResultSchema,
   createRemoteMcpConnectionInputSchema,
   lookupRemoteMcpConnectionCreationResultSchema,
+  reauthenticateRemoteMcpConnectionResultSchema,
 } from "@crewhelm/contracts";
 import { type Hono } from "hono";
 
@@ -74,6 +75,7 @@ function setupPage(setup: Setup): string {
   const fieldHint = apiKey
     ? `Crewhelm sends this value only in the <code>${escapePageHtml(setup.claims.apiKeyHeaderName)}</code> header.`
     : "Crewhelm sends this value only as the remote server's bearer credential.";
+  const reauthentication = claims.operation === "reauthenticate";
   return renderWorkerPage({
     body: `      <p class="ch-copy">Connect <strong>${escapePageHtml(claims.name)}</strong> at <code>${escapePageHtml(claims.endpoint)}</code>.</p>
       <p class="ch-copy">The ${credentialDescription} only to Crewhelm's owner-side adapter, encrypted at rest, and never placed in Agent or MCP context.</p>
@@ -95,11 +97,11 @@ function setupPage(setup: Setup): string {
           <p>Encrypted at rest and never returned to an Agent, MCP client, log, or audit record.</p>
         </aside>
         <div class="ch-actions">
-          <button class="ch-button ch-button--primary" type="submit">Connect MCP server</button>
+          <button class="ch-button ch-button--primary" type="submit">${reauthentication ? "Update credential" : "Connect MCP server"}</button>
         </div>
       </form>`,
     context: "remote MCP credential handoff",
-    heading: `Enter ${apiKey ? "API-key" : "bearer"} credential.`,
+    heading: `Enter ${reauthentication ? "replacement " : ""}${apiKey ? "API-key" : "bearer"} credential.`,
     layout: "form",
     title: "Connect remote MCP",
     tone: "warning",
@@ -170,7 +172,18 @@ export function registerRemoteMcpBearerSetupRoutes(worker: Hono<{ Bindings: Work
 
       try {
         const controlPlane = context.env.OWNER_CONTROL_PLANE.getByName(claims.ownerKey);
-        if (controlPlane.lookupRemoteMcpConnectionCreation === undefined) return denied(503);
+        if (
+          claims.operation === "create" &&
+          controlPlane.lookupRemoteMcpConnectionCreation === undefined
+        ) {
+          return denied(503);
+        }
+        if (
+          claims.operation === "reauthenticate" &&
+          controlPlane.reauthenticateRemoteMcpConnection === undefined
+        ) {
+          return denied(503);
+        }
         const authority = {
           clientId:
             setup.authKind === "api_key"
@@ -179,27 +192,29 @@ export function registerRemoteMcpBearerSetupRoutes(worker: Hono<{ Bindings: Work
           ownerKey: claims.ownerKey,
           scopes: [CONNECTIONS_WRITE_SCOPE],
         };
-        const lookup = lookupRemoteMcpConnectionCreationResultSchema.safeParse(
-          await controlPlane.lookupRemoteMcpConnectionCreation(authority, {
-            apiKeyHeaderName:
-              setup.authKind === "api_key" ? setup.claims.apiKeyHeaderName : undefined,
-            authKind: setup.authKind,
-            endpoint: claims.endpoint,
-            idempotencyKey: claims.idempotencyKey,
-            name: claims.name,
-          }),
-        );
-        if (!lookup.success || !lookup.data.ok) return denied();
-        if (lookup.data.connection !== null) {
-          return workerPageResponse(
-            renderWorkerPage({
-              body: `      <p class="ch-copy">Crewhelm already connected <strong>${escapePageHtml(claims.name)}</strong>. You can close this window and inspect or attach <code>${escapePageHtml(lookup.data.connection.connectionId)}</code> from your MCP client.</p>`,
-              context: "remote MCP credential handoff",
-              heading: "Remote MCP already connected.",
-              title: "Remote MCP already connected",
-              tone: "positive",
+        if (claims.operation === "create") {
+          const lookup = lookupRemoteMcpConnectionCreationResultSchema.safeParse(
+            await controlPlane.lookupRemoteMcpConnectionCreation?.(authority, {
+              apiKeyHeaderName:
+                setup.authKind === "api_key" ? setup.claims.apiKeyHeaderName : undefined,
+              authKind: setup.authKind,
+              endpoint: claims.endpoint,
+              idempotencyKey: claims.idempotencyKey,
+              name: claims.name,
             }),
           );
+          if (!lookup.success || !lookup.data.ok) return denied();
+          if (lookup.data.connection !== null) {
+            return workerPageResponse(
+              renderWorkerPage({
+                body: `      <p class="ch-copy">Crewhelm already connected <strong>${escapePageHtml(claims.name)}</strong>. You can close this window and inspect or attach <code>${escapePageHtml(lookup.data.connection.connectionId)}</code> from your MCP client.</p>`,
+                context: "remote MCP credential handoff",
+                heading: "Remote MCP already connected.",
+                title: "Remote MCP already connected",
+                tone: "positive",
+              }),
+            );
+          }
         }
 
         const authentication =
@@ -211,28 +226,42 @@ export function registerRemoteMcpBearerSetupRoutes(worker: Hono<{ Bindings: Work
           endpoint: claims.endpoint,
           signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
         });
-        const created = createRemoteMcpConnectionResultSchema.safeParse(
-          await controlPlane.createRemoteMcpConnection(authority, {
-            ...authentication,
-            authKind: setup.authKind,
-            catalog: discovered.tools,
-            catalogBytes: discovered.catalogBytes,
-            endpoint: claims.endpoint,
-            idempotencyKey: claims.idempotencyKey,
-            name: claims.name,
-            server: discovered.server,
-            snapshotDigest: discovered.digest,
-          }),
-        );
+        const mutation =
+          claims.operation === "create"
+            ? createRemoteMcpConnectionResultSchema.safeParse(
+                await controlPlane.createRemoteMcpConnection(authority, {
+                  ...authentication,
+                  authKind: setup.authKind,
+                  catalog: discovered.tools,
+                  catalogBytes: discovered.catalogBytes,
+                  endpoint: claims.endpoint,
+                  idempotencyKey: claims.idempotencyKey,
+                  name: claims.name,
+                  server: discovered.server,
+                  snapshotDigest: discovered.digest,
+                }),
+              )
+            : reauthenticateRemoteMcpConnectionResultSchema.safeParse(
+                await controlPlane.reauthenticateRemoteMcpConnection?.(authority, {
+                  ...authentication,
+                  authKind: setup.authKind,
+                  catalog: discovered.tools,
+                  catalogBytes: discovered.catalogBytes,
+                  connectionId: claims.connectionId,
+                  idempotencyKey: claims.idempotencyKey,
+                  server: discovered.server,
+                  snapshotDigest: claims.snapshotDigest,
+                }),
+              );
 
-        if (!created.success || !created.data.ok) return denied();
+        if (!mutation.success || !mutation.data.ok) return denied();
 
         return workerPageResponse(
           renderWorkerPage({
-            body: `      <p class="ch-copy">Crewhelm connected <strong>${escapePageHtml(claims.name)}</strong>. You can close this window and inspect or attach <code>${escapePageHtml(created.data.connection.connectionId)}</code> from your MCP client.</p>`,
+            body: `      <p class="ch-copy">Crewhelm ${claims.operation === "create" ? "connected" : "updated"} <strong>${escapePageHtml(claims.name)}</strong>. You can close this window and inspect or attach <code>${escapePageHtml(mutation.data.connection.connectionId)}</code> from your MCP client.</p>`,
             context: "remote MCP credential handoff",
-            heading: "Remote MCP connected.",
-            title: "Remote MCP connected",
+            heading: `Remote MCP ${claims.operation === "create" ? "connected" : "credential updated"}.`,
+            title: `Remote MCP ${claims.operation === "create" ? "connected" : "credential updated"}`,
             tone: "positive",
           }),
         );

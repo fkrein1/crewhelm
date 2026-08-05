@@ -83,11 +83,11 @@ export function registerRemoteMcpConnectionTools(
             const endpoint = normalizeRemoteMcpEndpoint(request.data.endpoint);
 
             if (request.data.authKind === "oauth") {
-              if (controlPlane.reserveRemoteMcpOAuthSetup === undefined) {
+              if (controlPlane.reserveRemoteMcpAuthenticationSetup === undefined) {
                 return result(denied("remote_mcp_unavailable"));
               }
               const reserved = remoteMcpConnectionOperationResultSchema.safeParse(
-                await controlPlane.reserveRemoteMcpOAuthSetup(authority, request.data),
+                await controlPlane.reserveRemoteMcpAuthenticationSetup(authority, request.data),
               );
               return !reserved.success
                 ? result(denied("remote_mcp_unavailable"))
@@ -103,6 +103,7 @@ export function registerRemoteMcpConnectionTools(
                       expiresAt: Date.now() + 10 * 60 * 1_000,
                       idempotencyKey: request.data.idempotencyKey,
                       name: request.data.name,
+                      operation: "create",
                       ownerKey: authority.ownerKey,
                     },
                     origin: configuration.publicOrigin,
@@ -114,6 +115,7 @@ export function registerRemoteMcpConnectionTools(
                       expiresAt: Date.now() + 10 * 60 * 1_000,
                       idempotencyKey: request.data.idempotencyKey,
                       name: request.data.name,
+                      operation: "create",
                       ownerKey: authority.ownerKey,
                     },
                     origin: configuration.publicOrigin,
@@ -216,11 +218,11 @@ export function registerRemoteMcpConnectionTools(
             if (!authority.scopes.includes(CONNECTIONS_WRITE_SCOPE)) {
               return result(denied("insufficient_scope"));
             }
-            if (controlPlane.reserveRemoteMcpOAuthSetup === undefined) {
+            if (controlPlane.reserveRemoteMcpAuthenticationSetup === undefined) {
               return result(denied("remote_mcp_unavailable"));
             }
             const reserved = remoteMcpConnectionOperationResultSchema.safeParse(
-              await controlPlane.reserveRemoteMcpOAuthSetup(authority, request.data),
+              await controlPlane.reserveRemoteMcpAuthenticationSetup(authority, request.data),
             );
             return !reserved.success
               ? result(denied("remote_mcp_unavailable"))

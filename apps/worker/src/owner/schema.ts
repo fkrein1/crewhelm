@@ -516,7 +516,7 @@ export const remoteMcpConnectionMutations = sqliteTable(
     clientId: text("client_id").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
     connectionId: text("connection_id").notNull(),
-    operation: text("operation", { enum: ["create", "delete"] }).notNull(),
+    operation: text("operation", { enum: ["create", "delete", "reauthenticate"] }).notNull(),
     requestDigest: text("request_digest").notNull(),
     occurredAt: integer("occurred_at").notNull(),
   },
@@ -529,7 +529,7 @@ export const remoteMcpConnectionMutations = sqliteTable(
     index("remote_mcp_connection_mutations_connection").on(table.connectionId),
     check(
       "remote_mcp_connection_mutations_operation",
-      sql`${table.operation} IN ('create', 'delete')`,
+      sql`${table.operation} IN ('create', 'delete', 'reauthenticate')`,
     ),
     check(
       "remote_mcp_connection_mutations_request_digest",

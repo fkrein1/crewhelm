@@ -209,6 +209,11 @@ describe("OwnerControlPlane", () => {
           name: "0002_tricky_purple_man",
           version: 3,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0003_fair_red_ghost",
+          version: 4,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });
@@ -920,7 +925,7 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(authority)).resolves.toMatchObject({ ok: true });
     await runInDurableObject(stub, (_instance, state) => {
-      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version = 3");
+      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 3");
       state.storage.sql.exec(`
         INSERT INTO connections
           (connection_id, provider, provider_connection_id, auth_config_id, account_label,

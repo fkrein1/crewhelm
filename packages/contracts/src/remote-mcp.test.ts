@@ -5,6 +5,7 @@ import {
   remoteMcpApiKeyHeaderNameSchema,
   remoteMcpConnectionSchema,
   remoteMcpConnectionOperationInputSchema,
+  reauthenticateRemoteMcpConnectionInputSchema,
 } from "./remote-mcp.js";
 
 const catalog = [
@@ -65,6 +66,24 @@ describe("remote MCP API-key authentication", () => {
         status: "active",
       }),
     ).toMatchObject({ apiKeyHeaderName: "x-api-key", authKind: "api_key" });
+  });
+
+  it("accepts replacement credentials only with an exact frozen snapshot", () => {
+    expect(
+      reauthenticateRemoteMcpConnectionInputSchema.parse({
+        authKind: "api_key",
+        apiKey: { headerName: "X-API-Key", value: "replacement-key" },
+        catalog,
+        catalogBytes: base.catalogBytes,
+        connectionId: `connection_${crypto.randomUUID()}`,
+        idempotencyKey: "rotate-api-key",
+        server: base.server,
+        snapshotDigest: base.snapshotDigest,
+      }),
+    ).toMatchObject({
+      apiKey: { headerName: "x-api-key", value: "replacement-key" },
+      authKind: "api_key",
+    });
   });
 
   it.each([
