@@ -24,9 +24,13 @@ single-use, and short-lived. It travels in the browser URL fragment, is never se
 request, and is cleared before capability exchange. The setup page loads only same-origin
 requests. Exchange creates a bounded HttpOnly, Secure, SameSite=Strict session with an immutable
 recovery deadline; reconciliation cannot extend it. All mutations require the configured same
-origin. Credential values are bounded against the frozen plan and flow
-only browser → Worker → Composio. The owner control plane stores capability and session digests,
-safe field metadata, state, and the resulting opaque auth-config reference—never credential values.
+origin. Credential values are bounded against the frozen plan, split only into the exact Composio
+auth-config or connected-account destination frozen for each field, and flow only browser → Worker
+→ Composio. Provider sensitivity flags are hints, not authority: Crewhelm treats every submitted
+value as sensitive and masks known credential, password, token, private-key, and service-account
+shapes even when provider metadata does not. The owner control plane stores capability and session
+digests, safe field metadata, state, and the resulting opaque auth-config reference—never credential
+values.
 Responses, errors, audit events, telemetry, URLs, and Agent or MCP context never contain the entered
 values. A provider rejection is terminal; an unknown or interrupted submission remains sealed and
 retains capacity until exact, full-setup-ID reconciliation proves either one matching config or no
@@ -35,6 +39,9 @@ owner auth-config capacity before provider egress. Connection reservation accept
 auth-config reference already held by that owner. Readiness exposes globally discoverable managed
 configs, but exposes a custom config only when an owner-held Crewhelm record intersects the bounded
 active custom set returned by Composio.
+
+An unsupported provider-auth format produces only a short-lived informational browser plan. It has
+no credential fields and cannot reserve, create, or connect provider state.
 
 A successful provider authorization return may verify and activate only the exact Connection bound
 to its unexpired, digest-stored callback token and reservation. The same-origin return page performs

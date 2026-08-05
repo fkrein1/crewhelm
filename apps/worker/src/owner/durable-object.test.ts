@@ -199,6 +199,11 @@ describe("OwnerControlPlane", () => {
           name: "0000_bootstrap",
           version: 1,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0001_expand_provider_auth_schemes",
+          version: 2,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });
@@ -838,6 +843,70 @@ describe("OwnerControlPlane", () => {
       error: { code: "owner_mismatch" },
       ok: false,
     });
+  });
+
+  it("expands provider auth schemes without losing existing auth configs", async () => {
+    const authority = await authorityFor("107-provider-auth-migration");
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+
+    await expect(stub.status(authority)).resolves.toMatchObject({ ok: true });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version = 2");
+      state.storage.sql.exec("DROP INDEX provider_auth_configs_integration");
+      state.storage.sql.exec(`CREATE TABLE __old_provider_auth_configs (
+        auth_config_id text PRIMARY KEY NOT NULL,
+        integration_slug text NOT NULL,
+        auth_scheme text NOT NULL,
+        source text NOT NULL,
+        display_name text NOT NULL,
+        created_at integer NOT NULL,
+        updated_at integer NOT NULL,
+        CONSTRAINT provider_auth_configs_integration_slug
+          CHECK(length(integration_slug) BETWEEN 1 AND 128),
+        CONSTRAINT provider_auth_configs_auth_scheme
+          CHECK(auth_scheme IN ('OAUTH2', 'API_KEY', 'BEARER_TOKEN', 'BASIC')),
+        CONSTRAINT provider_auth_configs_source
+          CHECK(source IN ('composio_managed', 'crewhelm_custom')),
+        CONSTRAINT provider_auth_configs_display_name
+          CHECK(length(display_name) BETWEEN 1 AND 160),
+        CONSTRAINT provider_auth_configs_created_at_positive CHECK(created_at > 0),
+        CONSTRAINT provider_auth_configs_updated_after_creation CHECK(updated_at >= created_at)
+      )`);
+      state.storage.sql.exec(`INSERT INTO __old_provider_auth_configs
+        SELECT * FROM provider_auth_configs`);
+      state.storage.sql.exec("DROP TABLE provider_auth_configs");
+      state.storage.sql.exec(
+        "ALTER TABLE __old_provider_auth_configs RENAME TO provider_auth_configs",
+      );
+      state.storage.sql.exec(
+        "CREATE INDEX provider_auth_configs_integration ON provider_auth_configs (integration_slug, auth_config_id)",
+      );
+      state.storage.sql.exec(`INSERT INTO provider_auth_configs
+        (auth_config_id, integration_slug, auth_scheme, source, display_name, created_at, updated_at)
+        VALUES ('ac_existing_oauth', 'github', 'OAUTH2', 'crewhelm_custom', 'Existing OAuth', 1, 1)`);
+    });
+    await evictDurableObject(stub);
+
+    await expect(stub.status(authority)).resolves.toMatchObject({
+      ok: true,
+      status: { schemaVersion: 2, status: "ready" },
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) => {
+        state.storage.sql.exec(`INSERT INTO provider_auth_configs
+          (auth_config_id, integration_slug, auth_scheme, source, display_name, created_at, updated_at)
+          VALUES ('ac_service_account', 'googlebigquery', 'GOOGLE_SERVICE_ACCOUNT',
+                  'crewhelm_custom', 'BigQuery service account', 2, 2)`);
+        return state.storage.sql
+          .exec(
+            "SELECT auth_config_id, auth_scheme FROM provider_auth_configs ORDER BY auth_config_id",
+          )
+          .toArray();
+      }),
+    ).resolves.toEqual([
+      { auth_config_id: "ac_existing_oauth", auth_scheme: "OAUTH2" },
+      { auth_config_id: "ac_service_account", auth_scheme: "GOOGLE_SERVICE_ACCOUNT" },
+    ]);
   });
 
   it("rolls back migration DDL when its journal write fails", async () => {

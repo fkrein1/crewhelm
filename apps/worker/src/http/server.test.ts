@@ -251,13 +251,27 @@ describe("Crewhelm Worker", () => {
           key: "client_secret",
           label: "Client secret",
           maximumLength: 8_192,
+          multiline: false,
           required: true,
           secret: true,
+          stage: "auth_config" as const,
+          type: "string" as const,
+        },
+        {
+          defaultValue: "crewhelm",
+          key: "subdomain",
+          label: "Subdomain",
+          maximumLength: 2_048,
+          multiline: false,
+          required: true,
+          secret: false,
+          stage: "connection" as const,
           type: "string" as const,
         },
       ],
       integrationName: "GitHub",
       integrationSlug: "github",
+      support: "supported" as const,
       setupId,
     };
     await expect(
@@ -277,7 +291,7 @@ describe("Crewhelm Worker", () => {
     const script = await request("/setup/provider-auth/app.js");
     const scriptBody = await script.text();
     expect(script.status).toBe(200);
-    expect(scriptBody).toContain('[[1, "Configure app"], [2, "Connect account"]]');
+    expect(scriptBody).toContain('result.plan.support === "unsupported"');
     expect(scriptBody).toContain('input.type = field.secret ? "password" : "text"');
     expect(scriptBody).toContain('reveal.setAttribute("aria-pressed", "false")');
     expect(scriptBody).not.toContain("Space-separated permissions requested by this app.");
@@ -360,7 +374,7 @@ describe("Crewhelm Worker", () => {
     });
 
     const connected = await request("/setup/provider-auth/connect", {
-      body: "{}",
+      body: JSON.stringify({ credentials: { subdomain: "crewhelm" } }),
       headers: { "content-type": "application/json", cookie: sessionCookie, origin },
       method: "POST",
     });
@@ -368,6 +382,13 @@ describe("Crewhelm Worker", () => {
     await expect(connected.json()).resolves.toEqual({
       ok: true,
       url: "https://connect.composio.dev/link/ln_github_browser",
+    });
+    const [, connectionInit] = fetchMock.mock.calls[1] ?? [];
+    if (typeof connectionInit?.body !== "string") {
+      throw new Error("Expected connection-link body.");
+    }
+    expect(JSON.parse(connectionInit.body)).toMatchObject({
+      connection_data: { subdomain: "crewhelm" },
     });
 
     const stored = await runInDurableObject(controlPlane, (_instance, state) => [
@@ -407,13 +428,16 @@ describe("Crewhelm Worker", () => {
           key: "api_key",
           label: "API key",
           maximumLength: 8_192,
+          multiline: false,
           required: true,
           secret: true,
+          stage: "auth_config" as const,
           type: "string" as const,
         },
       ],
       integrationName: "Linear",
       integrationSlug: "linear",
+      support: "supported" as const,
       setupId,
     };
     await expect(
@@ -502,13 +526,16 @@ describe("Crewhelm Worker", () => {
           key: "api_key",
           label: "API key",
           maximumLength: 8_192,
+          multiline: false,
           required: true,
           secret: true,
+          stage: "auth_config" as const,
           type: "string" as const,
         },
       ],
       integrationName: "Linear",
       integrationSlug: "linear",
+      support: "supported" as const,
       setupId,
     };
     await expect(

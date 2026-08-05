@@ -24,7 +24,7 @@ flowchart LR
     Session -. admitted native tool .-> Sandbox["Ephemeral no-egress Sandbox"]
     Session -. admitted search .-> Search["Brave Search adapter"]
     Session -. Run-bound source .-> Web["Controlled public HTTPS fetch"]
-    Worker --> Catalog["Composio catalog and Connect Links"]
+    Worker --> Catalog["Composio catalog, auth configs, and Connect Links"]
     Session --> Gate["ToolGate and execution reservation"]
     Gate --> Composio["Trusted adapter / Composio"]
     Gate --> RemoteMCP["Owner-side remote MCP adapter"]
@@ -59,6 +59,12 @@ The control plane owns admission and administration; the Agent directory owns co
 lifecycle; each session owns execution. Cross-object calls
 carry explicit authority because Durable Objects do not share transactions. D1 is not an
 authoritative store for control-plane or Agent domain state.
+
+Provider setup is a same-origin browser handoff. The Worker freezes Composio's bounded field
+metadata by auth-config or connected-account stage, accepts each credential once, and forwards it
+only to that destination. Representable API-key, bearer, basic, service-account, and custom OAuth
+formats share the same Crewhelm form; OAuth continues through a Connect Link. Unsupported formats
+render an informational page without accepting credentials or creating provider state.
 
 Recipe discovery uses the configured canonical public Registry origin. The owner control plane
 fetches bounded metadata and exact package bytes with redirects disabled, verifies every pinned

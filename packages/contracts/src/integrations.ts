@@ -157,7 +157,19 @@ export const integrationCatalogSearchInputSchema = z.strictObject({
 export const integrationSlugSchema = z
   .string()
   .regex(/^[a-z0-9][a-z0-9_-]{0,127}$/, "Expected a Composio integration slug.");
-export const providerAuthSchemeSchema = z.enum(["OAUTH2", "API_KEY", "BEARER_TOKEN", "BASIC"]);
+export const providerAuthSchemeSchema = z.enum([
+  "API_KEY",
+  "BASIC",
+  "BASIC_WITH_JWT",
+  "BEARER_TOKEN",
+  "DCR_OAUTH",
+  "GOOGLE_SERVICE_ACCOUNT",
+  "NO_AUTH",
+  "OAUTH1",
+  "OAUTH2",
+  "S2S_OAUTH2",
+  "SAML",
+]);
 export const providerAuthConfigSourceSchema = z.enum(["composio_managed", "crewhelm_custom"]);
 export const providerAuthConfigReferenceSchema = z.strictObject({
   authConfigId: connectionAuthConfigIdSchema,
@@ -175,7 +187,7 @@ const providerAuthSelectionRequiredSchema = z.strictObject({
   state: z.literal("selection_required"),
 });
 const providerAuthSetupRequiredSchema = z.strictObject({
-  availableSchemes: z.array(providerAuthSchemeSchema).min(1).max(4),
+  availableSchemes: z.array(providerAuthSchemeSchema).min(1).max(16),
   managedAuthAvailable: z.boolean(),
   recommendedScheme: providerAuthSchemeSchema,
   setup: z
@@ -233,6 +245,7 @@ export const integrationCatalogItemSchema = z.strictObject({
     .max(16)
     .nullable(),
   description: z.string().max(2_000).nullable(),
+  logoUrl: z.url().max(2_048).startsWith("https://").nullable(),
   name: z.string().min(1).max(160),
   noAuth: z.boolean().nullable(),
   slug: integrationSlugSchema,

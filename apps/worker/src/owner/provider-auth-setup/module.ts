@@ -57,6 +57,7 @@ function stablePlan(plan: ProviderAuthSetupPlan): string {
     fields: plan.fields,
     integrationName: plan.integrationName,
     integrationSlug: plan.integrationSlug,
+    support: plan.support,
   });
 }
 
@@ -90,6 +91,20 @@ export class ProviderAuthSetups {
       return prepareProviderAuthSetupResultSchema.parse({
         error: {
           code: "insufficient_scope",
+          message: "Provider authentication setup request denied.",
+        },
+        ok: false,
+      });
+    }
+    if (
+      request.data.plan.support === "unsupported" &&
+      (request.data.plan.fields.length !== 0 ||
+        request.data.plan.callbackUrl !== undefined ||
+        request.data.plan.documentationUrl !== undefined)
+    ) {
+      return prepareProviderAuthSetupResultSchema.parse({
+        error: {
+          code: "invalid_request",
           message: "Provider authentication setup request denied.",
         },
         ok: false,

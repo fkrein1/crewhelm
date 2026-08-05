@@ -58,7 +58,7 @@ const customAuthConfigCreateSchema = z.looseObject({
   }),
 });
 const composioAuthFieldSchema = z.looseObject({
-  default: z.string().max(8_192).nullish(),
+  default: z.unknown().optional(),
   displayName: z.string().min(1).max(120),
   is_secret: z.boolean().optional(),
   name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/),
@@ -76,7 +76,8 @@ const composioToolkitSchema = z.looseObject({
         auth_hint_url: z.string().max(2_048).nullish(),
         fields: z
           .looseObject({
-            auth_config_creation: composioAuthConfigCreationFieldsSchema,
+            auth_config_creation: composioAuthConfigCreationFieldsSchema.optional(),
+            connected_account_initiation: composioAuthConfigCreationFieldsSchema.optional(),
           })
           .optional(),
         mode: z.string().min(1).max(64),
@@ -121,8 +122,9 @@ export type PrepareCustomIntegrationAuthConfigResult =
       fields: ProviderCredentialField[];
       integrationName: string;
       ok: true;
+      support: "supported" | "unsupported";
     }
-  | { error: "unsupported" | "unavailable"; ok: false };
+  | { error: "unavailable"; ok: false };
 
 export type ReconcileCustomIntegrationAuthConfigResult =
   | { authConfig: ProviderAuthConfigReference; state: "configured" }
@@ -252,19 +254,63 @@ function safeDocumentationUrl(value: string | null | undefined): string | undefi
   }
 }
 
+const PUBLIC_PROVIDER_FIELD_NAMES = new Set([
+  "account_id",
+  "authorizationurl",
+  "base_url",
+  "client_id",
+  "company_id",
+  "domain",
+  "full",
+  "generic_id",
+  "region",
+  "shop",
+  "subdomain",
+  "user_id",
+  "username",
+]);
+const SECRET_PROVIDER_FIELD_NAME =
+  /(?:api_?key|basic_encoded|bearer|credential|password|private_?key|secret|token)/i;
+const MULTILINE_PROVIDER_FIELD_NAME = /(?:credentials?_json|private_?key)/i;
+const SUPPORTED_CUSTOM_AUTH_SCHEMES = new Set<ProviderAuthScheme>([
+  "API_KEY",
+  "BASIC",
+  "BASIC_WITH_JWT",
+  "BEARER_TOKEN",
+  "DCR_OAUTH",
+  "GOOGLE_SERVICE_ACCOUNT",
+  "OAUTH2",
+  "S2S_OAUTH2",
+]);
+
+function providerFieldIsSecret(field: z.infer<typeof composioAuthFieldSchema>): boolean {
+  if (field.is_secret === true || SECRET_PROVIDER_FIELD_NAME.test(field.name)) return true;
+  return !PUBLIC_PROVIDER_FIELD_NAMES.has(field.name.toLowerCase());
+}
+
 function normalizeCredentialFields(
   details: z.infer<typeof composioAuthConfigCreationFieldsSchema>,
+  stage: ProviderCredentialField["stage"],
 ): ProviderCredentialField[] | null {
   const fields = [...details.required, ...details.optional]
-    .filter((field) => field.name !== "oauth_redirect_uri" && field.name.toLowerCase() !== "scopes")
+    .filter(
+      (field) =>
+        stage !== "auth_config" ||
+        (field.name !== "oauth_redirect_uri" && field.name.toLowerCase() !== "scopes"),
+    )
     .map((field) => {
-      const secret = field.is_secret !== false;
+      const secret = providerFieldIsSecret(field);
       return {
+        ...(secret || typeof field.default !== "string" || field.default === ""
+          ? {}
+          : { defaultValue: field.default }),
         key: field.name,
         label: field.displayName,
         maximumLength: secret ? 8_192 : 2_048,
+        multiline: MULTILINE_PROVIDER_FIELD_NAME.test(field.name),
         required: field.required,
         secret,
+        stage,
         type: "string" as const,
       };
     });
@@ -432,7 +478,8 @@ export function createComposioAuthConfigs(
       if (
         credentialKeys.filter((key) => key !== "oauth_redirect_uri").length > 16 ||
         (callback !== undefined &&
-          (authScheme.data !== "OAUTH2" || callback !== COMPOSIO_CUSTOM_OAUTH_CALLBACK_URL))
+          (!new Set<ProviderAuthScheme>(["DCR_OAUTH", "OAUTH1", "OAUTH2"]).has(authScheme.data) ||
+            callback !== COMPOSIO_CUSTOM_OAUTH_CALLBACK_URL))
       ) {
         return { error: "outcome_unknown", ok: false };
       }
@@ -703,31 +750,65 @@ export function createComposioAuthConfigs(
           (detail) => normalizeScheme(detail.mode) === authScheme.data,
         );
         const details = matchingDetails.length === 1 ? matchingDetails[0] : undefined;
-        const creation = details?.fields?.auth_config_creation;
-        if (details === undefined || creation === undefined) {
-          return { error: "unsupported", ok: false };
-        }
+        if (details === undefined) return { error: "unavailable", ok: false };
+        const creation = details.fields?.auth_config_creation ?? { optional: [], required: [] };
+        const initiation = details.fields?.connected_account_initiation ?? {
+          optional: [],
+          required: [],
+        };
+        const allFields = [
+          ...creation.required,
+          ...creation.optional,
+          ...initiation.required,
+          ...initiation.optional,
+        ];
         if (
           creation.required.some((field) => !field.required) ||
           creation.optional.some((field) => field.required) ||
-          [...creation.required, ...creation.optional].some(
-            (field) =>
-              field.type.toLowerCase() !== "string" || (field.is_secret === true && field.default),
-          )
+          initiation.required.some((field) => !field.required) ||
+          initiation.optional.some((field) => field.required)
         ) {
-          return { error: "unsupported", ok: false };
+          return {
+            fields: [],
+            integrationName: toolkit.data.name,
+            ok: true,
+            support: "unsupported",
+          };
         }
-        const fields = normalizeCredentialFields(creation);
-        if (fields === null) return { error: "unsupported", ok: false };
+        const fields = [
+          ...(normalizeCredentialFields(creation, "auth_config") ?? []),
+          ...(normalizeCredentialFields(initiation, "connection") ?? []),
+        ];
+        const parsedFields = providerCredentialFieldsSchema.safeParse(fields);
+        const supported =
+          SUPPORTED_CUSTOM_AUTH_SCHEMES.has(authScheme.data) &&
+          allFields.every((field) => field.type.toLowerCase() === "string") &&
+          !allFields.some(
+            (field) =>
+              providerFieldIsSecret(field) &&
+              field.default !== null &&
+              field.default !== undefined &&
+              field.default !== "",
+          ) &&
+          parsedFields.success;
+        if (!supported) {
+          return {
+            fields: [],
+            integrationName: toolkit.data.name,
+            ok: true,
+            support: "unsupported",
+          };
+        }
         const documentationUrl = safeDocumentationUrl(details.auth_hint_url);
         const result: PrepareCustomIntegrationAuthConfigResult = {
-          ...(authScheme.data === "OAUTH2"
+          ...(["DCR_OAUTH", "OAUTH2"].includes(authScheme.data)
             ? { callbackUrl: COMPOSIO_CUSTOM_OAUTH_CALLBACK_URL }
             : {}),
           ...(documentationUrl === undefined ? {} : { documentationUrl }),
-          fields,
+          fields: parsedFields.data,
           integrationName: toolkit.data.name,
           ok: true,
+          support: "supported",
         };
         return containsSecret(result, apiKey.data) ? { error: "unavailable", ok: false } : result;
       } catch {

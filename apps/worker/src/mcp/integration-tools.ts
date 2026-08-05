@@ -290,34 +290,35 @@ async function enableIntegration(
         integrationSlug: request.data.integrationSlug,
       });
       if (!prepared.ok) {
-        return integrationEnablementMcpResult(
-          prepared.error === "unsupported"
-            ? inspection
-            : {
-                error: {
-                  code: "provider_auth_unavailable",
-                  message: "Integration enablement request denied.",
-                },
-                ok: false,
-              },
-        );
+        return integrationEnablementMcpResult({
+          error: {
+            code: "provider_auth_unavailable",
+            message: "Integration enablement request denied.",
+          },
+          ok: false,
+        });
       }
 
       const now = Date.now();
       const capabilityExpiresAt = now + PROVIDER_AUTH_SETUP_CAPABILITY_LIFETIME_MS;
       const setupExpiresAt = now + PROVIDER_AUTH_SETUP_SESSION_LIFETIME_MS;
       const setupId = `provider_auth_setup_${crypto.randomUUID()}`;
+      const authorizeConnection = authority.scopes.includes(CONNECTIONS_WRITE_SCOPE);
+      const setupFields = prepared.fields.filter(
+        (field) => field.stage === "auth_config" || authorizeConnection,
+      );
       const plan = providerAuthSetupPlanSchema.parse({
-        authorizeConnection: authority.scopes.includes(CONNECTIONS_WRITE_SCOPE),
+        authorizeConnection,
         authScheme: readiness.recommendedScheme,
         ...(prepared.callbackUrl === undefined ? {} : { callbackUrl: prepared.callbackUrl }),
         ...(prepared.documentationUrl === undefined
           ? {}
           : { documentationUrl: prepared.documentationUrl }),
-        fieldSchemaDigest: await digestFields(prepared.fields),
-        fields: prepared.fields,
+        fieldSchemaDigest: await digestFields(setupFields),
+        fields: setupFields,
         integrationName: prepared.integrationName,
         integrationSlug: request.data.integrationSlug,
+        support: prepared.support,
         setupId,
       });
       const capability = await createProviderAuthSetupCapability({

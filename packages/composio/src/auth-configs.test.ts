@@ -154,6 +154,25 @@ describe("Composio auth configurations", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it("fails closed when a toolkit exposes only an unknown authentication scheme", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse(toolkit("future_provider", { modes: ["future_custom_scheme"] })),
+      );
+
+    await expect(
+      createComposioAuthConfigs({ apiKey, fetch: fetchMock }).inspect({
+        integrationSlug: "future_provider",
+      }),
+    ).resolves.toEqual({
+      authentication: { reason: "auth_scheme_unsupported", state: "unsupported" },
+      integration: { name: "future_provider", slug: "future_provider" },
+      ok: true,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("creates a managed configuration through one fixed bounded write", async () => {
     const onResponse = vi.fn<(event: unknown) => void>();
     const fetchMock = vi
@@ -277,21 +296,305 @@ describe("Composio auth configurations", () => {
           key: "client_secret",
           label: "Client secret",
           maximumLength: 8192,
+          multiline: false,
           required: true,
           secret: true,
+          stage: "auth_config",
           type: "string",
         },
         {
           key: "client_label",
           label: "Client label",
-          maximumLength: 2048,
+          maximumLength: 8192,
+          multiline: false,
           required: false,
-          secret: false,
+          secret: true,
+          stage: "auth_config",
           type: "string",
         },
       ],
       integrationName: "GitHub",
       ok: true,
+      support: "supported",
+    });
+  });
+
+  it("freezes Firecrawl connected-account fields from the live catalog shape", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        auth_config_details: [
+          {
+            auth_hint_url: "https://docs.firecrawl.dev/api-reference/introduction",
+            fields: {
+              auth_config_creation: {
+                optional: [],
+                required: [],
+              },
+              connected_account_initiation: {
+                optional: [],
+                required: [
+                  {
+                    default: "https://api.firecrawl.dev/v1",
+                    displayName: "Base URL",
+                    is_secret: false,
+                    name: "full",
+                    required: true,
+                    type: "string",
+                  },
+                  {
+                    default: "",
+                    displayName: "API key",
+                    is_secret: true,
+                    name: "generic_api_key",
+                    required: true,
+                    type: "string",
+                  },
+                ],
+              },
+            },
+            mode: "api_key",
+          },
+        ],
+        composio_managed_auth_schemes: [],
+        name: "Firecrawl",
+        slug: "firecrawl",
+      }),
+    );
+
+    await expect(
+      createComposioAuthConfigs({ apiKey, fetch: fetchMock }).prepareCustom({
+        authScheme: "API_KEY",
+        integrationSlug: "firecrawl",
+      }),
+    ).resolves.toEqual({
+      documentationUrl: "https://docs.firecrawl.dev/api-reference/introduction",
+      fields: [
+        {
+          defaultValue: "https://api.firecrawl.dev/v1",
+          key: "full",
+          label: "Base URL",
+          maximumLength: 2048,
+          multiline: false,
+          required: true,
+          secret: false,
+          stage: "connection",
+          type: "string",
+        },
+        {
+          key: "generic_api_key",
+          label: "API key",
+          maximumLength: 8192,
+          multiline: false,
+          required: true,
+          secret: true,
+          stage: "connection",
+          type: "string",
+        },
+      ],
+      integrationName: "Firecrawl",
+      ok: true,
+      support: "supported",
+    });
+  });
+
+  it("allows hosted account authorization when auth-config fields are all provider defaults", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        auth_config_details: [
+          {
+            fields: {
+              auth_config_creation: {
+                optional: [],
+                required: [
+                  {
+                    default: "https://api.example.com/v1",
+                    displayName: "Base URL",
+                    is_secret: false,
+                    name: "base_url",
+                    required: true,
+                    type: "string",
+                  },
+                ],
+              },
+              connected_account_initiation: {
+                optional: [],
+                required: [
+                  {
+                    displayName: "API key",
+                    is_secret: true,
+                    name: "api_key",
+                    required: true,
+                    type: "string",
+                  },
+                ],
+              },
+            },
+            mode: "api_key",
+          },
+        ],
+        composio_managed_auth_schemes: [],
+        name: "Hosted credentials",
+        slug: "hosted_credentials",
+      }),
+    );
+
+    await expect(
+      createComposioAuthConfigs({ apiKey, fetch: fetchMock }).prepareCustom({
+        authScheme: "API_KEY",
+        integrationSlug: "hosted_credentials",
+      }),
+    ).resolves.toMatchObject({
+      fields: [
+        expect.objectContaining({ key: "base_url", stage: "auth_config" }),
+        expect.objectContaining({ key: "api_key", stage: "connection" }),
+      ],
+      ok: true,
+      support: "supported",
+    });
+  });
+
+  it.each([
+    ["OAUTH2", "client_secret", "Client secret"],
+    ["API_KEY", "api_key", "API key"],
+    ["BEARER_TOKEN", "bearer_token", "Bearer token"],
+    ["BASIC", "password", "Password"],
+  ] as const)(
+    "prepares a bounded private field plan for the %s scheme",
+    async (authScheme, fieldName, displayName) => {
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+        jsonResponse({
+          auth_config_details: [
+            {
+              fields: {
+                auth_config_creation: {
+                  optional: [],
+                  required: [
+                    {
+                      displayName,
+                      is_secret: true,
+                      name: fieldName,
+                      required: true,
+                      type: "string",
+                    },
+                  ],
+                },
+              },
+              mode: authScheme,
+            },
+          ],
+          composio_managed_auth_schemes: [],
+          name: "Example provider",
+          slug: "example_provider",
+        }),
+      );
+
+      await expect(
+        createComposioAuthConfigs({ apiKey, fetch: fetchMock }).prepareCustom({
+          authScheme,
+          integrationSlug: "example_provider",
+        }),
+      ).resolves.toMatchObject({
+        fields: [
+          {
+            key: fieldName,
+            label: displayName,
+            required: true,
+            secret: true,
+            type: "string",
+          },
+        ],
+        integrationName: "Example provider",
+        ok: true,
+      });
+    },
+  );
+
+  it("masks service-account JSON despite incorrect provider sensitivity metadata", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        auth_config_details: [
+          {
+            fields: {
+              auth_config_creation: { optional: [], required: [] },
+              connected_account_initiation: {
+                optional: [],
+                required: [
+                  {
+                    displayName: "Credentials JSON",
+                    is_secret: false,
+                    name: "credentials_json",
+                    required: true,
+                    type: "string",
+                  },
+                ],
+              },
+            },
+            mode: "GOOGLE_SERVICE_ACCOUNT",
+          },
+        ],
+        composio_managed_auth_schemes: [],
+        name: "Google BigQuery",
+        slug: "googlebigquery",
+      }),
+    );
+
+    await expect(
+      createComposioAuthConfigs({ apiKey, fetch: fetchMock }).prepareCustom({
+        authScheme: "GOOGLE_SERVICE_ACCOUNT",
+        integrationSlug: "googlebigquery",
+      }),
+    ).resolves.toMatchObject({
+      fields: [
+        expect.objectContaining({
+          key: "credentials_json",
+          multiline: true,
+          secret: true,
+          stage: "connection",
+        }),
+      ],
+      ok: true,
+      support: "supported",
+    });
+  });
+
+  it("returns a safe informational plan for unsupported SAML configuration", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        auth_config_details: [
+          {
+            fields: {
+              auth_config_creation: {
+                optional: [],
+                required: [
+                  {
+                    displayName: "Private key",
+                    is_secret: false,
+                    name: "private_key",
+                    required: true,
+                    type: "string",
+                  },
+                ],
+              },
+            },
+            mode: "SAML",
+          },
+        ],
+        composio_managed_auth_schemes: [],
+        name: "SAP SuccessFactors",
+        slug: "sap_successfactors",
+      }),
+    );
+
+    await expect(
+      createComposioAuthConfigs({ apiKey, fetch: fetchMock }).prepareCustom({
+        authScheme: "SAML",
+        integrationSlug: "sap_successfactors",
+      }),
+    ).resolves.toEqual({
+      fields: [],
+      integrationName: "SAP SuccessFactors",
+      ok: true,
+      support: "unsupported",
     });
   });
 
