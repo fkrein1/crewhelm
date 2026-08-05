@@ -1072,6 +1072,24 @@ describe("OwnerControlPlane connections", () => {
       nextCursor: null,
       ok: true,
     });
+    await expect(
+      stub.listConnections(authority, {
+        connectionId: "connection_00000000-0000-4000-8000-000000000091",
+      }),
+    ).resolves.toEqual({
+      connections: [
+        {
+          authorizationOutcome: "untracked",
+          connectionId: "connection_00000000-0000-4000-8000-000000000091",
+          createdAt: "1970-01-01T00:00:00.091Z",
+          remoteMcp: { authKind: "bearer", name: "Handoff" },
+          status: "active",
+        },
+      ],
+      detail: { nextAction: "none", timeline: [] },
+      nextCursor: null,
+      ok: true,
+    });
   });
 
   it("rejects unauthorized, cross-owner, and malformed connection listings", async () => {
