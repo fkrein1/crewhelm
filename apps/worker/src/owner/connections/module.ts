@@ -193,6 +193,21 @@ function nextConnectionAction(summary: ComposioConnectionSummary): ConnectionNex
   return unexpectedConnectionState(summary.authorizationOutcome);
 }
 
+function nextRemoteConnectionAction(status: ConnectionSummary["status"]): ConnectionNextAction {
+  switch (status) {
+    case "active":
+      return "none";
+    case "initiated":
+      return "wait";
+    case "revoked":
+      return "reconnect";
+    case "unavailable":
+      return "review_authorization";
+  }
+
+  return unexpectedConnectionState(status);
+}
+
 export function deniedConnectionLink(
   code: ConnectionLinkFailure["error"]["code"],
   operation?: ConnectionLinkFailure["error"]["operation"],
@@ -1345,6 +1360,58 @@ export class Connections {
     }
 
     if (request.data.connectionId !== undefined) {
+      const remote = this.#database
+        .select({
+          accountLabel: connections.accountLabel,
+          authKind: remoteMcpConnections.authKind,
+          connectionId: connections.connectionId,
+          createdAt: connections.createdAt,
+          status: connections.status,
+        })
+        .from(connections)
+        .innerJoin(
+          remoteMcpConnections,
+          eq(remoteMcpConnections.connectionId, connections.connectionId),
+        )
+        .where(
+          and(
+            eq(connections.connectionId, request.data.connectionId),
+            eq(connections.provider, "remote_mcp"),
+          ),
+        )
+        .get();
+      if (remote !== undefined) {
+        if (remote.accountLabel === null) return deniedConnectionRead("connection_not_found");
+        const summary = connectionSummarySchema.parse({
+          authorizationOutcome: "untracked",
+          connectionId: remote.connectionId,
+          createdAt: new Date(remote.createdAt).toISOString(),
+          remoteMcp: { authKind: remote.authKind, name: remote.accountLabel },
+          status: remote.status,
+        });
+        const timeline = this.#database
+          .select({
+            action: auditEvents.action,
+            eventId: auditEvents.eventId,
+            occurredAt: auditEvents.occurredAt,
+          })
+          .from(auditEvents)
+          .where(eq(auditEvents.subjectId, remote.connectionId))
+          .orderBy(asc(auditEvents.eventId))
+          .limit(25)
+          .all()
+          .map((event) => ({
+            ...event,
+            occurredAt: new Date(event.occurredAt).toISOString(),
+          }));
+
+        return listConnectionsResultSchema.parse({
+          connections: [summary],
+          detail: { nextAction: nextRemoteConnectionAction(remote.status), timeline },
+          nextCursor: null,
+          ok: true,
+        });
+      }
       const inspected = this.inspect({ connectionId: request.data.connectionId });
 
       return inspected.ok

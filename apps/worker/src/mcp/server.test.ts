@@ -3712,6 +3712,85 @@ describe("authenticated MCP handler", () => {
     });
   });
 
+  it("does not create provider state for unsupported credential-free auth plans", async () => {
+    const authority = await ownerAuthority("mcp-unsupported-hosted-auth-owner", [
+      CONNECTION_CONFIGS_WRITE_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const unsupportedToolkit = {
+      auth_config_details: [
+        {
+          fields: {
+            auth_config_creation: { optional: [], required: [] },
+            connected_account_initiation: { optional: [], required: [] },
+          },
+          mode: "SAML",
+        },
+      ],
+      composio_managed_auth_schemes: [],
+      name: "Unsupported provider",
+      no_auth: false,
+      slug: "unsupported_provider",
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json(unsupportedToolkit))
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
+      .mockResolvedValueOnce(Response.json(unsupportedToolkit));
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 143,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              operation: {
+                integrationSlug: "unsupported_provider",
+                kind: "connect_provider",
+                requestKey: "mcp-unsupported-hosted-auth",
+              },
+            },
+            name: MCP_CHANGE_CONNECTIONS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+    const result = enableIntegrationResultSchema.parse(JSON.parse(payload.content[0]?.text ?? ""));
+
+    expect(payload.isError).toBe(false);
+    expect(result).toMatchObject({
+      authentication: { state: "setup_required" },
+      integration: { slug: "unsupported_provider" },
+      ok: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    await expect(
+      runInDurableObject(
+        env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+        (_instance, state) => ({
+          authConfigs: state.storage.sql
+            .exec("SELECT count(*) AS count FROM provider_auth_configs")
+            .one(),
+          enablements: state.storage.sql
+            .exec("SELECT count(*) AS count FROM integration_enablement_requests")
+            .one(),
+          setups: state.storage.sql
+            .exec("SELECT count(*) AS count FROM provider_auth_setup_requests")
+            .one(),
+        }),
+      ),
+    ).resolves.toEqual({
+      authConfigs: { count: 0 },
+      enablements: { count: 0 },
+      setups: { count: 1 },
+    });
+  });
+
   it("uses Crewhelm setup only for reusable Spotify app credentials", async () => {
     const authority = await ownerAuthority("mcp-spotify-app-setup-owner", [
       CONNECTION_CONFIGS_WRITE_SCOPE,

@@ -305,7 +305,7 @@ async function enableIntegration(
         });
       }
 
-      if (!prepared.requiresAuthConfigCredentials) {
+      if (prepared.support === "supported" && !prepared.requiresAuthConfigCredentials) {
         composioHostedAuth = {
           authScheme: readiness.recommendedScheme,
           credentials: Object.fromEntries([
