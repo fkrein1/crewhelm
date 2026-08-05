@@ -722,7 +722,7 @@ Create a public, API-key, bearer, or OAuth remote MCP Connection.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `apiKeyHeaderName` | No | string | Exact HTTP header name for API-key authentication. Enter the credential only in the returned browser setup. minimum length: `1`; maximum length: `64`; pattern: `^[!#$%&'*+.^_`\|~0-9A-Za-z-]+$` |
+| `apiKeyHeaderName` | No | string | Exact HTTP header name for API-key authentication. Enter the credential only in the returned browser setup. minimum length: `1`; maximum length: `64`; pattern: ``^[!#$%&'*+.^_`\|~0-9A-Za-z-]+$`` |
 | `authKind` | Yes | "public" \| "api_key" \| "bearer" \| "oauth" | — |
 | `endpoint` | Yes | string | maximum length: `2048`; format: `uri` |
 | `name` | Yes | string | minimum length: `1`; maximum length: `80`; pattern: `^[ -~]+$` |

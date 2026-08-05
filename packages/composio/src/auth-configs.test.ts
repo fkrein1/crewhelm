@@ -451,6 +451,7 @@ describe("Composio auth configurations", () => {
         expect.objectContaining({ key: "api_key", stage: "connection" }),
       ],
       ok: true,
+      requiresAuthConfigCredentials: false,
       support: "supported",
     });
   });

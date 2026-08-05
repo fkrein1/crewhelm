@@ -110,6 +110,13 @@ function markdownText(value: string): string {
   return value.replaceAll("|", "\\|").replaceAll("\n", " ");
 }
 
+function markdownCodeSpan(value: string): string {
+  const longestDelimiter = Math.max(0, ...(value.match(/`+/g)?.map((run) => run.length) ?? []));
+  const delimiter = "`".repeat(longestDelimiter + 1);
+
+  return `${delimiter}${value}${delimiter}`;
+}
+
 function schemaDetails(schema: Record<string, unknown>): string {
   const details: string[] = [];
   if (typeof schema.description === "string") details.push(schema.description);
@@ -129,7 +136,7 @@ function schemaDetails(schema: Record<string, unknown>): string {
   ];
   const present = constraints
     .filter(([, value]) => value !== undefined)
-    .map(([label, value]) => `${label}: \`${String(value)}\``);
+    .map(([label, value]) => `${label}: ${markdownCodeSpan(String(value))}`);
   if (present.length > 0) details.push(present.join("; "));
 
   return markdownText(details.join(" ") || "—");
@@ -480,6 +487,11 @@ async function discoverTools(
 }
 
 describe("MCP documentation", () => {
+  it("escapes Markdown delimiters in generated schema details", () => {
+    expect(markdownText("token`value|next")).toBe("token`value\\|next");
+    expect(markdownCodeSpan("token`value")).toBe("``token`value``");
+  });
+
   it("matches the authenticated tool catalog", async () => {
     const authority = ownerAuthoritySchema.parse({
       clientId: "mcp-documentation",

@@ -73,7 +73,7 @@ function isPrintableAccountLabel(value: string): boolean {
 
   return true;
 }
-export const connectionSummarySchema = z.strictObject({
+export const composioConnectionSummarySchema = z.strictObject({
   accountLabel: z
     .string()
     .min(1)
@@ -91,6 +91,24 @@ export const connectionSummarySchema = z.strictObject({
   providerConnectionId: composioConnectedAccountIdSchema,
   status: connectionStatusSchema,
 });
+export const remoteMcpConnectionSummarySchema = z.strictObject({
+  authorizationOutcome: z.literal("untracked"),
+  connectionId: connectionIdSchema,
+  createdAt: z.iso.datetime(),
+  remoteMcp: z.strictObject({
+    authKind: z.enum(["public", "api_key", "bearer", "oauth"]),
+    name: z
+      .string()
+      .min(1)
+      .max(80)
+      .refine(isPrintableAccountLabel, "Expected a printable ASCII remote MCP name."),
+  }),
+  status: connectionStatusSchema,
+});
+export const connectionSummarySchema = z.union([
+  composioConnectionSummarySchema,
+  remoteMcpConnectionSummarySchema,
+]);
 export const listConnectionsInputSchema = z.strictObject({
   authorizationOutcome: connectionAuthorizationOutcomeSchema
     .optional()
@@ -111,10 +129,10 @@ export const inspectConnectionInputSchema = z.strictObject({
   connectionId: connectionIdSchema,
 });
 export const activateVerifiedConnectionInputSchema = z.strictObject({
-  accountLabel: connectionSummarySchema.shape.accountLabel,
+  accountLabel: composioConnectionSummarySchema.shape.accountLabel,
   connectionId: connectionIdSchema,
   providerConnectionId: composioConnectedAccountIdSchema,
-  verifiedIntegrationSlug: connectionSummarySchema.shape.integrationSlug.unwrap(),
+  verifiedIntegrationSlug: composioConnectionSummarySchema.shape.integrationSlug.unwrap(),
 });
 
 const connectionLinkRequestErrorSchema = z.strictObject({
@@ -202,7 +220,7 @@ export const recordConnectionAuthorizationReturnResultSchema = z.discriminatedUn
   z.strictObject({
     connection: z.strictObject({
       connectionId: connectionIdSchema,
-      integrationSlug: connectionSummarySchema.shape.integrationSlug.unwrap(),
+      integrationSlug: composioConnectionSummarySchema.shape.integrationSlug.unwrap(),
       providerConnectionId: composioConnectedAccountIdSchema,
     }),
     ok: z.literal(true),
@@ -283,6 +301,7 @@ export type ActivateVerifiedAuthorizationReturnInput = z.infer<
 >;
 export type ConnectionAuthorizationOutcome = z.infer<typeof connectionAuthorizationOutcomeSchema>;
 export type ConnectionSummary = z.infer<typeof connectionSummarySchema>;
+export type ComposioConnectionSummary = z.infer<typeof composioConnectionSummarySchema>;
 export type CreateConnectionLinkInput = z.infer<typeof createConnectionLinkInputSchema>;
 export type CreateConnectionLinkResult = z.infer<typeof createConnectionLinkResultSchema>;
 export type ListConnectionsInput = z.infer<typeof listConnectionsInputSchema>;

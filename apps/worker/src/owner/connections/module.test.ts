@@ -1036,6 +1036,44 @@ describe("OwnerControlPlane connections", () => {
     ).resolves.toEqual({ connections: [], nextCursor: null, ok: true });
   });
 
+  it("includes remote MCP Connections in the universal connection list", async () => {
+    const authority = await authorityFor("remote-mcp-universal-list", [CONNECTIONS_READ_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(`
+        INSERT INTO connections
+          (connection_id, provider, provider_connection_id, auth_config_id, account_label,
+           status, created_at)
+        VALUES
+          ('connection_00000000-0000-4000-8000-000000000091',
+           'remote_mcp', NULL, NULL, 'Handoff', 'active', 91);
+        INSERT INTO remote_mcp_connections
+          (connection_id, endpoint, auth_kind, api_key_header_name, catalog, catalog_bytes,
+           snapshot_digest, server_name, server_version, credential_ciphertext,
+           credential_nonce, oauth_scopes)
+        VALUES
+          ('connection_00000000-0000-4000-8000-000000000091',
+           'https://api.handoff.ai/mcp', 'bearer', NULL, '[]', 2,
+           '${"a".repeat(64)}', 'handoff-public-api', '0.1.0', 'ciphertext', 'nonce', '[]')
+      `);
+    });
+
+    await expect(stub.listConnections(authority, {})).resolves.toEqual({
+      connections: [
+        {
+          authorizationOutcome: "untracked",
+          connectionId: "connection_00000000-0000-4000-8000-000000000091",
+          createdAt: "1970-01-01T00:00:00.091Z",
+          remoteMcp: { authKind: "bearer", name: "Handoff" },
+          status: "active",
+        },
+      ],
+      nextCursor: null,
+      ok: true,
+    });
+  });
+
   it("rejects unauthorized, cross-owner, and malformed connection listings", async () => {
     const authority = await authorityFor("124", [CONNECTIONS_READ_SCOPE]);
     const insufficient = await authorityFor("124", [CONNECTIONS_WRITE_SCOPE]);
