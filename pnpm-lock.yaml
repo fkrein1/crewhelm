@@ -206,6 +206,9 @@ importers:
       '@crewhelm/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@noble/hashes':
+        specifier: 2.2.0
+        version: 2.2.0
       zod:
         specifier: 4.4.3
         version: 4.4.3

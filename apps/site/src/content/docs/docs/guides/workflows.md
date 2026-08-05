@@ -26,9 +26,9 @@ should continue even if the MCP conversation disconnects.
 ## Authority and custody
 
 Workflow start freezes the owner, Agent and fleet revisions, objective, stage prompts, Briefs,
-aggregate budget, retention, and optional final output contract. The coordinator receives opaque
-identifiers only. It cannot add work, grant authority, call providers, or bypass normal Run and
-Tool gate checks.
+stage timing and deferral windows, aggregate budget, retention, and optional final output contract.
+The coordinator receives opaque identifiers only. It cannot add work, grant authority, call
+providers, or bypass normal Run and Tool gate checks.
 
 Every stage executes as a normal bounded Run in one isolated Workflow-owned Session. That Session
 cannot be continued or deleted as an ordinary Agent conversation.
@@ -42,6 +42,13 @@ cannot be continued or deleted as an ordinary Agent conversation.
 4. Omit `outputContract` for a Markdown deliverable. If software requires JSON, provide one bounded
    object-root schema; it applies only to the final stage.
 5. Keep the returned Workflow object unchanged.
+
+For a stage that must wait on external processing, add `deferral` with the maximum elapsed waiting
+window. Tell the Agent what provider state means done. Its final action must checkpoint either
+`wait`, which ends the current Run and resumes the stage later as a fresh bounded Run, or `done`,
+which advances the Workflow. Sleeping consumes no Run duration or integration-call budget. Each
+resumed check consumes its own bounded Run budget within the frozen aggregate Workflow limits.
+Omitting the checkpoint fails a deferrable stage closed.
 
 Use a direct Run instead when the plan is not yet known. A Workflow is not a general graph or a way
 to ask the model to invent future authority.

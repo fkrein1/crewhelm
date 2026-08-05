@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@crewhelm/contracts": "workspace:*",
+    "@noble/hashes": "2.2.0",
     "zod": "4.4.3"
   }
 }

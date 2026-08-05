@@ -76,8 +76,10 @@ approval-gated.
 3. Inspect an individual tool only when its parameter schema needs review.
 4. Call `crewhelm_change_connections` with `operation.kind: "grant_provider_actions"`, the returned
    Agent and Connection objects, selected tools, authorization mode, expiry, and the smallest
-   useful duration, output, cost, concurrency, and per-Run call limits.
-5. Retain the new Agent revision returned by the configuration change.
+   useful duration, output, cost, concurrency, and per-Run call limits. This replaces the selected
+   actions for that Connection and preserves grants from other Connections.
+5. Retain the returned Agent object. The grant creates a new immutable Agent revision; use that
+   returned object unchanged for any later provider or remote MCP grant.
 
 ## Verify the Connection
 

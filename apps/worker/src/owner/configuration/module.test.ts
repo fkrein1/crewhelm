@@ -66,9 +66,13 @@ describe("OwnerControlPlane fleet configuration", () => {
     }
 
     const patch = {
+      execution: {
+        maxToolCalls: 10,
+      },
       integrations: {
         duplicateToolCallLimit: 3,
         maxCallsPerRun: 10,
+        maxCallsPerToolPerRun: 10,
       },
     };
     await expect(

@@ -80,6 +80,7 @@ function exactInput(): ComposioToolGateInput {
       connectionId,
       connectionStatus: "active",
       currentAgentRevision: 7,
+      durationLimitMs: 45_000,
       evaluatedAt: "2026-07-27T18:20:00.000Z",
       fleetCallsPerDayUsed: 20,
       fleetCallsPerThirtyDaysUsed: 200,
@@ -101,6 +102,7 @@ function exactInput(): ComposioToolGateInput {
       remainingToolCalls: 2,
       runId,
       sameToolInputCallsUsed: 0,
+      toolCallsUsed: 2,
     },
   };
 }
@@ -320,17 +322,44 @@ describe("ToolGate Composio policy", () => {
   });
 
   it.each([
-    ["run calls", { remainingToolCalls: 0 }],
-    ["grant calls", { grantCallsUsed: 4 }],
-    ["duration", { remainingDurationMs: 0 }],
-    ["output", { remainingOutputBytes: 0 }],
-    ["cost", { remainingCostMicrousd: 1_999 }],
-  ])("denies an exhausted %s budget", async (_label, policyChange) => {
+    [
+      "run calls",
+      { remainingToolCalls: 0 },
+      { dimension: "run_tool_calls", kind: "budget", limit: 2, used: 2 },
+    ],
+    [
+      "grant calls",
+      { grantCallsUsed: 4 },
+      { dimension: "grant_tool_calls", kind: "budget", limit: 2, used: 4 },
+    ],
+    [
+      "duration",
+      { remainingDurationMs: 0 },
+      { dimension: "run_duration_ms", kind: "budget", limit: 45_000, used: 45_000 },
+    ],
+    [
+      "output",
+      { remainingOutputBytes: 0 },
+      { dimension: "tool_output_bytes", kind: "budget", limit: 64_000, used: 64_000 },
+    ],
+    [
+      "cost",
+      { remainingCostMicrousd: 1_999 },
+      {
+        dimension: "tool_cost_microusd",
+        kind: "budget",
+        limit: 1_999,
+        requested: 2_000,
+        used: 0,
+      },
+    ],
+  ] as const)("denies an exhausted %s budget", async (_label, policyChange, details) => {
     const input = exactInput();
     Object.assign(input.policy, policyChange);
 
     expect(await evaluateComposioToolAction(input)).toEqual({
       decision: "deny",
+      details,
       reason: "budget_exhausted",
     });
   });
@@ -341,6 +370,7 @@ describe("ToolGate Composio policy", () => {
 
     expect(await evaluateComposioToolAction(input)).toEqual({
       decision: "deny",
+      details: { active: 1, kind: "concurrency", limit: 1 },
       reason: "concurrency_exhausted",
     });
   });
@@ -351,22 +381,35 @@ describe("ToolGate Composio policy", () => {
 
     expect(await evaluateComposioToolAction(input)).toEqual({
       decision: "deny",
+      details: { calls: 2, kind: "duplicate_calls", limit: 2 },
       reason: "loop_detected",
     });
   });
 
   it.each([
-    ["daily", { fleetCallsPerDayUsed: 300 }],
-    ["thirty-day", { fleetCallsPerThirtyDaysUsed: 8_000 }],
-  ])("denies an exhausted fleet %s integration-call limit", async (_label, policyChange) => {
-    const input = exactInput();
-    Object.assign(input.policy, policyChange);
+    [
+      "daily",
+      { fleetCallsPerDayUsed: 300 },
+      { dimension: "fleet_calls_per_day", kind: "rate", limit: 300, used: 300 },
+    ],
+    [
+      "thirty-day",
+      { fleetCallsPerThirtyDaysUsed: 8_000 },
+      { dimension: "fleet_calls_per_thirty_days", kind: "rate", limit: 8_000, used: 8_000 },
+    ],
+  ] as const)(
+    "denies an exhausted fleet %s integration-call limit",
+    async (_label, policyChange, details) => {
+      const input = exactInput();
+      Object.assign(input.policy, policyChange);
 
-    expect(await evaluateComposioToolAction(input)).toEqual({
-      decision: "deny",
-      reason: "rate_exhausted",
-    });
-  });
+      expect(await evaluateComposioToolAction(input)).toEqual({
+        decision: "deny",
+        details,
+        reason: "rate_exhausted",
+      });
+    },
+  );
 
   it("denies an unknown or over-grant action cost", async () => {
     const unknownCost = exactInput();
@@ -380,6 +423,13 @@ describe("ToolGate Composio policy", () => {
     });
     expect(await evaluateComposioToolAction(overGrantCost)).toEqual({
       decision: "deny",
+      details: {
+        dimension: "tool_cost_microusd",
+        kind: "budget",
+        limit: 3_000,
+        requested: 5_001,
+        used: 0,
+      },
       reason: "budget_exhausted",
     });
 

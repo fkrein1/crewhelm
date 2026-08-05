@@ -1,5 +1,6 @@
 import {
   MAXIMUM_ACTIVE_AGENT_WORKFLOWS_PER_OWNER,
+  MAXIMUM_AGENT_WORKFLOW_DEFERRALS,
   MAXIMUM_AGENT_WORKFLOWS_PER_OWNER,
   agentTaskWorkflowParamsSchema,
   agentWorkflowAggregateBudgetSchema,
@@ -9,6 +10,8 @@ import {
   agentWorkflowSummarySchema,
   cancelAgentWorkflowInputSchema,
   cancelAgentWorkflowResultSchema,
+  checkpointAgentWorkflowStageInputSchema,
+  checkpointAgentWorkflowStageResultSchema,
   completeAgentWorkflowStageInputSchema,
   completeAgentWorkflowStageResultSchema,
   continuationFromRunSession,
@@ -21,6 +24,7 @@ import {
   inspectAgentWorkflowResultSchema,
   listAgentWorkflowsInputSchema,
   listAgentWorkflowsResultSchema,
+  prepareAgentWorkflowStageResultSchema,
   runPromptSchema,
   runIdSchema,
   startAgentWorkflowInputSchema,
@@ -30,6 +34,7 @@ import {
   type AgentWorkflowStatus,
   type AgentWorkflowSummary,
   type CancelAgentWorkflowResult,
+  type CheckpointAgentWorkflowStageResult,
   type CompleteAgentWorkflowStageResult,
   type DeleteAgentWorkflowResult,
   type DispatchAgentWorkflowStageResult,
@@ -37,6 +42,7 @@ import {
   type InspectAgentWorkflowResult,
   type ListAgentWorkflowsResult,
   type OwnerAuthority,
+  type PrepareAgentWorkflowStageResult,
   type StartAgentWorkflowInput,
   type StartAgentWorkflowResult,
   type StartRunResult,
@@ -45,7 +51,7 @@ import {
   type OutputContract,
   type JsonValue,
 } from "@crewhelm/contracts";
-import { and, asc, count, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, count, eq, gt, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import * as z from "zod";
 
@@ -169,7 +175,7 @@ export function agentWorkflowFailureFromRunStart(code: RunStartFailureCode): Fai
 function admittedStagePrompt(
   objective: string,
   stageCount: number,
-  stage: Pick<StoredStage, "name" | "prompt" | "stageIndex">,
+  stage: Pick<StoredStage, "maxWaitSeconds" | "name" | "prompt" | "stageIndex">,
 ): string {
   return runPromptSchema.parse(
     [
@@ -178,6 +184,11 @@ function admittedStagePrompt(
       "",
       `Stage ${stage.stageIndex + 1}/${stageCount} — ${stage.name}:`,
       stage.prompt,
+      ...(stage.maxWaitSeconds === null
+        ? []
+        : [
+            "This stage supports durable deferral. After checking the external work, make workflow_stage_checkpoint your final action: use state=wait with a bounded afterSeconds and reason when work is still pending, or state=done when this stage is complete. Do not claim that you waited inside this Run.",
+          ]),
     ].join("\n"),
   );
 }
@@ -276,7 +287,18 @@ function isTerminalWorkflowStatus(
 
 function stageProjection(stage: StoredStage, includePrompt: boolean) {
   return agentWorkflowStageSummarySchema.parse({
+    attempts: stage.attemptCount,
     completedAt: stage.completedAt === null ? null : new Date(stage.completedAt).toISOString(),
+    delayBeforeSeconds: stage.delayBeforeSeconds,
+    deferral:
+      stage.maxWaitSeconds === null
+        ? null
+        : {
+            lastReason: stage.lastDeferReason,
+            maxWaitSeconds: stage.maxWaitSeconds,
+            nextAttemptAt:
+              stage.nextAttemptAt === null ? null : new Date(stage.nextAttemptAt).toISOString(),
+          },
     index: stage.stageIndex,
     name: stage.name,
     ...(includePrompt ? { prompt: stage.prompt } : {}),
@@ -357,6 +379,7 @@ export class AgentWorkflows {
         digestRunPrompt(
           admittedStagePrompt(request.data.objective, request.data.stages.length, {
             ...stage,
+            maxWaitSeconds: stage.deferral?.maxWaitSeconds ?? null,
             stageIndex,
           }),
         ),
@@ -461,14 +484,21 @@ export class AgentWorkflows {
           agent.executionLimits.maxToolCalls,
           fleet.data.execution.maxToolCalls,
           fleet.data.integrations.maxCallsPerRun,
+          agent.executionLimits.integrations?.maxCallsPerRun ??
+            fleet.data.integrations.maxCallsPerRun,
         ),
         maxTurns: Math.min(agent.executionLimits.maxTurns, fleet.data.execution.maxTurns),
       };
+      const maximumRunCount =
+        stageCount +
+        (request.data.stages.some((stage) => stage.deferral !== undefined)
+          ? MAXIMUM_AGENT_WORKFLOW_DEFERRALS
+          : 0);
       const budget = agentWorkflowAggregateBudgetSchema.parse({
-        maxDurationSeconds: effective.maxDurationSeconds * stageCount,
-        maxModelTokens: effective.maxModelTokens * stageCount,
-        maxToolCalls: effective.maxToolCalls * stageCount,
-        maxTurns: effective.maxTurns * stageCount,
+        maxDurationSeconds: effective.maxDurationSeconds * maximumRunCount,
+        maxModelTokens: effective.maxModelTokens * maximumRunCount,
+        maxToolCalls: effective.maxToolCalls * maximumRunCount,
+        maxTurns: effective.maxTurns * maximumRunCount,
       });
       const id = workflowId();
       const cleanupAt = currentTime + fleet.data.retention.inboxSeconds * 1_000;
@@ -500,6 +530,8 @@ export class AgentWorkflows {
         .insert(agentWorkflowStages)
         .values(
           request.data.stages.map((stage, stageIndex) => ({
+            delayBeforeSeconds: stage.delayBeforeSeconds,
+            maxWaitSeconds: stage.deferral?.maxWaitSeconds ?? null,
             name: stage.name,
             prompt: stage.prompt,
             promptDigest: promptDigests[stageIndex] ?? "",
@@ -650,6 +682,75 @@ export class AgentWorkflows {
     });
   }
 
+  prepareStage(input: unknown): PrepareAgentWorkflowStageResult {
+    const request = dispatchAgentWorkflowStageInputSchema.safeParse(input);
+    if (!request.success) {
+      return prepareAgentWorkflowStageResultSchema.parse(denied("invalid_request"));
+    }
+
+    const row = this.#workflow(request.data.workflowId);
+    const stage = this.#stage(request.data.workflowId, request.data.stageIndex);
+    if (row === undefined || stage === undefined || row.agentId !== request.data.agentId) {
+      return prepareAgentWorkflowStageResultSchema.parse(denied("workflow_not_found"));
+    }
+    if (
+      row.cancellationRequestedAt !== null ||
+      !["queued", "running", "waiting"].includes(row.status) ||
+      row.completedStages !== stage.stageIndex ||
+      row.currentRunId !== null ||
+      !["pending", "waiting"].includes(stage.status)
+    ) {
+      return prepareAgentWorkflowStageResultSchema.parse(denied("workflow_busy"));
+    }
+    if (
+      row.status === "waiting" &&
+      row.currentStageIndex === stage.stageIndex &&
+      row.waitingUntil !== null
+    ) {
+      return prepareAgentWorkflowStageResultSchema.parse({
+        ok: true,
+        waitingUntil: new Date(row.waitingUntil).toISOString(),
+      });
+    }
+    if (stage.status === "waiting") {
+      return prepareAgentWorkflowStageResultSchema.parse(denied("workflow_busy"));
+    }
+    if (stage.delayBeforeSeconds === 0 || stage.attemptCount > 0) {
+      return prepareAgentWorkflowStageResultSchema.parse({ ok: true, waitingUntil: null });
+    }
+    if (row.currentStageIndex !== null || row.waitingUntil !== null) {
+      return prepareAgentWorkflowStageResultSchema.parse(denied("workflow_busy"));
+    }
+
+    const updatedAt = Date.now();
+    const waitingUntil = updatedAt + stage.delayBeforeSeconds * 1_000;
+    const updated = this.#database
+      .update(agentWorkflows)
+      .set({
+        currentStageIndex: stage.stageIndex,
+        status: "waiting",
+        updatedAt,
+        waitingUntil,
+        workflowRevision: sql`${agentWorkflows.workflowRevision} + 1`,
+      })
+      .where(
+        and(
+          eq(agentWorkflows.workflowId, row.workflowId),
+          eq(agentWorkflows.workflowRevision, row.workflowRevision),
+        ),
+      )
+      .returning({ workflowId: agentWorkflows.workflowId })
+      .get();
+    if (updated === undefined) {
+      return prepareAgentWorkflowStageResultSchema.parse(denied("workflow_busy"));
+    }
+
+    return prepareAgentWorkflowStageResultSchema.parse({
+      ok: true,
+      waitingUntil: new Date(waitingUntil).toISOString(),
+    });
+  }
+
   async dispatch(input: unknown): Promise<DispatchAgentWorkflowStageResult> {
     const request = dispatchAgentWorkflowStageInputSchema.safeParse(input);
     if (!request.success || this.#objectName === undefined) {
@@ -668,6 +769,7 @@ export class AgentWorkflows {
     if (stage.runId !== null && row.session !== null) {
       const attached = await this.#agent(row).attachAgentTaskWorkflowRun({
         agentId: row.agentId,
+        attempt: stage.attemptCount,
         ownerKey: this.#objectName,
         runId: stage.runId,
         session: row.session,
@@ -679,6 +781,7 @@ export class AgentWorkflows {
       }
       const status = stage.status === "waiting" ? "running" : stage.status;
       return dispatchAgentWorkflowStageResultSchema.parse({
+        attempt: stage.attemptCount,
         ok: true,
         runId: stage.runId,
         session: row.session,
@@ -687,11 +790,12 @@ export class AgentWorkflows {
     }
 
     if (
-      !["queued", "running"].includes(row.status) ||
+      !["queued", "running", "waiting"].includes(row.status) ||
       row.cancellationRequestedAt !== null ||
       row.completedStages !== request.data.stageIndex ||
-      stage.status !== "pending" ||
+      !["pending", "waiting"].includes(stage.status) ||
       row.currentRunId !== null ||
+      (row.waitingUntil !== null && row.waitingUntil > Date.now()) ||
       (row.currentStageIndex !== null && row.currentStageIndex !== stage.stageIndex)
     ) {
       return dispatchAgentWorkflowStageResultSchema.parse(denied("workflow_busy"));
@@ -732,29 +836,30 @@ export class AgentWorkflows {
 
       if (
         current === undefined ||
-        currentStage?.status !== "pending" ||
+        currentStage === undefined ||
+        !["pending", "waiting"].includes(currentStage.status) ||
         currentStage.runId !== null ||
         current.cancellationRequestedAt !== null ||
-        !["queued", "running"].includes(current.status) ||
+        !["queued", "running", "waiting"].includes(current.status) ||
         current.completedStages !== stage.stageIndex ||
         current.currentRunId !== null ||
+        (current.waitingUntil !== null && current.waitingUntil > Date.now()) ||
         (current.currentStageIndex !== null && current.currentStageIndex !== stage.stageIndex)
       ) {
         return undefined;
       }
 
-      if (current.currentStageIndex === null) {
-        transaction
-          .update(agentWorkflows)
-          .set({
-            currentStageIndex: stage.stageIndex,
-            status: "running",
-            updatedAt: Date.now(),
-            workflowRevision: sql`${agentWorkflows.workflowRevision} + 1`,
-          })
-          .where(eq(agentWorkflows.workflowId, current.workflowId))
-          .run();
-      }
+      transaction
+        .update(agentWorkflows)
+        .set({
+          currentStageIndex: stage.stageIndex,
+          status: "running",
+          updatedAt: Date.now(),
+          waitingUntil: null,
+          workflowRevision: sql`${agentWorkflows.workflowRevision} + 1`,
+        })
+        .where(eq(agentWorkflows.workflowId, current.workflowId))
+        .run();
 
       return transaction
         .select()
@@ -767,6 +872,7 @@ export class AgentWorkflows {
       return dispatchAgentWorkflowStageResultSchema.parse(denied("workflow_busy"));
     }
     row = reserved;
+    const attempt = stage.attemptCount + 1;
 
     const authority = this.#runtimeAuthority(row);
     const materializedBriefs = await this.#briefs.materialize(
@@ -801,7 +907,7 @@ export class AgentWorkflows {
             }),
         ...(row.session === null ? {} : { continuation: continuationFromRunSession(row.session) }),
         expectedRevision: row.agentRevision,
-        idempotencyKey: `workflow.${row.workflowId}.${stage.stageIndex}`,
+        idempotencyKey: `workflow.${row.workflowId}.${stage.stageIndex}.${attempt}`,
         ...(stage.stageIndex === row.stageCount - 1 && row.outputContract !== null
           ? { outputContract: publicOutputContract(row.outputContract) }
           : {}),
@@ -867,7 +973,7 @@ export class AgentWorkflows {
         current.currentStageIndex !== stage.stageIndex ||
         current.currentRunId !== null ||
         currentStage.runId !== null ||
-        currentStage.status !== "pending" ||
+        !["pending", "waiting"].includes(currentStage.status) ||
         !["running", "cancelling"].includes(current.status)
       ) {
         return false;
@@ -875,12 +981,22 @@ export class AgentWorkflows {
 
       transaction
         .update(agentWorkflowStages)
-        .set({ runId: started.run.runId, startedAt: updatedAt, status: "running" })
+        .set({
+          attemptCount: attempt,
+          checkpointDelaySeconds: null,
+          checkpointResumeAt: null,
+          checkpointRunId: null,
+          checkpointState: null,
+          nextAttemptAt: null,
+          runId: started.run.runId,
+          startedAt: currentStage.startedAt ?? updatedAt,
+          status: "running",
+        })
         .where(
           and(
             eq(agentWorkflowStages.workflowId, row.workflowId),
             eq(agentWorkflowStages.stageIndex, stage.stageIndex),
-            eq(agentWorkflowStages.status, "pending"),
+            inArray(agentWorkflowStages.status, ["pending", "waiting"]),
           ),
         )
         .run();
@@ -918,6 +1034,7 @@ export class AgentWorkflows {
 
     const attached = await this.#agent(row).attachAgentTaskWorkflowRun({
       agentId: row.agentId,
+      attempt,
       ownerKey: this.#objectName,
       runId: started.run.runId,
       session: boundSession,
@@ -940,11 +1057,89 @@ export class AgentWorkflows {
     }
 
     return dispatchAgentWorkflowStageResultSchema.parse({
+      attempt,
       ok: true,
       runId: started.run.runId,
       session: boundSession,
       status: started.run.status,
     });
+  }
+
+  checkpoint(input: unknown): CheckpointAgentWorkflowStageResult {
+    const request = checkpointAgentWorkflowStageInputSchema.safeParse(input);
+    if (!request.success) {
+      return checkpointAgentWorkflowStageResultSchema.parse(denied("invalid_request"));
+    }
+    const row = this.#database
+      .select()
+      .from(agentWorkflows)
+      .where(eq(agentWorkflows.currentRunId, request.data.runId))
+      .get();
+    const stage =
+      row?.currentStageIndex === null || row?.currentStageIndex === undefined
+        ? undefined
+        : this.#stage(row.workflowId, row.currentStageIndex);
+    if (
+      row === undefined ||
+      stage === undefined ||
+      row.status !== "running" ||
+      stage.status !== "running" ||
+      stage.runId !== request.data.runId ||
+      stage.maxWaitSeconds === null
+    ) {
+      return checkpointAgentWorkflowStageResultSchema.parse(denied("workflow_not_found"));
+    }
+
+    const checkpoint = request.data.checkpoint;
+    const checkpointedAt = Date.now();
+    const checkpointResumeAt =
+      checkpoint.state === "wait" ? checkpointedAt + checkpoint.afterSeconds * 1_000 : null;
+    if (stage.checkpointState !== null) {
+      const replayed =
+        stage.checkpointRunId === request.data.runId &&
+        stage.checkpointState === checkpoint.state &&
+        (checkpoint.state === "done" ||
+          (stage.checkpointDelaySeconds === checkpoint.afterSeconds &&
+            stage.checkpointResumeAt !== null &&
+            stage.lastDeferReason === checkpoint.reason));
+      return checkpointAgentWorkflowStageResultSchema.parse(
+        replayed ? { checkpointed: true, ok: true } : denied("workflow_busy"),
+      );
+    }
+
+    if (checkpoint.state === "wait") {
+      const waitDeadline = (stage.startedAt ?? checkpointedAt) + stage.maxWaitSeconds * 1_000;
+      if (
+        row.deferralCount >= MAXIMUM_AGENT_WORKFLOW_DEFERRALS ||
+        checkpointResumeAt === null ||
+        checkpointResumeAt > waitDeadline
+      ) {
+        return checkpointAgentWorkflowStageResultSchema.parse(denied("budget_exhausted"));
+      }
+    }
+
+    const updated = this.#database
+      .update(agentWorkflowStages)
+      .set({
+        checkpointDelaySeconds: checkpoint.state === "wait" ? checkpoint.afterSeconds : null,
+        checkpointResumeAt,
+        checkpointRunId: request.data.runId,
+        checkpointState: checkpoint.state,
+        lastDeferReason: checkpoint.state === "wait" ? checkpoint.reason : stage.lastDeferReason,
+      })
+      .where(
+        and(
+          eq(agentWorkflowStages.workflowId, row.workflowId),
+          eq(agentWorkflowStages.stageIndex, stage.stageIndex),
+          eq(agentWorkflowStages.runId, request.data.runId),
+          isNull(agentWorkflowStages.checkpointState),
+        ),
+      )
+      .returning({ runId: agentWorkflowStages.runId })
+      .get();
+    return checkpointAgentWorkflowStageResultSchema.parse(
+      updated === undefined ? denied("workflow_busy") : { checkpointed: true, ok: true },
+    );
   }
 
   async complete(input: unknown): Promise<CompleteAgentWorkflowStageResult> {
@@ -954,6 +1149,20 @@ export class AgentWorkflows {
     }
     const row = this.#workflow(request.data.workflowId);
     const stage = this.#stage(request.data.workflowId, request.data.stageIndex);
+    if (
+      row !== undefined &&
+      stage?.status === "waiting" &&
+      stage.lastRunId === request.data.runId &&
+      stage.nextAttemptAt !== null
+    ) {
+      return completeAgentWorkflowStageResultSchema.parse({
+        attempt: stage.attemptCount,
+        ok: true,
+        status: "waiting",
+        waitingUntil: new Date(stage.nextAttemptAt).toISOString(),
+        workflowStatus: "waiting",
+      });
+    }
     if (
       row === undefined ||
       stage === undefined ||
@@ -1001,7 +1210,102 @@ export class AgentWorkflows {
       });
     }
 
-    const runStatus = inspected.run.status;
+    if (
+      inspected.run.status === "completed" &&
+      stage.checkpointState === "wait" &&
+      stage.checkpointDelaySeconds !== null &&
+      stage.checkpointResumeAt !== null &&
+      row.cancellationRequestedAt === null
+    ) {
+      const deferredAt = Date.now();
+      const waitingUntil = stage.checkpointResumeAt;
+      const deferred = this.#database.transaction((transaction) => {
+        const current = transaction
+          .select()
+          .from(agentWorkflows)
+          .where(eq(agentWorkflows.workflowId, row.workflowId))
+          .get();
+        const currentStage = transaction
+          .select()
+          .from(agentWorkflowStages)
+          .where(
+            and(
+              eq(agentWorkflowStages.workflowId, row.workflowId),
+              eq(agentWorkflowStages.stageIndex, stage.stageIndex),
+            ),
+          )
+          .get();
+        if (
+          current === undefined ||
+          currentStage?.runId !== request.data.runId ||
+          currentStage.checkpointState !== "wait" ||
+          current.currentRunId !== request.data.runId ||
+          current.deferralCount >= MAXIMUM_AGENT_WORKFLOW_DEFERRALS
+        ) {
+          return false;
+        }
+        transaction
+          .update(agentWorkflowStages)
+          .set({
+            checkpointDelaySeconds: null,
+            checkpointResumeAt: null,
+            checkpointRunId: null,
+            checkpointState: null,
+            lastRunId: request.data.runId,
+            nextAttemptAt: waitingUntil,
+            runId: null,
+            status: "waiting",
+          })
+          .where(
+            and(
+              eq(agentWorkflowStages.workflowId, row.workflowId),
+              eq(agentWorkflowStages.stageIndex, stage.stageIndex),
+            ),
+          )
+          .run();
+        transaction
+          .update(agentWorkflows)
+          .set({
+            currentRunId: null,
+            currentStageIndex: stage.stageIndex,
+            deferralCount: current.deferralCount + 1,
+            status: "waiting",
+            updatedAt: deferredAt,
+            waitingUntil,
+            workflowRevision: sql`${agentWorkflows.workflowRevision} + 1`,
+          })
+          .where(eq(agentWorkflows.workflowId, row.workflowId))
+          .run();
+        transaction
+          .insert(auditEvents)
+          .values({
+            action: "workflow.stage_deferred",
+            clientId: "crewhelm:workflow",
+            occurredAt: deferredAt,
+            subjectId: row.workflowId,
+          })
+          .run();
+        return true;
+      });
+      if (!deferred) {
+        return completeAgentWorkflowStageResultSchema.parse(denied("workflow_busy"));
+      }
+      await this.#scheduleRecovery(waitingUntil);
+      return completeAgentWorkflowStageResultSchema.parse({
+        attempt: stage.attemptCount,
+        ok: true,
+        status: "waiting",
+        waitingUntil: new Date(waitingUntil).toISOString(),
+        workflowStatus: "waiting",
+      });
+    }
+
+    const runStatus =
+      inspected.run.status === "completed" &&
+      stage.maxWaitSeconds !== null &&
+      stage.checkpointState !== "done"
+        ? "failed"
+        : inspected.run.status;
     const isFinalCompletedStage =
       runStatus === "completed" && stage.stageIndex === row.stageCount - 1;
     const jsonDeliverable =
@@ -1148,6 +1452,7 @@ export class AgentWorkflows {
           failureStageIndex: runStatus === "failed" || finalOutputMissing ? stage.stageIndex : null,
           status: workflowStatus,
           updatedAt,
+          waitingUntil: null,
           workflowRevision: sql`${agentWorkflows.workflowRevision} + 1`,
         })
         .where(eq(agentWorkflows.workflowId, row.workflowId))
@@ -1234,7 +1539,8 @@ export class AgentWorkflows {
     }
     row = cancelling;
 
-    let cancelled = row.currentRunId === null && row.currentStageIndex === null;
+    let cancelled =
+      row.currentRunId === null && (row.currentStageIndex === null || row.waitingUntil !== null);
     if (row.currentRunId !== null) {
       const runCancellation = await this.#agentChannel.cancel(this.#runtimeAuthority(row), {
         runId: row.currentRunId,
@@ -1287,6 +1593,7 @@ export class AgentWorkflows {
             currentStageIndex: null,
             status: "cancelled",
             updatedAt: completedAt,
+            waitingUntil: null,
             workflowRevision: sql`${agentWorkflows.workflowRevision} + 1`,
           })
           .where(eq(agentWorkflows.workflowId, row.workflowId))
@@ -1452,6 +1759,12 @@ export class AgentWorkflows {
       row !== undefined &&
       row.agentId === request.data.agentId &&
       row.stageCount === request.data.stageCount &&
+      (request.data.stageDelaysSeconds.length === 0 ||
+        JSON.stringify(request.data.stageDelaysSeconds) ===
+          JSON.stringify(this.#stages(row.workflowId).map((stage) => stage.delayBeforeSeconds))) &&
+      (request.data.stageMaxWaitSeconds.length === 0 ||
+        JSON.stringify(request.data.stageMaxWaitSeconds) ===
+          JSON.stringify(this.#stages(row.workflowId).map((stage) => stage.maxWaitSeconds ?? 0))) &&
       !isTerminalWorkflowStatus(row.status)
     );
   }
@@ -1495,6 +1808,7 @@ export class AgentWorkflows {
           failureStageIndex: cancelled ? null : failureStageIndex,
           status: cancelled ? "cancelled" : "failed",
           updatedAt: completedAt,
+          waitingUntil: null,
           workflowRevision: sql`${agentWorkflows.workflowRevision} + 1`,
         })
         .where(
@@ -1648,8 +1962,26 @@ export class AgentWorkflows {
     const active = this.#database
       .select({ value: agentWorkflows.updatedAt })
       .from(agentWorkflows)
-      .where(inArray(agentWorkflows.status, ["running", "waiting"]))
+      .where(
+        or(
+          eq(agentWorkflows.status, "running"),
+          and(eq(agentWorkflows.status, "waiting"), isNotNull(agentWorkflows.currentRunId)),
+        ),
+      )
       .orderBy(asc(agentWorkflows.updatedAt))
+      .limit(1)
+      .get()?.value;
+    const delayed = this.#database
+      .select({ value: agentWorkflows.waitingUntil })
+      .from(agentWorkflows)
+      .where(
+        and(
+          eq(agentWorkflows.status, "waiting"),
+          isNull(agentWorkflows.currentRunId),
+          isNotNull(agentWorkflows.waitingUntil),
+        ),
+      )
+      .orderBy(asc(agentWorkflows.waitingUntil))
       .limit(1)
       .get()?.value;
     const cleanup = this.#database
@@ -1687,6 +2019,7 @@ export class AgentWorkflows {
       active === undefined
         ? undefined
         : Math.max(active + RECOVERY_DELAY_MS, Date.now() + RECOVERY_DELAY_MS),
+      delayed == null ? undefined : delayed > Date.now() ? delayed : Date.now() + RECOVERY_DELAY_MS,
       cleanup,
       deletionRecovery == null
         ? undefined
@@ -1797,16 +2130,11 @@ export class AgentWorkflows {
         }
       }
 
-      const stageRunIds = this.#stages(row.workflowId).flatMap((stage) =>
-        stage.runId === null ? [] : [stage.runId],
-      );
-      if (stageRunIds.length > 0) {
-        this.#database
-          .update(runAdmissions)
-          .set({ briefContext: null })
-          .where(inArray(runAdmissions.runId, stageRunIds))
-          .run();
-      }
+      this.#database
+        .update(runAdmissions)
+        .set({ briefContext: null })
+        .where(eq(runAdmissions.clientId, `crewhelm:workflow:${row.workflowId}`))
+        .run();
 
       phase = "runtime_delete";
       if (
@@ -1905,6 +2233,8 @@ export class AgentWorkflows {
         agentId: row.agentId,
         ownerKey: this.#objectName,
         stageCount: row.stageCount,
+        stageDelaysSeconds: this.#stages(row.workflowId).map((stage) => stage.delayBeforeSeconds),
+        stageMaxWaitSeconds: this.#stages(row.workflowId).map((stage) => stage.maxWaitSeconds ?? 0),
         workflowId: row.workflowId,
       });
       if (!started) {
@@ -1945,11 +2275,26 @@ export class AgentWorkflows {
     }
 
     if (row.currentRunId === null && row.completedStages < row.stageCount) {
-      await this.dispatch({
+      const stageIndex = row.currentStageIndex ?? row.completedStages;
+      const prepared = this.prepareStage({
         agentId: row.agentId,
-        stageIndex: row.currentStageIndex ?? row.completedStages,
+        stageIndex,
         workflowId: row.workflowId,
       });
+      if (prepared.ok) {
+        const waitingUntil =
+          prepared.waitingUntil === null ? null : new Date(prepared.waitingUntil).getTime();
+        if (waitingUntil === null || waitingUntil <= Date.now()) {
+          await this.dispatch({
+            agentId: row.agentId,
+            stageIndex,
+            workflowId: row.workflowId,
+          });
+        } else {
+          await this.#scheduleRecovery(waitingUntil);
+          return;
+        }
+      }
     }
 
     await this.#scheduleRecovery(Date.now() + RECOVERY_DELAY_MS);
@@ -1990,6 +2335,7 @@ export class AgentWorkflows {
           failureStageIndex: cancelled ? null : stage.stageIndex,
           status: cancelled ? "cancelled" : "failed",
           updatedAt: completedAt,
+          waitingUntil: null,
           workflowRevision: sql`${agentWorkflows.workflowRevision} + 1`,
         })
         .where(eq(agentWorkflows.workflowId, row.workflowId))
@@ -2026,6 +2372,7 @@ export class AgentWorkflows {
           currentStageIndex: null,
           status: "cancelled",
           updatedAt,
+          waitingUntil: null,
           workflowRevision: sql`${agentWorkflows.workflowRevision} + 1`,
         })
         .where(eq(agentWorkflows.workflowId, row.workflowId))
@@ -2039,6 +2386,7 @@ export class AgentWorkflows {
         currentStageIndex: null,
         status: "running",
         updatedAt,
+        waitingUntil: null,
         workflowRevision: sql`${agentWorkflows.workflowRevision} + 1`,
       })
       .where(eq(agentWorkflows.workflowId, row.workflowId))
@@ -2079,6 +2427,7 @@ export class AgentWorkflows {
       stageCount: row.stageCount,
       status: row.status,
       updatedAt: new Date(row.updatedAt).toISOString(),
+      waitingUntil: row.waitingUntil === null ? null : new Date(row.waitingUntil).toISOString(),
       workflowId: row.workflowId,
     });
   }

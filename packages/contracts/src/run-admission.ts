@@ -19,6 +19,7 @@ import {
   sha256DigestSchema,
   toolCallIdSchema,
   toolExecutionEvaluationFailureReasonSchema,
+  toolGateDenialDetailsSchema,
   toolGateDenialReasonSchema,
 } from "./capabilities.js";
 import {
@@ -570,9 +571,24 @@ export const toolProviderFailureSchema = z.strictObject({
   errorCode: z.number().int().nonnegative().safe().optional(),
   outcome: z.enum([
     "invalid_response",
+    "object_upload_failed",
+    "object_upload_rejected",
+    "processing_failed",
     "provider_rejected",
     "sensitive_response",
+    "source_download_aborted",
+    "source_download_failed",
+    "source_download_invalid_url",
+    "source_download_request_context",
+    "source_download_subrequest_limit",
+    "source_response_rejected",
+    "source_too_large",
+    "source_url_rejected",
     "transport_error",
+    "upload_request_failed",
+    "upload_request_invalid",
+    "upload_request_rejected",
+    "upload_url_rejected",
   ]),
   status: z.number().int().min(100).max(599).nullable(),
   toolSlug: z
@@ -645,6 +661,7 @@ export const toolAuthorizationTimelineEventSchema = z.discriminatedUnion("event"
     toolCallId: toolCallIdSchema,
   }),
   z.strictObject({
+    details: toolGateDenialDetailsSchema.optional(),
     event: z.literal("tool.authorization_blocked"),
     occurredAt: z.iso.datetime(),
     reason: toolAuthorizationFailureReasonSchema,

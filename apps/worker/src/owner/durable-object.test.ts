@@ -214,6 +214,16 @@ describe("OwnerControlPlane", () => {
           name: "0003_fair_red_ghost",
           version: 4,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0004_tricky_zuras",
+          version: 5,
+        },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0005_talented_boom_boom",
+          version: 6,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });

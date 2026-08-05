@@ -25,6 +25,7 @@ import {
   SLOW_TEST_PROMPT,
   TestCrewAgent,
   TestCrewSession,
+  WORKFLOW_CHECKPOINT_TEST_PROMPT,
 } from "../../agent/admitted-runs/test-agent.js";
 import { admittedRunRecordSchema } from "../../agent/admitted-runs/schema.js";
 import { deriveOwnerKey } from "../identity.js";
@@ -188,6 +189,28 @@ async function terminalRun(
   );
 }
 
+async function completedRunWithOutput(
+  controlPlane: ReturnType<typeof env.OWNER_CONTROL_PLANE.getByName>,
+  authority: OwnerAuthority,
+  runId: string,
+): Promise<Run & { output: string }> {
+  return vi.waitFor(
+    async () => {
+      const inspected = await controlPlane.inspectRun(authority, { runId });
+
+      if (
+        !inspected.ok ||
+        inspected.run.status !== "completed" ||
+        inspected.run.output === undefined
+      ) {
+        throw new Error("Expected a completed workflow Run with retained output.");
+      }
+      return { ...inspected.run, output: inspected.run.output };
+    },
+    { interval: 25, timeout: 5_000 },
+  );
+}
+
 async function drainSlowSessionRun(
   session: ReturnType<typeof env.CREW_SESSION.getByName>,
   runId: string,
@@ -219,6 +242,71 @@ async function sha256Hex(content: string): Promise<string> {
 }
 
 describe("Agent workflows", () => {
+  it("executes a durable Workflow wait through both checkpoint authorization gates", async () => {
+    const authority = await authorityFor("agent-workflow-checkpoint-action");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("workflow-checkpoint-action-agent"),
+    );
+    if (!created.ok) throw new Error("Expected Workflow checkpoint Agent fixture.");
+    await enableSessions(authority.ownerKey, created.agent.id);
+
+    const started = await controlPlane.startAgentWorkflow(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "workflow-checkpoint-action-start",
+      objective: "Prove the Workflow checkpoint action reaches its owner boundary.",
+      stages: [
+        {
+          deferral: { maxWaitSeconds: 3_600 },
+          name: "Checkpoint",
+          prompt: WORKFLOW_CHECKPOINT_TEST_PROMPT,
+        },
+        { name: "Finish", prompt: "Finish the exact Workflow." },
+      ],
+    });
+    if (!started.ok) throw new Error("Expected Workflow checkpoint fixture.");
+
+    const dispatched = await controlPlane.dispatchAgentWorkflowStage({
+      agentId: created.agent.id,
+      stageIndex: 0,
+      workflowId: started.workflow.workflowId,
+    });
+    if (!dispatched.ok) throw new Error("Expected Workflow checkpoint Run.");
+    const run = await terminalRun(controlPlane, authority, dispatched.runId);
+    const inspected = await controlPlane.inspectRun(authority, { runId: dispatched.runId });
+
+    expect(run.status).toBe("completed");
+    expect(inspected).toMatchObject({ ok: true });
+    if (!inspected.ok) throw new Error("Expected completed Workflow checkpoint Run inspection.");
+    expect(inspected.timeline).toEqual(
+      expect.arrayContaining([expect.objectContaining({ event: "tool.authorization_allowed" })]),
+    );
+    await expect(
+      controlPlane.completeAgentWorkflowStage({
+        agentId: created.agent.id,
+        runId: dispatched.runId,
+        stageIndex: 0,
+        workflowId: started.workflow.workflowId,
+      }),
+    ).resolves.toMatchObject({ ok: true, status: "waiting", workflowStatus: "waiting" });
+    await expect(
+      controlPlane.inspectAgentWorkflow(authority, {
+        workflowId: started.workflow.workflowId,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      workflow: {
+        currentStage: {
+          deferral: { lastReason: "fixture_processing" },
+          status: "waiting",
+        },
+        status: "waiting",
+      },
+    });
+  });
+
   it("coordinates two admitted Runs through one exact durable Session", async () => {
     const authority = await authorityFor("agent-workflow-901");
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
@@ -368,7 +456,7 @@ describe("Agent workflows", () => {
     if (!second.ok) {
       throw new Error("Expected the second workflow stage Run.");
     }
-    const finalRun = await terminalRun(controlPlane, authority, second.runId);
+    const finalRun = await completedRunWithOutput(controlPlane, authority, second.runId);
     const completion = {
       agentId: created.agent.id,
       runId: second.runId,
@@ -426,6 +514,210 @@ describe("Agent workflows", () => {
       ok: true,
       runs: [{ trigger: "workflow" }, { trigger: "workflow" }],
     });
+  });
+
+  it("records a durable stage delay, denies early dispatch, and cancels while sleeping", async () => {
+    const authority = await authorityFor("agent-workflow-delay-902");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("workflow-delay-agent-902"),
+    );
+    if (!created.ok) throw new Error("Expected delayed Workflow Agent fixture.");
+    await enableSessions(authority.ownerKey, created.agent.id);
+
+    const started = await controlPlane.startAgentWorkflow(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "workflow-delay-902",
+      objective: "Start asynchronous work and finish after a durable delay.",
+      stages: [
+        {
+          delayBeforeSeconds: 30,
+          name: "Start",
+          prompt: "Start the asynchronous work.",
+        },
+        { name: "Finish", prompt: "Finish the asynchronous work." },
+      ],
+    });
+    if (!started.ok) throw new Error("Expected delayed Workflow fixture.");
+
+    const prepared = await controlPlane.prepareAgentWorkflowStage({
+      agentId: created.agent.id,
+      stageIndex: 0,
+      workflowId: started.workflow.workflowId,
+    });
+    expect(prepared).toMatchObject({ ok: true, waitingUntil: expect.any(String) });
+    await expect(
+      controlPlane.prepareAgentWorkflowStage({
+        agentId: created.agent.id,
+        stageIndex: 0,
+        workflowId: started.workflow.workflowId,
+      }),
+    ).resolves.toEqual(prepared);
+    await expect(
+      controlPlane.dispatchAgentWorkflowStage({
+        agentId: created.agent.id,
+        stageIndex: 0,
+        workflowId: started.workflow.workflowId,
+      }),
+    ).resolves.toMatchObject({ error: { code: "workflow_busy" }, ok: false });
+
+    const waiting = await controlPlane.inspectAgentWorkflow(authority, {
+      workflowId: started.workflow.workflowId,
+    });
+    expect(waiting).toMatchObject({
+      ok: true,
+      workflow: {
+        currentRunId: null,
+        currentStage: { delayBeforeSeconds: 30, index: 0, status: "pending" },
+        status: "waiting",
+        waitingUntil: prepared.ok ? prepared.waitingUntil : null,
+      },
+    });
+    if (!waiting.ok) throw new Error("Expected delayed Workflow inspection.");
+
+    const cancellation = await controlPlane.cancelAgentWorkflow(authority, {
+      expectedRevision: waiting.workflow.revision,
+      workflowId: started.workflow.workflowId,
+    });
+    if (!cancellation.ok) {
+      throw new Error(`Expected delayed Workflow cancellation: ${JSON.stringify(cancellation)}`);
+    }
+    expect(cancellation).toMatchObject({
+      cancelled: true,
+      ok: true,
+      workflow: { status: "cancelled" },
+    });
+  });
+
+  it("checkpoints a deferrable stage and resumes it as a fresh bounded Run", async () => {
+    const authority = await authorityFor("agent-workflow-deferral");
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await controlPlane.createAgent(
+      authority,
+      agentInput("workflow-deferral-agent"),
+    );
+    if (!created.ok) throw new Error("Expected deferrable Workflow Agent fixture.");
+    await enableSessions(authority.ownerKey, created.agent.id);
+
+    const started = await controlPlane.startAgentWorkflow(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "workflow-deferral-start",
+      objective: "Wait for one external estimate, then finish the proposal.",
+      stages: [
+        {
+          deferral: { maxWaitSeconds: 3_600 },
+          name: "Wait for estimate",
+          prompt: SLOW_TEST_PROMPT,
+        },
+        { name: "Finish proposal", prompt: "Finish the proposal." },
+      ],
+    });
+    if (!started.ok) throw new Error("Expected deferrable Workflow fixture.");
+
+    const first = await controlPlane.dispatchAgentWorkflowStage({
+      agentId: created.agent.id,
+      stageIndex: 0,
+      workflowId: started.workflow.workflowId,
+    });
+    if (!first.ok) throw new Error("Expected first deferrable Workflow attempt.");
+    expect(first.attempt).toBe(1);
+    await expect(
+      controlPlane.checkpointAgentWorkflowStage({
+        checkpoint: { afterSeconds: 30, reason: "estimate_processing", state: "wait" },
+        runId: first.runId,
+      }),
+    ).resolves.toEqual({ checkpointed: true, ok: true });
+    const checkpointResumeAt = await runInDurableObject(controlPlane, (_instance, state) =>
+      Number(
+        state.storage.sql
+          .exec(
+            "SELECT checkpoint_resume_at AS resumeAt FROM agent_workflow_stages WHERE workflow_id = ? AND stage_index = 0",
+            started.workflow.workflowId,
+          )
+          .one().resumeAt,
+      ),
+    );
+    const firstSession = env.CREW_SESSION.getByName(
+      crewSessionObjectName({
+        agentId: created.agent.id,
+        ownerKey: authority.ownerKey,
+        sessionId: first.session.sessionId,
+      }),
+    );
+    await drainSlowSessionRun(firstSession, first.runId);
+    await terminalRun(controlPlane, authority, first.runId);
+    const deferred = await controlPlane.completeAgentWorkflowStage({
+      agentId: created.agent.id,
+      runId: first.runId,
+      stageIndex: 0,
+      workflowId: started.workflow.workflowId,
+    });
+    expect(deferred).toMatchObject({
+      attempt: 1,
+      ok: true,
+      status: "waiting",
+      waitingUntil: new Date(checkpointResumeAt).toISOString(),
+    });
+    await runInDurableObject(controlPlane, async (instance, state) => {
+      await state.storage.deleteAlarm();
+      await instance.alarm();
+      expect(await state.storage.getAlarm()).toBe(checkpointResumeAt);
+    });
+
+    const waiting = await controlPlane.inspectAgentWorkflow(authority, {
+      workflowId: started.workflow.workflowId,
+    });
+    expect(waiting).toMatchObject({
+      ok: true,
+      workflow: {
+        currentStage: {
+          attempts: 1,
+          deferral: { lastReason: "estimate_processing" },
+          status: "waiting",
+        },
+        status: "waiting",
+      },
+    });
+
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      const past = Date.now() - 1;
+      state.storage.sql.exec(
+        "UPDATE agent_workflows SET waiting_until = ? WHERE workflow_id = ?",
+        past,
+        started.workflow.workflowId,
+      );
+      state.storage.sql.exec(
+        "UPDATE agent_workflow_stages SET next_attempt_at = ? WHERE workflow_id = ? AND stage_index = 0",
+        past,
+        started.workflow.workflowId,
+      );
+    });
+    const second = await controlPlane.dispatchAgentWorkflowStage({
+      agentId: created.agent.id,
+      stageIndex: 0,
+      workflowId: started.workflow.workflowId,
+    });
+    if (!second.ok) throw new Error("Expected resumed Workflow attempt.");
+    expect(second).toMatchObject({ attempt: 2, session: { branchRevision: 2 } });
+    await expect(
+      controlPlane.checkpointAgentWorkflowStage({
+        checkpoint: { state: "done" },
+        runId: second.runId,
+      }),
+    ).resolves.toEqual({ checkpointed: true, ok: true });
+    await drainSlowSessionRun(firstSession, second.runId);
+    await terminalRun(controlPlane, authority, second.runId);
+    await expect(
+      controlPlane.completeAgentWorkflowStage({
+        agentId: created.agent.id,
+        runId: second.runId,
+        stageIndex: 0,
+        workflowId: started.workflow.workflowId,
+      }),
+    ).resolves.toMatchObject({ ok: true, status: "completed", workflowStatus: "running" });
   });
 
   it("applies a frozen JSON contract only to the final Workflow deliverable", async () => {
@@ -952,30 +1244,79 @@ describe("Agent workflows", () => {
       idempotencyKey: "workflow-delete-recovery-905",
       objective: "Retain a deletion receipt without retaining the Workflow.",
       stages: [
-        { name: "One", prompt: "Complete the first stage." },
+        {
+          deferral: { maxWaitSeconds: 3_600 },
+          name: "One",
+          prompt: "Complete the first stage after its external work is ready.",
+        },
         { name: "Two", prompt: "Complete the second stage." },
       ],
     };
     const started = await controlPlane.startAgentWorkflow(authority, plan);
     if (!started.ok) throw new Error("Expected deletion recovery Workflow fixture.");
 
-    let sessionId: string | undefined;
-    for (const stageIndex of [0, 1]) {
-      const dispatched = await controlPlane.dispatchAgentWorkflowStage({
-        agentId: created.agent.id,
-        stageIndex,
-        workflowId: started.workflow.workflowId,
-      });
-      if (!dispatched.ok) throw new Error("Expected deletion recovery stage Run.");
-      sessionId = dispatched.session.sessionId;
-      await terminalRun(controlPlane, authority, dispatched.runId);
-      await controlPlane.completeAgentWorkflowStage({
-        agentId: created.agent.id,
-        runId: dispatched.runId,
-        stageIndex,
-        workflowId: started.workflow.workflowId,
-      });
-    }
+    const firstAttempt = await controlPlane.dispatchAgentWorkflowStage({
+      agentId: created.agent.id,
+      stageIndex: 0,
+      workflowId: started.workflow.workflowId,
+    });
+    if (!firstAttempt.ok) throw new Error("Expected first deletion recovery stage attempt.");
+    await controlPlane.checkpointAgentWorkflowStage({
+      checkpoint: { afterSeconds: 30, reason: "fixture_processing", state: "wait" },
+      runId: firstAttempt.runId,
+    });
+    await terminalRun(controlPlane, authority, firstAttempt.runId);
+    await controlPlane.completeAgentWorkflowStage({
+      agentId: created.agent.id,
+      runId: firstAttempt.runId,
+      stageIndex: 0,
+      workflowId: started.workflow.workflowId,
+    });
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      const past = Date.now() - 1;
+      state.storage.sql.exec(
+        "UPDATE agent_workflows SET waiting_until = ? WHERE workflow_id = ?",
+        past,
+        started.workflow.workflowId,
+      );
+      state.storage.sql.exec(
+        "UPDATE agent_workflow_stages SET next_attempt_at = ? WHERE workflow_id = ? AND stage_index = 0",
+        past,
+        started.workflow.workflowId,
+      );
+    });
+    const secondAttempt = await controlPlane.dispatchAgentWorkflowStage({
+      agentId: created.agent.id,
+      stageIndex: 0,
+      workflowId: started.workflow.workflowId,
+    });
+    if (!secondAttempt.ok) throw new Error("Expected resumed deletion recovery stage attempt.");
+    await controlPlane.checkpointAgentWorkflowStage({
+      checkpoint: { state: "done" },
+      runId: secondAttempt.runId,
+    });
+    await terminalRun(controlPlane, authority, secondAttempt.runId);
+    await controlPlane.completeAgentWorkflowStage({
+      agentId: created.agent.id,
+      runId: secondAttempt.runId,
+      stageIndex: 0,
+      workflowId: started.workflow.workflowId,
+    });
+
+    const finalStage = await controlPlane.dispatchAgentWorkflowStage({
+      agentId: created.agent.id,
+      stageIndex: 1,
+      workflowId: started.workflow.workflowId,
+    });
+    if (!finalStage.ok) throw new Error("Expected final deletion recovery stage Run.");
+    const sessionId = finalStage.session.sessionId;
+    await terminalRun(controlPlane, authority, finalStage.runId);
+    await controlPlane.completeAgentWorkflowStage({
+      agentId: created.agent.id,
+      runId: finalStage.runId,
+      stageIndex: 1,
+      workflowId: started.workflow.workflowId,
+    });
     if (sessionId === undefined) throw new Error("Expected Workflow-owned Session.");
     const terminal = await controlPlane.inspectAgentWorkflow(authority, {
       workflowId: started.workflow.workflowId,
@@ -1012,6 +1353,15 @@ describe("Agent workflows", () => {
       controlPlane.inspectAgentWorkflow(authority, { workflowId: started.workflow.workflowId }),
     ).resolves.toMatchObject({ error: { code: "workflow_not_found" }, ok: false });
     await expect(env.SKILL_PACKAGES.head(deliverableObjectKey)).resolves.toBeNull();
+    await runInDurableObject(controlPlane, (_instance, state) => {
+      const retained = state.storage.sql
+        .exec(
+          "SELECT count(*) AS count FROM run_admissions WHERE client_id = ? AND brief_context IS NOT NULL",
+          `crewhelm:workflow:${started.workflow.workflowId}`,
+        )
+        .one().count;
+      expect(retained).toBe(0);
+    });
     await expect(controlPlane.deleteAgentWorkflow(authority, deletion)).resolves.toEqual({
       deleted: true,
       ok: true,

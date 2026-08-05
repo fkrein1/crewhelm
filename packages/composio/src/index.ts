@@ -346,6 +346,7 @@ export function createComposioCatalog(options: ComposioCatalogOptions): Composio
 
 export {
   createComposioRuntime,
+  isComposioFileStagingError,
   type ComposioConnectionVerificationResult,
   type ComposioRuntime,
   type ComposioRuntimeOptions,

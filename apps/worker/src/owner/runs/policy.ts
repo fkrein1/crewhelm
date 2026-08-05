@@ -10,8 +10,11 @@ import {
 const LOCAL_DECISION_TTL_MS = 30 * 1_000;
 const MAXIMUM_POLICY_SNAPSHOT_AGE_MS = 5 * 1_000;
 
-function deny(reason: Extract<ToolGateDecision, { decision: "deny" }>["reason"]): ToolGateDecision {
-  return { decision: "deny", reason };
+function deny(
+  reason: Extract<ToolGateDecision, { decision: "deny" }>["reason"],
+  details?: Extract<ToolGateDecision, { decision: "deny" }>["details"],
+): ToolGateDecision {
+  return { decision: "deny", ...(details === undefined ? {} : { details }), reason };
 }
 
 function hasMatchingBinding(
@@ -158,30 +161,85 @@ async function evaluateComposioToolActionWithApproval(
     policy.activeGrantCalls >=
     Math.min(grant.limits.maxConcurrency, policy.limits.maxConcurrencyPerGrant)
   ) {
-    return deny("concurrency_exhausted");
+    return deny("concurrency_exhausted", {
+      active: policy.activeGrantCalls,
+      kind: "concurrency",
+      limit: Math.min(grant.limits.maxConcurrency, policy.limits.maxConcurrencyPerGrant),
+    });
   }
 
   if (policy.sameToolInputCallsUsed >= policy.limits.duplicateToolCallLimit) {
-    return deny("loop_detected");
+    return deny("loop_detected", {
+      calls: policy.sameToolInputCallsUsed,
+      kind: "duplicate_calls",
+      limit: policy.limits.duplicateToolCallLimit,
+    });
   }
 
-  if (
-    policy.fleetCallsPerDayUsed >= policy.limits.callsPerDay ||
-    policy.fleetCallsPerThirtyDaysUsed >= policy.limits.callsPerThirtyDays
-  ) {
-    return deny("rate_exhausted");
+  if (policy.fleetCallsPerDayUsed >= policy.limits.callsPerDay) {
+    return deny("rate_exhausted", {
+      dimension: "fleet_calls_per_day",
+      kind: "rate",
+      limit: policy.limits.callsPerDay,
+      used: policy.fleetCallsPerDayUsed,
+    });
   }
 
-  if (
-    policy.remainingToolCalls === 0 ||
-    policy.grantCallsUsed >=
-      Math.min(grant.limits.maxCallsPerRun, policy.limits.maxCallsPerToolPerRun) ||
-    policy.remainingDurationMs === 0 ||
-    policy.remainingOutputBytes === 0 ||
-    action.estimatedCostMicrousd > policy.remainingCostMicrousd ||
-    action.estimatedCostMicrousd > grant.limits.maxCostMicrousdPerCall
-  ) {
-    return deny("budget_exhausted");
+  if (policy.fleetCallsPerThirtyDaysUsed >= policy.limits.callsPerThirtyDays) {
+    return deny("rate_exhausted", {
+      dimension: "fleet_calls_per_thirty_days",
+      kind: "rate",
+      limit: policy.limits.callsPerThirtyDays,
+      used: policy.fleetCallsPerThirtyDaysUsed,
+    });
+  }
+
+  if (policy.remainingToolCalls === 0) {
+    return deny("budget_exhausted", {
+      dimension: "run_tool_calls",
+      kind: "budget",
+      limit: policy.toolCallsUsed,
+      used: policy.toolCallsUsed,
+    });
+  }
+
+  const grantCallLimit = Math.min(grant.limits.maxCallsPerRun, policy.limits.maxCallsPerToolPerRun);
+  if (policy.grantCallsUsed >= grantCallLimit) {
+    return deny("budget_exhausted", {
+      dimension: "grant_tool_calls",
+      kind: "budget",
+      limit: grantCallLimit,
+      used: policy.grantCallsUsed,
+    });
+  }
+
+  if (policy.remainingDurationMs === 0) {
+    return deny("budget_exhausted", {
+      dimension: "run_duration_ms",
+      kind: "budget",
+      limit: policy.durationLimitMs,
+      used: policy.durationLimitMs,
+    });
+  }
+
+  if (policy.remainingOutputBytes === 0) {
+    return deny("budget_exhausted", {
+      dimension: "tool_output_bytes",
+      kind: "budget",
+      limit: grant.limits.maxOutputBytes,
+      used: grant.limits.maxOutputBytes,
+    });
+  }
+
+  const costLimit = Math.min(policy.remainingCostMicrousd, grant.limits.maxCostMicrousdPerCall);
+  if (action.estimatedCostMicrousd > costLimit) {
+    return deny("budget_exhausted", {
+      dimension: "tool_cost_microusd",
+      kind: "budget",
+      limit: costLimit,
+      requested: action.estimatedCostMicrousd,
+      used: 0,
+    });
   }
 
   if (

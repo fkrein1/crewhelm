@@ -45,6 +45,9 @@ survive an MCP disconnect. Crewhelm freezes the objective, stages, Agent revisio
 aggregate budget, and retention before starting. Each stage is still admitted as a normal Run.
 
 A Workflow coordinates; it does not grant authority, add stages, or interpret output as policy.
+An explicitly deferrable stage can checkpoint while external work is pending. The checkpoint ends
+the current Run; Crewhelm sleeps durably and later admits a fresh bounded Run for the same stage and
+Workflow-owned Session. The Workflow's elapsed-time, deferral, and aggregate limits still apply.
 
 ## Schedules and Event Triggers start fresh work
 

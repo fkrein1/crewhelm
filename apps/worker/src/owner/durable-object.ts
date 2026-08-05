@@ -102,11 +102,13 @@ import {
   type RetireAgentBlueprintResult,
   type DeleteAgentSessionResult,
   type CancelAgentWorkflowResult,
+  type CheckpointAgentWorkflowStageResult,
   type CompleteAgentWorkflowStageResult,
   type DeleteAgentWorkflowResult,
   type DispatchAgentWorkflowStageResult,
   type InspectAgentWorkflowResult,
   type ListAgentWorkflowsResult,
+  type PrepareAgentWorkflowStageResult,
   type StartAgentWorkflowResult,
   type CreateBriefResult,
   type ReviseBriefResult,
@@ -1140,6 +1142,18 @@ export class OwnerControlPlane extends DurableObject {
     return this.#migrationReady
       ? this.#workflows.dispatch(input)
       : Promise.resolve(deniedAgentWorkflow("incompatible_schema"));
+  }
+
+  prepareAgentWorkflowStage(input: unknown): PrepareAgentWorkflowStageResult {
+    return this.#migrationReady
+      ? this.#workflows.prepareStage(input)
+      : deniedAgentWorkflow("incompatible_schema");
+  }
+
+  checkpointAgentWorkflowStage(input: unknown): CheckpointAgentWorkflowStageResult {
+    return this.#migrationReady
+      ? this.#workflows.checkpoint(input)
+      : deniedAgentWorkflow("incompatible_schema");
   }
 
   completeAgentWorkflowStage(input: unknown): Promise<CompleteAgentWorkflowStageResult> {

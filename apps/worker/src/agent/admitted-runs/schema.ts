@@ -242,6 +242,7 @@ export const admittedTurnMetadataSchema = z.strictObject({
     runId: runIdSchema,
     session: runSessionSchema.optional(),
     sessionContext: admittedRunRecordSchema.shape.sessionContext,
+    trigger: runTriggerSchema.default("manual"),
   }),
 });
 

@@ -36,9 +36,10 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
     "Resolve auth readiness, reuse an owner-held config, create credential-free or managed auth, or return a Crewhelm setup link for reusable app credentials.",
   event_history: "List bounded delivery history for one exact Event Trigger.",
   event_sources: "List Event Trigger sources available through one exact Connection.",
-  grant_provider_actions: "Grant one Agent revision selected actions from one provider Connection.",
+  grant_provider_actions:
+    "Replace the selected actions for one provider Connection and return the new Agent revision.",
   grant_remote_mcp:
-    "Grant one Agent revision selected tools from one remote MCP Connection snapshot.",
+    "Replace the frozen tools for one remote MCP Connection and return the new Agent revision.",
   inbox_overview: "Summarize matching inbox items without returning individual previews.",
   inspect_action: "Inspect the exact parameter schema for one provider action version.",
   inspect_blueprint: "Inspect one exact Agent blueprint package version.",

@@ -9,6 +9,7 @@ import {
   createComposioCatalog,
   createComposioConnectionLinks,
   createComposioRuntime,
+  isComposioFileStagingError,
 } from "./index.js";
 
 function catalogResponse(body: unknown, init?: ResponseInit): Response {
@@ -746,6 +747,48 @@ describe("Composio runtime adapter", () => {
     );
   });
 
+  it("exposes a bounded public HTTPS source for provider-uploadable file inputs", () => {
+    const runtime = createComposioRuntime({ apiKey: "composio-project-secret" });
+    const schema = runtime.createInputSchema(
+      JSON.stringify({
+        properties: {
+          attachment: {
+            additionalProperties: false,
+            file_uploadable: true,
+            properties: {
+              mimetype: { type: "string" },
+              name: { type: "string" },
+              s3key: { type: "string" },
+            },
+            required: ["mimetype", "name", "s3key"],
+            type: "object",
+          },
+        },
+        required: ["attachment"],
+        type: "object",
+      }),
+    );
+
+    expect(
+      schema.safeParse({
+        attachment: {
+          mimetype: "application/pdf",
+          name: "proposal.pdf",
+          source_url: "https://assets.example.com/proposal.pdf?signature=retained",
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      schema.safeParse({
+        attachment: {
+          mimetype: "application/pdf",
+          name: "../proposal.pdf",
+          source_url: "https://assets.example.com/proposal.pdf",
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts an empty provider root object schema", () => {
     const runtime = createComposioRuntime({ apiKey: "composio-project-secret" });
     const schema = runtime.createInputSchema(
@@ -975,6 +1018,252 @@ describe("Composio runtime adapter", () => {
     });
   });
 
+  it("stages a public HTTPS file before executing a provider file action", async () => {
+    const apiKey = "composio-project-secret";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response("%PDF-demo", {
+          headers: { "content-length": "9", "content-type": "application/pdf" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        catalogResponse({
+          key: "uploads/proposal.pdf",
+          new_presigned_url: "https://uploads.example.com/proposal.pdf?signature=private",
+          type: "new",
+        }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(
+        catalogResponse({ data: { draftId: "draft-1" }, error: null, successful: true }),
+      );
+    const receiverSensitiveFetch = new Proxy(fetchMock, {
+      apply(target, thisArgument, argumentsList) {
+        if (thisArgument !== undefined) throw new TypeError("Illegal invocation");
+        return Reflect.apply(target, undefined, argumentsList);
+      },
+    });
+    const result = await createComposioRuntime({ apiKey, fetch: receiverSensitiveFetch }).execute({
+      arguments: {
+        attachment: {
+          mimetype: "application/pdf",
+          name: "proposal.pdf",
+          source_url: "https://assets.example.com/proposal.pdf?signature=retained",
+        },
+        subject: "Proposal",
+      },
+      maximumOutputBytes: 64_000,
+      providerConnectionId: "ca_project_123",
+      signal: new AbortController().signal,
+      timeoutMs: 20_000,
+      toolkitSlug: "gmail",
+      toolkitVersion: "20260727_00",
+      toolSlug: "GMAIL_CREATE_EMAIL_DRAFT",
+      userId: "owner_1111111111111111111111111111111111111111111",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    const sourceRequest = fetchMock.mock.calls[0]?.[0];
+    if (!(sourceRequest instanceof Request)) throw new TypeError("Expected a source Request.");
+    expect(sourceRequest.url).toBe("https://assets.example.com/proposal.pdf?signature=retained");
+    expect(sourceRequest).toMatchObject({ method: "GET", redirect: "manual" });
+    const uploadRequest = fetchMock.mock.calls[1];
+    expect(uploadRequest?.[0]).toBe("https://backend.composio.dev/api/v3.1/files/upload/request");
+    if (typeof uploadRequest?.[1]?.body !== "string") {
+      throw new TypeError("Expected a serialized upload request.");
+    }
+    expect(JSON.parse(uploadRequest[1].body)).toEqual({
+      filename: "proposal.pdf",
+      md5: "28c30d1a9cfbafbe8cb140816b4fe8ea",
+      mimetype: "application/pdf",
+      toolkit_slug: "gmail",
+      tool_slug: "GMAIL_CREATE_EMAIL_DRAFT",
+    });
+    const execution = fetchMock.mock.calls[3];
+    if (typeof execution?.[1]?.body !== "string") {
+      throw new TypeError("Expected a serialized execution request.");
+    }
+    expect(JSON.parse(execution[1].body).arguments).toEqual({
+      attachment: {
+        mimetype: "application/pdf",
+        name: "proposal.pdf",
+        s3key: "uploads/proposal.pdf",
+      },
+      subject: "Proposal",
+    });
+    expect(JSON.stringify(execution)).not.toContain("signature=retained");
+    expect(result).toEqual({ draftId: "draft-1" });
+  });
+
+  it("passes presigned source and upload URLs to fetch byte-for-byte", async () => {
+    const sourceUrl =
+      "https://assets.example.com/proposal.pdf?X-Amz-Credential=a%2Fb%2Fc&X-Amz-Signature=A+B";
+    const uploadUrl =
+      "https://uploads.example.com/proposal.pdf?X-Amz-Credential=d%2Fe%2Ff&X-Amz-Signature=C+D";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response("%PDF-demo", { headers: { "content-type": "application/pdf" } }),
+      )
+      .mockResolvedValueOnce(
+        catalogResponse({ key: "uploads/proposal.pdf", new_presigned_url: uploadUrl, type: "new" }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(
+        catalogResponse({ data: { draftId: "draft-1" }, error: null, successful: true }),
+      );
+
+    await createComposioRuntime({ apiKey: "composio-project-secret", fetch: fetchMock }).execute({
+      arguments: {
+        attachment: { mimetype: "application/pdf", name: "proposal.pdf", source_url: sourceUrl },
+      },
+      maximumOutputBytes: 64_000,
+      providerConnectionId: "ca_project_123",
+      signal: new AbortController().signal,
+      timeoutMs: 20_000,
+      toolkitSlug: "gmail",
+      toolkitVersion: "20260727_00",
+      toolSlug: "GMAIL_CREATE_EMAIL_DRAFT",
+      userId: "owner_1111111111111111111111111111111111111111111",
+    });
+
+    const sourceRequest = fetchMock.mock.calls[0]?.[0];
+    const uploadRequest = fetchMock.mock.calls[2]?.[0];
+    if (!(sourceRequest instanceof Request) || !(uploadRequest instanceof Request)) {
+      throw new TypeError("Expected exact file Requests.");
+    }
+    expect(sourceRequest.url).toBe(sourceUrl);
+    expect(uploadRequest.url).toBe(uploadUrl);
+  });
+
+  it("reports a bounded Worker request-context download failure", async () => {
+    const onResponse = vi.fn<(event: unknown) => void>();
+    const runtime = createComposioRuntime({
+      apiKey: "composio-project-secret",
+      fetch: vi
+        .fn<typeof fetch>()
+        .mockRejectedValue(new TypeError("Cannot perform I/O on behalf of a different request.")),
+      onResponse,
+    });
+
+    const failure = await runtime
+      .execute({
+        arguments: {
+          attachment: {
+            mimetype: "application/pdf",
+            name: "proposal.pdf",
+            source_url: "https://files.example.com/proposal.pdf",
+          },
+        },
+        maximumOutputBytes: 64_000,
+        providerConnectionId: "ca_project_123",
+        signal: new AbortController().signal,
+        timeoutMs: 20_000,
+        toolkitSlug: "gmail",
+        toolkitVersion: "20260727_00",
+        toolSlug: "GMAIL_CREATE_EMAIL_DRAFT",
+        userId: "owner_1111111111111111111111111111111111111111111",
+      })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(isComposioFileStagingError(failure)).toBe(true);
+    expect(failure).toMatchObject({ message: "Composio file staging failed." });
+    expect(onResponse).toHaveBeenCalledExactlyOnceWith({
+      durationMs: expect.any(Number),
+      operation: "stage_file",
+      outcome: "source_download_request_context",
+      status: null,
+      toolSlug: "GMAIL_CREATE_EMAIL_DRAFT",
+    });
+    expect(JSON.stringify(onResponse.mock.calls)).not.toContain("different request");
+  });
+
+  it("retries one generic source download transport failure before staging", async () => {
+    const sourceUrl = "https://files.example.com/proposal.pdf";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new TypeError("Network connection lost"))
+      .mockResolvedValueOnce(
+        new Response("%PDF-demo", { headers: { "content-type": "application/pdf" } }),
+      )
+      .mockResolvedValueOnce(
+        catalogResponse({
+          key: "uploads/proposal.pdf",
+          new_presigned_url: undefined,
+          type: "existing",
+        }),
+      )
+      .mockResolvedValueOnce(
+        catalogResponse({ data: { draftId: "draft-1" }, error: null, successful: true }),
+      );
+
+    const result = await createComposioRuntime({
+      apiKey: "composio-project-secret",
+      fetch: fetchMock,
+    }).execute({
+      arguments: {
+        attachment: {
+          mimetype: "application/pdf",
+          name: "proposal.pdf",
+          source_url: sourceUrl,
+        },
+      },
+      maximumOutputBytes: 64_000,
+      providerConnectionId: "ca_project_123",
+      signal: new AbortController().signal,
+      timeoutMs: 20_000,
+      toolkitSlug: "gmail",
+      toolkitVersion: "20260727_00",
+      toolSlug: "GMAIL_CREATE_EMAIL_DRAFT",
+      userId: "owner_1111111111111111111111111111111111111111111",
+    });
+
+    const firstRequest = fetchMock.mock.calls[0]?.[0];
+    const secondRequest = fetchMock.mock.calls[1]?.[0];
+    if (!(firstRequest instanceof Request) || !(secondRequest instanceof Request)) {
+      throw new TypeError("Expected retried source Requests.");
+    }
+    expect(firstRequest.url).toBe(sourceUrl);
+    expect(secondRequest.url).toBe(sourceUrl);
+    expect(result).toEqual({ draftId: "draft-1" });
+  });
+
+  it("rejects private and redirected file sources before provider execution", async () => {
+    for (const [sourceUrl, sourceResponse] of [
+      ["https://127.0.0.1/proposal.pdf", undefined],
+      ["https://assets.example.com/proposal.pdf", new Response(null, { status: 302 })],
+    ] as const) {
+      const fetchMock = vi.fn<typeof fetch>();
+      if (sourceResponse !== undefined) fetchMock.mockResolvedValue(sourceResponse);
+      const runtime = createComposioRuntime({
+        apiKey: "composio-project-secret",
+        fetch: fetchMock,
+      });
+
+      await expect(
+        runtime.execute({
+          arguments: {
+            attachment: {
+              mimetype: "application/pdf",
+              name: "proposal.pdf",
+              source_url: sourceUrl,
+            },
+          },
+          maximumOutputBytes: 64_000,
+          providerConnectionId: "ca_project_123",
+          signal: new AbortController().signal,
+          timeoutMs: 20_000,
+          toolkitSlug: "gmail",
+          toolkitVersion: "20260727_00",
+          toolSlug: "GMAIL_CREATE_EMAIL_DRAFT",
+          userId: "owner_1111111111111111111111111111111111111111111",
+        }),
+      ).rejects.toThrow("Composio file staging failed.");
+      expect(fetchMock).toHaveBeenCalledTimes(sourceResponse === undefined ? 0 : 1);
+    }
+  });
+
   it("reports a bounded provider rejection without response content", async () => {
     const secret = "provider-secret-that-must-not-be-logged";
     const onResponse = vi.fn<(event: unknown) => void>();
@@ -1006,6 +1295,48 @@ describe("Composio runtime adapter", () => {
       toolSlug: "PROJECT_TOOLKIT_READ_ITEM",
     });
     expect(JSON.stringify(onResponse.mock.calls)).not.toContain(secret);
+  });
+
+  it("omits empty Slack alternative-content fields before provider execution", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        catalogResponse({ data: { ok: true, ts: "1785680000.000001" }, successful: true }),
+      );
+
+    await createComposioRuntime({
+      apiKey: "composio-project-secret",
+      fetch: fetchMock,
+    }).execute({
+      arguments: {
+        blocks: [],
+        channel: "C0123456789",
+        fallback_text: "",
+        markdown_text: "Proposal ready",
+        reply_broadcast: false,
+        thread_ts: "",
+        unfurl_links: false,
+        unfurl_media: false,
+      },
+      maximumOutputBytes: 64_000,
+      providerConnectionId: "ca_project_123",
+      signal: new AbortController().signal,
+      timeoutMs: 20_000,
+      toolkitSlug: "slack",
+      toolkitVersion: "20260721_00",
+      toolSlug: "SLACK_SEND_MESSAGE",
+      userId: "owner_1111111111111111111111111111111111111111111",
+    });
+
+    const body = fetchMock.mock.calls[0]?.[1]?.body;
+    if (typeof body !== "string") throw new TypeError("Expected a serialized Slack request.");
+    expect(JSON.parse(body).arguments).toEqual({
+      channel: "C0123456789",
+      markdown_text: "Proposal ready",
+      reply_broadcast: false,
+      unfurl_links: false,
+      unfurl_media: false,
+    });
   });
 
   it("reports only structured provider error identifiers", async () => {

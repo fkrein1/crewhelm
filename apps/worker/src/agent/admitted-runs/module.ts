@@ -23,6 +23,8 @@ import {
   runSessionSchema,
   runTimelineEventSchema,
   completeToolExecutionResultSchema,
+  checkpointAgentWorkflowStageInputSchema,
+  checkpointAgentWorkflowStageResultSchema,
   evaluateToolExecutionResultSchema,
   executeRemoteMcpToolResultSchema,
   reserveToolExecutionResultSchema,
@@ -50,6 +52,8 @@ import {
   type ClassifiedExternalToolAction,
   type ExternalToolCapabilityGrant,
   type ToolExecutionPermit,
+  type ToolGateDenialDetails,
+  type ToolGateDecision,
   type PendingToolApproval,
   type RecordAgentInboxRunInput,
   type ToolAuthorizationTimelineEvent,
@@ -68,7 +72,7 @@ import {
   type RuntimeToolExecutionPermit,
   type VerifyActiveRunAdmissionInput,
 } from "@crewhelm/contracts";
-import { createComposioRuntime } from "@crewhelm/composio";
+import { createComposioRuntime, isComposioFileStagingError } from "@crewhelm/composio";
 import { getSandbox, type ExecutionResult } from "@cloudflare/sandbox";
 import {
   Think,
@@ -161,6 +165,7 @@ const RUN_RECORD_PREFIX = "crewhelm:run:";
 const SESSION_RUN_DRAINED_PREFIX = "crewhelm:session-run-drained:";
 const SESSION_RUN_RESTART_PREFIX = "crewhelm:session-run-restart:";
 const SESSION_RUN_TERMINAL_PREFIX = "crewhelm:session-run-terminal:";
+const WORKFLOW_STAGE_CHECKPOINT_PREFIX = "crewhelm:workflow-stage-checkpoint:";
 const RUN_TRACE_PREFIX = "crewhelm:run-trace:";
 const RUN_OUTPUT_PREFIX = "crewhelm:run-output:";
 const RUN_OUTPUT_MESSAGE_PREFIX = "crewhelm:run-output-message:";
@@ -174,6 +179,8 @@ const MAXIMUM_RUN_OUTPUT_PARTS = 256;
 const EXECUTION_OUTCOME_PREFIX = "[execute tool]";
 const EXECUTION_OUTCOME_MARKER = " Outcome: ";
 const SANDBOX_CODE_TOOL_NAME = "sandbox_run_code";
+const WORKFLOW_STAGE_CHECKPOINT_TOOL_NAME = "workflow_stage_checkpoint";
+const WORKFLOW_STAGE_CHECKPOINT_PERMISSION = "workflow.stage.checkpoint";
 const WEB_FETCH_TOOL_NAME = "web_fetch_source";
 const WEB_SEARCH_TOOL_NAME = "web_search";
 const INVALID_RUN_ADMISSION = {
@@ -183,6 +190,62 @@ const INVALID_RUN_ADMISSION = {
   },
   ok: false,
 } as const;
+
+export function toolGateDenialMessage(
+  reason: Extract<ToolGateDecision, { decision: "deny" }>["reason"],
+  details?: ToolGateDenialDetails,
+): string {
+  if (details?.kind === "concurrency") {
+    return `Tool call temporarily blocked because this grant has ${details.active}/${details.limit} active calls. Retry after another call completes.`;
+  }
+  if (details?.kind === "duplicate_calls") {
+    return `Repeated identical tool-call limit reached (${details.calls}/${details.limit}). Use the existing result or change the arguments; do not repeat the same call.`;
+  }
+  if (details?.kind === "rate") {
+    const window = details.dimension === "fleet_calls_per_day" ? "daily" : "thirty-day";
+    return `Fleet ${window} integration-call limit reached (${details.used}/${details.limit}). Do not retry until the usage window resets or the owner raises the limit.`;
+  }
+  if (details?.kind === "budget") {
+    switch (details.dimension) {
+      case "run_tool_calls":
+        return `Run tool-call budget exhausted (${details.used}/${details.limit}). Do not retry this tool in the current Run; finish with available results or continue in a new Run.`;
+      case "grant_tool_calls":
+        return `This granted tool's per-Run call budget is exhausted (${details.used}/${details.limit}). Do not retry it in the current Run.`;
+      case "run_duration_ms":
+        return `Run duration budget exhausted (${details.used}/${details.limit} ms). Stop tool work and preserve the current progress.`;
+      case "tool_output_bytes":
+        return `Tool output budget exhausted (${details.used}/${details.limit} bytes). Request a smaller result if the tool supports it.`;
+      case "tool_cost_microusd":
+        return `Estimated tool cost ${details.requested ?? 0} microusd exceeds the ${details.limit} microusd per-call budget. Choose a lower-cost action or request a higher owner limit.`;
+    }
+  }
+
+  switch (reason) {
+    case "concurrency_exhausted":
+      return "Tool concurrency is temporarily exhausted. Retry after another active call completes.";
+    case "budget_exhausted":
+      return "Tool execution budget is exhausted for this Run. Do not repeat the call in this Run.";
+    case "loop_detected":
+      return "Repeated identical tool calls were stopped as a likely loop. Use the prior result or change the arguments.";
+    case "rate_exhausted":
+      return "The fleet integration-call rate limit is exhausted. Do not retry until the usage window resets.";
+    case "grant_expired":
+      return "This tool grant expired. Ask the owner to renew the Agent connection.";
+    case "policy_inactive":
+      return "This tool is unavailable because its Agent, Connection, or grant is inactive.";
+    case "policy_stale":
+      return "The tool policy snapshot changed before execution. Retry the call against the current Run policy.";
+    case "grant_mismatch":
+    case "policy_mismatch":
+      return "The tool call no longer matches the Agent's current grant and was denied. Refresh the Agent configuration before retrying.";
+    case "invalid_request":
+      return "The tool call did not match the granted input contract. Correct the arguments before retrying.";
+    case "unknown_cost":
+      return "This tool call has no trustworthy cost estimate and was denied by policy.";
+  }
+
+  throw new Error("Tool gate returned an unsupported denial reason.");
+}
 
 function briefContextSummary(
   context: AdmittedBriefContextContent | undefined,
@@ -329,6 +392,10 @@ function sessionRunDrainedKey(runId: string): string {
 
 function sessionRunRestartKey(runId: string): string {
   return `${SESSION_RUN_RESTART_PREFIX}${runId}`;
+}
+
+function workflowStageCheckpointKey(runId: string): string {
+  return `${WORKFLOW_STAGE_CHECKPOINT_PREFIX}${runId}`;
 }
 
 function inboxProjectionKey(runId: string): string {
@@ -1806,6 +1873,7 @@ export class CrewSession extends Think {
     await this.ctx.storage.delete(sessionRunDrainedKey(request.data.runId));
     await this.ctx.storage.delete(sessionRunRestartKey(request.data.runId));
     await this.ctx.storage.delete(sessionRunTerminalKey(request.data.runId));
+    await this.ctx.storage.delete(workflowStageCheckpointKey(request.data.runId));
     await this.ctx.storage.delete(runRecordKey(request.data.runId));
   }
 
@@ -1998,6 +2066,35 @@ export class CrewSession extends Think {
     ]);
     const sandboxTool = this.#activeSandboxCodeTool();
 
+    if (this.#activeTurnMetadata().trigger === "workflow") {
+      actions.push([
+        WORKFLOW_STAGE_CHECKPOINT_TOOL_NAME,
+        defineAction({
+          approval: false,
+          approvalRisk: "low",
+          approvalSummary: "Checkpoint Workflow stage",
+          description:
+            "Use only as the final action of a deferrable Workflow stage. Choose wait with afterSeconds and a concise reason when external work is still pending, or done when the stage is complete. Crewhelm persists the checkpoint; this action performs no provider effect.",
+          execute: async (input) => {
+            const metadata = this.#activeTurnMetadata();
+            const result = checkpointAgentWorkflowStageResultSchema.parse(
+              await this.env.OWNER_CONTROL_PLANE.getByName(
+                metadata.configuration.ownerKey,
+              ).checkpointAgentWorkflowStage({ checkpoint: input, runId: metadata.runId }),
+            );
+            if (!result.ok) throw new Error("Workflow stage checkpoint denied.");
+            await this.ctx.storage.put(workflowStageCheckpointKey(metadata.runId), true);
+            return { checkpointed: true };
+          },
+          inputSchema: checkpointAgentWorkflowStageInputSchema.shape.checkpoint,
+          kind: "server",
+          name: WORKFLOW_STAGE_CHECKPOINT_TOOL_NAME,
+          permissions: [WORKFLOW_STAGE_CHECKPOINT_PERMISSION],
+          timeoutMs: 30_000,
+        }),
+      ]);
+    }
+
     if (sandboxTool !== undefined) {
       actions.push([
         SANDBOX_CODE_TOOL_NAME,
@@ -2106,6 +2203,7 @@ export class CrewSession extends Think {
           ...(this.#activeSandboxCodeTool() === undefined ? [] : [SANDBOX_CODE_TOOL_NAME]),
           ...(this.#activeWebSearchTool() === undefined ? [] : [WEB_SEARCH_TOOL_NAME]),
           ...(this.#activeWebFetchTool() === undefined ? [] : [WEB_FETCH_TOOL_NAME]),
+          ...(metadata.trigger === "workflow" ? [WORKFLOW_STAGE_CHECKPOINT_TOOL_NAME] : []),
         ];
     return {
       activeTools,
@@ -2147,6 +2245,9 @@ export class CrewSession extends Think {
           grantedPermissions: [
             ...reference.budgetReservation.toolGrants.map((grant) => grant.grantId),
             ...(reference.budgetReservation.runtimePlan.tools ?? []).map((tool) => tool.id),
+            ...(this.#activeTurnMetadata().trigger === "workflow"
+              ? [WORKFLOW_STAGE_CHECKPOINT_PERMISSION]
+              : []),
           ],
         };
       }
@@ -2902,6 +3003,32 @@ export class CrewSession extends Think {
         ? undefined
         : await canonicalToolCallId(reference.runId, context.toolCallId);
 
+    if (context.action === WORKFLOW_STAGE_CHECKPOINT_TOOL_NAME) {
+      return (
+        this.#activeTurnMetadata().trigger === "workflow" &&
+        checkpointAgentWorkflowStageInputSchema.shape.checkpoint.safeParse(context.input).success &&
+        context.requiredPermissions.length === 1 &&
+        context.requiredPermissions[0] === WORKFLOW_STAGE_CHECKPOINT_PERMISSION
+      );
+    }
+
+    if (
+      reference !== undefined &&
+      (await this.ctx.storage.get(workflowStageCheckpointKey(reference.runId))) === true
+    ) {
+      if (toolCallId !== undefined) {
+        await this.#recordToolAuthorization({
+          checkpoint: "action_authorization",
+          outcome: "blocked",
+          reason: "action_invalid",
+          runId: reference.runId,
+          startedAt,
+          toolCallId,
+        });
+      }
+      return { allowed: false, reason: "Workflow stage was already checkpointed." };
+    }
+
     if (sandboxTool !== undefined) {
       const input = this.#sandboxCodeInputSchema(sandboxTool).safeParse(context.input);
       const allowed =
@@ -3083,13 +3210,20 @@ export class CrewSession extends Think {
       await this.#recordToolAuthorization({
         adapter,
         checkpoint: "action_authorization",
+        ...(evaluation.data.decision.details === undefined
+          ? {}
+          : { details: evaluation.data.decision.details }),
         outcome: "blocked",
         reason: evaluation.data.decision.reason,
         runId: reference.runId,
         startedAt,
         toolCallId: action.toolCallId,
       });
-      return false;
+      // The SDK's action-authorization hook can only return a boolean. Let the
+      // richer pre-execution hook re-evaluate deterministic policy denials so
+      // the model receives the exact budget, concurrency, rate, or loop
+      // reason. Pre-execution remains fail-closed and no provider call is made.
+      return true;
     }
 
     if (evaluation.data.decision.decision === "requires_approval") {
@@ -3184,6 +3318,29 @@ export class CrewSession extends Think {
       reference === undefined
         ? undefined
         : await canonicalToolCallId(reference.runId, context.toolCallId);
+
+    if (context.toolName === WORKFLOW_STAGE_CHECKPOINT_TOOL_NAME) {
+      const valid =
+        reference !== undefined &&
+        toolCallId !== undefined &&
+        this.#activeTurnMetadata().trigger === "workflow" &&
+        checkpointAgentWorkflowStageInputSchema.shape.checkpoint.safeParse(context.input).success;
+
+      if (reference !== undefined && toolCallId !== undefined) {
+        await this.#recordToolAuthorization({
+          checkpoint: "pre_execution",
+          outcome: valid ? "allowed" : "blocked",
+          ...(valid ? {} : { reason: "action_invalid" }),
+          runId: reference.runId,
+          startedAt,
+          toolCallId,
+        });
+      }
+
+      return valid
+        ? { action: "allow" }
+        : { action: "block", reason: "Workflow stage checkpoint denied." };
+    }
 
     if (sandboxTool !== undefined) {
       const input = z
@@ -3349,13 +3506,22 @@ export class CrewSession extends Think {
       await this.#recordToolAuthorization({
         adapter,
         checkpoint: "pre_execution",
+        ...(evaluation.data.decision.details === undefined
+          ? {}
+          : { details: evaluation.data.decision.details }),
         outcome: "blocked",
         reason: evaluation.data.decision.reason,
         runId: reference.runId,
         startedAt,
         toolCallId: action.toolCallId,
       });
-      return { action: "block", reason: "Tool execution denied." };
+      return {
+        action: "block",
+        reason: toolGateDenialMessage(
+          evaluation.data.decision.reason,
+          evaluation.data.decision.details,
+        ),
+      };
     }
 
     if (evaluation.data.decision.decision !== expectedDecision) {
@@ -4222,9 +4388,12 @@ export class CrewSession extends Think {
               toolCallId: context.permit.action.toolCallId,
             });
 
-            if (event.operation === "execute" && event.outcome !== "accepted") {
+            if (
+              event.operation !== "verify" &&
+              !(event.operation === "execute" && event.outcome === "accepted")
+            ) {
               const provider = toolProviderFailureSchema.safeParse({
-                ...(event.providerErrorCode === undefined
+                ...(!("providerErrorCode" in event) || event.providerErrorCode === undefined
                   ? {}
                   : { errorCode: event.providerErrorCode }),
                 outcome: event.outcome,
@@ -4274,6 +4443,7 @@ export class CrewSession extends Think {
             providerConnectionId,
             signal: context.signal,
             timeoutMs: context.permit.constraints.maxDurationMs,
+            toolkitSlug: grant.integrationSlug,
             toolkitVersion: grant.toolkitVersion,
             toolSlug: grant.toolSlug,
             userId: grant.ownerKey,
@@ -4295,6 +4465,9 @@ export class CrewSession extends Think {
             runId: context.permit.action.runId,
             toolCallId: context.permit.action.toolCallId,
           });
+          if (isComposioFileStagingError(error)) {
+            throw new ToolExecutionNotDispatchedError();
+          }
           throw error;
         }
       },
@@ -4409,8 +4582,32 @@ export class CrewSession extends Think {
 
     const reservation = reserveToolExecutionResultSchema.safeParse(result);
 
-    if (!reservation.success || !reservation.data.ok || reservation.data.state !== "allowed") {
+    if (!reservation.success) {
       throw new Error("Tool execution denied.");
+    }
+    if (!reservation.data.ok) {
+      if ("reason" in reservation.data.error) {
+        await this.#recordToolAuthorization({
+          adapter,
+          checkpoint: "pre_execution",
+          ...(reservation.data.error.details === undefined
+            ? {}
+            : { details: reservation.data.error.details }),
+          outcome: "blocked",
+          reason: reservation.data.error.reason,
+          runId: reference.runId,
+          startedAt: performance.now(),
+          toolCallId: action.toolCallId,
+        });
+      }
+      throw new Error(
+        "reason" in reservation.data.error
+          ? toolGateDenialMessage(reservation.data.error.reason, reservation.data.error.details)
+          : "Tool execution denied.",
+      );
+    }
+    if (reservation.data.state !== "allowed") {
+      throw new Error("Tool execution requires owner approval.");
     }
 
     const permit = reservation.data.permit;
@@ -4444,7 +4641,9 @@ export class CrewSession extends Think {
 
       status = "completed";
     } catch (error) {
-      if (error instanceof ToolExecutionNotDispatchedError) status = "failed";
+      if (error instanceof ToolExecutionNotDispatchedError || adapter.grant.effect === "read") {
+        status = "failed";
+      }
       output = undefined;
     }
 
@@ -4701,6 +4900,7 @@ export class CrewSession extends Think {
       runId,
       ...(record.session === undefined ? {} : { session: record.session }),
       ...(record.sessionContext === undefined ? {} : { sessionContext: record.sessionContext }),
+      trigger: record.trigger,
     });
   }
 
@@ -4753,6 +4953,7 @@ export class CrewSession extends Think {
   async #recordToolAuthorization(input: {
     adapter?: CrewAgentToolAdapter;
     checkpoint: "action_authorization" | "pre_execution";
+    details?: ToolGateDenialDetails;
     outcome: "allowed" | "approval_required" | "blocked";
     reason?: ToolAuthorizationFailureReason;
     runId: string;
@@ -4799,6 +5000,7 @@ export class CrewSession extends Think {
             ? "tool.authorization_approval_required"
             : "tool.authorization_blocked",
       occurredAt,
+      ...(input.details === undefined ? {} : { details: input.details }),
       ...(input.reason === undefined ? {} : { reason: input.reason }),
       toolCallId: input.toolCallId,
     });

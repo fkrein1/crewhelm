@@ -251,7 +251,9 @@ export const composioToolLimitsSchema = z.strictObject({
     .int()
     .min(1)
     .max(16)
-    .describe("Owner-selected concurrent-call ceiling; use 1 unless parallel calls are required."),
+    .describe(
+      "Owner-selected concurrent-call ceiling for this granted tool. The fleet ceiling still applies.",
+    ),
   maxCostMicrousdPerCall: z
     .number()
     .int()
@@ -328,6 +330,11 @@ export const toolGatePolicySnapshotSchema = z.strictObject({
   connectionId: connectionIdSchema,
   connectionStatus: z.enum(["active", "revoked", "unavailable"]),
   currentAgentRevision: agentRevisionNumberSchema,
+  durationLimitMs: z
+    .number()
+    .int()
+    .positive()
+    .max(60 * 60 * 1_000),
   evaluatedAt: z.iso.datetime(),
   fleetCallsPerDayUsed: z.number().int().min(0).max(1_000_000),
   fleetCallsPerThirtyDaysUsed: z.number().int().min(0).max(1_000_000),
@@ -357,6 +364,7 @@ export const toolGatePolicySnapshotSchema = z.strictObject({
   remainingToolCalls: z.number().int().min(0).max(100),
   runId: runIdSchema,
   sameToolInputCallsUsed: z.number().int().min(0).max(100),
+  toolCallsUsed: z.number().int().min(0).max(100),
 });
 export const composioToolGateInputSchema = z.strictObject({
   action: classifiedComposioToolActionSchema,
@@ -382,6 +390,37 @@ export const toolGateDenialReasonSchema = z.enum([
   "rate_exhausted",
   "unknown_cost",
 ]);
+export const toolGateDenialDetailsSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    active: z.number().int().nonnegative().max(100),
+    kind: z.literal("concurrency"),
+    limit: z.number().int().positive().max(16),
+  }),
+  z.strictObject({
+    dimension: z.enum([
+      "run_tool_calls",
+      "grant_tool_calls",
+      "run_duration_ms",
+      "tool_output_bytes",
+      "tool_cost_microusd",
+    ]),
+    kind: z.literal("budget"),
+    limit: z.number().int().nonnegative().safe(),
+    requested: z.number().int().nonnegative().safe().optional(),
+    used: z.number().int().nonnegative().safe(),
+  }),
+  z.strictObject({
+    calls: z.number().int().nonnegative().max(100),
+    kind: z.literal("duplicate_calls"),
+    limit: z.number().int().positive().max(100),
+  }),
+  z.strictObject({
+    dimension: z.enum(["fleet_calls_per_day", "fleet_calls_per_thirty_days"]),
+    kind: z.literal("rate"),
+    limit: z.number().int().positive().max(1_000_000),
+    used: z.number().int().nonnegative().max(1_000_000),
+  }),
+]);
 export const toolExecutionEvaluationFailureReasonSchema = z.enum([
   "action_mismatch",
   "admission_mismatch",
@@ -406,6 +445,7 @@ export const toolGateDecisionSchema = z.discriminatedUnion("decision", [
   }),
   z.strictObject({
     decision: z.literal("deny"),
+    details: toolGateDenialDetailsSchema.optional(),
     reason: toolGateDenialReasonSchema,
   }),
   z.strictObject({
@@ -430,4 +470,5 @@ export type ToolExecutionEvaluationFailureReason = z.infer<
   typeof toolExecutionEvaluationFailureReasonSchema
 >;
 export type ToolGateDecision = z.infer<typeof toolGateDecisionSchema>;
+export type ToolGateDenialDetails = z.infer<typeof toolGateDenialDetailsSchema>;
 export type ToolGatePolicySnapshot = z.infer<typeof toolGatePolicySnapshotSchema>;

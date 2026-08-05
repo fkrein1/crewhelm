@@ -29,6 +29,20 @@
       "when": 1785940205125,
       "tag": "0003_fair_red_ghost",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1785948002188,
+      "tag": "0004_tricky_zuras",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785961251568,
+      "tag": "0005_talented_boom_boom",
+      "breakpoints": true
     }
   ]
 }

@@ -114,6 +114,12 @@ stage returns through the existing admission path and executes in one exact Work
 That Session is hidden from ordinary discovery and rejects direct continuation or deletion, so only
 the owning Workflow can advance its branch until terminal cleanup.
 
+An explicitly deferrable stage also freezes a maximum elapsed waiting window. Its admitted Run may
+finish with one owner-recorded Workflow checkpoint: `wait` schedules a durable coordinator sleep
+and a new bounded Run for the same stage, while `done` permits ordinary stage completion. Attempt
+and Run identifiers remain exact across delivery and recovery. Sleeping is outside the Run's
+duration and integration-call budget; resumed Runs and the aggregate Workflow remain bounded.
+
 Briefs are bounded, explicit owner inputs rather than Agent capabilities. Each immutable revision
 is stored behind a Crewhelm-owned object-store adapter; the control plane keeps only compact
 metadata and verifies content and digest before admission. The exact rendered context is frozen
@@ -263,7 +269,10 @@ branding, stylesheet assets, and terminal color roles.
 4. `ToolGate` rechecks the grant, policy, connection, effect, approval, and budget before Composio
    or remote MCP dispatch. A native runtime tool instead redeems a narrow owner-issued permit for its exact
    admitted descriptor, input digest, and shared call budget before its Crewhelm adapter runs.
-   Ambiguous dispatches remain blocked or recorded unknown until recovery.
+   A provider-uploadable public HTTPS file is validated and staged only inside that admitted
+   destination call without modifying its presigned URL; only the resulting opaque file reference
+   reaches the provider action. Ambiguous dispatches remain blocked or recorded unknown until
+   recovery.
 5. Schedules and Workflow stages use the same admission path. A Workflow stage is admitted only
    from its exact frozen owner record and continues the exact Workflow Session; duplicate terminal
    events and retries cannot advance a different stage.

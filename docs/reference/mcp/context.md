@@ -1368,6 +1368,33 @@ Create or replace a bounded Agent blueprint package draft for review.
             "executionLimits": {
               "type": "object",
               "properties": {
+                "integrations": {
+                  "type": "object",
+                  "properties": {
+                    "duplicateToolCallLimit": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100
+                    },
+                    "maxCallsPerRun": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100
+                    },
+                    "maxCallsPerToolPerRun": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100
+                    }
+                  },
+                  "required": [
+                    "duplicateToolCallLimit",
+                    "maxCallsPerRun",
+                    "maxCallsPerToolPerRun"
+                  ],
+                  "additionalProperties": false,
+                  "description": "Optional Agent-specific per-Run integration ceilings; fleet ceilings still win."
+                },
                 "maxDurationSeconds": {
                   "type": "integer",
                   "minimum": 1,

@@ -29,6 +29,7 @@ import {
   CrewAgent,
   type CrewSession,
   isToolExecutionPermitFresh,
+  toolGateDenialMessage,
 } from "./module.js";
 import { deriveOwnerKey } from "../../owner/identity.js";
 import { skillsCapabilityConfiguration } from "../../agent-capabilities/skills.js";
@@ -517,6 +518,28 @@ describe("CrewAgent admitted execution", () => {
     expect(isToolExecutionPermitFresh(permit, expiresAt - 1)).toBe(true);
     expect(isToolExecutionPermitFresh(permit, expiresAt)).toBe(false);
     expect(isToolExecutionPermitFresh(permit, expiresAt + 1)).toBe(false);
+  });
+
+  it("returns actionable concurrency and budget denials to the model", () => {
+    expect(
+      toolGateDenialMessage("concurrency_exhausted", {
+        active: 8,
+        kind: "concurrency",
+        limit: 8,
+      }),
+    ).toBe(
+      "Tool call temporarily blocked because this grant has 8/8 active calls. Retry after another call completes.",
+    );
+    expect(
+      toolGateDenialMessage("budget_exhausted", {
+        dimension: "grant_tool_calls",
+        kind: "budget",
+        limit: 24,
+        used: 24,
+      }),
+    ).toBe(
+      "This granted tool's per-Run call budget is exhausted (24/24). Do not retry it in the current Run.",
+    );
   });
 
   it("pins the complete inherited surface and owns every authority-bearing override", () => {
