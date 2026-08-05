@@ -358,7 +358,7 @@ export const reserveIntegrationEnablementResultSchema = z.union([
     authConfigId: connectionAuthConfigIdSchema,
     authScheme: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
     integrationSlug: integrationSlugSchema,
-    managed: z.literal(true),
+    managed: z.boolean(),
     ok: z.literal(true),
     state: z.literal("replay"),
   }),
@@ -378,7 +378,7 @@ export const completeIntegrationEnablementInputSchema = z.strictObject({
   authScheme: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
   created: z.boolean(),
   integrationSlug: integrationSlugSchema,
-  managed: z.literal(true),
+  managed: z.boolean(),
   name: z.string().min(1).max(160),
   reservationId: integrationEnablementReservationIdSchema,
 });

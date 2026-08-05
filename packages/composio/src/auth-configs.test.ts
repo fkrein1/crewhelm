@@ -315,6 +315,7 @@ describe("Composio auth configurations", () => {
       ],
       integrationName: "GitHub",
       ok: true,
+      requiresAuthConfigCredentials: true,
       support: "supported",
     });
   });
@@ -393,6 +394,7 @@ describe("Composio auth configurations", () => {
       ],
       integrationName: "Firecrawl",
       ok: true,
+      requiresAuthConfigCredentials: false,
       support: "supported",
     });
   });
@@ -594,6 +596,7 @@ describe("Composio auth configurations", () => {
       fields: [],
       integrationName: "SAP SuccessFactors",
       ok: true,
+      requiresAuthConfigCredentials: true,
       support: "unsupported",
     });
   });

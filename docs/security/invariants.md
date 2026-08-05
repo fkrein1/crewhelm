@@ -19,6 +19,12 @@ These constraints apply before a capability becomes reachable.
 8. **Verifiable supply chain.** Dependencies and automation are pinned, reviewed, minimally
    privileged, and released with provenance.
 
+Connected-account credentials supported by Composio's hosted connection form travel directly from
+the owner's browser to Composio and never enter Crewhelm. Crewhelm creates the reusable
+credential-free auth configuration under the same bounded reservation used for managed auth, then
+returns only a validated `connect.composio.dev` link. Crewhelm uses its provider-auth setup page only
+when reusable app credentials must exist before Composio can authorize the connected account.
+
 A custom provider-auth setup capability is owner-, client-, toolkit-, scheme-, and field-plan-bound,
 single-use, and short-lived. It travels in the browser URL fragment, is never sent in an HTTP
 request, and is cleared before capability exchange. The setup page loads only same-origin

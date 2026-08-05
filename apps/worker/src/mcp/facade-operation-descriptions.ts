@@ -11,7 +11,7 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   cancel_run: "Cancel one Run before it dispatches an external tool effect.",
   cancel_workflow: "Stop future stages of one exact active Workflow revision.",
   connect_provider:
-    "Resolve provider auth and return an authorization link or a short-lived owner setup link for custom credentials.",
+    "Resolve provider auth and return a Composio authorization link or, when required, a Crewhelm setup link for reusable app credentials.",
   connect_remote_mcp: "Create a public, bearer, or OAuth remote MCP Connection.",
   create: "Create an Agent from one bounded definition.",
   create_brief: "Create one bounded owner-provided text Brief.",
@@ -33,7 +33,7 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   discard_package_draft: "Discard one Skill or Agent blueprint package draft.",
   discard_publish_draft: "Discard one Recipe publication draft.",
   enable_provider:
-    "Resolve auth readiness, reuse an owner-held config, create managed auth, or return a short-lived owner setup link for custom credentials.",
+    "Resolve auth readiness, reuse an owner-held config, create credential-free or managed auth, or return a Crewhelm setup link for reusable app credentials.",
   event_history: "List bounded delivery history for one exact Event Trigger.",
   event_sources: "List Event Trigger sources available through one exact Connection.",
   grant_provider_actions: "Grant one Agent revision selected actions from one provider Connection.",
