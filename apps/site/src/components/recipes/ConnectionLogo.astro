@@ -32,20 +32,27 @@ const logoUrl = getComposioLogoUrl(integration.slug);
 </span>
 
 <script>
-  for (const image of document.querySelectorAll<HTMLImageElement>(".connection-logo img")) {
-    if (image.dataset.logoInitialized !== undefined) continue;
-    image.dataset.logoInitialized = "";
-    const logo = image.closest<HTMLElement>(".connection-logo");
-    const settle = () => {
-      const available = image.naturalWidth > 0;
-      logo?.classList.toggle("is-loaded", available);
-      logo?.classList.toggle("is-unavailable", !available);
-      logo?.dispatchEvent(new CustomEvent("connection-logo-state", { bubbles: true }));
-    };
-    image.addEventListener("load", settle, { once: true });
-    image.addEventListener("error", settle, { once: true });
-    if (image.complete) settle();
+  function initializeConnectionLogos(root: ParentNode): void {
+    for (const image of root.querySelectorAll<HTMLImageElement>(".connection-logo img")) {
+      if (image.dataset.logoInitialized !== undefined) continue;
+      image.dataset.logoInitialized = "";
+      const logo = image.closest<HTMLElement>(".connection-logo");
+      const settle = () => {
+        const available = image.naturalWidth > 0;
+        logo?.classList.toggle("is-loaded", available);
+        logo?.classList.toggle("is-unavailable", !available);
+        logo?.dispatchEvent(new CustomEvent("connection-logo-state", { bubbles: true }));
+      };
+      image.addEventListener("load", settle, { once: true });
+      image.addEventListener("error", settle, { once: true });
+      if (image.complete) settle();
+    }
   }
+
+  document.addEventListener("connection-logos-initialize", (event) => {
+    if (event.target instanceof Element) initializeConnectionLogos(event.target);
+  });
+  initializeConnectionLogos(document);
 </script>
 
 <style>

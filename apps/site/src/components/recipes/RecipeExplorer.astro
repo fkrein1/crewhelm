@@ -62,6 +62,7 @@ const { basePath, recipes } = Astro.props;
       const template = templateFor(slug);
       if (!template) return false;
       content.replaceChildren(template.content.cloneNode(true));
+      content.dispatchEvent(new CustomEvent("connection-logos-initialize", { bubbles: true }));
       dialog.setAttribute("aria-labelledby", `recipe-title-${slug}`);
       activeSlug = slug;
       return true;
