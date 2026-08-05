@@ -33,6 +33,7 @@ export const mcpAuthoringDraftReferenceSchema = mcpAuthoringDraftLocatorSchema
   .describe("Copy-ready owner-scoped authoring draft reference returned by Crewhelm.");
 
 export const mcpAuthoringDraftInputSchema = z.discriminatedUnion("action", [
+  z.strictObject({ action: z.literal("list") }),
   z.strictObject({
     action: z.literal("create"),
     content: jsonValueSchema,
@@ -72,6 +73,11 @@ const mcpAuthoringDraftErrorSchema = z.strictObject({
 });
 
 export const mcpAuthoringDraftResultSchema = z.union([
+  z.strictObject({
+    action: z.literal("list"),
+    drafts: z.array(mcpAuthoringDraftReferenceSchema).max(MAXIMUM_MCP_AUTHORING_DRAFTS),
+    ok: z.literal(true),
+  }),
   z.strictObject({
     action: z.enum(["create", "replace"]),
     draft: mcpAuthoringDraftReferenceSchema,

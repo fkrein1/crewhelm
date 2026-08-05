@@ -94,6 +94,7 @@ const EXPECTED_FACADE_OPERATIONS = {
     "inspect_skill",
     "list_blueprints",
     "inspect_blueprint",
+    "list_authoring_drafts",
     "list_briefs",
     "inspect_brief",
     "inspect_brief_revision",

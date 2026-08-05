@@ -916,7 +916,7 @@ describe("authenticated MCP handler", () => {
         }),
       ),
     );
-    if (!createdDraft.ok || createdDraft.action === "discard" || createdDraft.action === "read") {
+    if (!createdDraft.ok || createdDraft.action !== "create") {
       throw new Error("Expected a Recipe publication draft.");
     }
     let publicationDraft = createdDraft.draft;
@@ -977,7 +977,7 @@ describe("authenticated MCP handler", () => {
           "",
       ),
     );
-    if (!setSection.ok || setSection.action === "discard" || setSection.action === "read") {
+    if (!setSection.ok || setSection.action !== "replace") {
       throw new Error("Expected an updated Recipe publication draft.");
     }
     publicationDraft = setSection.draft;
@@ -1596,13 +1596,18 @@ describe("authenticated MCP handler", () => {
     });
     const preparedDraft = mcpAuthoringDraftResultSchema.parse(prepared.result);
     expect(prepared.isError).toBe(false);
-    if (
-      !preparedDraft.ok ||
-      preparedDraft.action === "discard" ||
-      preparedDraft.action === "read"
-    ) {
+    if (!preparedDraft.ok || preparedDraft.action !== "create") {
       throw new Error("Expected an MCP Skill draft.");
     }
+
+    const listedDrafts = mcpAuthoringDraftResultSchema.parse(
+      (
+        await call(MCP_INSPECT_CONTEXT_TOOL_NAME, {
+          operation: { kind: "list_authoring_drafts" },
+        })
+      ).result,
+    );
+    expect(listedDrafts).toEqual({ action: "list", drafts: [preparedDraft.draft], ok: true });
 
     const preview = await call(MCP_CHANGE_CONTEXT_TOOL_NAME, {
       operation: { draft: preparedDraft.draft, kind: "preview_package" },
@@ -1768,11 +1773,7 @@ describe("authenticated MCP handler", () => {
     });
     const preparedDraft = mcpAuthoringDraftResultSchema.parse(prepared.result);
     expect(prepared.isError).toBe(false);
-    if (
-      !preparedDraft.ok ||
-      preparedDraft.action === "discard" ||
-      preparedDraft.action === "read"
-    ) {
+    if (!preparedDraft.ok || preparedDraft.action !== "create") {
       throw new Error("Expected an MCP Agent blueprint draft.");
     }
 

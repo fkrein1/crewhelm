@@ -297,6 +297,18 @@ async function readAuthoringDraft(catalog: PrivateToolCatalog, draft: unknown, e
   return parsed?.ok === true && parsed.action === "read" ? { parsed, result } : { result };
 }
 
+async function listAuthoringDrafts(
+  catalog: PrivateToolCatalog,
+  _input: Record<string, unknown>,
+  extra: unknown,
+) {
+  return catalog.dispatch(
+    "crewhelm_authoring_drafts",
+    { request: JSON.stringify({ action: "list" }) },
+    extra,
+  );
+}
+
 function invalidAuthoringDraftResult(): CallToolResult {
   return validatedToolResult(
     {
@@ -1714,6 +1726,12 @@ const CONTEXT_FACADE_DEFINITIONS = [
         privateTool: "crewhelm_get_config",
         required: ["id"],
         targetKind: "agent-blueprint-package",
+      },
+      {
+        kind: "list_authoring_drafts",
+        privateTool: "crewhelm_authoring_drafts",
+        publicSchema: z.strictObject({}),
+        run: listAuthoringDrafts,
       },
       {
         action: "list",

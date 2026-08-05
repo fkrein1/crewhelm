@@ -18,7 +18,7 @@ import {
   type McpAuthoringDraftResult,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
-import { and, count, eq, lte } from "drizzle-orm";
+import { and, count, desc, eq, lte } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import { mcpAuthoringDrafts, type ControlPlaneDatabaseSchema } from "../schema.js";
@@ -93,6 +93,8 @@ export class McpAuthoringDrafts {
       this.#deleteExpired(Date.now());
 
       switch (request.data.action) {
+        case "list":
+          return this.#list(authority);
         case "create":
           return await this.#create(authority, request.data);
         case "read":
@@ -110,6 +112,19 @@ export class McpAuthoringDrafts {
 
   #deleteExpired(now: number): void {
     this.#database.delete(mcpAuthoringDrafts).where(lte(mcpAuthoringDrafts.expiresAt, now)).run();
+  }
+
+  #list(authority: OwnerAuthority): McpAuthoringDraftResult {
+    const drafts = this.#database
+      .select()
+      .from(mcpAuthoringDrafts)
+      .where(eq(mcpAuthoringDrafts.clientId, authority.clientId))
+      .orderBy(desc(mcpAuthoringDrafts.updatedAt))
+      .limit(MAXIMUM_MCP_AUTHORING_DRAFTS)
+      .all()
+      .map(reference);
+
+    return mcpAuthoringDraftResultSchema.parse({ action: "list", drafts, ok: true });
   }
 
   async #create(
