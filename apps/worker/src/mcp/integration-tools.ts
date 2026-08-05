@@ -265,7 +265,9 @@ async function enableIntegration(
 
   const readiness = inspection.authentication;
   let selected = readiness.state === "ready" ? readiness.selected : undefined;
-  let composioHostedAuth: { authScheme: ProviderAuthScheme; name: string } | undefined;
+  let composioHostedAuth:
+    | { authScheme: ProviderAuthScheme; credentials: Record<string, string>; name: string }
+    | undefined;
 
   if (readiness.state === "ready" && request.data.authConfigId !== undefined) {
     if (request.data.authConfigId !== readiness.selected.authConfigId) {
@@ -306,6 +308,19 @@ async function enableIntegration(
       if (!prepared.requiresAuthConfigCredentials) {
         composioHostedAuth = {
           authScheme: readiness.recommendedScheme,
+          credentials: Object.fromEntries([
+            ...prepared.fields.flatMap((field) =>
+              field.stage === "auth_config" && field.defaultValue !== undefined
+                ? [[field.key, field.defaultValue] as const]
+                : [],
+            ),
+            ...(prepared.callbackUrl === undefined
+              ? []
+              : ([["oauth_redirect_uri", prepared.callbackUrl] as const] satisfies (readonly [
+                  string,
+                  string,
+                ])[])),
+          ]),
           name: prepared.integrationName,
         };
       } else {
@@ -498,7 +513,7 @@ async function enableIntegration(
           })
         : await authConfigs.createCustom({
             authScheme: composioHostedAuth.authScheme,
-            credentials: {},
+            credentials: composioHostedAuth.credentials,
             integrationSlug: request.data.integrationSlug,
             name: customAuthConfigName(composioHostedAuth.name, reservation.data.reservationId),
           });

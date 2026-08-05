@@ -12,6 +12,8 @@ import {
   type AgentEventTriggersInput,
   type AgentEventTriggersResult,
   type BriefReference,
+  type ComposioConnectionSummary,
+  type ConnectionSummary,
   type IntegrationToolParameterValue,
   type OwnerAuthority,
 } from "@crewhelm/contracts";
@@ -47,6 +49,12 @@ type EventTriggerDefinition = AgentEventTriggerDefinition & {
   source: Extract<AgentEventTriggerDefinition["source"], { kind: "connection_event" }>;
 };
 type EventTriggerFailure = Extract<AgentEventTriggersResult, { ok: false }>;
+
+function isComposioConnection(
+  connection: ConnectionSummary,
+): connection is ComposioConnectionSummary {
+  return !("remoteMcp" in connection);
+}
 
 export function deniedAgentEventTrigger(
   code: EventTriggerFailure["error"]["code"],
@@ -291,6 +299,7 @@ export class AgentEventTriggers {
     }
 
     if (
+      !isComposioConnection(connection.connection) ||
       connection.connection.status !== "active" ||
       connection.connection.authorizationOutcome !== "returned" ||
       connection.connection.integrationSlug === null
@@ -787,6 +796,7 @@ export class AgentEventTriggers {
 
     if (
       !connection.ok ||
+      !isComposioConnection(connection.connection) ||
       connection.connection.providerConnectionId !== event.providerConnectionId ||
       connection.connection.authConfigId !== event.authConfigId ||
       row.sourceSlug !== event.sourceSlug
@@ -1238,6 +1248,7 @@ export class AgentEventTriggers {
     }
 
     if (
+      !isComposioConnection(connection.connection) ||
       connection.connection.status !== "active" ||
       connection.connection.authorizationOutcome !== "returned" ||
       connection.connection.integrationSlug === null
@@ -1432,7 +1443,11 @@ export class AgentEventTriggers {
 
       const connection = this.#connections.inspect({ connectionId: row.connectionId });
 
-      if (!connection.ok || connection.connection.status !== "active") {
+      if (
+        !connection.ok ||
+        !isComposioConnection(connection.connection) ||
+        connection.connection.status !== "active"
+      ) {
         return deniedAgentEventTrigger("event_trigger_operation_unknown");
       }
 
@@ -1511,7 +1526,7 @@ export class AgentEventTriggers {
 
       const connection = this.#connections.inspect({ connectionId: row.connectionId });
 
-      if (!connection.ok) {
+      if (!connection.ok || !isComposioConnection(connection.connection)) {
         return deniedAgentEventTrigger("event_trigger_operation_unknown");
       }
 

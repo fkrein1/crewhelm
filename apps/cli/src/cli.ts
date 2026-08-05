@@ -196,7 +196,9 @@ function formatStandingIntegrationRehearsalReport(
       ? `Agent ${report.agentId}; ${report.trigger} run ${report.runId}; terminal status ${report.runStatus ?? "unknown"}.\n`
       : "";
   const connection = report.connection
-    ? `Connection ${report.connection.accountLabel ?? report.connection.providerConnectionId} (${report.connection.integrationSlug ?? "unknown integration"}).\n`
+    ? "remoteMcp" in report.connection
+      ? `Connection ${report.connection.remoteMcp.name} (remote MCP).\n`
+      : `Connection ${report.connection.accountLabel ?? report.connection.providerConnectionId} (${report.connection.integrationSlug ?? "unknown integration"}).\n`
     : "";
   const draft =
     report.retainedDraft && report.fixtureSubject

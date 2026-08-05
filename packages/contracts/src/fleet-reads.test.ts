@@ -108,6 +108,24 @@ describe("fleet read response budgets", () => {
     ).toBeLessThanOrEqual(MAXIMUM_FLEET_LIST_RESPONSE_BYTES);
   });
 
+  it("accepts compact remote MCP Connection summaries", () => {
+    expect(
+      listConnectionsResultSchema.parse({
+        connections: [
+          {
+            authorizationOutcome: "untracked",
+            connectionId: `connection_${uuid(1)}`,
+            createdAt: timestamp,
+            remoteMcp: { authKind: "bearer", name: "Handoff" },
+            status: "active",
+          },
+        ],
+        nextCursor: null,
+        ok: true,
+      }),
+    ).toMatchObject({ connections: [{ remoteMcp: { authKind: "bearer", name: "Handoff" } }] });
+  });
+
   it("bounds worst-case unresolved provider-effect pages", () => {
     const effects = Array.from({ length: MAXIMUM_FLEET_LIST_ITEMS }, (_, index) => ({
       agentId: `agent_${uuid(index)}`,

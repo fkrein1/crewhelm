@@ -9,6 +9,7 @@ import {
   activateVerifiedAuthorizationReturnInputSchema,
   activateVerifiedConnectionInputSchema,
   connectionAuthorizationTokenSchema,
+  composioConnectionSummarySchema,
   connectionSummarySchema,
   createConnectionLinkInputSchema,
   createConnectionLinkResultSchema,
@@ -28,6 +29,7 @@ import {
   reserveIntegrationEnablementResultSchema,
   reserveConnectionLinkResultSchema,
   type ConnectionSummary,
+  type ComposioConnectionSummary,
   type ActivateVerifiedConnectionInput,
   type CreateConnectionLinkInput,
   type CreateConnectionLinkResult,
@@ -57,6 +59,7 @@ import {
   integrationEnablementRequests,
   providerAuthConfigs,
   providerAuthSetupRequests,
+  remoteMcpConnections,
   type ControlPlaneDatabaseSchema,
 } from "../schema.js";
 
@@ -165,7 +168,7 @@ function authorizationReturnOutcome(
   return unexpectedConnectionState(status);
 }
 
-function nextConnectionAction(summary: ConnectionSummary): ConnectionNextAction {
+function nextConnectionAction(summary: ComposioConnectionSummary): ConnectionNextAction {
   switch (summary.status) {
     case "revoked":
       return "reconnect";
@@ -1380,17 +1383,22 @@ export class Connections {
       .select({
         accountLabel: listedConnections.accountLabel,
         authConfigId: listedConnections.authConfigId,
+        authKind: remoteMcpConnections.authKind,
         authorizationOutcome: latestAuthorizationOutcome,
         connectionId: listedConnections.connectionId,
         createdAt: listedConnections.createdAt,
         integrationSlug,
+        provider: listedConnections.provider,
         providerConnectionId: listedConnections.providerConnectionId,
         status: listedConnections.status,
       })
       .from(listedConnections)
+      .leftJoin(
+        remoteMcpConnections,
+        eq(remoteMcpConnections.connectionId, listedConnections.connectionId),
+      )
       .where(
         and(
-          eq(listedConnections.provider, "composio"),
           request.data.authorizationOutcome === undefined
             ? undefined
             : eq(latestAuthorizationOutcome, request.data.authorizationOutcome),
@@ -1414,8 +1422,21 @@ export class Connections {
       .orderBy(asc(listedConnections.connectionId))
       .limit(request.data.limit + 1)
       .all();
-    const summaries = rows.flatMap((row) =>
-      row.authConfigId === null || row.providerConnectionId === null
+    const summaries = rows.flatMap((row) => {
+      if (row.provider === "remote_mcp") {
+        return row.accountLabel === null || row.authKind === null
+          ? []
+          : [
+              connectionSummarySchema.parse({
+                authorizationOutcome: "untracked",
+                connectionId: row.connectionId,
+                createdAt: new Date(row.createdAt).toISOString(),
+                remoteMcp: { authKind: row.authKind, name: row.accountLabel },
+                status: row.status,
+              }),
+            ];
+      }
+      return row.authConfigId === null || row.providerConnectionId === null
         ? []
         : [
             this.#summaryFromRow({
@@ -1423,8 +1444,8 @@ export class Connections {
               authConfigId: row.authConfigId,
               providerConnectionId: row.providerConnectionId,
             }),
-          ],
-    );
+          ];
+    });
     const hasMore = summaries.length > request.data.limit;
     const page = summaries.slice(0, request.data.limit);
     const nextCursor = hasMore ? (page.at(-1)?.connectionId ?? null) : null;
@@ -1718,8 +1739,8 @@ export class Connections {
     };
   }
 
-  #summaryFromRow(row: StoredConnectionSummaryRow): ConnectionSummary {
-    return connectionSummarySchema.parse({
+  #summaryFromRow(row: StoredConnectionSummaryRow): ComposioConnectionSummary {
+    return composioConnectionSummarySchema.parse({
       accountLabel: row.accountLabel,
       authorizationOutcome: row.authorizationOutcome,
       authConfigId: row.authConfigId,

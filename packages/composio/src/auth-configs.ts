@@ -757,7 +757,13 @@ export function createComposioAuthConfigs(
           optional: [],
           required: [],
         };
-        const requiresAuthConfigCredentials = creation.required.length > 0;
+        const requiresAuthConfigCredentials = creation.required.some(
+          (field) =>
+            field.name !== "oauth_redirect_uri" &&
+            (providerFieldIsSecret(field) ||
+              typeof field.default !== "string" ||
+              field.default === ""),
+        );
         const allFields = [
           ...creation.required,
           ...creation.optional,

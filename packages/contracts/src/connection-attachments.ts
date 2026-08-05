@@ -3,7 +3,7 @@ import * as z from "zod";
 import { composioToolLimitsSchema, toolAuthorizationModeSchema } from "./capabilities.js";
 import {
   connectionIdSchema,
-  connectionSummarySchema,
+  composioConnectionSummarySchema,
   composioConnectedAccountIdSchema,
 } from "./connections.js";
 import {
@@ -103,7 +103,7 @@ export const completeAgentConnectionConfigurationInputSchema =
         }),
       )
       .max(MAXIMUM_CONNECTION_TOOLS_PER_AGENT),
-    verifiedAccountLabel: connectionSummarySchema.shape.accountLabel,
+    verifiedAccountLabel: composioConnectionSummarySchema.shape.accountLabel,
     verifiedToolkitSlug: integrationSlugSchema.nullable(),
   });
 
