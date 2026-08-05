@@ -3516,7 +3516,16 @@ describe("authenticated MCP handler", () => {
               fields: {
                 auth_config_creation: {
                   optional: [],
-                  required: [],
+                  required: [
+                    {
+                      default: "https://api.firecrawl.dev/v1",
+                      displayName: "Base URL",
+                      is_secret: false,
+                      name: "base_url",
+                      required: true,
+                      type: "string",
+                    },
+                  ],
                 },
                 connected_account_initiation: {
                   optional: [],
@@ -3558,7 +3567,16 @@ describe("authenticated MCP handler", () => {
               fields: {
                 auth_config_creation: {
                   optional: [],
-                  required: [],
+                  required: [
+                    {
+                      default: "https://api.firecrawl.dev/v1",
+                      displayName: "Base URL",
+                      is_secret: false,
+                      name: "base_url",
+                      required: true,
+                      type: "string",
+                    },
+                  ],
                 },
                 connected_account_initiation: {
                   optional: [],
@@ -3652,6 +3670,12 @@ describe("authenticated MCP handler", () => {
       ok: true,
     });
     expect(fetchMock).toHaveBeenCalledTimes(6);
+    const authConfigRequest = fetchMock.mock.calls[4]?.[1];
+    expect(
+      typeof authConfigRequest?.body === "string" ? JSON.parse(authConfigRequest.body) : null,
+    ).toMatchObject({
+      auth_config: { credentials: { base_url: "https://api.firecrawl.dev/v1" } },
+    });
     await expect(
       runInDurableObject(
         env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),

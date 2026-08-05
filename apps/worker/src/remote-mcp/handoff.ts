@@ -1,9 +1,11 @@
 import {
   createRemoteMcpConnectionInputSchema,
+  connectionIdSchema,
   ownerKeySchema,
   remoteMcpApiKeyHeaderNameSchema,
   remoteMcpEndpointSchema,
   remoteMcpConnectionNameSchema,
+  remoteMcpConnectionSchema,
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
@@ -22,16 +24,32 @@ const publicOriginSchema = z
   .max(2_048)
   .refine((value) => new URL(value).protocol === "https:" && new URL(value).origin === value);
 const signingSecretSchema = z.string().min(32).max(1_024);
-const claimsSchema = z.strictObject({
+const baseClaimsSchema = z.strictObject({
   endpoint: remoteMcpEndpointSchema,
   expiresAt: z.number().int().positive().safe(),
   idempotencyKey: createRemoteMcpConnectionInputSchema.shape.idempotencyKey,
   name: remoteMcpConnectionNameSchema,
   ownerKey: ownerKeySchema,
 });
-const apiKeyClaimsSchema = claimsSchema.extend({
-  apiKeyHeaderName: remoteMcpApiKeyHeaderNameSchema,
-});
+const reauthenticationClaims = {
+  connectionId: connectionIdSchema,
+  operation: z.literal("reauthenticate"),
+  snapshotDigest: remoteMcpConnectionSchema.shape.snapshotDigest,
+};
+const claimsSchema = z.discriminatedUnion("operation", [
+  baseClaimsSchema.extend({ operation: z.literal("create") }),
+  baseClaimsSchema.extend(reauthenticationClaims),
+]);
+const apiKeyClaimsSchema = z.discriminatedUnion("operation", [
+  baseClaimsSchema.extend({
+    apiKeyHeaderName: remoteMcpApiKeyHeaderNameSchema,
+    operation: z.literal("create"),
+  }),
+  baseClaimsSchema.extend({
+    apiKeyHeaderName: remoteMcpApiKeyHeaderNameSchema,
+    ...reauthenticationClaims,
+  }),
+]);
 const oauthClaimsSchema = z.strictObject({
   expiresAt: z.number().int().positive().safe(),
   ownerKey: ownerKeySchema,

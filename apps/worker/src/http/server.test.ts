@@ -5,6 +5,7 @@ import {
   CONNECTIONS_READ_SCOPE,
   CONNECTIONS_WRITE_SCOPE,
   CONNECTION_CONFIGS_WRITE_SCOPE,
+  createRemoteMcpConnectionResultSchema,
   healthReportSchema,
   ownerAuthoritySchema,
   OWNER_WRITE_SCOPE,
@@ -186,13 +187,13 @@ function remoteMcpApiKeyFetch() {
   });
 }
 
-function remoteMcpBearerFetch() {
+function remoteMcpBearerFetch(expectedToken = "private-bearer-token") {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : input.toString();
     if (url !== "https://mcp.example.com/rpc" || init?.method !== "POST") {
       throw new Error(`Unexpected bearer MCP request: ${url}`);
     }
-    if (new Headers(init.headers).get("authorization") !== "Bearer private-bearer-token") {
+    if (new Headers(init.headers).get("authorization") !== `Bearer ${expectedToken}`) {
       return new Response(null, { status: 401 });
     }
     if (typeof init.body !== "string") throw new Error("Expected MCP request body.");
@@ -1016,6 +1017,7 @@ describe("Crewhelm Worker", () => {
         expiresAt: Date.now() + 60_000,
         idempotencyKey: "remote-mcp-browser-handoff",
         name: "Project MCP",
+        operation: "create",
         ownerKey,
       },
       origin,
@@ -1078,6 +1080,7 @@ describe("Crewhelm Worker", () => {
         expiresAt: Date.now() + 60_000,
         idempotencyKey: "remote-mcp-browser-upstream-denial",
         name: "Denied MCP",
+        operation: "create",
         ownerKey: `owner_${"d".repeat(43)}`,
       },
       origin,
@@ -1110,6 +1113,72 @@ describe("Crewhelm Worker", () => {
     warning.mockRestore();
   });
 
+  it("rotates a bearer credential through an exact signed browser handoff", async () => {
+    const ownerKey = `owner_${"u".repeat(43)}`;
+    const authority = ownerAuthoritySchema.parse({
+      clientId: "remote-mcp-browser-rotation",
+      ownerKey,
+      scopes: [CONNECTIONS_WRITE_SCOPE],
+    });
+    const controlPlane = env.OWNER_CONTROL_PLANE.getByName(ownerKey);
+    const catalog = [{ inputSchema: { type: "object" as const }, name: "records.read" }];
+    const serializedCatalog = JSON.stringify(catalog);
+    const snapshotDigest = await digest(serializedCatalog);
+    const created = createRemoteMcpConnectionResultSchema.parse(
+      await controlPlane.createRemoteMcpConnection(authority, {
+        authKind: "bearer",
+        bearerToken: "original-bearer-token",
+        catalog,
+        catalogBytes: encoder.encode(serializedCatalog).byteLength,
+        endpoint: "https://mcp.example.com/rpc",
+        idempotencyKey: "remote-mcp-browser-rotation-create",
+        name: "Rotated MCP",
+        server: { name: "bearer-server", version: "1.0.0" },
+        snapshotDigest,
+      }),
+    );
+    if (!created.ok) throw new Error("Expected bearer Connection creation.");
+    const reserved = remoteMcpConnectionOperationResultSchema.parse(
+      await controlPlane.reserveRemoteMcpAuthenticationSetup(authority, {
+        action: "reauthenticate",
+        connectionId: created.connection.connectionId,
+        idempotencyKey: "remote-mcp-browser-rotation-update",
+        snapshotDigest,
+      }),
+    );
+    if (!reserved.ok || reserved.state !== "setup_required") {
+      throw new Error("Expected browser reauthentication setup.");
+    }
+    const page = await worker.fetch(new Request(reserved.setup.url), env);
+    expect(await page.text()).toContain("replacement bearer credential");
+
+    const fetchMock = remoteMcpBearerFetch("replacement-bearer-token");
+    const response = await worker.fetch(
+      new Request(reserved.setup.url, {
+        body: "bearerToken=replacement-bearer-token",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        method: "POST",
+      }),
+      env,
+    );
+    fetchMock.mockRestore();
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(body).toContain("Remote MCP credential updated");
+    expect(body).not.toContain("replacement-bearer-token");
+    await expect(
+      runInDurableObject(controlPlane, (_instance, state) =>
+        state.storage.sql
+          .exec(
+            `SELECT operation FROM remote_mcp_connection_mutations
+             WHERE idempotency_key = 'remote-mcp-browser-rotation-update'`,
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({ operation: "reauthenticate" });
+  });
+
   it("connects a named-header API-key MCP through a bounded browser handoff", async () => {
     const ownerKey = `owner_${"k".repeat(43)}`;
     const setup = await createRemoteMcpApiKeySetup({
@@ -1119,6 +1188,7 @@ describe("Crewhelm Worker", () => {
         expiresAt: Date.now() + 60_000,
         idempotencyKey: "remote-mcp-api-key-browser-handoff",
         name: "API Key MCP",
+        operation: "create",
         ownerKey,
       },
       origin,
@@ -1195,7 +1265,7 @@ describe("Crewhelm Worker", () => {
     });
     const controlPlane = env.OWNER_CONTROL_PLANE.getByName(ownerKey);
     const reservation = remoteMcpConnectionOperationResultSchema.parse(
-      await controlPlane.reserveRemoteMcpOAuthSetup(authority, {
+      await controlPlane.reserveRemoteMcpAuthenticationSetup(authority, {
         action: "connect",
         authKind: "oauth",
         endpoint: "https://mcp.example.com/rpc",
@@ -1230,7 +1300,7 @@ describe("Crewhelm Worker", () => {
     expect(callbackBody).not.toContain("oauth-access-secret");
 
     const replay = remoteMcpConnectionOperationResultSchema.parse(
-      await controlPlane.reserveRemoteMcpOAuthSetup(authority, {
+      await controlPlane.reserveRemoteMcpAuthenticationSetup(authority, {
         action: "connect",
         authKind: "oauth",
         endpoint: "https://mcp.example.com/rpc",
@@ -1378,7 +1448,7 @@ describe("Crewhelm Worker", () => {
     ).resolves.toEqual({ completed: true, ok: true });
 
     const reauthentication = remoteMcpConnectionOperationResultSchema.parse(
-      await controlPlane.reserveRemoteMcpOAuthSetup(authority, {
+      await controlPlane.reserveRemoteMcpAuthenticationSetup(authority, {
         action: "reauthenticate",
         connectionId: replay.connection.connectionId,
         idempotencyKey: "remote-mcp-oauth-browser-reauthenticate",

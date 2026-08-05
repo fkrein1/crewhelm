@@ -20,6 +20,7 @@ const claims = {
   expiresAt: Date.now() + 60_000,
   idempotencyKey: "remote-mcp-handoff",
   name: "Project MCP",
+  operation: "create" as const,
   ownerKey: `owner_${"o".repeat(43)}`,
 };
 

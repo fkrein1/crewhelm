@@ -60,13 +60,14 @@ export interface OwnerControlPlaneClient {
   lookupRemoteMcpConnectionCreation?(authorityInput: unknown, input: unknown): Promise<unknown>;
   mcpAuthoringDrafts?(authorityInput: unknown, input: unknown): Promise<unknown>;
   reserveConnectionLink(authorityInput: unknown, input: unknown): Promise<unknown>;
-  reserveRemoteMcpOAuthSetup?(authorityInput: unknown, input: unknown): Promise<unknown>;
+  reserveRemoteMcpAuthenticationSetup?(authorityInput: unknown, input: unknown): Promise<unknown>;
   recipes?(authorityInput: unknown, input: unknown): Promise<unknown>;
   recordProviderAuthConfig?(authorityInput: unknown, input: unknown): Promise<unknown>;
   prepareProviderAuthSetup?(authorityInput: unknown, input: unknown): Promise<unknown>;
   providerAuthSetupAuthority?(input: unknown): Promise<unknown>;
   readProviderAuthSetup?(input: unknown): Promise<unknown>;
   reconcileProviderAuthSetup?(input: unknown): Promise<unknown>;
+  reauthenticateRemoteMcpConnection?(authorityInput: unknown, input: unknown): Promise<unknown>;
   rejectProviderAuthSetup?(input: unknown): Promise<unknown>;
   recipePublications?(authorityInput: unknown, input: unknown): Promise<unknown>;
   reserveIntegrationEnablement(authorityInput: unknown, input: unknown): Promise<unknown>;

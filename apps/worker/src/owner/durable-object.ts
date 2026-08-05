@@ -42,6 +42,7 @@ import {
   type CreateRunAdmissionResult,
   type CreateRemoteMcpConnectionResult,
   type DeleteRemoteMcpConnectionResult,
+  type ReauthenticateRemoteMcpConnectionResult,
   type BeginRemoteMcpOAuthResult,
   type CompleteRemoteMcpOAuthResult,
   type FailRemoteMcpOAuthResult,
@@ -1748,13 +1749,13 @@ export class OwnerControlPlane extends DurableObject {
         };
   }
 
-  reserveRemoteMcpOAuthSetup(
+  reserveRemoteMcpAuthenticationSetup(
     authorityInput: unknown,
     input: unknown,
   ): Promise<RemoteMcpConnectionOperationResult> | RemoteMcpConnectionOperationResult {
     const authorization = this.#authorize(authorityInput, CONNECTIONS_WRITE_SCOPE);
     return authorization.ok
-      ? this.#remoteMcpConnections.reserveOAuth(authorization.authority, input)
+      ? this.#remoteMcpConnections.reserveAuthentication(authorization.authority, input)
       : {
           error: {
             code: authorization.code,
@@ -1851,6 +1852,23 @@ export class OwnerControlPlane extends DurableObject {
 
     return authorization.ok
       ? this.#remoteMcpConnections.delete(authorization.authority, input)
+      : {
+          error: {
+            code: authorization.code,
+            message: "Remote MCP Connection request denied.",
+          },
+          ok: false,
+        };
+  }
+
+  reauthenticateRemoteMcpConnection(
+    authorityInput: unknown,
+    input: unknown,
+  ): Promise<ReauthenticateRemoteMcpConnectionResult> | ReauthenticateRemoteMcpConnectionResult {
+    const authorization = this.#authorize(authorityInput, CONNECTIONS_WRITE_SCOPE);
+
+    return authorization.ok
+      ? this.#remoteMcpConnections.reauthenticate(authorization.authority, input)
       : {
           error: {
             code: authorization.code,

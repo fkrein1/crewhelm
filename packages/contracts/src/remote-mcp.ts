@@ -190,6 +190,26 @@ export const createRemoteMcpConnectionInputSchema = z
       });
     }
   });
+const reauthenticateRemoteMcpConnectionFields = {
+  catalog: remoteMcpCatalogSchema,
+  catalogBytes: remoteMcpConnectionSchema.shape.catalogBytes,
+  connectionId: connectionIdSchema,
+  idempotencyKey: createRemoteMcpConnectionInputSchema.shape.idempotencyKey,
+  server: remoteMcpConnectionSchema.shape.server,
+  snapshotDigest: remoteMcpSha256DigestSchema,
+};
+export const reauthenticateRemoteMcpConnectionInputSchema = z.discriminatedUnion("authKind", [
+  z.strictObject({
+    ...reauthenticateRemoteMcpConnectionFields,
+    apiKey: remoteMcpApiKeyCredentialSchema,
+    authKind: z.literal("api_key"),
+  }),
+  z.strictObject({
+    ...reauthenticateRemoteMcpConnectionFields,
+    authKind: z.literal("bearer"),
+    bearerToken: createRemoteMcpConnectionInputSchema.shape.bearerToken.unwrap(),
+  }),
+]);
 export const remoteMcpConnectionRequestErrorSchema = z.strictObject({
   code: z.enum([
     "connection_limit_exceeded",
@@ -244,6 +264,14 @@ export const createRemoteMcpConnectionResultSchema = z.discriminatedUnion("ok", 
     connection: remoteMcpConnectionSchema,
     created: z.boolean(),
     ok: z.literal(true),
+  }),
+  z.strictObject({ error: remoteMcpConnectionRequestErrorSchema, ok: z.literal(false) }),
+]);
+export const reauthenticateRemoteMcpConnectionResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    connection: remoteMcpConnectionSchema,
+    ok: z.literal(true),
+    reauthenticated: z.boolean(),
   }),
   z.strictObject({ error: remoteMcpConnectionRequestErrorSchema, ok: z.literal(false) }),
 ]);
@@ -378,6 +406,9 @@ export const remoteMcpConnectionOperationResultSchema = z.discriminatedUnion("ok
 
 export type CreateRemoteMcpConnectionInput = z.infer<typeof createRemoteMcpConnectionInputSchema>;
 export type CreateRemoteMcpConnectionResult = z.infer<typeof createRemoteMcpConnectionResultSchema>;
+export type ReauthenticateRemoteMcpConnectionResult = z.infer<
+  typeof reauthenticateRemoteMcpConnectionResultSchema
+>;
 export type DeleteRemoteMcpConnectionResult = z.infer<typeof deleteRemoteMcpConnectionResultSchema>;
 export type InspectRemoteMcpConnectionResult = z.infer<
   typeof inspectRemoteMcpConnectionResultSchema

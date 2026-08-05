@@ -11,6 +11,7 @@ import {
   inspectRemoteMcpConnectionResultSchema,
   lookupRemoteMcpConnectionCreationResultSchema,
   remoteMcpToolCapabilityGrantSchema,
+  reauthenticateRemoteMcpConnectionResultSchema,
 } from "@crewhelm/contracts";
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -262,6 +263,72 @@ describe("OwnerControlPlane remote MCP Connections", () => {
           .one(),
       ),
     ).resolves.toEqual({ credential_ciphertext: null, credential_nonce: null });
+  });
+
+  it("rotates bearer credentials idempotently without changing the frozen snapshot", async () => {
+    const authority = await authorityFor("remote-mcp-bearer-rotation", [
+      CONNECTIONS_READ_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const input = await connectionInput("remote-mcp-bearer-rotation-create", {
+      authKind: "bearer",
+      bearerToken: "original-bearer-secret",
+    });
+    const created = createRemoteMcpConnectionResultSchema.parse(
+      await stub.createRemoteMcpConnection(authority, input),
+    );
+    if (!created.ok) throw new Error("Expected bearer Connection creation.");
+    const before = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec(
+          `SELECT credential_ciphertext, credential_nonce
+           FROM remote_mcp_connections WHERE connection_id = ?`,
+          created.connection.connectionId,
+        )
+        .one(),
+    );
+    const rotation = {
+      authKind: "bearer" as const,
+      bearerToken: "replacement-bearer-secret",
+      catalog,
+      catalogBytes: input.catalogBytes,
+      connectionId: created.connection.connectionId,
+      idempotencyKey: "remote-mcp-bearer-rotation-update",
+      server: input.server,
+      snapshotDigest: input.snapshotDigest,
+    };
+
+    expect(
+      reauthenticateRemoteMcpConnectionResultSchema.parse(
+        await stub.reauthenticateRemoteMcpConnection(authority, rotation),
+      ),
+    ).toMatchObject({
+      connection: { snapshotDigest: input.snapshotDigest, status: "active" },
+      ok: true,
+      reauthenticated: true,
+    });
+    await expect(
+      stub.reauthenticateRemoteMcpConnection(authority, rotation),
+    ).resolves.toMatchObject({ ok: true, reauthenticated: false });
+    await expect(
+      stub.reauthenticateRemoteMcpConnection(authority, {
+        ...rotation,
+        bearerToken: "conflicting-secret",
+      }),
+    ).resolves.toMatchObject({ error: { code: "idempotency_conflict" }, ok: false });
+
+    const after = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec(
+          `SELECT credential_ciphertext, credential_nonce
+           FROM remote_mcp_connections WHERE connection_id = ?`,
+          created.connection.connectionId,
+        )
+        .one(),
+    );
+    expect(after).not.toEqual(before);
+    expect(JSON.stringify(after)).not.toContain("replacement-bearer-secret");
   });
 
   it("denies invalid authority, stale deletion, and noncanonical endpoints", async () => {
