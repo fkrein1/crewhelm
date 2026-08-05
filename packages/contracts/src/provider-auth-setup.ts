@@ -52,18 +52,23 @@ export const providerCredentialFieldsSchema = z
     (fields) => new Set(fields.map((field) => field.key)).size === fields.length,
     "Expected unique provider credential fields.",
   );
-export const providerAuthSetupPlanSchema = z.strictObject({
-  authorizeConnection: z.boolean(),
-  authScheme: providerAuthSchemeSchema,
-  callbackUrl: safeHttpsUrlSchema.optional(),
-  documentationUrl: safeHttpsUrlSchema.optional(),
-  fieldSchemaDigest: sha256DigestSchema,
-  fields: providerCredentialFieldsSchema,
-  integrationName: z.string().min(1).max(160),
-  integrationSlug: integrationSlugSchema,
-  support: z.enum(["supported", "unsupported"]),
-  setupId: providerAuthSetupIdSchema,
-});
+export const providerAuthSetupPlanSchema = z
+  .strictObject({
+    authorizeConnection: z.boolean(),
+    authScheme: providerAuthSchemeSchema,
+    callbackUrl: safeHttpsUrlSchema.optional(),
+    documentationUrl: safeHttpsUrlSchema.optional(),
+    fieldSchemaDigest: sha256DigestSchema,
+    fields: providerCredentialFieldsSchema,
+    integrationName: z.string().min(1).max(160),
+    integrationSlug: integrationSlugSchema,
+    support: z.enum(["supported", "unsupported"]),
+    setupId: providerAuthSetupIdSchema,
+  })
+  .refine(
+    (plan) => plan.fields.every((field) => field.stage === "auth_config"),
+    "Provider setup plans may contain only reusable auth-config credentials.",
+  );
 export const prepareProviderAuthSetupInputSchema = z.strictObject({
   capabilityDigest: sha256DigestSchema,
   capabilityExpiresAt: z.number().int().positive().safe(),

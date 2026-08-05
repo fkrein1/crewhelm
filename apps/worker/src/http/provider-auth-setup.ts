@@ -83,10 +83,10 @@ const SCRIPT = String.raw`(() => {
     if (!response.ok || result === null) throw result || new Error("request_failed");
     return result;
   };
-  const openProviderAuthorization = async (credentials = {}) => {
+  const openProviderAuthorization = async () => {
     status.textContent = "Opening provider authorization…";
     const connected = await request("${CONNECT_PATH}", {
-      body: JSON.stringify({ credentials }),
+      body: "{}",
       method: "POST",
     });
     window.location.assign(connected.url);
@@ -255,11 +255,10 @@ const SCRIPT = String.raw`(() => {
       submit.disabled = true;
       status.textContent = "Sending credentials securely to the provider…";
       const authConfigCredentials = {};
-      const connectionCredentials = {};
       for (const field of result.plan.fields) {
         const value = form.elements.namedItem(field.key).value;
         if (field.required || value !== "") {
-          (field.stage === "auth_config" ? authConfigCredentials : connectionCredentials)[field.key] = value;
+          authConfigCredentials[field.key] = value;
         }
       }
       try {
@@ -271,7 +270,7 @@ const SCRIPT = String.raw`(() => {
           if (configured.url) {
             window.location.assign(configured.url);
           } else {
-            await openProviderAuthorization(connectionCredentials);
+            await openProviderAuthorization();
           }
         } else {
           renderCompleted(configured.plan);
@@ -287,7 +286,6 @@ const SCRIPT = String.raw`(() => {
         setup.replaceChildren();
       } finally {
         for (const key of Object.keys(authConfigCredentials)) authConfigCredentials[key] = "";
-        for (const key of Object.keys(connectionCredentials)) connectionCredentials[key] = "";
         form.reset();
       }
     });
@@ -298,10 +296,6 @@ const SCRIPT = String.raw`(() => {
     status.textContent = plan.integrationName + " authentication is configured.";
     if (!plan.authorizeConnection) {
       setup.replaceChildren(text("You can close this window and continue from your MCP client."));
-      return;
-    }
-    if (plan.fields.some((field) => field.stage === "connection" && field.required)) {
-      setup.replaceChildren(text("Request a new setup link to enter the connection credentials again. Crewhelm did not retain them."));
       return;
     }
     const actions = document.createElement("div");
@@ -578,10 +572,9 @@ export function registerProviderAuthSetupRoutes(worker: Hono<{ Bindings: WorkerE
     const body = mutationAllowed(context.req.raw, context.env)
       ? await jsonBody(context.req.raw)
       : null;
-    if (body === null || !hasExactKeys(body, ["credentials"])) {
+    if (body === null || !hasExactKeys(body, [])) {
       return json(DENIED, 400);
     }
-    const credentials = ownValue(body, "credentials");
     const session = await sessionForRequest(context.req.raw, context.env);
     if (session === null) return json(DENIED, 401);
     const controlPlane = context.env.OWNER_CONTROL_PLANE.getByName(session.claims.ownerKey);
@@ -595,11 +588,7 @@ export function registerProviderAuthSetupRoutes(worker: Hono<{ Bindings: WorkerE
       !current.success ||
       !current.data.ok ||
       current.data.status !== "configured" ||
-      current.data.plan.support !== "supported" ||
-      !validCredentials(
-        credentials,
-        current.data.plan.fields.filter((field) => field.stage === "connection"),
-      )
+      current.data.plan.support !== "supported"
     ) {
       return json(DENIED, 400);
     }
@@ -639,7 +628,6 @@ export function registerProviderAuthSetupRoutes(worker: Hono<{ Bindings: WorkerE
       authConfigId: setupAuthority.data.authConfigId,
       callbackSecrets: callback.callbackSecrets,
       callbackUrl: callback.callbackUrl,
-      ...(Object.keys(credentials).length === 0 ? {} : { connectionData: credentials }),
       userId: authority.ownerKey,
     });
     if (!link.ok) return json(DENIED, 503);

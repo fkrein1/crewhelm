@@ -1111,7 +1111,6 @@ describe("Composio connection-link adapter", () => {
 
   it("creates a private hosted link through one fixed, bounded request", async () => {
     const apiKey = "composio-project-secret";
-    const connectionSecret = "provider-connection-secret";
     const cancellation = new AbortController();
     const onResponse = vi.fn<(event: unknown) => void>();
     const fetchMock = vi
@@ -1125,15 +1124,7 @@ describe("Composio connection-link adapter", () => {
       signal: cancellation.signal,
     });
 
-    await expect(
-      connectionLinks.create({
-        ...input,
-        connectionData: {
-          full: "https://api.firecrawl.dev/v1",
-          generic_api_key: connectionSecret,
-        },
-      }),
-    ).resolves.toEqual({
+    await expect(connectionLinks.create(input)).resolves.toEqual({
       connectionLink: {
         expiresAt: providerResponse.expires_at,
         providerConnectionId: providerResponse.connected_account_id,
@@ -1164,10 +1155,6 @@ describe("Composio connection-link adapter", () => {
     expect(JSON.parse(init.body)).toEqual({
       auth_config_id: input.authConfigId,
       callback_url: input.callbackUrl,
-      connection_data: {
-        full: "https://api.firecrawl.dev/v1",
-        generic_api_key: connectionSecret,
-      },
       experimental: {
         account_type: "PRIVATE",
       },
@@ -1176,7 +1163,6 @@ describe("Composio connection-link adapter", () => {
     cancellation.abort();
     expect(init?.signal?.aborted).toBe(true);
     expect(JSON.stringify(await connectionLinks.create(input))).not.toContain(apiKey);
-    expect(JSON.stringify(await connectionLinks.create(input))).not.toContain(connectionSecret);
   });
 
   it("does not dispatch without valid local configuration or input", async () => {

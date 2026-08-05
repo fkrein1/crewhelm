@@ -65,6 +65,17 @@ async function digestFields(fields: unknown): Promise<string> {
   );
 }
 
+function customAuthConfigName(integrationName: string, reservationId: string): string {
+  const suffix = ` · ${reservationId.slice(-12)}`;
+  const maximumBaseLength = 160 - suffix.length;
+  let base = "";
+  for (const character of integrationName) {
+    if (base.length + character.length > maximumBaseLength) break;
+    base += character;
+  }
+  return `${base}${suffix}`;
+}
+
 function integrationEnablementMcpResult(result: unknown) {
   return validatedToolResult(result, enableIntegrationResultSchema, {
     code: "invalid_integration_response",
@@ -312,9 +323,7 @@ async function enableIntegration(
         const setupExpiresAt = now + PROVIDER_AUTH_SETUP_SESSION_LIFETIME_MS;
         const setupId = `provider_auth_setup_${crypto.randomUUID()}`;
         const authorizeConnection = authority.scopes.includes(CONNECTIONS_WRITE_SCOPE);
-        const setupFields = prepared.fields.filter(
-          (field) => field.stage === "auth_config" || authorizeConnection,
-        );
+        const setupFields = prepared.fields.filter((field) => field.stage === "auth_config");
         const plan = providerAuthSetupPlanSchema.parse({
           authorizeConnection,
           authScheme: readiness.recommendedScheme,
@@ -491,7 +500,7 @@ async function enableIntegration(
             authScheme: composioHostedAuth.authScheme,
             credentials: {},
             integrationSlug: request.data.integrationSlug,
-            name: `${composioHostedAuth.name} · ${reservation.data.reservationId.slice(-12)}`,
+            name: customAuthConfigName(composioHostedAuth.name, reservation.data.reservationId),
           });
   } catch {
     return unknownIntegrationEnablementMcpResult(reservation.data);
