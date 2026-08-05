@@ -122,6 +122,7 @@ export type PrepareCustomIntegrationAuthConfigResult =
       fields: ProviderCredentialField[];
       integrationName: string;
       ok: true;
+      requiresAuthConfigCredentials: boolean;
       support: "supported" | "unsupported";
     }
   | { error: "unavailable"; ok: false };
@@ -756,6 +757,7 @@ export function createComposioAuthConfigs(
           optional: [],
           required: [],
         };
+        const requiresAuthConfigCredentials = creation.required.length > 0;
         const allFields = [
           ...creation.required,
           ...creation.optional,
@@ -772,6 +774,7 @@ export function createComposioAuthConfigs(
             fields: [],
             integrationName: toolkit.data.name,
             ok: true,
+            requiresAuthConfigCredentials,
             support: "unsupported",
           };
         }
@@ -796,6 +799,7 @@ export function createComposioAuthConfigs(
             fields: [],
             integrationName: toolkit.data.name,
             ok: true,
+            requiresAuthConfigCredentials,
             support: "unsupported",
           };
         }
@@ -808,6 +812,7 @@ export function createComposioAuthConfigs(
           fields: parsedFields.data,
           integrationName: toolkit.data.name,
           ok: true,
+          requiresAuthConfigCredentials,
           support: "supported",
         };
         return containsSecret(result, apiKey.data) ? { error: "unavailable", ok: false } : result;

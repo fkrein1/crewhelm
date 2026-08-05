@@ -328,11 +328,18 @@ export class Connections {
             });
           }
 
+          const authConfig = transaction
+            .select({ source: providerAuthConfigs.source })
+            .from(providerAuthConfigs)
+            .where(eq(providerAuthConfigs.authConfigId, existing.authConfigId))
+            .get();
+          if (authConfig === undefined) return deniedIntegrationEnablement("invalid_request");
+
           return reserveIntegrationEnablementResultSchema.parse({
             authConfigId: existing.authConfigId,
             authScheme: existing.authScheme,
             integrationSlug: existing.integrationSlug,
-            managed: true,
+            managed: authConfig.source === "composio_managed",
             ok: true,
             state: "replay",
           });
@@ -498,6 +505,7 @@ export class Connections {
       request.data.authScheme.toUpperCase(),
     );
     if (!normalizedAuthScheme.success) return deniedIntegrationEnablement("invalid_request");
+    const expectedSource = request.data.managed ? "composio_managed" : "crewhelm_custom";
 
     return this.#database.transaction((transaction) => {
       const currentTime = Date.now();
@@ -535,7 +543,7 @@ export class Connections {
         storedAuthConfig !== undefined &&
         (storedAuthConfig.integrationSlug !== request.data.integrationSlug ||
           storedAuthConfig.authScheme !== normalizedAuthScheme.data ||
-          storedAuthConfig.source !== "composio_managed")
+          storedAuthConfig.source !== expectedSource)
       ) {
         return deniedIntegrationEnablement("invalid_request");
       }
@@ -554,7 +562,7 @@ export class Connections {
           authScheme: row.authScheme,
           created: false,
           integrationSlug: row.integrationSlug,
-          managed: true,
+          managed: request.data.managed,
           ok: true,
         });
       }
@@ -600,7 +608,7 @@ export class Connections {
           createdAt: currentTime,
           displayName,
           integrationSlug: request.data.integrationSlug,
-          source: "composio_managed",
+          source: expectedSource,
           updatedAt: currentTime,
         })
         .onConflictDoUpdate({
@@ -623,7 +631,7 @@ export class Connections {
         authScheme: request.data.authScheme,
         created: request.data.created,
         integrationSlug: request.data.integrationSlug,
-        managed: true,
+        managed: request.data.managed,
         ok: true,
       });
     });

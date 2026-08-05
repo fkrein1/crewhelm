@@ -3457,11 +3457,12 @@ describe("authenticated MCP handler", () => {
     ).resolves.toEqual({ authConfigs: { count: 0 }, enablements: { count: 0 } });
   });
 
-  it("returns a private browser setup link for Firecrawl API-key authentication", async () => {
+  it("uses Composio's hosted form for Firecrawl connection credentials", async () => {
     const authority = await ownerAuthority("mcp-firecrawl-connect-readiness-owner", [
       CONNECTION_CONFIGS_WRITE_SCOPE,
       CONNECTIONS_WRITE_SCOPE,
     ]);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1_000).toISOString();
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
@@ -3545,6 +3546,31 @@ describe("authenticated MCP handler", () => {
           no_auth: false,
           slug: "firecrawl",
         }),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            auth_config: {
+              auth_scheme: "API_KEY",
+              id: "ac_firecrawl_custom",
+              is_composio_managed: false,
+            },
+            toolkit: { slug: "firecrawl" },
+          },
+          { status: 201 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            connected_account_id: "ca_firecrawl_custom",
+            expires_at: expiresAt,
+            experimental: { account_type: "PRIVATE" },
+            link_token: "ln_firecrawl_custom",
+            redirect_url: "https://connect.composio.dev/link/ln_firecrawl_custom",
+          },
+          { status: 201 },
+        ),
       );
     const response = await handleAuthenticatedMcpRequest(
       toolRequest(
@@ -3568,24 +3594,20 @@ describe("authenticated MCP handler", () => {
       { authority },
     );
     const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
-    const result = enableIntegrationResultSchema.parse(JSON.parse(payload.content[0]?.text ?? ""));
+    const result = createConnectionLinkResultSchema.parse(
+      JSON.parse(payload.content[0]?.text ?? ""),
+    );
 
     expect(payload.isError).toBe(false);
     expect(result).toMatchObject({
-      authentication: {
-        availableSchemes: ["API_KEY"],
-        managedAuthAvailable: false,
-        recommendedScheme: "API_KEY",
-        setup: {
-          expiresAt: expect.any(String),
-          url: expect.stringMatching(/^https:\/\/crewhelm\.test\/setup\/provider-auth#capability=/),
-        },
-        state: "setup_required",
+      connectionLink: {
+        expiresAt,
+        url: "https://connect.composio.dev/link/ln_firecrawl_custom",
       },
-      integration: { name: "Firecrawl", slug: "firecrawl" },
+      created: true,
       ok: true,
     });
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(6);
     await expect(
       runInDurableObject(
         env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
@@ -3596,16 +3618,126 @@ describe("authenticated MCP handler", () => {
           links: state.storage.sql
             .exec("SELECT count(*) AS count FROM connection_link_requests")
             .one(),
+          authConfigs: state.storage.sql
+            .exec(
+              `SELECT auth_config_id, auth_scheme, integration_slug, source
+               FROM provider_auth_configs`,
+            )
+            .toArray(),
           setups: state.storage.sql
             .exec("SELECT count(*) AS count FROM provider_auth_setup_requests")
             .one(),
         }),
       ),
     ).resolves.toEqual({
-      enablements: { count: 0 },
-      links: { count: 0 },
-      setups: { count: 1 },
+      authConfigs: [
+        {
+          auth_config_id: "ac_firecrawl_custom",
+          auth_scheme: "API_KEY",
+          integration_slug: "firecrawl",
+          source: "crewhelm_custom",
+        },
+      ],
+      enablements: { count: 1 },
+      links: { count: 1 },
+      setups: { count: 0 },
     });
+  });
+
+  it("uses Crewhelm setup only for reusable Spotify app credentials", async () => {
+    const authority = await ownerAuthority("mcp-spotify-app-setup-owner", [
+      CONNECTION_CONFIGS_WRITE_SCOPE,
+      CONNECTIONS_WRITE_SCOPE,
+    ]);
+    const spotifyToolkit = {
+      auth_config_details: [
+        {
+          fields: {
+            auth_config_creation: {
+              optional: [],
+              required: [
+                {
+                  displayName: "Client ID",
+                  is_secret: false,
+                  name: "client_id",
+                  required: true,
+                  type: "string",
+                },
+                {
+                  displayName: "Client secret",
+                  is_secret: true,
+                  name: "client_secret",
+                  required: true,
+                  type: "string",
+                },
+              ],
+            },
+            connected_account_initiation: { optional: [], required: [] },
+          },
+          mode: "oauth2",
+        },
+      ],
+      composio_managed_auth_schemes: [],
+      name: "Spotify",
+      no_auth: false,
+      slug: "spotify",
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json(spotifyToolkit))
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
+      .mockResolvedValueOnce(Response.json(spotifyToolkit));
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 140,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              operation: {
+                integrationSlug: "spotify",
+                kind: "connect_provider",
+                requestKey: "mcp-connect-spotify-app-setup",
+              },
+            },
+            name: MCP_CHANGE_CONNECTIONS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+    const result = enableIntegrationResultSchema.parse(JSON.parse(payload.content[0]?.text ?? ""));
+
+    expect(payload.isError).toBe(false);
+    expect(result).toMatchObject({
+      authentication: {
+        setup: {
+          expiresAt: expect.any(String),
+          url: expect.stringMatching(/^https:\/\/crewhelm\.test\/setup\/provider-auth#capability=/),
+        },
+        state: "setup_required",
+      },
+      integration: { name: "Spotify", slug: "spotify" },
+      ok: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    await expect(
+      runInDurableObject(
+        env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+        (_instance, state) => ({
+          enablements: state.storage.sql
+            .exec("SELECT count(*) AS count FROM integration_enablement_requests")
+            .one(),
+          setups: state.storage.sql
+            .exec("SELECT count(*) AS count FROM provider_auth_setup_requests")
+            .one(),
+        }),
+      ),
+    ).resolves.toEqual({ enablements: { count: 0 }, setups: { count: 1 } });
   });
 
   it("connects through one existing custom auth config without managed enablement", async () => {

@@ -315,9 +315,9 @@ How to use this tool:
 
 | Subtool | Purpose |
 | --- | --- |
-| `enable_provider` | Resolve auth readiness, reuse an owner-held config, create managed auth, or return a short-lived owner setup link for custom credentials. |
+| `enable_provider` | Resolve auth readiness, reuse an owner-held config, create credential-free or managed auth, or return a Crewhelm setup link for reusable app credentials. |
 | `authorize_provider` | Create an authorization link for one enabled provider integration. |
-| `connect_provider` | Resolve provider auth and return an authorization link or a short-lived owner setup link for custom credentials. |
+| `connect_provider` | Resolve provider auth and return a Composio authorization link or, when required, a Crewhelm setup link for reusable app credentials. |
 | `inspect_provider_connection` | Inspect one exact provider Connection. |
 | `grant_provider_actions` | Grant one Agent revision selected actions from one provider Connection. |
 | `connect_remote_mcp` | Create a public, bearer, or OAuth remote MCP Connection. |
@@ -328,7 +328,7 @@ How to use this tool:
 
 #### `enable_provider`
 
-Resolve auth readiness, reuse an owner-held config, create managed auth, or return a short-lived owner setup link for custom credentials.
+Resolve auth readiness, reuse an owner-held config, create credential-free or managed auth, or return a Crewhelm setup link for reusable app credentials.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
@@ -409,7 +409,7 @@ Create an authorization link for one enabled provider integration.
 
 #### `connect_provider`
 
-Resolve provider auth and return an authorization link or a short-lived owner setup link for custom credentials.
+Resolve provider auth and return a Composio authorization link or, when required, a Crewhelm setup link for reusable app credentials.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |

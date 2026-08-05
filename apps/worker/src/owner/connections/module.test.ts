@@ -121,6 +121,53 @@ describe("OwnerControlPlane connections", () => {
     ]);
   });
 
+  it("records and replays credential-free custom auth configurations", async () => {
+    const authority = await authorityFor("111-enable-custom", [CONNECTION_CONFIGS_WRITE_SCOPE]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const input = {
+      idempotencyKey: "enable-firecrawl-custom-111",
+      integrationSlug: "firecrawl",
+    };
+    const reservation = await stub.reserveIntegrationEnablement(authority, input);
+    if (!reservation.ok || reservation.state !== "dispatch") {
+      throw new Error("Expected custom integration enablement dispatch reservation.");
+    }
+
+    const completion = {
+      authConfigId: "ac_firecrawl_custom",
+      authScheme: "api_key",
+      created: true,
+      integrationSlug: "firecrawl",
+      managed: false,
+      name: "Firecrawl",
+      reservationId: reservation.reservationId,
+    };
+    await expect(stub.completeIntegrationEnablement(authority, completion)).resolves.toMatchObject({
+      managed: false,
+      ok: true,
+    });
+    await expect(stub.reserveIntegrationEnablement(authority, input)).resolves.toMatchObject({
+      authConfigId: completion.authConfigId,
+      managed: false,
+      ok: true,
+      state: "replay",
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec(
+            `SELECT auth_config_id, integration_slug, source
+             FROM provider_auth_configs`,
+          )
+          .one(),
+      ),
+    ).resolves.toEqual({
+      auth_config_id: completion.authConfigId,
+      integration_slug: "firecrawl",
+      source: "crewhelm_custom",
+    });
+  });
+
   it("redispatches an ambiguous integration enablement only after recovery", async () => {
     const authority = await authorityFor("111-enable-recovery", [CONNECTION_CONFIGS_WRITE_SCOPE]);
     const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);

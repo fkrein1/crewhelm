@@ -24,6 +24,7 @@ import {
   PROVIDER_AUTH_SETUP_SESSION_LIFETIME_MS,
   type InspectProviderAuthResult,
   type IntegrationAuthConfigListResult,
+  type ProviderAuthScheme,
   type ProviderAuthConfigReference,
 } from "@crewhelm/contracts";
 import type { ComposioAuthConfigs, ComposioCatalog } from "@crewhelm/composio";
@@ -253,6 +254,7 @@ async function enableIntegration(
 
   const readiness = inspection.authentication;
   let selected = readiness.state === "ready" ? readiness.selected : undefined;
+  let composioHostedAuth: { authScheme: ProviderAuthScheme; name: string } | undefined;
 
   if (readiness.state === "ready" && request.data.authConfigId !== undefined) {
     if (request.data.authConfigId !== readiness.selected.authConfigId) {
@@ -276,15 +278,6 @@ async function enableIntegration(
       });
     }
     if (!readiness.managedAuthAvailable) {
-      if (controlPlane.prepareProviderAuthSetup === undefined) {
-        return unavailableToolResult({
-          code: "invalid_control_plane_response",
-          disposition: "contact_operator",
-          phase: "control_plane.response",
-          reason: "invalid_response",
-        });
-      }
-
       const prepared = await authConfigs.prepareCustom({
         authScheme: readiness.recommendedScheme,
         integrationSlug: request.data.integrationSlug,
@@ -299,86 +292,102 @@ async function enableIntegration(
         });
       }
 
-      const now = Date.now();
-      const capabilityExpiresAt = now + PROVIDER_AUTH_SETUP_CAPABILITY_LIFETIME_MS;
-      const setupExpiresAt = now + PROVIDER_AUTH_SETUP_SESSION_LIFETIME_MS;
-      const setupId = `provider_auth_setup_${crypto.randomUUID()}`;
-      const authorizeConnection = authority.scopes.includes(CONNECTIONS_WRITE_SCOPE);
-      const setupFields = prepared.fields.filter(
-        (field) => field.stage === "auth_config" || authorizeConnection,
-      );
-      const plan = providerAuthSetupPlanSchema.parse({
-        authorizeConnection,
-        authScheme: readiness.recommendedScheme,
-        ...(prepared.callbackUrl === undefined ? {} : { callbackUrl: prepared.callbackUrl }),
-        ...(prepared.documentationUrl === undefined
-          ? {}
-          : { documentationUrl: prepared.documentationUrl }),
-        fieldSchemaDigest: await digestFields(setupFields),
-        fields: setupFields,
-        integrationName: prepared.integrationName,
-        integrationSlug: request.data.integrationSlug,
-        support: prepared.support,
-        setupId,
-      });
-      const capability = await createProviderAuthSetupCapability({
-        claims: { expiresAt: capabilityExpiresAt, ownerKey: authority.ownerKey, setupId },
-        origin: configuration.publicOrigin,
-        signingSecret: configuration.signingSecret,
-      });
+      if (!prepared.requiresAuthConfigCredentials) {
+        composioHostedAuth = {
+          authScheme: readiness.recommendedScheme,
+          name: prepared.integrationName,
+        };
+      } else {
+        if (controlPlane.prepareProviderAuthSetup === undefined) {
+          return unavailableToolResult({
+            code: "invalid_control_plane_response",
+            disposition: "contact_operator",
+            phase: "control_plane.response",
+            reason: "invalid_response",
+          });
+        }
 
-      let setupResponse: unknown;
-      try {
-        setupResponse = await controlPlane.prepareProviderAuthSetup(authority, {
-          capabilityDigest: capability.capabilityDigest,
-          capabilityExpiresAt,
-          idempotencyKey: request.data.idempotencyKey,
-          plan,
-          setupExpiresAt,
+        const now = Date.now();
+        const capabilityExpiresAt = now + PROVIDER_AUTH_SETUP_CAPABILITY_LIFETIME_MS;
+        const setupExpiresAt = now + PROVIDER_AUTH_SETUP_SESSION_LIFETIME_MS;
+        const setupId = `provider_auth_setup_${crypto.randomUUID()}`;
+        const authorizeConnection = authority.scopes.includes(CONNECTIONS_WRITE_SCOPE);
+        const setupFields = prepared.fields.filter(
+          (field) => field.stage === "auth_config" || authorizeConnection,
+        );
+        const plan = providerAuthSetupPlanSchema.parse({
+          authorizeConnection,
+          authScheme: readiness.recommendedScheme,
+          ...(prepared.callbackUrl === undefined ? {} : { callbackUrl: prepared.callbackUrl }),
+          ...(prepared.documentationUrl === undefined
+            ? {}
+            : { documentationUrl: prepared.documentationUrl }),
+          fieldSchemaDigest: await digestFields(setupFields),
+          fields: setupFields,
+          integrationName: prepared.integrationName,
+          integrationSlug: request.data.integrationSlug,
+          support: prepared.support,
+          setupId,
         });
-      } catch {
-        return unavailableToolResult({ phase: "control_plane.rpc", reason: "transport_error" });
-      }
-      const setup = prepareProviderAuthSetupResultSchema.safeParse(setupResponse);
-      if (!setup.success) {
-        return unavailableToolResult({
-          code: "invalid_control_plane_response",
-          disposition: "contact_operator",
-          phase: "control_plane.response",
-          reason: "invalid_response",
+        const capability = await createProviderAuthSetupCapability({
+          claims: { expiresAt: capabilityExpiresAt, ownerKey: authority.ownerKey, setupId },
+          origin: configuration.publicOrigin,
+          signingSecret: configuration.signingSecret,
         });
-      }
-      if (!setup.data.ok) {
+
+        let setupResponse: unknown;
+        try {
+          setupResponse = await controlPlane.prepareProviderAuthSetup(authority, {
+            capabilityDigest: capability.capabilityDigest,
+            capabilityExpiresAt,
+            idempotencyKey: request.data.idempotencyKey,
+            plan,
+            setupExpiresAt,
+          });
+        } catch {
+          return unavailableToolResult({ phase: "control_plane.rpc", reason: "transport_error" });
+        }
+        const setup = prepareProviderAuthSetupResultSchema.safeParse(setupResponse);
+        if (!setup.success) {
+          return unavailableToolResult({
+            code: "invalid_control_plane_response",
+            disposition: "contact_operator",
+            phase: "control_plane.response",
+            reason: "invalid_response",
+          });
+        }
+        if (!setup.data.ok) {
+          return integrationEnablementMcpResult({
+            error: {
+              code:
+                setup.data.error.code === "provider_auth_setup_limit_exceeded"
+                  ? "integration_enablement_request_limit_exceeded"
+                  : setup.data.error.code,
+              message: "Integration enablement request denied.",
+            },
+            ok: false,
+          });
+        }
+        const returnedCapability = await createProviderAuthSetupCapability({
+          claims: {
+            expiresAt: setup.data.capabilityExpiresAt,
+            ownerKey: authority.ownerKey,
+            setupId: setup.data.setupId,
+          },
+          origin: configuration.publicOrigin,
+          signingSecret: configuration.signingSecret,
+        });
         return integrationEnablementMcpResult({
-          error: {
-            code:
-              setup.data.error.code === "provider_auth_setup_limit_exceeded"
-                ? "integration_enablement_request_limit_exceeded"
-                : setup.data.error.code,
-            message: "Integration enablement request denied.",
+          ...inspection,
+          authentication: {
+            ...inspection.authentication,
+            setup: {
+              expiresAt: new Date(setup.data.capabilityExpiresAt).toISOString(),
+              url: returnedCapability.url,
+            },
           },
-          ok: false,
         });
       }
-      const returnedCapability = await createProviderAuthSetupCapability({
-        claims: {
-          expiresAt: setup.data.capabilityExpiresAt,
-          ownerKey: authority.ownerKey,
-          setupId: setup.data.setupId,
-        },
-        origin: configuration.publicOrigin,
-        signingSecret: configuration.signingSecret,
-      });
-      return integrationEnablementMcpResult({
-        ...inspection,
-        authentication: {
-          ...inspection.authentication,
-          setup: {
-            expiresAt: new Date(setup.data.capabilityExpiresAt).toISOString(),
-            url: returnedCapability.url,
-          },
-        },
-      });
     }
   }
 
@@ -462,34 +471,42 @@ async function enableIntegration(
       authScheme: reservation.data.authScheme,
       created: false,
       integrationSlug: reservation.data.integrationSlug,
-      managed: true,
+      managed: reservation.data.managed,
       ok: true,
     });
   }
 
-  let providerResult: Awaited<ReturnType<ComposioAuthConfigs["createManaged"]>>;
+  let providerResult:
+    | Awaited<ReturnType<ComposioAuthConfigs["createCustom"]>>
+    | Awaited<ReturnType<ComposioAuthConfigs["createManaged"]>>;
 
   try {
-    providerResult = await authConfigs.createManaged({
-      integrationSlug: request.data.integrationSlug,
-      name: inspection.integration.name,
-    });
+    providerResult =
+      composioHostedAuth === undefined
+        ? await authConfigs.createManaged({
+            integrationSlug: request.data.integrationSlug,
+            name: inspection.integration.name,
+          })
+        : await authConfigs.createCustom({
+            authScheme: composioHostedAuth.authScheme,
+            credentials: {},
+            integrationSlug: request.data.integrationSlug,
+            name: `${composioHostedAuth.name} · ${reservation.data.reservationId.slice(-12)}`,
+          });
   } catch {
     return unknownIntegrationEnablementMcpResult(reservation.data);
   }
 
   if (!providerResult.ok) {
-    return providerResult.error.code === "integration_enablement_outcome_unknown"
-      ? unknownIntegrationEnablementMcpResult(reservation.data)
-      : integrationEnablementMcpResult(providerResult);
+    return unknownIntegrationEnablementMcpResult(reservation.data);
   }
 
   const completion = completeIntegrationEnablementInputSchema.safeParse({
     authConfigId: providerResult.authConfig.authConfigId,
     authScheme: providerResult.authConfig.authScheme.toLowerCase(),
-    created: providerResult.created,
+    created: "created" in providerResult ? providerResult.created : true,
     integrationSlug: providerResult.authConfig.integrationSlug,
-    managed: true,
+    managed: composioHostedAuth === undefined,
     name: providerResult.authConfig.name,
     reservationId: reservation.data.reservationId,
   });
@@ -592,7 +609,7 @@ export function registerIntegrationTools(
         readOnlyHint: false,
       },
       description:
-        "Resolve provider authentication readiness, reuse an exact selected auth config, create managed authentication, or return a short-lived owner browser setup link for custom credentials. Setup and selection prerequisites create no connection-effect reservation.",
+        "Resolve provider authentication readiness, reuse an exact selected auth config, create credential-free or managed authentication, or return an owner browser setup link when reusable app credentials are required. Setup and selection prerequisites create no connection-effect reservation.",
       inputSchema: enableIntegrationInputSchema,
       title: "Enable integration",
     },

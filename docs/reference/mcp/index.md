@@ -95,10 +95,10 @@ Updating a Brief creates a new revision and never changes existing work.
 
 When the integration is known, skip catalog search. Call `connect_provider` through
 `crewhelm_change_connections`. If it returns exact auth-config choices, repeat with the selected
-`authConfigId`. If it reports custom setup is required, explain that no connection effect was
-reserved and never ask for credentials in MCP. Let the owner open the returned setup URL and complete the
-browser credential handoff and provider authorization. Otherwise let the owner open the returned
-authorization URL. Use the
+`authConfigId`. Never ask for credentials in MCP. Open a returned Composio authorization URL for
+connected-account credentials. A Crewhelm setup URL is returned only when reusable app credentials
+must be collected before Composio can authorize the account; let the owner complete that browser
+handoff first. Use the
 returned authorization result for exact lifecycle inspection after authorization. Keep the
 inspected Connection object unchanged. Search that integration's
 tools and pass selected `{slug, version}` values directly to
