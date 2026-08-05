@@ -237,21 +237,22 @@ local use but does not revoke provider-side credentials.
 Remote MCP server metadata, JSON Schemas, annotations, and results are hostile provider data.
 Crewhelm accepts only canonical public HTTPS Streamable HTTP endpoints, relies on strict-public
 global fetch routing, handles redirects manually without crossing origins, and creates a fresh
-bounded client for discovery or one tool call. It does not expose arbitrary headers, resources,
-prompts, subscriptions, or persistent remote sessions.
+bounded client for discovery or one tool call. It does not expose arbitrary per-call headers,
+resources, prompts, subscriptions, or persistent remote sessions.
 
-Public, bearer, and OAuth Connections use the same frozen-catalog and execution path. Bearer setup
-occurs through an expiring signed browser handoff bound to the authenticated owner and exact
-endpoint. OAuth adds a distinct signed setup capability and request-bound callback state, S256 PKCE,
-standards discovery, URL client IDs or dynamic registration, bounded responses, and exact public
-HTTPS authorization-server endpoints. Requested scopes are explicit; refresh and reauthentication
-cannot widen the frozen granted set. Pending OAuth state, client registration, tokens, and bearer
-credentials are encrypted with installation-derived owner storage keys and decrypted only by the
-owner-side adapter. Refresh completes before ToolGate records dispatch; failure marks the
-Connection unavailable so the owner can reauthenticate the same Connection without replacing its
-attachments or grants. Creation, inspection, attachment, execution, reauthentication, and
-revocation never return credentials. Revocation clears local ciphertext before attempting any
-advertised provider revocation endpoint.
+Public, named-header API-key, bearer, and OAuth Connections use the same frozen-catalog and
+execution path. API-key and bearer setups occur through an expiring signed browser handoff bound to
+the authenticated owner and exact endpoint. API-key header names are bounded and cannot replace
+reserved transport or MCP protocol headers. OAuth adds a distinct signed setup capability and
+request-bound callback state, S256 PKCE, standards discovery, URL client IDs or dynamic
+registration, bounded responses, and exact public HTTPS authorization-server endpoints. Requested
+scopes are explicit; refresh and reauthentication cannot widen the frozen granted set. Pending
+OAuth state, client registration, tokens, API keys, and bearer credentials are encrypted with
+installation-derived owner storage keys and decrypted only by the owner-side adapter. Refresh
+completes before ToolGate records dispatch; failure marks the Connection unavailable so the owner
+can reauthenticate the same Connection without replacing its attachments or grants. Creation,
+inspection, attachment, execution, reauthentication, and revocation never return credentials.
+Revocation clears local ciphertext before attempting any advertised provider revocation endpoint.
 
 Attaching a Connection creates grants for its entire reviewed catalog at one exact snapshot digest.
 Remote hints cannot reduce authority: unknown and nominally read-only operations are classified as

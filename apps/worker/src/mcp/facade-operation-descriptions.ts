@@ -12,7 +12,7 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   cancel_workflow: "Stop future stages of one exact active Workflow revision.",
   connect_provider:
     "Resolve provider auth and return a Composio authorization link or, when required, a Crewhelm setup link for reusable app credentials.",
-  connect_remote_mcp: "Create a public, bearer, or OAuth remote MCP Connection.",
+  connect_remote_mcp: "Create a public, API-key, bearer, or OAuth remote MCP Connection.",
   create: "Create an Agent from one bounded definition.",
   create_brief: "Create one bounded owner-provided text Brief.",
   add_model: "Inspect, preview, or enable one exact Cloudflare model ID.",

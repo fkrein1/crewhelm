@@ -28,7 +28,9 @@ function mcpFetch(options?: {
   tools?: unknown[];
 }) {
   return vi.fn<typeof fetch>(async (_input, init) => {
-    const authorization = new Headers(init?.headers).get("authorization");
+    const headers = new Headers(init?.headers);
+    const authorization = headers.get("authorization");
+    const apiKey = headers.get("x-api-key");
     const body = requestBody(init);
 
     if (body.method === "initialize") {
@@ -74,7 +76,8 @@ function mcpFetch(options?: {
         result: {
           content: (
             options?.reflectedParts ?? [
-              options?.reflectedToken ?? `authorized:${authorization === "Bearer secret"}`,
+              options?.reflectedToken ??
+                `authorized:${authorization === "Bearer secret" || apiKey === "private-api-key"}`,
             ]
           ).map((text) => ({ text, type: "text" })),
         },
@@ -108,6 +111,56 @@ describe("remote MCP endpoints", () => {
 });
 
 describe("remote MCP client", () => {
+  it("identifies Crewhelm on every outbound request", async () => {
+    const fetchImplementation = mcpFetch();
+
+    await discoverRemoteMcpTools({
+      endpoint: "https://mcp.example.com/mcp",
+      fetchImplementation,
+      signal: new AbortController().signal,
+    });
+
+    expect(fetchImplementation).toHaveBeenCalled();
+    expect(
+      fetchImplementation.mock.calls.every(([, init]) =>
+        new Headers(init?.headers).get("user-agent")?.startsWith("crewhelm/"),
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves safe upstream failure metadata and logs structured context", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await expect(
+      discoverRemoteMcpTools({
+        bearerToken: "must-never-appear",
+        endpoint: "https://mcp.example.com/private/path",
+        fetchImplementation: vi.fn<typeof fetch>(
+          async () => new Response("upstream secret response", { status: 403 }),
+        ),
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toMatchObject({
+      code: "request_failed",
+      failureKind: "upstream_denied",
+      upstreamStatus: 403,
+    });
+
+    expect(warning).toHaveBeenCalledWith({
+      authKind: "bearer",
+      endpointHost: "mcp.example.com",
+      errorName: "Error",
+      event: "crewhelm.remote_mcp.request_failed",
+      failureKind: "upstream_denied",
+      operation: "discovery",
+      upstreamStatus: 403,
+    });
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("must-never-appear");
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("upstream secret response");
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("/private/path");
+    warning.mockRestore();
+  });
+
   it("discovers and freezes a canonical tool catalog", async () => {
     const result = await discoverRemoteMcpTools({
       bearerToken: "secret",
@@ -161,6 +214,32 @@ describe("remote MCP client", () => {
         toolName: "record.read",
       }),
     ).resolves.toMatchObject({ content: [{ text: "authorized:true", type: "text" }] });
+  });
+
+  it("calls one exact tool with named-header API-key authentication", async () => {
+    await expect(
+      callRemoteMcpTool({
+        apiKey: { headerName: "x-api-key", value: "private-api-key" },
+        arguments: { id: "record-1" },
+        endpoint: "https://mcp.example.com/mcp",
+        fetchImplementation: mcpFetch(),
+        maximumOutputBytes: 4_096,
+        signal: new AbortController().signal,
+        toolName: "record.read",
+      }),
+    ).resolves.toMatchObject({ content: [{ text: "authorized:true", type: "text" }] });
+
+    await expect(
+      callRemoteMcpTool({
+        apiKey: { headerName: "x-api-key", value: "private-api-key" },
+        arguments: {},
+        endpoint: "https://mcp.example.com/mcp",
+        fetchImplementation: mcpFetch({ reflectedToken: "private-api-key" }),
+        maximumOutputBytes: 4_096,
+        signal: new AbortController().signal,
+        toolName: "record.read",
+      }),
+    ).rejects.toMatchObject({ code: "credential_reflected" });
   });
 
   it("rejects reflected credentials and oversized output", async () => {

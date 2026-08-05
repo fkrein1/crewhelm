@@ -1528,10 +1528,18 @@ Replace the portable Connection requirements in a Recipe publication draft.
                 ],
                 "additionalProperties": false
               },
+              "apiKeyHeaderName": {
+                "description": "Exact HTTP header name for API-key authentication. Enter the credential only in the returned browser setup.",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+              },
               "authKind": {
                 "type": "string",
                 "enum": [
                   "public",
+                  "api_key",
                   "bearer",
                   "oauth"
                 ]

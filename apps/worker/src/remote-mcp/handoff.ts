@@ -1,16 +1,19 @@
 import {
   createRemoteMcpConnectionInputSchema,
   ownerKeySchema,
+  remoteMcpApiKeyHeaderNameSchema,
   remoteMcpEndpointSchema,
   remoteMcpConnectionNameSchema,
 } from "@crewhelm/contracts";
 import * as z from "zod";
 
 export const REMOTE_MCP_BEARER_SETUP_PATH_PREFIX = "/connections/remote-mcp/setup/";
+export const REMOTE_MCP_API_KEY_SETUP_PATH_PREFIX = "/connections/remote-mcp/api-key/setup/";
 export const REMOTE_MCP_OAUTH_SETUP_PATH_PREFIX = "/connections/remote-mcp/oauth/setup/";
 export const REMOTE_MCP_OAUTH_CALLBACK_PATH = "/connections/remote-mcp/oauth/callback";
 export const REMOTE_MCP_OAUTH_CLIENT_METADATA_PATH = "/.well-known/oauth-client/crewhelm";
 const BEARER_HANDOFF_VERSION = "crewhelm.remote-mcp-bearer-setup.v1";
+const API_KEY_HANDOFF_VERSION = "crewhelm.remote-mcp-api-key-setup.v1";
 const OAUTH_SETUP_VERSION = "crewhelm.remote-mcp-oauth-setup.v1";
 const OAUTH_STATE_VERSION = "crewhelm.remote-mcp-oauth-state.v1";
 const encoder = new TextEncoder();
@@ -26,6 +29,9 @@ const claimsSchema = z.strictObject({
   name: remoteMcpConnectionNameSchema,
   ownerKey: ownerKeySchema,
 });
+const apiKeyClaimsSchema = claimsSchema.extend({
+  apiKeyHeaderName: remoteMcpApiKeyHeaderNameSchema,
+});
 const oauthClaimsSchema = z.strictObject({
   expiresAt: z.number().int().positive().safe(),
   ownerKey: ownerKeySchema,
@@ -37,6 +43,7 @@ const oauthClaimsSchema = z.strictObject({
 });
 
 export type RemoteMcpBearerSetupClaims = z.infer<typeof claimsSchema>;
+export type RemoteMcpApiKeySetupClaims = z.infer<typeof apiKeyClaimsSchema>;
 
 function encodeBase64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -144,6 +151,37 @@ export async function readRemoteMcpBearerSetup(input: {
     ...input,
     schema: claimsSchema,
     version: BEARER_HANDOFF_VERSION,
+  });
+}
+
+export async function createRemoteMcpApiKeySetup(input: {
+  claims: RemoteMcpApiKeySetupClaims;
+  origin: string;
+  signingSecret: string;
+}): Promise<{ expiresAt: string; url: string }> {
+  const claims = apiKeyClaimsSchema.parse(input.claims);
+  const origin = publicOriginSchema.parse(input.origin);
+  const { encodedClaims, signature } = await signClaims({
+    claims,
+    signingSecret: input.signingSecret,
+    version: API_KEY_HANDOFF_VERSION,
+  });
+
+  return {
+    expiresAt: new Date(claims.expiresAt).toISOString(),
+    url: `${origin}${REMOTE_MCP_API_KEY_SETUP_PATH_PREFIX}${encodedClaims}/${signature}`,
+  };
+}
+
+export async function readRemoteMcpApiKeySetup(input: {
+  encodedClaims: string;
+  signature: string;
+  signingSecret: unknown;
+}): Promise<RemoteMcpApiKeySetupClaims | null> {
+  return readClaims({
+    ...input,
+    schema: apiKeyClaimsSchema,
+    version: API_KEY_HANDOFF_VERSION,
   });
 }
 

@@ -34,6 +34,7 @@ import {
   validateJsonOutput,
 } from "./output-contracts.js";
 import {
+  remoteMcpApiKeyHeaderNameSchema,
   remoteMcpAuthKindSchema,
   remoteMcpEndpointSchema,
   remoteMcpOAuthScopesSchema,
@@ -302,6 +303,7 @@ const recipeRemoteMcpToolRequirementSchema = z.strictObject({
 });
 export const recipeRemoteMcpConnectionRequirementSchema = requestedConnectionBoundsSchema
   .extend({
+    apiKeyHeaderName: remoteMcpApiKeyHeaderNameSchema.optional(),
     authKind: remoteMcpAuthKindSchema,
     authorization: toolAuthorizationModeSchema,
     description: z.string().trim().min(1).max(240),
@@ -320,6 +322,14 @@ export const recipeRemoteMcpConnectionRequirementSchema = requestedConnectionBou
     reviewedToolCount: z.number().int().min(1).max(100),
     slot: recipeConnectionSlotSchema,
   })
+  .refine(
+    ({ apiKeyHeaderName, authKind }) =>
+      (authKind === "api_key") === (apiKeyHeaderName !== undefined),
+    {
+      message: "Only API-key remote MCP requirements must name an authentication header.",
+      path: ["apiKeyHeaderName"],
+    },
+  )
   .refine(({ authKind, oauthScopes }) => authKind === "oauth" || oauthScopes.length === 0, {
     message: "Only OAuth remote MCP requirements may request OAuth scopes.",
     path: ["oauthScopes"],

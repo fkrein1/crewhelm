@@ -353,7 +353,8 @@ export const remoteMcpConnections = sqliteTable(
   {
     connectionId: text("connection_id").primaryKey(),
     endpoint: text("endpoint").notNull(),
-    authKind: text("auth_kind", { enum: ["public", "bearer", "oauth"] }).notNull(),
+    authKind: text("auth_kind", { enum: ["public", "api_key", "bearer", "oauth"] }).notNull(),
+    apiKeyHeaderName: text("api_key_header_name"),
     catalog: text("catalog", { mode: "json" }).$type<RemoteMcpCatalog>().notNull(),
     catalogBytes: integer("catalog_bytes").notNull(),
     snapshotDigest: text("snapshot_digest").notNull(),
@@ -373,12 +374,16 @@ export const remoteMcpConnections = sqliteTable(
     }).onDelete("restrict"),
     check("remote_mcp_connections_endpoint", sql`length(${table.endpoint}) BETWEEN 1 AND 2048`),
     check(
+      "remote_mcp_connections_api_key_header",
+      sql`(${table.authKind} = 'api_key') = (${table.apiKeyHeaderName} IS NOT NULL)`,
+    ),
+    check(
       "remote_mcp_connections_auth",
       sql`(
         (${table.authKind} = 'public'
           AND ${table.credentialCiphertext} IS NULL
           AND ${table.credentialNonce} IS NULL)
-        OR (${table.authKind} IN ('bearer', 'oauth')
+        OR (${table.authKind} IN ('api_key', 'bearer', 'oauth')
           AND ((${table.credentialCiphertext} IS NOT NULL
               AND ${table.credentialNonce} IS NOT NULL)
             OR (${table.credentialCiphertext} IS NULL

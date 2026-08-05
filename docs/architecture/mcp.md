@@ -137,7 +137,8 @@ the provider's authoritative UI or API. Only a proven `not_applied` result permi
 mutation to be retried. Connections and capability grants remain explicitly revocable.
 
 Remote MCP keeps discovery, credential setup, frozen catalog validation, Agent attachment, and
-execution-time authorization in their existing owners. Public, bearer, and OAuth servers use the
-same owner-side adapter. Bearer material enters through a signed browser setup handoff; OAuth uses
-standards discovery, authorization code with PKCE, encrypted token storage, lazy refresh, and
-best-effort provider revocation. Remote content remains untrusted and bounded.
+execution-time authorization in their existing owners. Public, named-header API-key, bearer, and
+OAuth servers use the same owner-side adapter. API-key and bearer credentials enter through signed
+browser setup handoffs; OAuth uses standards discovery, authorization code with PKCE, encrypted
+token storage, lazy refresh, and best-effort provider revocation. Remote content remains untrusted
+and bounded.

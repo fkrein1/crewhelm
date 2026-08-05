@@ -39,10 +39,10 @@ Worker to Composio; the owner control plane stores only digests, a frozen safe f
 resulting auth-config reference. Agents receive only opaque Connection identifiers and bounded use
 through Crewhelm's adapter. Custom auth-config references are owner-held: readiness intersects the
 owner's completed Crewhelm setup records with the bounded active configuration set in Composio.
-An installation-level custom config is never adopted merely because it exists. For a bearer or
-OAuth remote MCP Connection, Crewhelm encrypts
-credentials at rest in the owner control plane and never places them in MCP arguments, Agent state,
-model context, logs, audit results, or provider results.
+An installation-level custom config is never adopted merely because it exists. For an API-key,
+bearer, or OAuth remote MCP Connection, Crewhelm encrypts credentials at rest in the owner control
+plane and never places them in MCP arguments, Agent state, model context, logs, audit results, or
+provider results.
 
 The bootstrap CLI briefly holds deployment authority. Local installation metadata contains
 non-secret coordinates, not deployed secret values.

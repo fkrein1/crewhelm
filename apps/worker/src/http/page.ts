@@ -10,6 +10,7 @@ interface WorkerPage {
   body: string;
   context?: string;
   heading: string;
+  layout?: "form";
   scriptPath?: string;
   title: string;
   tone?: CrewhelmPageTone;
@@ -39,6 +40,7 @@ export function renderWorkerPage(page: WorkerPage): string {
       : `\n    <script src="${escapePageHtml(page.scriptPath)}" defer></script>`;
   const context = escapePageHtml(page.context ?? "secure browser handoff");
   const tone = page.tone ?? "accent";
+  const panelClass = page.layout === "form" ? "ch-panel ch-panel--form" : "ch-panel";
 
   return `<!doctype html>
 <html lang="en">
@@ -50,7 +52,7 @@ export function renderWorkerPage(page: WorkerPage): string {
     <link rel="stylesheet" href="/oauth/styles.css">${script}
   </head>
   <body class="ch-page">
-    <main class="ch-panel" data-tone="${tone}">
+    <main class="${panelClass}" data-tone="${tone}">
       <div class="ch-panel__bar">
         <span class="ch-panel__context">${context}</span>
         ${CREWHELM_COMPACT_BRAND_HTML}

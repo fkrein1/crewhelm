@@ -49,6 +49,7 @@ import {
   publishAgentBlueprintResultSchema,
   recipePublicationToolResultSchema,
   recipeToolResultSchema,
+  remoteMcpConnectionOperationResultSchema,
   instantiateAgentBlueprintResultSchema,
   retireSkillResultSchema,
   retireAgentBlueprintResultSchema,
@@ -3374,6 +3375,48 @@ describe("authenticated MCP handler", () => {
     expect(text).not.toContain("provider-secret");
   });
 
+  it("returns a browser handoff for named-header API-key remote MCP authentication", async () => {
+    const authority = await ownerAuthority("mcp-api-key-remote-mcp", [CONNECTIONS_WRITE_SCOPE]);
+    const response = await handleAuthenticatedMcpRequest(
+      toolRequest(
+        JSON.stringify({
+          id: 142,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            arguments: {
+              operation: {
+                apiKeyHeaderName: "X-API-Key",
+                authKind: "api_key",
+                endpoint: "https://handoff.example.com/mcp",
+                kind: "connect_remote_mcp",
+                name: "Handoff",
+                requestKey: "connect-handoff-api-mcp",
+              },
+            },
+            name: MCP_CHANGE_CONNECTIONS_TOOL_NAME,
+          },
+        }),
+      ),
+      env,
+      { authority },
+    );
+    const payload = jsonRpcToolResultSchema.parse(await response.json()).result;
+    const result = remoteMcpConnectionOperationResultSchema.parse(
+      JSON.parse(payload.content[0]?.text ?? ""),
+    );
+
+    expect(payload.isError).toBe(false);
+    expect(result).toMatchObject({ ok: true, state: "setup_required" });
+    if (!result.ok || result.state !== "setup_required") {
+      throw new Error("Expected API-key setup handoff.");
+    }
+    expect(new URL(result.setup.url).pathname).toMatch(
+      /^\/connections\/remote-mcp\/api-key\/setup\//,
+    );
+    expect(JSON.stringify(result)).not.toContain("private-api-key");
+  });
+
   it("inspects custom provider setup readiness without creating a reservation", async () => {
     const authority = await ownerAuthority("mcp-spotify-readiness-owner", [
       CONNECTION_CONFIGS_READ_SCOPE,
@@ -3462,6 +3505,7 @@ describe("authenticated MCP handler", () => {
       CONNECTION_CONFIGS_WRITE_SCOPE,
       CONNECTIONS_WRITE_SCOPE,
     ]);
+    const integrationName = "F".repeat(160);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1_000).toISOString();
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -3500,7 +3544,7 @@ describe("authenticated MCP handler", () => {
             },
           ],
           composio_managed_auth_schemes: [],
-          name: "Firecrawl",
+          name: integrationName,
           no_auth: false,
           slug: "firecrawl",
         }),
@@ -3542,7 +3586,7 @@ describe("authenticated MCP handler", () => {
             },
           ],
           composio_managed_auth_schemes: [],
-          name: "Firecrawl",
+          name: integrationName,
           no_auth: false,
           slug: "firecrawl",
         }),
@@ -3672,7 +3716,18 @@ describe("authenticated MCP handler", () => {
                 },
               ],
             },
-            connected_account_initiation: { optional: [], required: [] },
+            connected_account_initiation: {
+              optional: [],
+              required: [
+                {
+                  displayName: "Account token",
+                  is_secret: true,
+                  name: "account_token",
+                  required: true,
+                  type: "string",
+                },
+              ],
+            },
           },
           mode: "oauth2",
         },
@@ -3725,19 +3780,25 @@ describe("authenticated MCP handler", () => {
       ok: true,
     });
     expect(fetchMock).toHaveBeenCalledTimes(4);
-    await expect(
-      runInDurableObject(
-        env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
-        (_instance, state) => ({
-          enablements: state.storage.sql
-            .exec("SELECT count(*) AS count FROM integration_enablement_requests")
-            .one(),
-          setups: state.storage.sql
-            .exec("SELECT count(*) AS count FROM provider_auth_setup_requests")
-            .one(),
-        }),
-      ),
-    ).resolves.toEqual({ enablements: { count: 0 }, setups: { count: 1 } });
+    const stored = await runInDurableObject(
+      env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey),
+      (_instance, state) => ({
+        enablements: state.storage.sql
+          .exec("SELECT count(*) AS count FROM integration_enablement_requests")
+          .one(),
+        setup: state.storage.sql
+          .exec<{ plan: string }>("SELECT plan FROM provider_auth_setup_requests")
+          .one(),
+      }),
+    );
+    expect(stored.enablements).toEqual({ count: 0 });
+    expect(JSON.parse(stored.setup.plan)).toMatchObject({
+      fields: [
+        { key: "client_id", stage: "auth_config" },
+        { key: "client_secret", stage: "auth_config" },
+      ],
+    });
+    expect(stored.setup.plan).not.toContain("account_token");
   });
 
   it("connects through one existing custom auth config without managed enablement", async () => {
