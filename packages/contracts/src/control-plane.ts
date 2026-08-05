@@ -191,12 +191,32 @@ export const agentInstructionsSchema = z
   .string()
   .min(1)
   .max(8 * 1_024);
-export const agentExecutionLimitsSchema = z.strictObject({
-  maxDurationSeconds: z.number().int().min(1).max(3_600),
-  maxModelTokens: z.number().int().min(1).max(1_000_000),
-  maxToolCalls: z.number().int().min(0).max(100),
-  maxTurns: z.number().int().min(1).max(100),
-});
+export const agentIntegrationLimitsSchema = z
+  .strictObject({
+    duplicateToolCallLimit: z.number().int().min(1).max(100),
+    maxCallsPerRun: z.number().int().min(1).max(100),
+    maxCallsPerToolPerRun: z.number().int().min(1).max(100),
+  })
+  .refine(
+    (limits) => limits.maxCallsPerToolPerRun <= limits.maxCallsPerRun,
+    "Per-tool calls must not exceed total calls per run.",
+  );
+export const agentExecutionLimitsSchema = z
+  .strictObject({
+    integrations: agentIntegrationLimitsSchema
+      .describe("Optional Agent-specific per-Run integration ceilings; fleet ceilings still win.")
+      .optional(),
+    maxDurationSeconds: z.number().int().min(1).max(3_600),
+    maxModelTokens: z.number().int().min(1).max(1_000_000),
+    maxToolCalls: z.number().int().min(0).max(100),
+    maxTurns: z.number().int().min(1).max(100),
+  })
+  .refine(
+    (limits) =>
+      limits.integrations === undefined ||
+      limits.maxToolCalls <= limits.integrations.maxCallsPerRun,
+    "Agent tool calls must not exceed its integration-call limit.",
+  );
 export const agentCapabilityGrantsSchema = z
   .array(capabilityGrantIdSchema)
   .max(100)

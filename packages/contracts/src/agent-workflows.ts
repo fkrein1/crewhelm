@@ -27,6 +27,12 @@ export const MAXIMUM_AGENT_WORKFLOW_OBJECTIVE_CHARACTERS = 4 * 1_024;
 export const MAXIMUM_AGENT_WORKFLOW_STAGE_NAME_CHARACTERS = 80;
 export const MAXIMUM_AGENT_WORKFLOW_STAGE_PROMPT_CHARACTERS = 11 * 1_024;
 export const MAXIMUM_AGENT_WORKFLOW_PLAN_CHARACTERS = 48 * 1_024;
+export const MAXIMUM_AGENT_WORKFLOW_STAGE_DELAY_SECONDS = 7 * 24 * 60 * 60;
+export const MAXIMUM_AGENT_WORKFLOW_TOTAL_DELAY_SECONDS = 28 * 24 * 60 * 60;
+export const DEFAULT_AGENT_WORKFLOW_STAGE_MAX_WAIT_SECONDS = 60 * 60;
+export const MINIMUM_AGENT_WORKFLOW_DEFER_SECONDS = 30;
+export const MAXIMUM_AGENT_WORKFLOW_DEFER_SECONDS = 2 * 60 * 60;
+export const MAXIMUM_AGENT_WORKFLOW_DEFERRALS = 120;
 export const MAXIMUM_AGENT_WORKFLOWS_PER_OWNER = 1_000;
 export const MAXIMUM_ACTIVE_AGENT_WORKFLOWS_PER_OWNER = 32;
 export const MAXIMUM_WORKFLOW_DELIVERABLE_BYTES = MAXIMUM_RUN_OUTPUT_CHARACTERS * 3;
@@ -57,7 +63,33 @@ export const agentWorkflowStageStatusSchema = z.enum([
   "cancelled",
 ]);
 
+export const agentWorkflowStageDeferralSchema = z.strictObject({
+  maxWaitSeconds: z
+    .number()
+    .int()
+    .min(MINIMUM_AGENT_WORKFLOW_DEFER_SECONDS)
+    .max(MAXIMUM_AGENT_WORKFLOW_STAGE_DELAY_SECONDS)
+    .default(DEFAULT_AGENT_WORKFLOW_STAGE_MAX_WAIT_SECONDS)
+    .describe(
+      "Maximum elapsed time this stage may defer itself while waiting for external work. The Agent chooses each bounded resume delay.",
+    ),
+});
+
+const agentWorkflowStageDelaySecondsSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(MAXIMUM_AGENT_WORKFLOW_STAGE_DELAY_SECONDS);
+
 export const agentWorkflowStagePlanSchema = z.strictObject({
+  delayBeforeSeconds: agentWorkflowStageDelaySecondsSchema
+    .describe("Durable delay before this stage is admitted. Sleeping consumes no Run budget.")
+    .optional(),
+  deferral: agentWorkflowStageDeferralSchema
+    .describe(
+      "Permit this Workflow stage to checkpoint as waiting and resume as a fresh bounded Run until done or the elapsed-time ceiling is reached.",
+    )
+    .optional(),
   name: z
     .string()
     .trim()
@@ -95,14 +127,27 @@ export const agentWorkflowFailureSchema = z.strictObject({
 });
 
 export const agentWorkflowAggregateBudgetSchema = z.strictObject({
-  maxDurationSeconds: z.number().int().min(2).max(28_800).safe(),
-  maxModelTokens: z.number().int().min(2).max(8_000_000).safe(),
-  maxToolCalls: z.number().int().min(0).max(800).safe(),
-  maxTurns: z.number().int().min(2).max(800).safe(),
+  maxDurationSeconds: z.number().int().min(2).max(460_800).safe(),
+  maxModelTokens: z.number().int().min(2).max(128_000_000).safe(),
+  maxToolCalls: z.number().int().min(0).max(12_800).safe(),
+  maxTurns: z.number().int().min(2).max(12_800).safe(),
 });
 
 export const agentWorkflowStageSummarySchema = z.strictObject({
+  attempts: z
+    .number()
+    .int()
+    .nonnegative()
+    .max(MAXIMUM_AGENT_WORKFLOW_DEFERRALS + 1),
   completedAt: z.iso.datetime().nullable(),
+  delayBeforeSeconds: agentWorkflowStageDelaySecondsSchema,
+  deferral: z
+    .strictObject({
+      lastReason: z.string().min(1).max(256).nullable(),
+      maxWaitSeconds: agentWorkflowStageDeferralSchema.shape.maxWaitSeconds,
+      nextAttemptAt: z.iso.datetime().nullable(),
+    })
+    .nullable(),
   index: z
     .number()
     .int()
@@ -131,6 +176,7 @@ export const agentWorkflowSummarySchema = z.strictObject({
   stageCount: z.number().int().min(2).max(MAXIMUM_AGENT_WORKFLOW_STAGES),
   status: agentWorkflowStatusSchema,
   updatedAt: z.iso.datetime(),
+  waitingUntil: z.iso.datetime().nullable(),
   workflowId: agentWorkflowIdSchema,
 });
 
@@ -216,7 +262,26 @@ export const startAgentWorkflowInputSchema = z
         path: ["stages"],
       });
     }
-  });
+
+    const totalDelaySeconds = input.stages.reduce(
+      (total, stage) => total + (stage.delayBeforeSeconds ?? 0),
+      0,
+    );
+    if (totalDelaySeconds > MAXIMUM_AGENT_WORKFLOW_TOTAL_DELAY_SECONDS) {
+      context.addIssue({
+        code: "custom",
+        message: "Workflow stage delays exceed the bounded total.",
+        path: ["stages"],
+      });
+    }
+  })
+  .transform((input) => ({
+    ...input,
+    stages: input.stages.map((stage) => ({
+      ...stage,
+      delayBeforeSeconds: stage.delayBeforeSeconds ?? 0,
+    })),
+  }));
 
 export const listAgentWorkflowsInputSchema = z.strictObject({
   agentId: agentIdSchema.optional().describe("Return workflows for one exact Agent."),
@@ -438,8 +503,24 @@ export const agentTaskWorkflowParamsSchema = z.strictObject({
   agentId: agentIdSchema,
   ownerKey: ownerKeySchema,
   stageCount: z.number().int().min(2).max(MAXIMUM_AGENT_WORKFLOW_STAGES),
+  stageDelaysSeconds: z
+    .array(z.number().int().min(0).max(MAXIMUM_AGENT_WORKFLOW_STAGE_DELAY_SECONDS))
+    .max(MAXIMUM_AGENT_WORKFLOW_STAGES)
+    .default([]),
+  stageMaxWaitSeconds: z
+    .array(z.number().int().min(0).max(MAXIMUM_AGENT_WORKFLOW_STAGE_DELAY_SECONDS))
+    .max(MAXIMUM_AGENT_WORKFLOW_STAGES)
+    .default([]),
   workflowId: agentWorkflowIdSchema,
 });
+
+export const prepareAgentWorkflowStageResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    ok: z.literal(true),
+    waitingUntil: z.iso.datetime().nullable(),
+  }),
+  z.strictObject({ error: agentWorkflowMutationErrorSchema, ok: z.literal(false) }),
+]);
 
 export const dispatchAgentWorkflowStageInputSchema = z.strictObject({
   agentId: agentIdSchema,
@@ -453,6 +534,11 @@ export const dispatchAgentWorkflowStageInputSchema = z.strictObject({
 
 export const dispatchAgentWorkflowStageResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
+    attempt: z
+      .number()
+      .int()
+      .positive()
+      .max(MAXIMUM_AGENT_WORKFLOW_DEFERRALS + 1),
     ok: z.literal(true),
     runId: runIdSchema,
     session: runSessionSchema,
@@ -465,16 +551,53 @@ export const completeAgentWorkflowStageInputSchema = dispatchAgentWorkflowStageI
   runId: runIdSchema,
 });
 
-export const completeAgentWorkflowStageResultSchema = z.discriminatedUnion("ok", [
+export const completeAgentWorkflowStageResultSchema = z.union([
   z.strictObject({
     ok: z.literal(true),
     status: z.enum(["completed", "failed", "cancelled"]),
     workflowStatus: agentWorkflowStatusSchema,
   }),
+  z.strictObject({
+    attempt: z
+      .number()
+      .int()
+      .positive()
+      .max(MAXIMUM_AGENT_WORKFLOW_DEFERRALS + 1),
+    ok: z.literal(true),
+    status: z.literal("waiting"),
+    waitingUntil: z.iso.datetime(),
+    workflowStatus: z.literal("waiting"),
+  }),
+  z.strictObject({ error: agentWorkflowMutationErrorSchema, ok: z.literal(false) }),
+]);
+
+export const checkpointAgentWorkflowStageInputSchema = z.strictObject({
+  checkpoint: z.discriminatedUnion("state", [
+    z.strictObject({ state: z.literal("done") }),
+    z.strictObject({
+      afterSeconds: z
+        .number()
+        .int()
+        .min(MINIMUM_AGENT_WORKFLOW_DEFER_SECONDS)
+        .max(MAXIMUM_AGENT_WORKFLOW_DEFER_SECONDS),
+      reason: z.string().trim().min(1).max(256),
+      state: z.literal("wait"),
+    }),
+  ]),
+  runId: runIdSchema,
+});
+
+export const checkpointAgentWorkflowStageResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({ checkpointed: z.literal(true), ok: z.literal(true) }),
   z.strictObject({ error: agentWorkflowMutationErrorSchema, ok: z.literal(false) }),
 ]);
 
 export const agentWorkflowRunEventSchema = z.strictObject({
+  attempt: z
+    .number()
+    .int()
+    .positive()
+    .max(MAXIMUM_AGENT_WORKFLOW_DEFERRALS + 1),
   runId: runIdSchema,
   stageIndex: z
     .number()
@@ -493,6 +616,9 @@ export type AgentWorkflowStageSummary = z.infer<typeof agentWorkflowStageSummary
 export type AgentWorkflowStatus = z.infer<typeof agentWorkflowStatusSchema>;
 export type AgentWorkflowSummary = z.infer<typeof agentWorkflowSummarySchema>;
 export type CancelAgentWorkflowResult = z.infer<typeof cancelAgentWorkflowResultSchema>;
+export type CheckpointAgentWorkflowStageResult = z.infer<
+  typeof checkpointAgentWorkflowStageResultSchema
+>;
 export type CompleteAgentWorkflowStageResult = z.infer<
   typeof completeAgentWorkflowStageResultSchema
 >;
@@ -500,6 +626,7 @@ export type DeleteAgentWorkflowResult = z.infer<typeof deleteAgentWorkflowResult
 export type DispatchAgentWorkflowStageResult = z.infer<
   typeof dispatchAgentWorkflowStageResultSchema
 >;
+export type PrepareAgentWorkflowStageResult = z.infer<typeof prepareAgentWorkflowStageResultSchema>;
 export type InspectAgentWorkflowResult = z.infer<typeof inspectAgentWorkflowResultSchema>;
 export type ListAgentWorkflowsResult = z.infer<typeof listAgentWorkflowsResultSchema>;
 export type StartAgentWorkflowInput = z.infer<typeof startAgentWorkflowInputSchema>;

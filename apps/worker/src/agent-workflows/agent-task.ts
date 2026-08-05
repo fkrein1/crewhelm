@@ -3,6 +3,7 @@ import {
   agentWorkflowRunEventSchema,
   completeAgentWorkflowStageResultSchema,
   dispatchAgentWorkflowStageResultSchema,
+  prepareAgentWorkflowStageResultSchema,
   type AgentTaskWorkflowParams,
   type DispatchAgentWorkflowStageResult,
 } from "@crewhelm/contracts";
@@ -13,8 +14,8 @@ import type { CrewAgent } from "../agent/session-directory.js";
 
 export const AGENT_TASK_WORKFLOW_BINDING = "AGENT_TASK_WORKFLOW" as const;
 export const AGENT_TASK_WORKFLOW_AGENT_BINDING = "CREW_AGENT" as const;
-export function agentWorkflowStageEventType(stageIndex: number): string {
-  return `crewhelm.agent-workflow.stage-terminal.${stageIndex}`;
+export function agentWorkflowStageEventType(stageIndex: number, attempt: number): string {
+  return `crewhelm.agent-workflow.stage-terminal.${stageIndex}.${attempt}`;
 }
 
 type StageFailureCode = Extract<DispatchAgentWorkflowStageResult, { ok: false }>["error"]["code"];
@@ -68,113 +69,157 @@ export class AgentTaskWorkflow extends AgentWorkflow<CrewAgent, AgentTaskWorkflo
     const controlPlane = this.env.OWNER_CONTROL_PLANE.getByName(params.ownerKey);
 
     for (let stageIndex = 0; stageIndex < params.stageCount; stageIndex += 1) {
-      const dispatched = dispatchAgentWorkflowStageResultSchema.parse(
-        await step.do(
-          `dispatch-stage-${stageIndex}`,
-          { retries: { delay: "1 second", limit: 5 }, timeout: "30 seconds" },
-          async () => {
-            const result = dispatchAgentWorkflowStageResultSchema.parse(
-              await controlPlane.dispatchAgentWorkflowStage({
-                agentId: params.agentId,
-                stageIndex,
-                workflowId: params.workflowId,
-              }),
-            );
-
-            if (!result.ok && stageFailureDisposition(result.error.code) === "retry") {
-              throw new Error(
-                `Crewhelm workflow stage ${stageIndex + 1} admission is unavailable.`,
+      let attempt = 1;
+      for (;;) {
+        const prepared = prepareAgentWorkflowStageResultSchema.parse(
+          await step.do(
+            `prepare-stage-${stageIndex}-attempt-${attempt}`,
+            { retries: { delay: "1 second", limit: 5 }, timeout: "30 seconds" },
+            async () => {
+              const result = prepareAgentWorkflowStageResultSchema.parse(
+                await controlPlane.prepareAgentWorkflowStage({
+                  agentId: params.agentId,
+                  stageIndex,
+                  workflowId: params.workflowId,
+                }),
               );
-            }
-            return result;
-          },
-        ),
-      );
-
-      if (!dispatched.ok) {
-        throw new NonRetryableError(
-          `Crewhelm workflow stage ${stageIndex + 1} was not admitted (${dispatched.error.code}).`,
+              if (!result.ok && stageFailureDisposition(result.error.code) === "retry") {
+                throw new Error(
+                  `Crewhelm workflow stage ${stageIndex + 1} preparation is unavailable.`,
+                );
+              }
+              return result;
+            },
+          ),
         );
-      }
 
-      const parsedTerminal = agentWorkflowRunEventSchema.safeParse(
-        (
-          await step.waitForEvent(`wait-stage-${stageIndex}`, {
-            timeout: "2 hours",
-            type: agentWorkflowStageEventType(stageIndex),
-          })
-        ).payload,
-      );
-
-      if (!parsedTerminal.success) {
-        throw new NonRetryableError("Crewhelm workflow received an invalid stage event.");
-      }
-
-      const terminal = parsedTerminal.data;
-
-      if (
-        terminal.workflowId !== params.workflowId ||
-        terminal.stageIndex !== stageIndex ||
-        terminal.runId !== dispatched.runId
-      ) {
-        throw new NonRetryableError("Crewhelm workflow received a mismatched stage event.");
-      }
-
-      const completed = completeAgentWorkflowStageResultSchema.parse(
-        await step.do(
-          `complete-stage-${stageIndex}`,
-          { retries: { delay: "1 second", limit: 5 }, timeout: "30 seconds" },
-          async () => {
-            const result = completeAgentWorkflowStageResultSchema.parse(
-              await controlPlane.completeAgentWorkflowStage({
-                agentId: params.agentId,
-                runId: terminal.runId,
-                stageIndex,
-                workflowId: params.workflowId,
-              }),
-            );
-
-            if (!result.ok && stageFailureDisposition(result.error.code) === "retry") {
-              throw new Error(
-                `Crewhelm workflow stage ${stageIndex + 1} completion is unavailable.`,
-              );
-            }
-            return result;
-          },
-        ),
-      );
-
-      if (!completed.ok) {
-        throw new NonRetryableError(
-          `Crewhelm workflow stage ${stageIndex + 1} could not be finalized (${completed.error.code}).`,
-        );
-      }
-
-      switch (completed.workflowStatus) {
-        case "cancelled": {
-          const result = { status: "cancelled" as const, workflowId: params.workflowId };
-          await step.reportComplete(result);
-          return result;
-        }
-        case "completed":
-          if (stageIndex !== params.stageCount - 1) {
-            throw new NonRetryableError("Crewhelm workflow completed before its final stage.");
-          }
-          break;
-        case "failed":
-          await step.reportError(`Crewhelm workflow stage ${stageIndex + 1} failed.`);
-          throw new NonRetryableError(`Crewhelm workflow stage ${stageIndex + 1} failed.`);
-        case "running":
-          if (stageIndex === params.stageCount - 1) {
-            throw new NonRetryableError("Crewhelm workflow final stage did not complete.");
-          }
-          break;
-        case "cancelling":
-        case "queued":
-        case "waiting":
+        if (!prepared.ok) {
           throw new NonRetryableError(
-            `Crewhelm workflow stage ${stageIndex + 1} returned an invalid workflow state (${completed.workflowStatus}).`,
+            `Crewhelm workflow stage ${stageIndex + 1} could not be prepared (${prepared.error.code}).`,
           );
+        }
+        if (prepared.waitingUntil !== null) {
+          await step.sleepUntil(
+            `delay-stage-${stageIndex}-attempt-${attempt}`,
+            new Date(prepared.waitingUntil),
+          );
+        }
+
+        const dispatched = dispatchAgentWorkflowStageResultSchema.parse(
+          await step.do(
+            `dispatch-stage-${stageIndex}-attempt-${attempt}`,
+            { retries: { delay: "1 second", limit: 5 }, timeout: "30 seconds" },
+            async () => {
+              const result = dispatchAgentWorkflowStageResultSchema.parse(
+                await controlPlane.dispatchAgentWorkflowStage({
+                  agentId: params.agentId,
+                  stageIndex,
+                  workflowId: params.workflowId,
+                }),
+              );
+
+              if (!result.ok && stageFailureDisposition(result.error.code) === "retry") {
+                throw new Error(
+                  `Crewhelm workflow stage ${stageIndex + 1} admission is unavailable.`,
+                );
+              }
+              return result;
+            },
+          ),
+        );
+
+        if (!dispatched.ok) {
+          throw new NonRetryableError(
+            `Crewhelm workflow stage ${stageIndex + 1} was not admitted (${dispatched.error.code}).`,
+          );
+        }
+
+        const parsedTerminal = agentWorkflowRunEventSchema.safeParse(
+          (
+            await step.waitForEvent(`wait-stage-${stageIndex}-attempt-${dispatched.attempt}`, {
+              timeout: "2 hours",
+              type: agentWorkflowStageEventType(stageIndex, dispatched.attempt),
+            })
+          ).payload,
+        );
+
+        if (!parsedTerminal.success) {
+          throw new NonRetryableError("Crewhelm workflow received an invalid stage event.");
+        }
+
+        const terminal = parsedTerminal.data;
+
+        if (
+          terminal.workflowId !== params.workflowId ||
+          terminal.stageIndex !== stageIndex ||
+          terminal.attempt !== dispatched.attempt ||
+          terminal.runId !== dispatched.runId
+        ) {
+          throw new NonRetryableError("Crewhelm workflow received a mismatched stage event.");
+        }
+
+        const completed = completeAgentWorkflowStageResultSchema.parse(
+          await step.do(
+            `complete-stage-${stageIndex}-attempt-${dispatched.attempt}`,
+            { retries: { delay: "1 second", limit: 5 }, timeout: "30 seconds" },
+            async () => {
+              const result = completeAgentWorkflowStageResultSchema.parse(
+                await controlPlane.completeAgentWorkflowStage({
+                  agentId: params.agentId,
+                  runId: terminal.runId,
+                  stageIndex,
+                  workflowId: params.workflowId,
+                }),
+              );
+
+              if (!result.ok && stageFailureDisposition(result.error.code) === "retry") {
+                throw new Error(
+                  `Crewhelm workflow stage ${stageIndex + 1} completion is unavailable.`,
+                );
+              }
+              return result;
+            },
+          ),
+        );
+
+        if (!completed.ok) {
+          throw new NonRetryableError(
+            `Crewhelm workflow stage ${stageIndex + 1} could not be finalized (${completed.error.code}).`,
+          );
+        }
+
+        if (completed.status === "waiting") {
+          attempt = completed.attempt + 1;
+          continue;
+        }
+
+        switch (completed.workflowStatus) {
+          case "cancelled": {
+            const result = { status: "cancelled" as const, workflowId: params.workflowId };
+            await step.reportComplete(result);
+            return result;
+          }
+          case "completed":
+            if (stageIndex !== params.stageCount - 1) {
+              throw new NonRetryableError("Crewhelm workflow completed before its final stage.");
+            }
+            break;
+          case "failed":
+            await step.reportError(`Crewhelm workflow stage ${stageIndex + 1} failed.`);
+            throw new NonRetryableError(`Crewhelm workflow stage ${stageIndex + 1} failed.`);
+          case "running":
+            if (stageIndex === params.stageCount - 1) {
+              throw new NonRetryableError("Crewhelm workflow final stage did not complete.");
+            }
+            break;
+          case "cancelling":
+          case "queued":
+          case "waiting":
+            throw new NonRetryableError(
+              `Crewhelm workflow stage ${stageIndex + 1} returned an invalid workflow state (${completed.workflowStatus}).`,
+            );
+        }
+        break;
       }
     }
 

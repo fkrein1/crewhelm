@@ -60,6 +60,14 @@ exact Agent and fleet revisions, aggregate budget, and retention before executio
 runtime receives only opaque coordinates and cannot mint permits, add work, access provider
 adapters, or bypass the normal Run and ToolGate checks.
 
+A deferrable Workflow stage may use its Workflow-only checkpoint action as its final action to
+declare either `wait` or `done`. A `wait` checkpoint records one bounded reason and resume delay,
+ends the current Run, and lets the Workflow coordinator sleep durably before admitting a fresh Run
+for the same stage and Session. The sleep consumes no Run duration or integration-call budget.
+Elapsed waiting time, each delay, total deferrals, and aggregate Workflow execution remain frozen
+and bounded. A missing checkpoint fails the deferrable stage closed; model text cannot create a
+delay, widen its deadline, or mark the checkpoint durable.
+
 Each stage rechecks the frozen fleet revision inside Run admission before a permit is issued. A
 Workflow-owned Session is not an ordinary continuation target: direct Runs and Session deletion
 cannot mutate it, and it is removed only through the Workflow deletion path.
@@ -143,6 +151,13 @@ response bytes, normalized output bytes, and wall time are frozen at admission a
 content enters model context. Cloudflare's `global_fetch_strictly_public` flag prevents global fetch
 from bypassing mapped Workers or zone security settings through direct origin routing. Retrieved
 content is evidence, never instructions or authority.
+
+Provider-uploadable files may accept one explicit Crewhelm `source_url` descriptor. The Worker
+validates a parsed copy as public HTTPS, rejects credentials, fragments, nonstandard ports, local or
+private hosts, redirects, unexpected media types, and files outside the bounded count and size. It
+fetches the original URL string unchanged so presigned query signatures are never normalized or
+reconstructed. File bytes stay outside model context, MCP results, logs, and audit events. The
+destination action receives only Composio's opaque staged-file reference.
 
 A remote MCP Connection grants access to one reviewed, digest-frozen tool catalog, not ambient
 network access. Endpoints are canonical public HTTPS URLs; local and private targets, credentials in

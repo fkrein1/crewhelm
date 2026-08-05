@@ -143,7 +143,10 @@ function workflowSummary(
     currentStage: terminal
       ? null
       : {
+          attempts: workflowState === "running" ? 1 : 0,
           completedAt: null,
+          deferral: null,
+          delayBeforeSeconds: 0,
           index: 0,
           name: "Observe",
           runId: null,
@@ -156,6 +159,7 @@ function workflowSummary(
     stageCount: 2,
     status: workflowState,
     updatedAt: timestamp,
+    waitingUntil: null,
     workflowId,
   };
 }
@@ -169,7 +173,10 @@ function inspectedWorkflow(workflowState: "running" | "completed" | "cancelled",
     session: null,
     stages: [
       {
+        attempts: 1,
         completedAt: workflowState === "completed" ? timestamp : null,
+        deferral: null,
+        delayBeforeSeconds: 0,
         index: 0,
         name: "Observe",
         runId: null,
@@ -182,7 +189,10 @@ function inspectedWorkflow(workflowState: "running" | "completed" | "cancelled",
               : "running",
       },
       {
+        attempts: workflowState === "completed" ? 1 : 0,
         completedAt: workflowState === "completed" ? timestamp : null,
+        deferral: null,
+        delayBeforeSeconds: 0,
         index: 1,
         name: "Conclude",
         runId: null,

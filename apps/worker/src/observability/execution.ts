@@ -132,6 +132,33 @@ const executionProviderResponseEventSchema = z.discriminatedUnion("operation", [
   z
     .object({
       durationMs: durationMsSchema,
+      operation: z.literal("stage_file"),
+      outcome: z.enum([
+        "object_upload_failed",
+        "object_upload_rejected",
+        "processing_failed",
+        "source_download_aborted",
+        "source_download_failed",
+        "source_download_invalid_url",
+        "source_download_request_context",
+        "source_download_subrequest_limit",
+        "source_response_rejected",
+        "source_too_large",
+        "source_url_rejected",
+        "upload_request_failed",
+        "upload_request_invalid",
+        "upload_request_rejected",
+        "upload_url_rejected",
+      ]),
+      runId: runIdSchema,
+      status: providerStatusSchema,
+      toolCallId: toolCallIdSchema,
+      toolSlug: integrationToolSlugSchema,
+    })
+    .strict(),
+  z
+    .object({
+      durationMs: durationMsSchema,
       operation: z.literal("verify"),
       outcome: z.enum([
         "accepted",

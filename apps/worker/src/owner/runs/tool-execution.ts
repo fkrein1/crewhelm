@@ -29,6 +29,7 @@ import {
   type ListUnresolvedToolEffectsResult,
   type OwnerAuthority,
   type ToolExecutionEvaluationFailureReason,
+  type ToolGateDecision,
 } from "@crewhelm/contracts";
 import { and, count, desc, eq, gt, isNotNull, isNull, lt, lte, min, or } from "drizzle-orm";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
@@ -57,6 +58,20 @@ const INVALID_TOOL_EXECUTION = {
   },
   ok: false,
 } as const;
+
+function deniedToolExecutionPolicy(
+  decision: Extract<ToolGateDecision, { decision: "deny" }>,
+): ReserveToolExecutionResult {
+  return reserveToolExecutionResultSchema.parse({
+    error: {
+      code: "invalid_execution",
+      ...(decision.details === undefined ? {} : { details: decision.details }),
+      message: "Tool execution denied.",
+      reason: decision.reason,
+    },
+    ok: false,
+  });
+}
 
 export function deniedToolExecutionEvaluation(
   reason: ToolExecutionEvaluationFailureReason,
@@ -267,7 +282,7 @@ export class ToolExecutions {
 
     switch (decision.decision) {
       case "deny":
-        return INVALID_TOOL_EXECUTION;
+        return deniedToolExecutionPolicy(decision);
       case "requires_approval":
         recordExecutionEvent({
           outcome: "approval_required",
@@ -416,11 +431,13 @@ export class ToolExecutions {
       const expired = transaction
         .select({
           clientId: runAdmissions.clientId,
+          grant: capabilityGrants.grant,
           runId: toolExecutions.runId,
           toolCallId: toolExecutions.toolCallId,
         })
         .from(toolExecutions)
         .innerJoin(runAdmissions, eq(runAdmissions.runId, toolExecutions.runId))
+        .innerJoin(capabilityGrants, eq(capabilityGrants.grantId, toolExecutions.grantId))
         .where(
           and(
             eq(toolExecutions.status, "reserved"),
@@ -432,12 +449,14 @@ export class ToolExecutions {
       const completed: typeof expired = [];
 
       for (const execution of expired) {
+        const grant = externalToolCapabilityGrantSchema.safeParse(execution.grant);
+        const status = grant.success && grant.data.effect === "read" ? "failed" : "unknown";
         const updated = transaction
           .update(toolExecutions)
           .set({
             completedAt: currentTime,
             outputBytes: 0,
-            status: "unknown",
+            status,
           })
           .where(
             and(
@@ -457,7 +476,7 @@ export class ToolExecutions {
         transaction
           .insert(auditEvents)
           .values({
-            action: "tool.execution_unknown",
+            action: `tool.execution_${status}`,
             clientId: execution.clientId,
             occurredAt: currentTime,
             subjectId: execution.toolCallId,
@@ -470,8 +489,9 @@ export class ToolExecutions {
     });
 
     for (const execution of reconciled) {
+      const grant = externalToolCapabilityGrantSchema.safeParse(execution.grant);
       recordExecutionEvent({
-        outcome: "unknown",
+        outcome: grant.success && grant.data.effect === "read" ? "failed" : "unknown",
         outputBytes: 0,
         phase: "tool.completion",
         runId: execution.runId,
@@ -534,11 +554,14 @@ export class ToolExecutions {
         });
       }
 
-      const status =
+      const exceededBoundary =
         currentTime > row.expiresAt ||
-        request.data.outcome.outputBytes > request.data.permit.constraints.maxOutputBytes
-          ? "unknown"
-          : request.data.outcome.status;
+        request.data.outcome.outputBytes > request.data.permit.constraints.maxOutputBytes;
+      const status = exceededBoundary
+        ? request.data.permit.action.effect === "read"
+          ? "failed"
+          : "unknown"
+        : request.data.outcome.status;
       completedStatus = status;
 
       transaction
@@ -1223,6 +1246,7 @@ export class ToolExecutions {
                 ? ("revoked" as const)
                 : ("unavailable" as const),
           currentAgentRevision: currentAgent.currentRevision,
+          durationLimitMs: request.budgetReservation.maxDurationSeconds * 1_000,
           evaluatedAt: new Date(evaluatedAt).toISOString(),
           fleetCallsPerDayUsed,
           fleetCallsPerThirtyDaysUsed,
@@ -1250,6 +1274,7 @@ export class ToolExecutions {
           ),
           runId: request.runId,
           sameToolInputCallsUsed,
+          toolCallsUsed: admission.toolCallsConsumed,
         },
       },
       ok: true,

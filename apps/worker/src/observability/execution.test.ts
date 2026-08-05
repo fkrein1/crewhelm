@@ -88,6 +88,34 @@ describe("execution observability", () => {
     });
   });
 
+  it("emits one bounded file-staging phase without URLs or provider content", () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    recordExecutionProviderResponse({
+      durationMs: 91,
+      operation: "stage_file",
+      outcome: "object_upload_rejected",
+      runId,
+      status: 403,
+      toolCallId,
+      toolSlug: "GMAIL_CREATE_EMAIL_DRAFT",
+    });
+
+    expect(info).toHaveBeenCalledExactlyOnceWith({
+      event: "crewhelm.execution.provider_response",
+      durationMs: 91,
+      operation: "stage_file",
+      outcome: "object_upload_rejected",
+      parentSpanId: runId,
+      runId,
+      spanId: toolCallId,
+      status: 403,
+      toolCallId,
+      toolSlug: "GMAIL_CREATE_EMAIL_DRAFT",
+      traceId: runId,
+    });
+  });
+
   it("records provider unavailability while verifying a connection", () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
 

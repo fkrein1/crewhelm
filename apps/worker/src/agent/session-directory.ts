@@ -60,6 +60,7 @@ const agentWorkflowDirectoryRecordSchema = agentTaskWorkflowParamsSchema.extend(
 });
 
 const agentWorkflowRunDirectoryRecordSchema = z.strictObject({
+  attempt: z.number().int().positive().max(121),
   delivered: z.boolean(),
   runId: runIdSchema,
   session: runSessionSchema,
@@ -259,6 +260,8 @@ export class CrewAgent extends CrewSession {
     ).verifyAgentWorkflowRuntime({
       agentId: request.data.agentId,
       stageCount: request.data.stageCount,
+      stageDelaysSeconds: request.data.stageDelaysSeconds,
+      stageMaxWaitSeconds: request.data.stageMaxWaitSeconds,
       workflowId: request.data.workflowId,
     });
 
@@ -273,7 +276,11 @@ export class CrewAgent extends CrewSession {
       if (
         stored.data.agentId !== request.data.agentId ||
         stored.data.ownerKey !== request.data.ownerKey ||
-        stored.data.stageCount !== request.data.stageCount
+        stored.data.stageCount !== request.data.stageCount ||
+        JSON.stringify(stored.data.stageDelaysSeconds) !==
+          JSON.stringify(request.data.stageDelaysSeconds) ||
+        JSON.stringify(stored.data.stageMaxWaitSeconds) !==
+          JSON.stringify(request.data.stageMaxWaitSeconds)
       ) {
         return false;
       }
@@ -329,6 +336,7 @@ export class CrewAgent extends CrewSession {
       await this.ctx.storage.get(key),
     );
     const mapping = agentWorkflowRunDirectoryRecordSchema.parse({
+      attempt: request.data.attempt,
       delivered: false,
       runId: request.data.runId,
       session: request.data.session,
@@ -340,6 +348,7 @@ export class CrewAgent extends CrewSession {
     if (existing.success && JSON.stringify(existing.data) !== JSON.stringify(mapping)) {
       if (
         existing.data.runId !== mapping.runId ||
+        existing.data.attempt !== mapping.attempt ||
         existing.data.workflowId !== mapping.workflowId ||
         existing.data.stageIndex !== mapping.stageIndex ||
         JSON.stringify(existing.data.session) !== JSON.stringify(mapping.session)
@@ -354,7 +363,11 @@ export class CrewAgent extends CrewSession {
       });
     }
 
-    await this.#deliverAgentWorkflowRunEvent(request.data.runId);
+    // Admission must not wait on the active CrewSession. A Run can already be
+    // generating or calling back into the owner while this directory is still
+    // attaching its durable Workflow route. Poll terminal state from an alarm
+    // instead, so dispatch returns before the Workflow step's 30-second lease.
+    await this.#scheduleAgentWorkflowRunDelivery(request.data.runId);
     return true;
   }
 
@@ -1145,12 +1158,13 @@ export class CrewAgent extends CrewSession {
         mapping.workflowId,
         {
           payload: agentWorkflowRunEventSchema.parse({
+            attempt: mapping.attempt,
             runId: mapping.runId,
             stageIndex: mapping.stageIndex,
             status: mapping.terminalStatus,
             workflowId: mapping.workflowId,
           }),
-          type: agentWorkflowStageEventType(mapping.stageIndex),
+          type: agentWorkflowStageEventType(mapping.stageIndex, mapping.attempt),
         },
       ]);
       const current = agentWorkflowRunDirectoryRecordSchema.safeParse(

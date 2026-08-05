@@ -1095,6 +1095,26 @@ Start two to eight ordered Agent Runs under one durable objective.
       "items": {
         "type": "object",
         "properties": {
+          "delayBeforeSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 604800,
+            "description": "Durable delay before this stage is admitted. Sleeping consumes no Run budget."
+          },
+          "deferral": {
+            "type": "object",
+            "properties": {
+              "maxWaitSeconds": {
+                "default": 3600,
+                "description": "Maximum elapsed time this stage may defer itself while waiting for external work. The Agent chooses each bounded resume delay.",
+                "type": "integer",
+                "minimum": 30,
+                "maximum": 604800
+              }
+            },
+            "additionalProperties": false,
+            "description": "Permit this Workflow stage to checkpoint as waiting and resume as a fresh bounded Run until done or the elapsed-time ceiling is reached."
+          },
           "name": {
             "type": "string",
             "minLength": 1,

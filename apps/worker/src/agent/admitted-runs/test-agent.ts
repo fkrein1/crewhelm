@@ -30,6 +30,7 @@ const TEST_TOOL_NAME = "projectToolkitReadItem";
 const SANDBOX_TEST_PROMPT = "Use the bounded Sandbox to calculate six times seven.";
 const SANDBOX_LIMIT_TEST_PROMPT = "Use the bounded Sandbox and exercise its execution limit.";
 const WEB_RESEARCH_TEST_PROMPT = "Search for and read the exact public Crewhelm test source.";
+const WORKFLOW_CHECKPOINT_TEST_PROMPT = "Checkpoint this exact Workflow stage as waiting.";
 const JSON_OUTPUT_TEST_PROMPT = "Return the admitted JSON test deliverable.";
 const JSON_REPAIR_TEST_PROMPT = "Return malformed JSON once for repair testing.";
 const JSON_FAILURE_TEST_PROMPT = "Return malformed JSON through repair failure testing.";
@@ -435,6 +436,37 @@ export class TestCrewSession extends CrewSession {
       }
 
       if (
+        serializedPrompt.includes(WORKFLOW_CHECKPOINT_TEST_PROMPT) &&
+        !serializedPrompt.includes('"checkpointed":true')
+      ) {
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: "stream-start", warnings: [] },
+              {
+                input: JSON.stringify({
+                  afterSeconds: 30,
+                  reason: "fixture_processing",
+                  state: "wait",
+                }),
+                toolCallId: "framework-workflow-checkpoint-call",
+                toolName: "workflow_stage_checkpoint",
+                type: "tool-call",
+              },
+              {
+                finishReason: { raw: "tool-calls", unified: "tool-calls" },
+                type: "finish",
+                usage: {
+                  inputTokens: { cacheRead: 0, cacheWrite: 0, noCache: 8, total: 8 },
+                  outputTokens: { reasoning: 0, text: 1, total: 1 },
+                },
+              },
+            ],
+          }),
+        };
+      }
+
+      if (
         serializedPrompt.includes(WEB_RESEARCH_TEST_PROMPT) &&
         (JSON.stringify(options.tools) ?? "").includes("web_search") &&
         this.#webSearchExecutions.length === 0
@@ -806,6 +838,7 @@ export {
   SANDBOX_LIMIT_TEST_PROMPT,
   SANDBOX_TEST_PROMPT,
   WEB_RESEARCH_TEST_PROMPT,
+  WORKFLOW_CHECKPOINT_TEST_PROMPT,
   SLOW_TEST_PROMPT,
   TEST_REPLY,
   JSON_FAILURE_TEST_PROMPT,

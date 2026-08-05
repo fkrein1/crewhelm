@@ -69,6 +69,11 @@ ordered Runs and should continue after the MCP conversation disconnects. Supply 
 Agent object, one objective, and short named stages. Crewhelm executes them sequentially in one
 isolated durable Session; a later stage starts only after the prior Run succeeds.
 
+When a stage must wait for external processing, make it deferrable with a bounded elapsed waiting
+window and describe the provider state that means done. The Agent checkpoints `wait` to resume the
+same stage as a fresh bounded Run after a durable delay, or `done` to advance. Sleeping consumes
+no Run duration or integration-call budget; the resumed Run and aggregate Workflow remain bounded.
+
 Retain the returned Workflow object unchanged. List with small limits for compact progress,
 then inspect only the selected Workflow. Inspection omits frozen prompts by default; set
 `includePrompts: true` only when debugging the exact plan. A completed Workflow exposes compact
@@ -115,7 +120,10 @@ returned authorization result for exact lifecycle inspection after authorization
 inspected Connection object unchanged. Search that integration's
 tools and pass selected `{slug, version}` values directly to
 the `grant_provider_actions` operation. Inspect individual tools only when parameter schemas are
-needed; attachment validation rechecks every selected definition server-side.
+needed; attachment validation rechecks every selected definition server-side. A grant operation
+replaces the tools for that one Connection while preserving other Connections. Pass the returned
+Agent object unchanged into the next grant so Crewhelm can thread the new immutable revision; do
+not copy or guess revision numbers.
 
 ### Recovery
 

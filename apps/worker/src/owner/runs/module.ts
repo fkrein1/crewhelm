@@ -231,6 +231,25 @@ function createBudgetReservation(input: {
   systemPromptCharacters: number;
   toolGrants: ExternalToolCapabilityGrant[];
 }): RunBudgetReservation {
+  const agentIntegrationLimits = input.executionLimits.integrations;
+  const effectiveIntegrationLimits = {
+    ...input.configuration.data.integrations,
+    duplicateToolCallLimit: Math.min(
+      agentIntegrationLimits?.duplicateToolCallLimit ??
+        input.configuration.data.integrations.duplicateToolCallLimit,
+      input.configuration.data.integrations.duplicateToolCallLimit,
+    ),
+    maxCallsPerRun: Math.min(
+      agentIntegrationLimits?.maxCallsPerRun ??
+        input.configuration.data.integrations.maxCallsPerRun,
+      input.configuration.data.integrations.maxCallsPerRun,
+    ),
+    maxCallsPerToolPerRun: Math.min(
+      agentIntegrationLimits?.maxCallsPerToolPerRun ??
+        input.configuration.data.integrations.maxCallsPerToolPerRun,
+      input.configuration.data.integrations.maxCallsPerToolPerRun,
+    ),
+  };
   const effectiveExecutionLimits = {
     maxDurationSeconds: Math.min(
       input.executionLimits.maxDurationSeconds,
@@ -243,17 +262,14 @@ function createBudgetReservation(input: {
     maxToolCalls: Math.min(
       input.executionLimits.maxToolCalls,
       input.configuration.data.execution.maxToolCalls,
-      input.configuration.data.integrations.maxCallsPerRun,
+      effectiveIntegrationLimits.maxCallsPerRun,
     ),
     maxTurns: Math.min(input.executionLimits.maxTurns, input.configuration.data.execution.maxTurns),
   };
   const grantedToolCalls = input.toolGrants.reduce(
     (total, grant) =>
       total +
-      Math.min(
-        grant.limits.maxCallsPerRun,
-        input.configuration.data.integrations.maxCallsPerToolPerRun,
-      ),
+      Math.min(grant.limits.maxCallsPerRun, effectiveIntegrationLimits.maxCallsPerToolPerRun),
     0,
   );
   const admittedRuntimeToolCalls =
@@ -272,7 +288,7 @@ function createBudgetReservation(input: {
 
   return runBudgetReservationSchema.parse({
     fleetConfigurationRevision: input.configuration.revision,
-    integrationLimits: input.configuration.data.integrations,
+    integrationLimits: effectiveIntegrationLimits,
     maxDurationSeconds: effectiveExecutionLimits.maxDurationSeconds,
     maxInputCharacters: Math.min(
       MAXIMUM_RUN_INPUT_CHARACTERS,

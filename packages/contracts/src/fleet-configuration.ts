@@ -8,21 +8,21 @@ import { agentExecutionLimitsSchema, agentMutationIdempotencyKeySchema } from ".
 import { fleetCapacitySchema, fleetRetentionSchema } from "./fleet-capacity.js";
 import { MAXIMUM_RUN_MODEL_OUTPUT_TOKENS, runIntegrationLimitsSchema } from "./run-admission.js";
 
-export const DEFAULT_FLEET_INTEGRATION_CALLS_PER_DAY = 300;
-export const DEFAULT_FLEET_INTEGRATION_CALLS_PER_THIRTY_DAYS = 8_000;
-export const DEFAULT_FLEET_DUPLICATE_TOOL_CALL_LIMIT = 2;
-export const DEFAULT_FLEET_MAXIMUM_TOOL_CALLS_PER_RUN = 8;
-export const DEFAULT_FLEET_MAXIMUM_TOOL_CALLS_PER_TOOL_PER_RUN = 2;
-export const DEFAULT_FLEET_MAXIMUM_TOOL_CONCURRENCY_PER_GRANT = 1;
+export const DEFAULT_FLEET_INTEGRATION_CALLS_PER_DAY = 1_000;
+export const DEFAULT_FLEET_INTEGRATION_CALLS_PER_THIRTY_DAYS = 20_000;
+export const DEFAULT_FLEET_DUPLICATE_TOOL_CALL_LIMIT = 10;
+export const DEFAULT_FLEET_MAXIMUM_TOOL_CALLS_PER_RUN = 60;
+export const DEFAULT_FLEET_MAXIMUM_TOOL_CALLS_PER_TOOL_PER_RUN = 40;
+export const DEFAULT_FLEET_MAXIMUM_TOOL_CONCURRENCY_PER_GRANT = 8;
 export const DEFAULT_FLEET_MINIMUM_SCHEDULE_INTERVAL_SECONDS = 60;
 export const MAXIMUM_FLEET_CONFIGURATION_REVISIONS = 1_000;
 export const MAXIMUM_FLEET_INTEGRATION_CALLS_PER_WINDOW = 1_000_000;
 
 export const defaultFleetExecutionLimits = {
-  maxDurationSeconds: 300,
+  maxDurationSeconds: 900,
   maxModelTokens: MAXIMUM_RUN_MODEL_OUTPUT_TOKENS,
   maxToolCalls: DEFAULT_FLEET_MAXIMUM_TOOL_CALLS_PER_RUN,
-  maxTurns: 8,
+  maxTurns: 60,
 } as const;
 
 const fleetIntegrationCallLimitSchema = z

@@ -331,12 +331,12 @@ How to use this tool:
 | `authorize_provider` | Create an authorization link for one enabled provider integration. |
 | `connect_provider` | Resolve provider auth and return a Composio authorization link or, when required, a Crewhelm setup link for reusable app credentials. |
 | `inspect_provider_connection` | Inspect one exact provider Connection. |
-| `grant_provider_actions` | Grant one Agent revision selected actions from one provider Connection. |
+| `grant_provider_actions` | Replace the selected actions for one provider Connection and return the new Agent revision. |
 | `connect_remote_mcp` | Create a public, API-key, bearer, or OAuth remote MCP Connection. |
 | `inspect_remote_mcp` | Inspect one exact remote MCP Connection and tool snapshot. |
 | `reauthenticate_remote_mcp` | Create a new authentication setup for one exact remote MCP Connection snapshot. |
 | `delete_remote_mcp` | Delete one exact remote MCP Connection. |
-| `grant_remote_mcp` | Grant one Agent revision selected tools from one remote MCP Connection snapshot. |
+| `grant_remote_mcp` | Replace the frozen tools for one remote MCP Connection and return the new Agent revision. |
 
 #### `enable_provider`
 
@@ -529,7 +529,7 @@ Inspect one exact provider Connection.
 
 #### `grant_provider_actions`
 
-Grant one Agent revision selected actions from one provider Connection.
+Replace the selected actions for one provider Connection and return the new Agent revision.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
@@ -572,7 +572,7 @@ Grant one Agent revision selected actions from one provider Connection.
           "type": "integer",
           "minimum": 1,
           "maximum": 16,
-          "description": "Owner-selected concurrent-call ceiling; use 1 unless parallel calls are required."
+          "description": "Owner-selected concurrent-call ceiling for this granted tool. The fleet ceiling still applies."
         },
         "maxCostMicrousdPerCall": {
           "type": "integer",
@@ -938,7 +938,7 @@ Delete one exact remote MCP Connection.
 
 #### `grant_remote_mcp`
 
-Grant one Agent revision selected tools from one remote MCP Connection snapshot.
+Replace the frozen tools for one remote MCP Connection and return the new Agent revision.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
@@ -989,7 +989,7 @@ Grant one Agent revision selected tools from one remote MCP Connection snapshot.
           "type": "integer",
           "minimum": 1,
           "maximum": 16,
-          "description": "Owner-selected concurrent-call ceiling; use 1 unless parallel calls are required."
+          "description": "Owner-selected concurrent-call ceiling for this granted tool. The fleet ceiling still applies."
         },
         "maxCostMicrousdPerCall": {
           "type": "integer",

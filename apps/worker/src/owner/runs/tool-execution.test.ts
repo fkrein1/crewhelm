@@ -598,7 +598,7 @@ describe("admitted tool execution", () => {
       ).toEqual({
         completed_at: expect.any(Number),
         output_bytes: 0,
-        status: "unknown",
+        status: "failed",
       });
       expect(
         [
@@ -607,14 +607,14 @@ describe("admitted tool execution", () => {
             abandonedAction.toolCallId,
           ),
         ].map((row) => row.action),
-      ).toEqual(["tool.execution_reserved", "tool.execution_dispatched", "tool.execution_unknown"]);
+      ).toEqual(["tool.execution_reserved", "tool.execution_dispatched", "tool.execution_failed"]);
     });
     await expect(
       controlPlane.reconcileToolExecution(authority, {
         resolution: "not_applied",
         toolCallId: abandonedAction.toolCallId,
       }),
-    ).resolves.toMatchObject({ ok: true, reconciled: true });
+    ).resolves.toMatchObject({ ok: false });
     const cancellationAction = {
       ...action,
       inputDigest: "e".repeat(64),

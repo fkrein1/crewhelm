@@ -81,6 +81,54 @@ describe("Run admission control flow", () => {
 });
 
 describe("OwnerControlPlane runs", () => {
+  it("freezes Agent-specific integration limits into the run budget", async () => {
+    const authority = await authorityFor("run-agent-integration-limits", [
+      AGENTS_WRITE_SCOPE,
+      OWNER_WRITE_SCOPE,
+      RUNS_WRITE_SCOPE,
+    ]);
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+    const created = await stub.createAgent(authority, {
+      ...agentInput("run-agent-integration-limits-create"),
+      executionLimits: {
+        integrations: {
+          duplicateToolCallLimit: 3,
+          maxCallsPerRun: 12,
+          maxCallsPerToolPerRun: 7,
+        },
+        maxDurationSeconds: 600,
+        maxModelTokens: 20_000,
+        maxToolCalls: 12,
+        maxTurns: 20,
+      },
+    });
+    if (!created.ok) {
+      throw new Error(
+        `Expected Agent-specific integration limit fixture: ${JSON.stringify(created)}`,
+      );
+    }
+
+    const prompt = "Prepare one bounded proposal draft.";
+    const issued = await stub.createRunAdmission(authority, {
+      agentId: created.agent.id,
+      expectedRevision: created.agent.revision,
+      idempotencyKey: "run-agent-integration-limits-admission",
+      promptCharacters: prompt.length,
+      promptDigest: await digestRunPrompt(prompt),
+    });
+    if (!issued.ok || issued.state !== "issued") {
+      throw new Error("Expected Agent-specific run admission.");
+    }
+
+    expect(issued.permit.budgetReservation).toMatchObject({
+      integrationLimits: {
+        duplicateToolCallLimit: 3,
+        maxCallsPerRun: 12,
+        maxCallsPerToolPerRun: 7,
+      },
+    });
+  });
+
   it("denies admission after an attached remote MCP Connection is revoked", async () => {
     const authority = await authorityFor("run-revoked-remote-mcp", [
       OWNER_WRITE_SCOPE,

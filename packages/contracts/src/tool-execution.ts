@@ -3,6 +3,8 @@ import * as z from "zod";
 import {
   classifiedExternalToolActionSchema,
   sha256DigestSchema,
+  toolGateDenialDetailsSchema,
+  toolGateDenialReasonSchema,
   toolExecutionEvaluationFailureReasonSchema,
   toolGateDecisionSchema,
 } from "./capabilities.js";
@@ -70,6 +72,12 @@ export const reserveToolExecutionResultSchema = z.union([
     effect: z.enum(["write", "destructive"]),
     ok: z.literal(true),
     state: z.literal("requires_approval"),
+  }),
+  invalidToolExecutionSchema.extend({
+    error: invalidToolExecutionSchema.shape.error.extend({
+      details: toolGateDenialDetailsSchema.optional(),
+      reason: toolGateDenialReasonSchema,
+    }),
   }),
   invalidToolExecutionSchema,
 ]);

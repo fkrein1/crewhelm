@@ -1051,6 +1051,8 @@ export const agentWorkflows = sqliteTable(
     completedStages: integer("completed_stages").notNull().default(0),
     currentStageIndex: integer("current_stage_index"),
     currentRunId: text("current_run_id"),
+    deferralCount: integer("deferral_count").notNull().default(0),
+    waitingUntil: integer("waiting_until"),
     session: text("session", { mode: "json" }).$type<RunSession | null>(),
     failureCode: text("failure_code", {
       enum: [
@@ -1118,9 +1120,18 @@ export const agentWorkflows = sqliteTable(
       "agent_workflows_completed_stages",
       sql`${table.completedStages} BETWEEN 0 AND ${table.stageCount}`,
     ),
+    check("agent_workflows_deferral_count", sql`${table.deferralCount} BETWEEN 0 AND 120`),
     check(
       "agent_workflows_current_stage",
       sql`${table.currentStageIndex} IS NULL OR ${table.currentStageIndex} BETWEEN 0 AND ${table.stageCount} - 1`,
+    ),
+    check(
+      "agent_workflows_delay_state",
+      sql`${table.waitingUntil} IS NULL OR (
+        ${table.status} IN ('waiting', 'cancelling')
+        AND ${table.currentStageIndex} IS NOT NULL
+        AND ${table.currentRunId} IS NULL
+        AND ${table.waitingUntil} >= ${table.createdAt})`,
     ),
     check(
       "agent_workflows_session_json",
@@ -1153,11 +1164,21 @@ export const agentWorkflowStages = sqliteTable(
     stageIndex: integer("stage_index").notNull(),
     name: text("name").notNull(),
     prompt: text("prompt").notNull(),
+    delayBeforeSeconds: integer("delay_before_seconds").notNull().default(0),
+    maxWaitSeconds: integer("max_wait_seconds"),
     promptDigest: text("prompt_digest").notNull(),
     status: text("status", {
       enum: ["pending", "running", "waiting", "completed", "failed", "cancelled"],
     }).notNull(),
     runId: text("run_id"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    checkpointRunId: text("checkpoint_run_id"),
+    checkpointState: text("checkpoint_state", { enum: ["done", "wait"] }),
+    checkpointDelaySeconds: integer("checkpoint_delay_seconds"),
+    checkpointResumeAt: integer("checkpoint_resume_at"),
+    lastDeferReason: text("last_defer_reason"),
+    lastRunId: text("last_run_id"),
+    nextAttemptAt: integer("next_attempt_at"),
     startedAt: integer("started_at"),
     completedAt: integer("completed_at"),
   },
@@ -1171,6 +1192,27 @@ export const agentWorkflowStages = sqliteTable(
     check("agent_workflow_stages_index", sql`${table.stageIndex} BETWEEN 0 AND 7`),
     check("agent_workflow_stages_name_length", sql`length(${table.name}) BETWEEN 1 AND 80`),
     check("agent_workflow_stages_prompt_length", sql`length(${table.prompt}) BETWEEN 1 AND 11264`),
+    check("agent_workflow_stages_delay", sql`${table.delayBeforeSeconds} BETWEEN 0 AND 604800`),
+    check(
+      "agent_workflow_stages_max_wait",
+      sql`${table.maxWaitSeconds} IS NULL OR ${table.maxWaitSeconds} BETWEEN 30 AND 604800`,
+    ),
+    check("agent_workflow_stages_attempts", sql`${table.attemptCount} BETWEEN 0 AND 121`),
+    check(
+      "agent_workflow_stages_checkpoint",
+      sql`(${table.checkpointState} IS NULL
+          AND ${table.checkpointRunId} IS NULL
+          AND ${table.checkpointDelaySeconds} IS NULL
+          AND ${table.checkpointResumeAt} IS NULL)
+        OR (${table.checkpointState} = 'done'
+          AND ${table.checkpointRunId} = ${table.runId}
+          AND ${table.checkpointDelaySeconds} IS NULL
+          AND ${table.checkpointResumeAt} IS NULL)
+        OR (${table.checkpointState} = 'wait'
+          AND ${table.checkpointRunId} = ${table.runId}
+          AND ${table.checkpointDelaySeconds} BETWEEN 30 AND 7200
+          AND ${table.checkpointResumeAt} IS NOT NULL)`,
+    ),
     check("agent_workflow_stages_prompt_digest_length", sql`length(${table.promptDigest}) = 64`),
     check(
       "agent_workflow_stages_status",
@@ -1182,12 +1224,17 @@ export const agentWorkflowStages = sqliteTable(
           AND ${table.runId} IS NULL
           AND ${table.startedAt} IS NULL
           AND ${table.completedAt} IS NULL)
-        OR (${table.status} IN ('running', 'waiting')
+        OR (${table.status} = 'waiting'
+          AND ((${table.runId} IS NULL AND ${table.nextAttemptAt} IS NOT NULL)
+            OR (${table.runId} IS NOT NULL AND ${table.nextAttemptAt} IS NULL))
+          AND ${table.startedAt} IS NOT NULL
+          AND ${table.completedAt} IS NULL)
+        OR (${table.status} = 'running'
           AND ${table.runId} IS NOT NULL
           AND ${table.startedAt} IS NOT NULL
           AND ${table.completedAt} IS NULL)
         OR (${table.status} IN ('completed', 'cancelled')
-          AND ${table.runId} IS NOT NULL
+          AND (${table.runId} IS NOT NULL OR ${table.status} = 'cancelled')
           AND ${table.startedAt} IS NOT NULL
           AND ${table.completedAt} IS NOT NULL
           AND ${table.completedAt} >= ${table.startedAt})

@@ -161,6 +161,9 @@ async function digestAgentUpdate(input: UpdateAgentInput): Promise<string> {
       capabilities: input.capabilities,
       expectedRevision: input.expectedRevision,
       executionLimits: {
+        ...(input.executionLimits.integrations === undefined
+          ? {}
+          : { integrations: input.executionLimits.integrations }),
         maxDurationSeconds: input.executionLimits.maxDurationSeconds,
         maxModelTokens: input.executionLimits.maxModelTokens,
         maxToolCalls: input.executionLimits.maxToolCalls,
