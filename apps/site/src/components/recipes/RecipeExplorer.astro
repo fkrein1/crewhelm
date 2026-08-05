@@ -27,7 +27,7 @@ const { basePath, recipes } = Astro.props;
         <button type="button" data-dialog-close aria-label="Close recipe and return to the list">
           <span aria-hidden="true">←</span> Back to Recipes
         </button>
-        <span>Esc</span>
+        <span class="dialog-shortcut">Esc</span>
       </div>
       <div data-dialog-content></div>
     </div>
@@ -219,6 +219,10 @@ const { basePath, recipes } = Astro.props;
 
     .dialog-frame {
       max-height: 100dvh;
+    }
+
+    .dialog-shortcut {
+      display: none;
     }
   }
 

@@ -26,6 +26,12 @@
     outline: 3px solid var(--ring);
     outline-offset: 4px;
   }
+
+  @media (max-width: 620px) {
+    :focus-visible {
+      outline: none !important;
+    }
+  }
 }
 
 @utility shell {

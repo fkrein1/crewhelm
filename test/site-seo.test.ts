@@ -35,9 +35,13 @@ const recipePreview = toRecipePreview({
 
 describe("Crewhelm site discovery foundation", () => {
   it("follows the system color scheme without a user override", async () => {
-    const [layout, page, seo] = await Promise.all([
+    const [layout, page, recipeCatalog, seo] = await Promise.all([
       readFile(new URL("../apps/site/src/layouts/SiteLayout.astro", import.meta.url), "utf8"),
       readFile(new URL("../apps/site/src/pages/index.astro", import.meta.url), "utf8"),
+      readFile(
+        new URL("../apps/site/src/components/recipes/RecipeCatalog.astro", import.meta.url),
+        "utf8",
+      ),
       readFile(new URL("../apps/site/src/components/Seo.astro", import.meta.url), "utf8"),
     ]);
 
@@ -48,6 +52,11 @@ describe("Crewhelm site discovery foundation", () => {
     expect(seo).toContain(
       '<meta name="theme-color" content="#11151e" media="(prefers-color-scheme: dark)" />',
     );
+    expect(recipeCatalog).toContain("--choice-paper: var(--card)");
+    expect(recipeCatalog).toContain("--choice-ink: var(--card-foreground)");
+    expect(recipeCatalog).toContain("--choice-muted: var(--muted-foreground)");
+    expect(recipeCatalog).toContain("--choice-blue: var(--primary)");
+    expect(recipeCatalog).not.toContain("--choice-paper: var(--color-paper-50)");
   });
 
   it("keeps canonical URLs on the production origin", () => {
@@ -193,11 +202,16 @@ describe("Crewhelm Recipe catalog", () => {
   });
 
   it("uses history-backed dialogs for list navigation and full direct pages", async () => {
-    const [explorer, directPage] = await Promise.all([
+    const [catalog, explorer, globalStyles, directPage] = await Promise.all([
+      readFile(
+        new URL("../apps/site/src/components/recipes/RecipeCatalog.astro", import.meta.url),
+        "utf8",
+      ),
       readFile(
         new URL("../apps/site/src/components/recipes/RecipeExplorer.astro", import.meta.url),
         "utf8",
       ),
+      readFile(new URL("../apps/site/src/styles/global.css", import.meta.url), "utf8"),
       readFile(
         new URL("../apps/site/src/pages/recipes/[namespace]/[name].astro", import.meta.url),
         "utf8",
@@ -209,7 +223,15 @@ describe("Crewhelm Recipe catalog", () => {
     expect(explorer).toContain('window.addEventListener("popstate"');
     expect(explorer).toContain("@starting-style");
     expect(explorer).toContain("allow-discrete");
+    expect(explorer).toContain('class="dialog-shortcut"');
+    expect(explorer).toMatch(
+      /@media \(max-width: 620px\)[\s\S]*\.dialog-shortcut \{[\s\S]*display: none;/u,
+    );
     expect(explorer).not.toContain("startViewTransition");
+    expect(globalStyles).toMatch(
+      /@media \(max-width: 620px\)[\s\S]*:focus-visible \{[\s\S]*outline: none !important;/u,
+    );
+    expect(catalog).not.toContain("outline: none;");
     expect(directPage).toContain("<RecipeDetail {recipe} />");
     expect(directPage).not.toContain("<RecipeExplorer");
   });
