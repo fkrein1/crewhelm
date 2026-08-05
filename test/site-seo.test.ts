@@ -202,9 +202,13 @@ describe("Crewhelm Recipe catalog", () => {
   });
 
   it("uses history-backed dialogs for list navigation and full direct pages", async () => {
-    const [catalog, explorer, globalStyles, directPage] = await Promise.all([
+    const [catalog, connectionLogo, explorer, globalStyles, directPage] = await Promise.all([
       readFile(
         new URL("../apps/site/src/components/recipes/RecipeCatalog.astro", import.meta.url),
+        "utf8",
+      ),
+      readFile(
+        new URL("../apps/site/src/components/recipes/ConnectionLogo.astro", import.meta.url),
         "utf8",
       ),
       readFile(
@@ -228,9 +232,14 @@ describe("Crewhelm Recipe catalog", () => {
       /@media \(max-width: 620px\)[\s\S]*\.dialog-shortcut \{[\s\S]*display: none;/u,
     );
     expect(explorer).not.toContain("startViewTransition");
+    expect(connectionLogo).toContain('document.addEventListener("connection-logos-initialize"');
+    expect(explorer).toContain('new CustomEvent("connection-logos-initialize"');
+    expect(globalStyles).toContain(":focus:not(:focus-visible)");
+    expect(globalStyles).toContain("-webkit-tap-highlight-color: transparent");
     expect(globalStyles).toMatch(
-      /@media \(max-width: 620px\)[\s\S]*:focus-visible \{[\s\S]*outline: none !important;/u,
+      /@media \(max-width: 620px\)[\s\S]*:focus-visible \{[\s\S]*outline-width: 2px;[\s\S]*outline-offset: 2px;/u,
     );
+    expect(globalStyles).not.toContain("outline: none !important");
     expect(catalog).not.toContain("outline: none;");
     expect(directPage).toContain("<RecipeDetail {recipe} />");
     expect(directPage).not.toContain("<RecipeExplorer");

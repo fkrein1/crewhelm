@@ -263,7 +263,7 @@ const report = {
   registry: {
     deploymentFingerprint: registryDigest,
     origin: registryOrigin,
-    seededRecipes: 10,
+    seededRecipes: seed.seeded,
     status: "ready",
   },
   schemaVersion: 1,
