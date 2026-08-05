@@ -90,10 +90,10 @@ try {
   const response = await fetch(`${origin}/development/seed`, { method: "POST" });
   if (!response.ok) throw new Error(`Local Registry seed failed (${String(response.status)}).`);
   const seed = object(await response.json());
-  if (seed.seeded !== 10 || seed.namespace !== "crewhelm-labs") {
-    throw new Error("Local Registry did not reconcile the expected ten Recipes.");
+  if (seed.seeded !== 30 || seed.namespace !== "crewhelm-labs") {
+    throw new Error("Local Registry did not reconcile the expected thirty Recipes.");
   }
-  console.log("Seeded 10 Recipes in crewhelm-labs.");
+  console.log("Seeded 30 Recipes in crewhelm-labs.");
   console.log(`Registry ready: ${origin}/api/registry/v1/recipes/search?q=decision`);
   process.exitCode = await stopped;
 } catch (error) {

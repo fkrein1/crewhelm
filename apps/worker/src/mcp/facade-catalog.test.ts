@@ -181,7 +181,11 @@ describe("authenticated MCP facade catalog", () => {
           request: "execute",
         });
         expect(invalid).toMatchObject({
-          content: [expect.objectContaining({ text: "Invalid Crewhelm operation input." })],
+          content: [
+            expect.objectContaining({
+              text: expect.stringMatching(/^Invalid Crewhelm operation input(?: at [^:]+)?:/),
+            }),
+          ],
           isError: true,
         });
       }

@@ -1,6 +1,7 @@
 ---
 import {
   getRecipeChoiceSignals,
+  getRecipeCardModelLabel,
   getRecipeModelLabel,
   type RecipePreview,
 } from "../../lib/recipe-catalog";
@@ -13,11 +14,20 @@ interface Props {
 
 const { recipes, unavailable = false } = Astro.props;
 
-const choices = recipes.map((recipe) => ({
-  modelLabel: getRecipeModelLabel(recipe.inference.primaryModel),
-  recipe,
-  signalSelection: getRecipeChoiceSignals(recipe),
-}));
+const choices = recipes.map((recipe) => {
+  const signalSelection = getRecipeChoiceSignals(recipe);
+  const modelLabel = getRecipeModelLabel(recipe.inference.primaryModel);
+  return {
+    cardModelLabel: getRecipeCardModelLabel(modelLabel),
+    initialHiddenCount:
+      signalSelection.hiddenCount +
+      signalSelection.integrations.length +
+      signalSelection.signals.length,
+    modelLabel,
+    recipe,
+    signalSelection,
+  };
+});
 ---
 
 <section class="choice-board shell" aria-labelledby="recipe-choice-title">
@@ -34,7 +44,7 @@ const choices = recipes.map((recipe) => ({
 
   <ul class="choice-grid">
     {
-      choices.map(({ modelLabel, recipe, signalSelection }) => (
+      choices.map(({ cardModelLabel, initialHiddenCount, modelLabel, recipe, signalSelection }) => (
         <li class="choice-item">
           <a
             class="recipe-card"
@@ -47,32 +57,47 @@ const choices = recipes.map((recipe) => ({
 
             <div
               class="metadata-line"
+              data-base-hidden-count={signalSelection.hiddenCount}
+              data-recipe-metadata
               aria-label={`Primary model: ${modelLabel}${
                 signalSelection.accessibleLabel ? `. Features: ${signalSelection.accessibleLabel}` : ""
               }`}
             >
               {signalSelection.integrations.length > 0 && (
-                <>
+                <span
+                  class="metadata-item metadata-item--integration"
+                  data-count={signalSelection.integrations.length}
+                  data-logo-item
+                  data-metadata-item
+                  hidden
+                >
                   <span class="integration-block" aria-hidden="true">
                     {signalSelection.integrations.map((integration) => (
-                      <ConnectionLogo integration={integration} size={15} />
+                      <ConnectionLogo integration={integration} loading="eager" size={15} />
                     ))}
                   </span>
                   <span class="metadata-separator" aria-hidden="true">•</span>
-                </>
+                </span>
               )}
-              <strong>{modelLabel}</strong>
+              <strong data-metadata-fixed title={modelLabel}>{cardModelLabel}</strong>
               {signalSelection.signals.map((signal) => (
-                <>
+                <span
+                  class="metadata-item"
+                  data-count="1"
+                  data-metadata-item
+                  hidden
+                >
                   <span class="metadata-separator" aria-hidden="true">•</span>
                   <span class:list={["signal", `signal--${signal.kind}`]}>{signal.label}</span>
-                </>
+                </span>
               ))}
-              {signalSelection.hiddenCount > 0 && (
-                <>
+              {initialHiddenCount > 0 && (
+                <span class="metadata-overflow" data-metadata-overflow>
                   <span class="metadata-separator" aria-hidden="true">•</span>
-                  <span class="more-signals">+{signalSelection.hiddenCount}</span>
-                </>
+                  <span class="more-signals" data-metadata-overflow-count>
+                    +{initialHiddenCount}
+                  </span>
+                </span>
               )}
             </div>
           </a>
@@ -89,6 +114,110 @@ const choices = recipes.map((recipe) => ({
     )
   }
 </section>
+
+<script>
+  import { fitRecipeMetadataItems } from "../../lib/recipe-catalog";
+
+  function positiveInteger(value: string | undefined): number {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  interface PreparedMetadataLine {
+    allItems: HTMLElement[];
+    baseHiddenCount: number;
+    candidates: HTMLElement[];
+    fixed: HTMLElement;
+    line: HTMLElement;
+    overflow: HTMLElement;
+    overflowCount: HTMLElement;
+  }
+
+  function prepareMetadataLine(line: HTMLElement): PreparedMetadataLine | null {
+    const fixed = line.querySelector<HTMLElement>("[data-metadata-fixed]");
+    const overflow = line.querySelector<HTMLElement>("[data-metadata-overflow]");
+    const overflowCount = line.querySelector<HTMLElement>("[data-metadata-overflow-count]");
+    if (fixed === null || overflow === null || overflowCount === null) return null;
+
+    const allItems = Array.from(line.querySelectorAll<HTMLElement>("[data-metadata-item]"));
+    let baseHiddenCount = positiveInteger(line.dataset.baseHiddenCount);
+    const candidates = allItems.filter((item) => {
+      const count = positiveInteger(item.dataset.count);
+      const logoAvailable =
+        item.dataset.logoItem === undefined ||
+        item.querySelector(".connection-logo.is-loaded") !== null;
+      if (!logoAvailable) baseHiddenCount += count;
+      return logoAvailable;
+    });
+    const totalHiddenCount =
+      baseHiddenCount +
+      candidates.reduce((count, item) => count + positiveInteger(item.dataset.count), 0);
+
+    line.dataset.measuring = "";
+    for (const item of candidates) item.hidden = false;
+    overflow.hidden = false;
+    overflowCount.textContent = `+${String(totalHiddenCount)}`;
+    return { allItems, baseHiddenCount, candidates, fixed, line, overflow, overflowCount };
+  }
+
+  function fitMetadataLines(lines: readonly HTMLElement[]): void {
+    const prepared = lines
+      .map(prepareMetadataLine)
+      .filter((line): line is PreparedMetadataLine => line !== null);
+    const measured = prepared.map((item) => ({
+      fit: fitRecipeMetadataItems({
+        availableWidth: item.line.clientWidth,
+        baseHiddenCount: item.baseHiddenCount,
+        fixedWidth: item.fixed.getBoundingClientRect().width,
+        gapWidth: Number.parseFloat(getComputedStyle(item.line).columnGap) || 0,
+        items: item.candidates.map((candidate) => ({
+          count: positiveInteger(candidate.dataset.count),
+          width: candidate.getBoundingClientRect().width,
+        })),
+        overflowWidth: item.overflow.getBoundingClientRect().width,
+      }),
+      item,
+    }));
+
+    for (const { fit, item } of measured) {
+      delete item.line.dataset.measuring;
+      for (const candidate of item.allItems) candidate.hidden = true;
+      item.candidates.forEach((candidate, index) => {
+        candidate.hidden = index >= fit.visibleItems;
+      });
+      item.overflowCount.textContent = `+${String(fit.hiddenCount)}`;
+      item.overflow.hidden = fit.hiddenCount === 0;
+    }
+  }
+
+  const metadataLines = Array.from(
+    document.querySelectorAll<HTMLElement>("[data-recipe-metadata]"),
+  );
+  const pendingLines = new Set<HTMLElement>();
+  let pendingFrame: number | undefined;
+  const queueMetadataLines = (lines: readonly HTMLElement[]) => {
+    for (const line of lines) pendingLines.add(line);
+    if (pendingFrame !== undefined) return;
+    pendingFrame = requestAnimationFrame(() => {
+      pendingFrame = undefined;
+      const batch = Array.from(pendingLines);
+      pendingLines.clear();
+      fitMetadataLines(batch);
+    });
+  };
+  const resizeObserver = new ResizeObserver((entries) => {
+    queueMetadataLines(entries.map((entry) => entry.target as HTMLElement));
+  });
+  metadataLines.forEach((line) => resizeObserver.observe(line));
+  document.addEventListener("connection-logo-state", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const line = target.closest<HTMLElement>("[data-recipe-metadata]");
+    if (line !== null) queueMetadataLines([line]);
+  });
+  void document.fonts?.ready.then(() => queueMetadataLines(metadataLines));
+  queueMetadataLines(metadataLines);
+</script>
 
 <style>
   .choice-board {
@@ -222,12 +351,9 @@ const choices = recipes.map((recipe) => ({
   }
 
   .metadata-line strong {
-    flex: 0 1 auto;
-    min-width: 0;
-    overflow: hidden;
+    flex: 0 0 auto;
     color: var(--choice-muted);
     font: 750 0.625rem/1.2 var(--font-mono);
-    text-overflow: ellipsis;
   }
 
   .metadata-separator {
@@ -235,6 +361,21 @@ const choices = recipes.map((recipe) => ({
     color: var(--choice-muted);
     font-size: 0.42rem;
     line-height: 1;
+  }
+
+  .metadata-item,
+  .metadata-overflow {
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: 0.45rem;
+    align-items: center;
+  }
+
+  .metadata-line[data-measuring] .metadata-item,
+  .metadata-line[data-measuring] .metadata-overflow {
+    position: absolute;
+    display: inline-flex !important;
+    visibility: hidden;
   }
 
   .integration-block {
@@ -253,9 +394,7 @@ const choices = recipes.map((recipe) => ({
   }
 
   .signal {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   @media (max-width: 75rem) {

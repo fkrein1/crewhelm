@@ -93,6 +93,7 @@ export const agentCapabilityConfigurationsSchema = z
   .array(agentCapabilityConfigurationSchema)
   .min(1)
   .max(MAXIMUM_AGENT_CAPABILITY_MODULES)
+  .describe("One to 16 unique capability modules sorted in canonical ID order.")
   .superRefine((capabilities, context) => {
     if (
       !capabilities.every(

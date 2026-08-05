@@ -1,16 +1,29 @@
 import type { RegistryEnv } from "./env.js";
+import { localCatalogStressDefinitionsA } from "./local-catalog-stress-seed-a.js";
+import { localCatalogStressDefinitionsB } from "./local-catalog-stress-seed-b.js";
 import { runRegistryMaintenance } from "./maintenance.js";
 import { publishBundle } from "./registry.js";
 import { publishers, registryDatabase } from "./schema.js";
 import { createRegistryServer } from "./server.js";
-import { TESTING_SEED_ARTIFACT_VERSION, testingSeedBundles } from "./testing-seed.js";
+import {
+  localCatalogStressSeedBundles,
+  TESTING_SEED_ARTIFACT_VERSION,
+  testingSeedBundles,
+} from "./testing-seed.js";
 
 type TestingRegistryBindings = RegistryEnv & { TESTING_SETUP_SECRET?: string };
 
 const testingPublisher = {
   displayName: "Crewhelm Testing Seeds",
   githubUserId: 1,
+  githubLogin: "crewhelm-testing-seeds",
   namespace: "crewhelm-labs",
+};
+const stressPublisher = {
+  displayName: "Crewhelm Catalog Stress Seeds",
+  githubUserId: 2,
+  githubLogin: "crewhelm-catalog-stress-seeds",
+  namespace: "crewhelm-stress",
 };
 
 function isTestingEnvironment(request: Request, env: TestingRegistryBindings): boolean {
@@ -69,33 +82,45 @@ export const testingRegistry: ExportedHandler<TestingRegistryBindings> = {
       }
       try {
         const now = Math.floor(Date.now() / 1_000);
-        await registryDatabase(bindings.REGISTRY_DB)
-          .insert(publishers)
-          .values({
-            createdAt: now,
-            displayName: testingPublisher.displayName,
-            githubLogin: "crewhelm-testing-seeds",
-            githubUserId: testingPublisher.githubUserId,
-            namespace: testingPublisher.namespace,
-            profileUrl: null,
-            status: "active",
-            updatedAt: now,
-          })
-          .onConflictDoUpdate({
-            set: {
-              displayName: testingPublisher.displayName,
-              githubLogin: "crewhelm-testing-seeds",
+        for (const seedPublisher of [testingPublisher, stressPublisher]) {
+          await registryDatabase(bindings.REGISTRY_DB)
+            .insert(publishers)
+            .values({
+              createdAt: now,
+              displayName: seedPublisher.displayName,
+              githubLogin: seedPublisher.githubLogin,
+              githubUserId: seedPublisher.githubUserId,
+              namespace: seedPublisher.namespace,
+              profileUrl: null,
+              status: "active",
               updatedAt: now,
-            },
-            target: publishers.githubUserId,
-          });
-        const bundles = await testingSeedBundles(bindings.PUBLIC_ORIGIN);
+            })
+            .onConflictDoUpdate({
+              set: {
+                displayName: seedPublisher.displayName,
+                githubLogin: seedPublisher.githubLogin,
+                updatedAt: now,
+              },
+              target: publishers.githubUserId,
+            });
+        }
         const recipes = [];
-        for (const bundle of bundles) {
+        for (const bundle of await testingSeedBundles(bindings.PUBLIC_ORIGIN)) {
           const result = await publishBundle(bindings, testingPublisher, bundle);
           if (result.recipe.artifact.version === TESTING_SEED_ARTIFACT_VERSION) {
             recipes.push(result.recipe.artifact.name);
           }
+        }
+        const stressDefinitions = [
+          ...localCatalogStressDefinitionsA,
+          ...localCatalogStressDefinitionsB,
+        ];
+        for (const bundle of await localCatalogStressSeedBundles(
+          bindings.PUBLIC_ORIGIN,
+          stressDefinitions,
+        )) {
+          const result = await publishBundle(bindings, stressPublisher, bundle);
+          recipes.push(result.recipe.artifact.name);
         }
         return Response.json({
           namespace: testingPublisher.namespace,

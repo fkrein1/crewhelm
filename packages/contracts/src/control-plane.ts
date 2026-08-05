@@ -241,7 +241,7 @@ export const agentCreationIdempotencyKeySchema = agentMutationIdempotencyKeySche
 export const createAgentInputSchema = z.strictObject({
   capabilities: agentCapabilityConfigurationsSchema
     .describe(
-      "Optional capability module configuration. Use crewhelm_inspect_context.inspect_capabilities to discover supported IDs and exact configuration schemas. Omit to use the owner model catalog's default inference module.",
+      "Optional capability modules in canonical ID order. Use crewhelm_inspect_context.inspect_capabilities to discover supported IDs and exact configuration schemas. Omit to use the owner model catalog's default inference module.",
     )
     .optional(),
   executionLimits: agentExecutionLimitsSchema

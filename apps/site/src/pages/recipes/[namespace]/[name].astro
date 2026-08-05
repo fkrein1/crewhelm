@@ -2,7 +2,7 @@
 import RecipeDetail from "../../../components/recipes/RecipeDetail.astro";
 import RecipeHeader from "../../../components/recipes/RecipeHeader.astro";
 import SiteLayout from "../../../layouts/SiteLayout.astro";
-import { toRecipePreview } from "../../../lib/recipe-catalog";
+import { RECIPE_DETAIL_CACHE_CONTROL, toRecipePreview } from "../../../lib/recipe-catalog";
 import { getRegistryRecipe } from "../../../lib/recipe-registry-server";
 
 export const prerender = false;
@@ -27,7 +27,7 @@ if (!projection) {
   });
 }
 const recipe = toRecipePreview(projection);
-Astro.response.headers.set("cache-control", "public, max-age=60, s-maxage=600, stale-while-revalidate=3600");
+Astro.response.headers.set("cache-control", RECIPE_DETAIL_CACHE_CONTROL);
 ---
 
 <SiteLayout title={`${recipe.title} — Crewhelm Recipe`} description={recipe.description}>

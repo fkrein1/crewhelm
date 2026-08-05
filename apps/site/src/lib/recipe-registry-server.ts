@@ -138,8 +138,8 @@ async function registryJson(path: string, request: Request): Promise<unknown> {
 }
 
 export async function listRegistryRecipes(request: Request): Promise<SiteRecipeProjection[]> {
-  const body = record(await registryJson("/v1/recipes?limit=25", request));
-  if (body.listVersion !== 1 || !Array.isArray(body.recipes) || body.recipes.length > 25) {
+  const body = record(await registryJson("/v1/recipes?limit=30", request));
+  if (body.listVersion !== 1 || !Array.isArray(body.recipes) || body.recipes.length > 30) {
     throw new Error("Invalid Registry response");
   }
   return body.recipes.map(parseRecipe);

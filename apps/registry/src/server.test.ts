@@ -519,7 +519,7 @@ describe("public Recipe Registry", () => {
   });
 
   it("rejects unbounded Recipe list requests", async () => {
-    const response = await SELF.fetch("https://registry.crewhelm.test/v1/recipes?limit=26");
+    const response = await SELF.fetch("https://registry.crewhelm.test/v1/recipes?limit=31");
     expect(response.status).toBe(400);
     expect(response.headers.get("cache-control")).toBe("no-store");
   });

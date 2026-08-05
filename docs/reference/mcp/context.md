@@ -1341,7 +1341,8 @@ Create or replace a bounded Agent blueprint package draft for review.
                   "schemaVersion"
                 ],
                 "additionalProperties": false
-              }
+              },
+              "description": "One to 16 unique capability modules sorted in canonical ID order."
             },
             "executionLimits": {
               "type": "object",

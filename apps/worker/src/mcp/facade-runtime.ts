@@ -400,7 +400,16 @@ export function registerProgressiveFacadeTools(
           const payload = facadeOperationPayloadSchema(catalog, selected).safeParse(
             parsed.data.input ?? {},
           );
-          if (!payload.success) return progressiveError("Invalid Crewhelm operation input.");
+          if (!payload.success) {
+            const issue = payload.error.issues[0];
+            const path = issue?.path.map(String).join(".");
+            const message = issue?.message ?? "Validation failed.";
+            return progressiveError(
+              path
+                ? `Invalid Crewhelm operation input at ${path}: ${message}`
+                : `Invalid Crewhelm operation input: ${message}`,
+            );
+          }
 
           try {
             const operation = { kind: selected.kind, ...payload.data };
