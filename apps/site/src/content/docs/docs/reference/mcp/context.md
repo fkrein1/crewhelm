@@ -46,6 +46,7 @@ How to use this tool:
 | `inspect_skill` | Inspect one exact owner-local Skill package version. |
 | `list_blueprints` | List available owner-local Agent blueprints. |
 | `inspect_blueprint` | Inspect one exact Agent blueprint package version. |
+| `list_authoring_drafts` | List compact references for active authoring drafts owned by this MCP client. |
 | `list_briefs` | List compact Brief metadata without reading content. |
 | `inspect_brief` | Inspect current metadata for one exact Brief without reading its content. |
 | `inspect_brief_revision` | Inspect metadata for one exact immutable Brief revision. |
@@ -271,6 +272,26 @@ Inspect one exact Agent blueprint package version.
   "required": [
     "id"
   ],
+  "additionalProperties": false
+}
+```
+
+</details>
+
+#### `list_authoring_drafts`
+
+List compact references for active authoring drafts owned by this MCP client.
+
+No input fields.
+
+<details>
+<summary>View exact JSON Schema</summary>
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {},
   "additionalProperties": false
 }
 ```

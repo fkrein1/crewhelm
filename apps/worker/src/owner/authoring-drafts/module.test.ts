@@ -43,6 +43,17 @@ describe("OwnerControlPlane MCP authoring drafts", () => {
     expect(created).toMatchObject({ action: "create", ok: true, replayed: false });
     if (!created.ok || created.action !== "create") throw new Error("Expected draft creation.");
 
+    await expect(stub.mcpAuthoringDrafts(authority, { action: "list" })).resolves.toEqual({
+      action: "list",
+      drafts: [created.draft],
+      ok: true,
+    });
+    await expect(stub.mcpAuthoringDrafts(otherClient, { action: "list" })).resolves.toEqual({
+      action: "list",
+      drafts: [],
+      ok: true,
+    });
+
     await expect(stub.mcpAuthoringDrafts(authority, create)).resolves.toMatchObject({
       action: "create",
       draft: created.draft,
@@ -83,6 +94,11 @@ describe("OwnerControlPlane MCP authoring drafts", () => {
     await expect(
       stub.mcpAuthoringDrafts(authority, { action: "discard", draft: replaced.draft }),
     ).resolves.toMatchObject({ action: "discard", discarded: true, ok: true });
+    await expect(stub.mcpAuthoringDrafts(authority, { action: "list" })).resolves.toEqual({
+      action: "list",
+      drafts: [],
+      ok: true,
+    });
     await expect(
       stub.mcpAuthoringDrafts(authority, { action: "read", draft: replaced.draft }),
     ).resolves.toMatchObject({ error: { code: "draft_not_found" }, ok: false });

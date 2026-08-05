@@ -65,6 +65,8 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   list_approvals: "List sensitive tool actions waiting for an owner decision.",
   list_auth_configs:
     "List bounded owner-held auth-config references; inspect provider auth for current activity.",
+  list_authoring_drafts:
+    "List compact references for active authoring drafts owned by this MCP client.",
   list_blueprints: "List available owner-local Agent blueprints.",
   list_briefs: "List compact Brief metadata without reading content.",
   list_connections: "List compact provider and remote MCP Connection metadata.",
