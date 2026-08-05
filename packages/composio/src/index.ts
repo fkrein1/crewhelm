@@ -42,6 +42,7 @@ const composioToolkitSchema = z.looseObject({
   auth_schemes: z.array(z.string().min(1).max(64)).max(16).optional(),
   meta: z.looseObject({
     description: z.string().max(2_000).nullish(),
+    logo: z.string().max(2_048).nullish(),
     tools_count: z.number().int().min(0).max(1_000_000),
     version: integrationToolkitVersionSchema,
   }),
@@ -136,12 +137,26 @@ function normalizeToolkit(toolkit: z.infer<typeof composioToolkitSchema>): Integ
   return {
     authSchemes: toolkit.auth_schemes?.map((scheme) => scheme.toLowerCase()) ?? null,
     description: toolkit.meta.description ?? null,
+    logoUrl: safeHttpsUrl(toolkit.meta.logo),
     name: toolkit.name,
     noAuth: toolkit.no_auth ?? null,
     slug: toolkit.slug,
     toolsCount: toolkit.meta.tools_count,
     version: toolkit.meta.version,
   };
+}
+
+function safeHttpsUrl(value: string | null | undefined): string | null {
+  if (value == null) return null;
+
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.username === "" && url.password === ""
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeTool(tool: z.infer<typeof composioToolSchema>): IntegrationToolCatalogItem {

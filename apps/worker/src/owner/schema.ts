@@ -2269,7 +2269,19 @@ export const providerAuthConfigs = sqliteTable(
     authConfigId: text("auth_config_id").primaryKey(),
     integrationSlug: text("integration_slug").notNull(),
     authScheme: text("auth_scheme", {
-      enum: ["OAUTH2", "API_KEY", "BEARER_TOKEN", "BASIC"],
+      enum: [
+        "API_KEY",
+        "BASIC",
+        "BASIC_WITH_JWT",
+        "BEARER_TOKEN",
+        "DCR_OAUTH",
+        "GOOGLE_SERVICE_ACCOUNT",
+        "NO_AUTH",
+        "OAUTH1",
+        "OAUTH2",
+        "S2S_OAUTH2",
+        "SAML",
+      ],
     }).notNull(),
     source: text("source", {
       enum: ["composio_managed", "crewhelm_custom"],
@@ -2286,7 +2298,7 @@ export const providerAuthConfigs = sqliteTable(
     ),
     check(
       "provider_auth_configs_auth_scheme",
-      sql`${table.authScheme} IN ('OAUTH2', 'API_KEY', 'BEARER_TOKEN', 'BASIC')`,
+      sql`${table.authScheme} IN ('API_KEY', 'BASIC', 'BASIC_WITH_JWT', 'BEARER_TOKEN', 'DCR_OAUTH', 'GOOGLE_SERVICE_ACCOUNT', 'NO_AUTH', 'OAUTH1', 'OAUTH2', 'S2S_OAUTH2', 'SAML')`,
     ),
     check(
       "provider_auth_configs_source",

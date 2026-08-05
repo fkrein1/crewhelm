@@ -30,7 +30,6 @@ const RECONCILE_PATH = `${PROVIDER_AUTH_SETUP_PATH}/reconcile`;
 const SCRIPT_PATH = `${PROVIDER_AUTH_SETUP_PATH}/app.js`;
 const MAXIMUM_JSON_BYTES = 140 * 1_024;
 const DENIED = { error: "provider_auth_setup_denied", ok: false } as const;
-
 const PAGE = renderWorkerPage({
   body: `      <p class="ch-copy" id="status">Preparing secure provider authentication…</p>
       <div id="setup"></div>`,
@@ -60,7 +59,7 @@ const SCRIPT = String.raw`(() => {
     if (!authorizeConnection) return document.createDocumentFragment();
     const steps = document.createElement("div");
     steps.className = "ch-steps";
-    for (const [number, label] of [[1, "Configure app"], [2, "Connect account"]]) {
+    for (const [number, label] of [[1, "Configure access"], [2, "Authorize account"]]) {
       const step = document.createElement("div");
       step.className = "ch-step";
       if (number === current) step.setAttribute("aria-current", "step");
@@ -84,18 +83,53 @@ const SCRIPT = String.raw`(() => {
     if (!response.ok || result === null) throw result || new Error("request_failed");
     return result;
   };
+  const openProviderAuthorization = async (credentials = {}) => {
+    status.textContent = "Opening provider authorization…";
+    const connected = await request("${CONNECT_PATH}", {
+      body: JSON.stringify({ credentials }),
+      method: "POST",
+    });
+    window.location.assign(connected.url);
+  };
   const render = (result) => {
     if (!result.ok) throw result;
     if (result.status === "configured") return renderCompleted(result.plan);
     if (result.status === "rejected") return fail("These credentials were rejected. Request a new setup link and try again.");
     if (result.status === "outcome_unknown") return renderUnknown(result);
     heading.textContent = "Connect " + result.plan.integrationName + ".";
+    if (result.plan.support === "unsupported") {
+      status.textContent = result.plan.integrationName + " uses " + result.plan.authScheme +
+        " authentication, which Crewhelm cannot configure safely yet.";
+      const notice = document.createElement("aside");
+      notice.className = "ch-trust";
+      const title = document.createElement("strong");
+      title.append(text("This format is not supported yet"));
+      const copy = document.createElement("p");
+      copy.append(text("Crewhelm did not request, transmit, or store any credentials. Choose another authentication method when the provider offers one, or request support for this format."));
+      notice.append(title, copy);
+      setup.replaceChildren(notice);
+      return;
+    }
     status.textContent = result.plan.authorizeConnection
-      ? "First, configure the developer app Crewhelm will use. Then you will authorize your account."
+      ? result.plan.fields.length === 0
+        ? "Continue to the provider's secure authorization page."
+        : "First, configure the developer app Crewhelm will use. Then you will authorize your account."
       : "Enter the configuration required by " + result.plan.integrationName + ".";
+    if (result.plan.fields.length === 0) {
+      setup.replaceChildren();
+      status.textContent = "Opening the provider's secure authorization page…";
+      request("${CONFIGURE_PATH}", {
+        body: JSON.stringify({ credentials: {} }),
+        method: "POST",
+      })
+        .then((configured) => configured.plan.authorizeConnection
+          ? openProviderAuthorization()
+          : renderCompleted(configured.plan))
+        .catch(() => fail("Provider authorization could not be started. Request a new setup link and try again."));
+      return;
+    }
     const form = document.createElement("form");
     form.className = "ch-form";
-    form.append(renderSteps(1, result.plan.authorizeConnection));
     if (result.plan.documentationUrl) {
       const help = document.createElement("p");
       help.className = "ch-copy";
@@ -151,14 +185,17 @@ const SCRIPT = String.raw`(() => {
         required.append(text("Required"));
         label.append(required);
       }
-      const input = document.createElement("input");
+      const input = document.createElement(field.multiline ? "textarea" : "input");
       input.autocomplete = "off";
       input.className = "ch-input";
       input.id = label.htmlFor;
       input.maxLength = field.maximumLength;
       input.name = field.key;
       input.required = field.required;
-      input.type = field.secret ? "password" : "text";
+      if (!field.multiline) input.type = field.secret ? "password" : "text";
+      if (field.multiline) input.rows = 7;
+      if (field.multiline && field.secret) input.classList.add("ch-input--masked");
+      if (field.defaultValue !== undefined) input.value = field.defaultValue;
       input.spellcheck = false;
       input.setAttribute("autocapitalize", "none");
       const wrap = document.createElement("div");
@@ -173,8 +210,14 @@ const SCRIPT = String.raw`(() => {
         reveal.setAttribute("aria-pressed", "false");
         reveal.append(text("Show"));
         reveal.addEventListener("click", () => {
-          const visible = input.type === "text";
-          input.type = visible ? "password" : "text";
+          const visible = field.multiline
+            ? !input.classList.contains("ch-input--masked")
+            : input.type === "text";
+          if (field.multiline) {
+            input.classList.toggle("ch-input--masked", visible);
+          } else {
+            input.type = visible ? "password" : "text";
+          }
           reveal.textContent = visible ? "Show" : "Hide";
           reveal.setAttribute("aria-pressed", String(!visible));
         });
@@ -192,7 +235,9 @@ const SCRIPT = String.raw`(() => {
     const trustTitle = document.createElement("strong");
     trustTitle.append(text("Security"));
     const trustCopy = document.createElement("p");
-    trustCopy.append(text("Sent securely to Composio for setup. Crewhelm clears the form and does not store these credentials."));
+    trustCopy.append(text(result.plan.fields.length === 0
+      ? "You will enter account credentials on Composio's secure authorization page. They never pass through Crewhelm."
+      : "Sent securely to Composio for setup. Crewhelm clears the form and does not store these credentials."));
     trust.append(trustTitle, trustCopy);
     form.append(trust);
     const actions = document.createElement("div");
@@ -200,28 +245,38 @@ const SCRIPT = String.raw`(() => {
     const submit = document.createElement("button");
     submit.className = "ch-button ch-button--primary";
     submit.type = "submit";
-    submit.append(text("Save and continue"));
+    submit.append(text(result.plan.authorizeConnection
+      ? "Connect " + result.plan.integrationName
+      : "Save configuration"));
     actions.append(submit);
     form.append(actions);
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       submit.disabled = true;
       status.textContent = "Sending credentials securely to the provider…";
-      const values = {};
+      const authConfigCredentials = {};
+      const connectionCredentials = {};
       for (const field of result.plan.fields) {
         const value = form.elements.namedItem(field.key).value;
-        if (field.required || value !== "") values[field.key] = value;
+        if (field.required || value !== "") {
+          (field.stage === "auth_config" ? authConfigCredentials : connectionCredentials)[field.key] = value;
+        }
       }
       try {
         const configured = await request("${CONFIGURE_PATH}", {
-          body: JSON.stringify({ credentials: values }),
+          body: JSON.stringify({ credentials: authConfigCredentials }),
           method: "POST",
         });
-        for (const key of Object.keys(values)) values[key] = "";
-        form.reset();
-        renderCompleted(configured.plan);
+        if (configured.plan.authorizeConnection) {
+          if (configured.url) {
+            window.location.assign(configured.url);
+          } else {
+            await openProviderAuthorization(connectionCredentials);
+          }
+        } else {
+          renderCompleted(configured.plan);
+        }
       } catch (error) {
-        for (const key of Object.keys(values)) values[key] = "";
         if (error && error.error === "credentials_rejected") {
           status.textContent = "The provider rejected these credentials. Check them and try again with a new setup link.";
         } else {
@@ -230,6 +285,10 @@ const SCRIPT = String.raw`(() => {
           status.textContent = "The provider outcome is unknown. Reload this page to check it without resubmitting credentials.";
         }
         setup.replaceChildren();
+      } finally {
+        for (const key of Object.keys(authConfigCredentials)) authConfigCredentials[key] = "";
+        for (const key of Object.keys(connectionCredentials)) connectionCredentials[key] = "";
+        form.reset();
       }
     });
     setup.replaceChildren(form);
@@ -241,6 +300,10 @@ const SCRIPT = String.raw`(() => {
       setup.replaceChildren(text("You can close this window and continue from your MCP client."));
       return;
     }
+    if (plan.fields.some((field) => field.stage === "connection" && field.required)) {
+      setup.replaceChildren(text("Request a new setup link to enter the connection credentials again. Crewhelm did not retain them."));
+      return;
+    }
     const actions = document.createElement("div");
     actions.className = "ch-actions";
     const button = document.createElement("button");
@@ -248,10 +311,8 @@ const SCRIPT = String.raw`(() => {
     button.append(text("Authorize provider account"));
     button.addEventListener("click", async () => {
       button.disabled = true;
-      status.textContent = "Opening provider authorization…";
       try {
-        const result = await request("${CONNECT_PATH}", { body: "{}", method: "POST" });
-        window.location.assign(result.url);
+        await openProviderAuthorization();
       } catch {
         fail("Provider authorization could not be started. Request a new setup link and try again.");
       }
@@ -461,7 +522,11 @@ export function registerProviderAuthSetupRoutes(worker: Hono<{ Bindings: WorkerE
       !current.success ||
       !current.data.ok ||
       current.data.status !== "exchanged" ||
-      !validCredentials(credentials, current.data.plan.fields)
+      current.data.plan.support !== "supported" ||
+      !validCredentials(
+        credentials,
+        current.data.plan.fields.filter((field) => field.stage === "auth_config"),
+      )
     ) {
       return json(DENIED, 400);
     }
@@ -513,12 +578,31 @@ export function registerProviderAuthSetupRoutes(worker: Hono<{ Bindings: WorkerE
     const body = mutationAllowed(context.req.raw, context.env)
       ? await jsonBody(context.req.raw)
       : null;
-    if (body === null || !hasExactKeys(body, [])) {
+    if (body === null || !hasExactKeys(body, ["credentials"])) {
       return json(DENIED, 400);
     }
+    const credentials = ownValue(body, "credentials");
     const session = await sessionForRequest(context.req.raw, context.env);
     if (session === null) return json(DENIED, 401);
     const controlPlane = context.env.OWNER_CONTROL_PLANE.getByName(session.claims.ownerKey);
+    const current = providerAuthSetupPlanResultSchema.safeParse(
+      await controlPlane.readProviderAuthSetup({
+        sessionDigest: session.sessionDigest,
+        setupId: session.claims.setupId,
+      }),
+    );
+    if (
+      !current.success ||
+      !current.data.ok ||
+      current.data.status !== "configured" ||
+      current.data.plan.support !== "supported" ||
+      !validCredentials(
+        credentials,
+        current.data.plan.fields.filter((field) => field.stage === "connection"),
+      )
+    ) {
+      return json(DENIED, 400);
+    }
     const setupAuthority = providerAuthSetupAuthorityResultSchema.safeParse(
       await controlPlane.providerAuthSetupAuthority({
         sessionDigest: session.sessionDigest,
@@ -555,6 +639,7 @@ export function registerProviderAuthSetupRoutes(worker: Hono<{ Bindings: WorkerE
       authConfigId: setupAuthority.data.authConfigId,
       callbackSecrets: callback.callbackSecrets,
       callbackUrl: callback.callbackUrl,
+      ...(Object.keys(credentials).length === 0 ? {} : { connectionData: credentials }),
       userId: authority.ownerKey,
     });
     if (!link.ok) return json(DENIED, 503);

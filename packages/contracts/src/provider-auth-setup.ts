@@ -29,17 +29,24 @@ export const providerAuthSetupIdSchema = z
   .regex(
     /^provider_auth_setup_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   );
-export const providerCredentialFieldSchema = z.strictObject({
-  key: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/),
-  label: z.string().min(1).max(120),
-  maximumLength: z.number().int().min(1).max(MAXIMUM_PROVIDER_CREDENTIAL_VALUE_CHARACTERS),
-  required: z.boolean(),
-  secret: z.boolean(),
-  type: z.literal("string"),
-});
+export const providerCredentialFieldSchema = z
+  .strictObject({
+    defaultValue: z.string().max(MAXIMUM_PROVIDER_CREDENTIAL_VALUE_CHARACTERS).optional(),
+    key: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/),
+    label: z.string().min(1).max(120),
+    maximumLength: z.number().int().min(1).max(MAXIMUM_PROVIDER_CREDENTIAL_VALUE_CHARACTERS),
+    multiline: z.boolean(),
+    required: z.boolean(),
+    secret: z.boolean(),
+    stage: z.enum(["auth_config", "connection"]),
+    type: z.literal("string"),
+  })
+  .refine(
+    (field) => field.defaultValue === undefined || !field.secret,
+    "Secret provider fields cannot carry defaults.",
+  );
 export const providerCredentialFieldsSchema = z
   .array(providerCredentialFieldSchema)
-  .min(1)
   .max(MAXIMUM_PROVIDER_CREDENTIAL_FIELDS)
   .refine(
     (fields) => new Set(fields.map((field) => field.key)).size === fields.length,
@@ -54,6 +61,7 @@ export const providerAuthSetupPlanSchema = z.strictObject({
   fields: providerCredentialFieldsSchema,
   integrationName: z.string().min(1).max(160),
   integrationSlug: integrationSlugSchema,
+  support: z.enum(["supported", "unsupported"]),
   setupId: providerAuthSetupIdSchema,
 });
 export const prepareProviderAuthSetupInputSchema = z.strictObject({

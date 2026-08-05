@@ -83,6 +83,7 @@ describe("Composio catalog adapter", () => {
             auth_schemes: ["OAUTH2"],
             meta: {
               description: "Search and scrape the web.",
+              logo: "https://assets.composio.dev/logos/firecrawl.png",
               tools_count: 18,
               version: "20260701_00",
             },
@@ -143,6 +144,7 @@ describe("Composio catalog adapter", () => {
         {
           authSchemes: ["oauth2"],
           description: "Search and scrape the web.",
+          logoUrl: "https://assets.composio.dev/logos/firecrawl.png",
           name: "Firecrawl",
           noAuth: false,
           slug: "firecrawl",
@@ -152,6 +154,7 @@ describe("Composio catalog adapter", () => {
         {
           authSchemes: null,
           description: "A project-owned integration.",
+          logoUrl: null,
           name: "Project toolkit",
           noAuth: null,
           slug: "project_toolkit",
@@ -163,6 +166,34 @@ describe("Composio catalog adapter", () => {
       ok: true,
     });
     expect(JSON.stringify(result)).not.toContain(apiKey);
+  });
+
+  it("drops unsafe catalog logo URLs without dropping the integration", async () => {
+    const catalog = createComposioCatalog({
+      apiKey: "composio-project-secret",
+      fetch: vi.fn<typeof fetch>().mockResolvedValue(
+        catalogResponse({
+          items: [
+            {
+              meta: {
+                description: "Unsafe upstream logo metadata.",
+                logo: "http://user:password@example.com/logo.svg",
+                tools_count: 1,
+                version: "20260701_00",
+              },
+              name: "Example",
+              slug: "example",
+            },
+          ],
+          next_cursor: null,
+        }),
+      ),
+    });
+
+    await expect(catalog.search({ limit: 1 })).resolves.toMatchObject({
+      integrations: [{ logoUrl: null, slug: "example" }],
+      ok: true,
+    });
   });
 
   it("discovers exact tools from every integration at the latest resolved version", async () => {
@@ -1080,6 +1111,7 @@ describe("Composio connection-link adapter", () => {
 
   it("creates a private hosted link through one fixed, bounded request", async () => {
     const apiKey = "composio-project-secret";
+    const connectionSecret = "provider-connection-secret";
     const cancellation = new AbortController();
     const onResponse = vi.fn<(event: unknown) => void>();
     const fetchMock = vi
@@ -1093,7 +1125,15 @@ describe("Composio connection-link adapter", () => {
       signal: cancellation.signal,
     });
 
-    await expect(connectionLinks.create(input)).resolves.toEqual({
+    await expect(
+      connectionLinks.create({
+        ...input,
+        connectionData: {
+          full: "https://api.firecrawl.dev/v1",
+          generic_api_key: connectionSecret,
+        },
+      }),
+    ).resolves.toEqual({
       connectionLink: {
         expiresAt: providerResponse.expires_at,
         providerConnectionId: providerResponse.connected_account_id,
@@ -1124,6 +1164,10 @@ describe("Composio connection-link adapter", () => {
     expect(JSON.parse(init.body)).toEqual({
       auth_config_id: input.authConfigId,
       callback_url: input.callbackUrl,
+      connection_data: {
+        full: "https://api.firecrawl.dev/v1",
+        generic_api_key: connectionSecret,
+      },
       experimental: {
         account_type: "PRIVATE",
       },
@@ -1132,6 +1176,7 @@ describe("Composio connection-link adapter", () => {
     cancellation.abort();
     expect(init?.signal?.aborted).toBe(true);
     expect(JSON.stringify(await connectionLinks.create(input))).not.toContain(apiKey);
+    expect(JSON.stringify(await connectionLinks.create(input))).not.toContain(connectionSecret);
   });
 
   it("does not dispatch without valid local configuration or input", async () => {

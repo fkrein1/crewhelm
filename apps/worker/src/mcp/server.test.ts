@@ -3310,6 +3310,7 @@ describe("authenticated MCP handler", () => {
         {
           authSchemes: ["oauth2"],
           description: "Search and scrape the web.",
+          logoUrl: null,
           name: "Firecrawl",
           noAuth: false,
           slug: "firecrawl",
@@ -3456,8 +3457,8 @@ describe("authenticated MCP handler", () => {
     ).resolves.toEqual({ authConfigs: { count: 0 }, enablements: { count: 0 } });
   });
 
-  it("returns setup-required from connect_provider before reserving an external effect", async () => {
-    const authority = await ownerAuthority("mcp-spotify-connect-readiness-owner", [
+  it("returns a private browser setup link for Firecrawl API-key authentication", async () => {
+    const authority = await ownerAuthority("mcp-firecrawl-connect-readiness-owner", [
       CONNECTION_CONFIGS_WRITE_SCOPE,
       CONNECTIONS_WRITE_SCOPE,
     ]);
@@ -3470,24 +3471,37 @@ describe("authenticated MCP handler", () => {
               fields: {
                 auth_config_creation: {
                   optional: [],
+                  required: [],
+                },
+                connected_account_initiation: {
+                  optional: [],
                   required: [
                     {
-                      displayName: "Client secret",
+                      default: "https://api.firecrawl.dev/v1",
+                      displayName: "Base URL",
+                      is_secret: false,
+                      name: "full",
+                      required: true,
+                      type: "string",
+                    },
+                    {
+                      default: "",
+                      displayName: "API key",
                       is_secret: true,
-                      name: "client_secret",
+                      name: "generic_api_key",
                       required: true,
                       type: "string",
                     },
                   ],
                 },
               },
-              mode: "oauth2",
+              mode: "api_key",
             },
           ],
           composio_managed_auth_schemes: [],
-          name: "Spotify",
+          name: "Firecrawl",
           no_auth: false,
-          slug: "spotify",
+          slug: "firecrawl",
         }),
       )
       .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
@@ -3499,24 +3513,37 @@ describe("authenticated MCP handler", () => {
               fields: {
                 auth_config_creation: {
                   optional: [],
+                  required: [],
+                },
+                connected_account_initiation: {
+                  optional: [],
                   required: [
                     {
-                      displayName: "Client secret",
+                      default: "https://api.firecrawl.dev/v1",
+                      displayName: "Base URL",
+                      is_secret: false,
+                      name: "full",
+                      required: true,
+                      type: "string",
+                    },
+                    {
+                      default: "",
+                      displayName: "API key",
                       is_secret: true,
-                      name: "client_secret",
+                      name: "generic_api_key",
                       required: true,
                       type: "string",
                     },
                   ],
                 },
               },
-              mode: "oauth2",
+              mode: "api_key",
             },
           ],
           composio_managed_auth_schemes: [],
-          name: "Spotify",
+          name: "Firecrawl",
           no_auth: false,
-          slug: "spotify",
+          slug: "firecrawl",
         }),
       );
     const response = await handleAuthenticatedMcpRequest(
@@ -3528,9 +3555,9 @@ describe("authenticated MCP handler", () => {
           params: {
             arguments: {
               operation: {
-                integrationSlug: "spotify",
+                integrationSlug: "firecrawl",
                 kind: "connect_provider",
-                requestKey: "mcp-connect-spotify-setup",
+                requestKey: "mcp-connect-firecrawl-setup",
               },
             },
             name: MCP_CHANGE_CONNECTIONS_TOOL_NAME,
@@ -3546,14 +3573,16 @@ describe("authenticated MCP handler", () => {
     expect(payload.isError).toBe(false);
     expect(result).toMatchObject({
       authentication: {
+        availableSchemes: ["API_KEY"],
         managedAuthAvailable: false,
+        recommendedScheme: "API_KEY",
         setup: {
           expiresAt: expect.any(String),
           url: expect.stringMatching(/^https:\/\/crewhelm\.test\/setup\/provider-auth#capability=/),
         },
         state: "setup_required",
       },
-      integration: { slug: "spotify" },
+      integration: { name: "Firecrawl", slug: "firecrawl" },
       ok: true,
     });
     expect(fetchMock).toHaveBeenCalledTimes(4);

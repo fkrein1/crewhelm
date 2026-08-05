@@ -284,6 +284,15 @@ body.ch-page {
   font-size: 11px;
 }
 
+textarea.ch-input {
+  min-height: 9rem;
+  resize: vertical;
+}
+
+.ch-input--masked {
+  -webkit-text-security: disc;
+}
+
 .ch-input-action {
   padding: 0 var(--ch-space-3);
   border: 1px solid var(--ch-color-border-strong);
