@@ -16,7 +16,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { createConnectionAuthorizationCallback } from "../owner/connections/index.js";
-import { createRemoteMcpBearerSetup } from "../remote-mcp/handoff.js";
+import { createRemoteMcpApiKeySetup, createRemoteMcpBearerSetup } from "../remote-mcp/handoff.js";
 import {
   createProviderAuthSetupCapability,
   createProviderAuthSetupSession,
@@ -147,6 +147,82 @@ function remoteMcpOAuthFetch() {
   });
 }
 
+function remoteMcpApiKeyFetch() {
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = input instanceof Request ? input.url : input.toString();
+    if (url !== "https://mcp.example.com/rpc" || init?.method !== "POST") {
+      throw new Error(`Unexpected API-key MCP request: ${url}`);
+    }
+    if (new Headers(init.headers).get("x-api-key") !== "private-api-key") {
+      return new Response(null, { status: 401 });
+    }
+    if (typeof init.body !== "string") throw new Error("Expected MCP request body.");
+    const rpc: unknown = JSON.parse(init.body);
+    if (typeof rpc !== "object" || rpc === null || Array.isArray(rpc)) {
+      throw new Error("Expected MCP request object.");
+    }
+    const id = Reflect.get(rpc, "id");
+    const rpcMethod = Reflect.get(rpc, "method");
+    if (rpcMethod === "initialize") {
+      return Response.json({
+        id,
+        jsonrpc: "2.0",
+        result: {
+          capabilities: { tools: {} },
+          protocolVersion: "2025-06-18",
+          serverInfo: { name: "api-key-server", version: "1.0.0" },
+        },
+      });
+    }
+    if (rpcMethod === "notifications/initialized") return new Response(null, { status: 202 });
+    if (rpcMethod === "tools/list") {
+      return Response.json({
+        id,
+        jsonrpc: "2.0",
+        result: { tools: [{ inputSchema: { type: "object" }, name: "records.read" }] },
+      });
+    }
+    throw new Error(`Unexpected API-key MCP method: ${String(rpcMethod)}`);
+  });
+}
+
+function remoteMcpBearerFetch() {
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = input instanceof Request ? input.url : input.toString();
+    if (url !== "https://mcp.example.com/rpc" || init?.method !== "POST") {
+      throw new Error(`Unexpected bearer MCP request: ${url}`);
+    }
+    if (new Headers(init.headers).get("authorization") !== "Bearer private-bearer-token") {
+      return new Response(null, { status: 401 });
+    }
+    if (typeof init.body !== "string") throw new Error("Expected MCP request body.");
+    const rpc: unknown = JSON.parse(init.body);
+    const id = typeof rpc === "object" && rpc !== null ? Reflect.get(rpc, "id") : undefined;
+    const rpcMethod =
+      typeof rpc === "object" && rpc !== null ? Reflect.get(rpc, "method") : undefined;
+    if (rpcMethod === "initialize") {
+      return Response.json({
+        id,
+        jsonrpc: "2.0",
+        result: {
+          capabilities: { tools: {} },
+          protocolVersion: "2025-06-18",
+          serverInfo: { name: "bearer-server", version: "1.0.0" },
+        },
+      });
+    }
+    if (rpcMethod === "notifications/initialized") return new Response(null, { status: 202 });
+    if (rpcMethod === "tools/list") {
+      return Response.json({
+        id,
+        jsonrpc: "2.0",
+        result: { tools: [{ inputSchema: { type: "object" }, name: "records.read" }] },
+      });
+    }
+    throw new Error(`Unexpected bearer MCP method: ${String(rpcMethod)}`);
+  });
+}
+
 async function connectionAuthorizationFixture(subject: string) {
   const ownerKey = await deriveOwnerKey({
     issuer: "https://github.com",
@@ -257,17 +333,6 @@ describe("Crewhelm Worker", () => {
           stage: "auth_config" as const,
           type: "string" as const,
         },
-        {
-          defaultValue: "crewhelm",
-          key: "subdomain",
-          label: "Subdomain",
-          maximumLength: 2_048,
-          multiline: false,
-          required: true,
-          secret: false,
-          stage: "connection" as const,
-          type: "string" as const,
-        },
       ],
       integrationName: "GitHub",
       integrationSlug: "github",
@@ -374,7 +439,7 @@ describe("Crewhelm Worker", () => {
     });
 
     const connected = await request("/setup/provider-auth/connect", {
-      body: JSON.stringify({ credentials: { subdomain: "crewhelm" } }),
+      body: "{}",
       headers: { "content-type": "application/json", cookie: sessionCookie, origin },
       method: "POST",
     });
@@ -387,9 +452,7 @@ describe("Crewhelm Worker", () => {
     if (typeof connectionInit?.body !== "string") {
       throw new Error("Expected connection-link body.");
     }
-    expect(JSON.parse(connectionInit.body)).toMatchObject({
-      connection_data: { subdomain: "crewhelm" },
-    });
+    expect(JSON.parse(connectionInit.body)).not.toHaveProperty("connection_data");
 
     const stored = await runInDurableObject(controlPlane, (_instance, state) => [
       ...state.storage.sql.exec("SELECT * FROM provider_auth_setup_requests").toArray(),
@@ -946,13 +1009,14 @@ describe("Crewhelm Worker", () => {
   });
 
   it("serves only authentic, bounded remote MCP bearer handoffs", async () => {
+    const ownerKey = `owner_${"r".repeat(43)}`;
     const setup = await createRemoteMcpBearerSetup({
       claims: {
         endpoint: "https://mcp.example.com/rpc",
         expiresAt: Date.now() + 60_000,
         idempotencyKey: "remote-mcp-browser-handoff",
         name: "Project MCP",
-        ownerKey: `owner_${"r".repeat(43)}`,
+        ownerKey,
       },
       origin,
       signingSecret: env.BETTER_AUTH_SECRET,
@@ -966,6 +1030,8 @@ describe("Crewhelm Worker", () => {
     expect(response.headers.get("referrer-policy")).toBe("no-referrer");
     expect(body).toContain("Project MCP");
     expect(body).toContain("https://mcp.example.com/rpc");
+    expect(body).toContain('class="ch-panel ch-panel--form"');
+    expect(body).toContain('class="ch-input"');
     expect(body).toContain('type="password"');
 
     const getByName = vi.spyOn(env.OWNER_CONTROL_PLANE, "getByName");
@@ -985,6 +1051,129 @@ describe("Crewhelm Worker", () => {
     expect(await malformed.text()).not.toContain("secret");
     expect(getByName).not.toHaveBeenCalled();
     getByName.mockRestore();
+
+    const fetchMock = remoteMcpBearerFetch();
+    const connected = await worker.fetch(
+      new Request(setup.url, {
+        body: "bearerToken=private-bearer-token",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        method: "POST",
+      }),
+      env,
+    );
+    fetchMock.mockRestore();
+    expect(connected.status).toBe(200);
+    const mutation = await runInDurableObject(
+      env.OWNER_CONTROL_PLANE.getByName(ownerKey),
+      (_instance, state) =>
+        state.storage.sql.exec(`SELECT client_id FROM remote_mcp_connection_mutations`).one(),
+    );
+    expect(mutation).toEqual({ client_id: "crewhelm:remote-mcp-bearer-handoff" });
+  });
+
+  it("reports a safe, actionable remote MCP upstream denial", async () => {
+    const setup = await createRemoteMcpBearerSetup({
+      claims: {
+        endpoint: "https://mcp.example.com/private/path",
+        expiresAt: Date.now() + 60_000,
+        idempotencyKey: "remote-mcp-browser-upstream-denial",
+        name: "Denied MCP",
+        ownerKey: `owner_${"d".repeat(43)}`,
+      },
+      origin,
+      signingSecret: env.BETTER_AUTH_SECRET,
+    });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("sensitive upstream body", { status: 403 }));
+
+    const response = await worker.fetch(
+      new Request(setup.url, {
+        body: "bearerToken=private-bearer-token",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        method: "POST",
+      }),
+      env,
+    );
+    fetchMock.mockRestore();
+    const body = await response.text();
+
+    expect(response.status).toBe(502);
+    expect(body).toContain("Remote MCP connection failed");
+    expect(body).toContain("HTTP 403");
+    expect(body).not.toContain("private-bearer-token");
+    expect(body).not.toContain("sensitive upstream body");
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("private-bearer-token");
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("sensitive upstream body");
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("/private/path");
+    warning.mockRestore();
+  });
+
+  it("connects a named-header API-key MCP through a bounded browser handoff", async () => {
+    const ownerKey = `owner_${"k".repeat(43)}`;
+    const setup = await createRemoteMcpApiKeySetup({
+      claims: {
+        apiKeyHeaderName: "X-API-Key",
+        endpoint: "https://mcp.example.com/rpc",
+        expiresAt: Date.now() + 60_000,
+        idempotencyKey: "remote-mcp-api-key-browser-handoff",
+        name: "API Key MCP",
+        ownerKey,
+      },
+      origin,
+      signingSecret: env.BETTER_AUTH_SECRET,
+    });
+    const page = await worker.fetch(new Request(setup.url), env);
+    const pageBody = await page.text();
+
+    expect(page.status).toBe(200);
+    expect(pageBody).toContain("API key");
+    expect(pageBody).toContain("x-api-key");
+    expect(pageBody).toContain('class="ch-panel ch-panel--form"');
+    expect(pageBody).toContain('class="ch-form"');
+    expect(pageBody).toContain('class="ch-field"');
+    expect(pageBody).toContain('class="ch-input"');
+    expect(pageBody).toContain('class="ch-field-hint"');
+    expect(pageBody).toContain('class="ch-trust"');
+    expect(pageBody).not.toContain("private-api-key");
+
+    const fetchMock = remoteMcpApiKeyFetch();
+    const connected = await worker.fetch(
+      new Request(setup.url, {
+        body: "apiKey=private-api-key",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        method: "POST",
+      }),
+      env,
+    );
+    fetchMock.mockRestore();
+    const connectedBody = await connected.text();
+
+    expect(connected.status).toBe(200);
+    expect(connectedBody).toContain("Remote MCP connected");
+    expect(connectedBody).not.toContain("private-api-key");
+    const stored = await runInDurableObject(
+      env.OWNER_CONTROL_PLANE.getByName(ownerKey),
+      (_instance, state) =>
+        state.storage.sql
+          .exec(
+            `SELECT r.auth_kind, r.api_key_header_name, r.credential_ciphertext,
+                    r.credential_nonce, m.client_id
+             FROM remote_mcp_connections r
+             INNER JOIN remote_mcp_connection_mutations m
+               ON m.connection_id = r.connection_id`,
+          )
+          .one(),
+    );
+    expect(stored).toEqual({
+      api_key_header_name: "x-api-key",
+      auth_kind: "api_key",
+      client_id: "crewhelm:remote-mcp-api-key-handoff",
+      credential_ciphertext: expect.any(String),
+      credential_nonce: expect.any(String),
+    });
+    expect(JSON.stringify(stored)).not.toContain("private-api-key");
   });
 
   it("completes remote MCP OAuth in the browser without exposing stored credentials", async () => {

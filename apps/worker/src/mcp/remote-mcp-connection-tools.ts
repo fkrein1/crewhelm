@@ -17,7 +17,7 @@ import {
   normalizeRemoteMcpEndpoint,
   RemoteMcpClientError,
 } from "../remote-mcp/client.js";
-import { createRemoteMcpBearerSetup } from "../remote-mcp/handoff.js";
+import { createRemoteMcpApiKeySetup, createRemoteMcpBearerSetup } from "../remote-mcp/handoff.js";
 import type { McpToolContext } from "./context.js";
 import { validatedToolResult } from "./tool-result.js";
 
@@ -65,7 +65,7 @@ export function registerRemoteMcpConnectionTools(
         readOnlyHint: false,
       },
       description:
-        "Connect, inspect, reauthenticate, or revoke one remote Streamable HTTP MCP Connection. Public endpoints connect directly. Bearer and OAuth endpoints use a short-lived browser setup link so credential material never enters MCP arguments or Agent context.",
+        "Connect, inspect, reauthenticate, or revoke one remote Streamable HTTP MCP Connection. Public endpoints connect directly. API-key, bearer, and OAuth endpoints use a short-lived browser setup link so credential material never enters MCP arguments or Agent context.",
       inputSchema: remoteMcpConnectionToolInputSchema,
       title: "Manage a remote MCP Connection",
     },
@@ -94,18 +94,31 @@ export function registerRemoteMcpConnectionTools(
                 : result(reserved.data);
             }
 
-            if (request.data.authKind === "bearer") {
-              const setup = await createRemoteMcpBearerSetup({
-                claims: {
-                  endpoint,
-                  expiresAt: Date.now() + 10 * 60 * 1_000,
-                  idempotencyKey: request.data.idempotencyKey,
-                  name: request.data.name,
-                  ownerKey: authority.ownerKey,
-                },
-                origin: configuration.publicOrigin,
-                signingSecret: configuration.signingSecret,
-              });
+            if (request.data.authKind === "api_key" || request.data.authKind === "bearer") {
+              const setup = await (request.data.authKind === "api_key"
+                ? createRemoteMcpApiKeySetup({
+                    claims: {
+                      apiKeyHeaderName: request.data.apiKeyHeaderName,
+                      endpoint,
+                      expiresAt: Date.now() + 10 * 60 * 1_000,
+                      idempotencyKey: request.data.idempotencyKey,
+                      name: request.data.name,
+                      ownerKey: authority.ownerKey,
+                    },
+                    origin: configuration.publicOrigin,
+                    signingSecret: configuration.signingSecret,
+                  })
+                : createRemoteMcpBearerSetup({
+                    claims: {
+                      endpoint,
+                      expiresAt: Date.now() + 10 * 60 * 1_000,
+                      idempotencyKey: request.data.idempotencyKey,
+                      name: request.data.name,
+                      ownerKey: authority.ownerKey,
+                    },
+                    origin: configuration.publicOrigin,
+                    signingSecret: configuration.signingSecret,
+                  }));
               return result({ ok: true, setup, state: "setup_required" });
             }
 

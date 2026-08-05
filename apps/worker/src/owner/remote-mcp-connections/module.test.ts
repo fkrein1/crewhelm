@@ -41,7 +41,10 @@ async function digest(value: string): Promise<string> {
 
 async function connectionInput(
   idempotencyKey: string,
-  authentication: { authKind: "public" } | { authKind: "bearer"; bearerToken: string },
+  authentication:
+    | { authKind: "public" }
+    | { authKind: "bearer"; bearerToken: string }
+    | { authKind: "api_key"; apiKey: { headerName: string; value: string } },
 ) {
   const serialized = JSON.stringify(catalog);
 
@@ -73,7 +76,9 @@ function requestBody(init: RequestInit | undefined): { id?: number; method?: str
 
 function remoteMcpFetch() {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
-    const authorization = new Headers(init?.headers).get("authorization");
+    const headers = new Headers(init?.headers);
+    const authorization = headers.get("authorization");
+    const apiKey = headers.get("x-api-key");
     const body = requestBody(init);
 
     if (body.method === "initialize") {
@@ -94,7 +99,10 @@ function remoteMcpFetch() {
         jsonrpc: "2.0",
         result: {
           content: [
-            { text: `authorized:${authorization === "Bearer execution-secret"}`, type: "text" },
+            {
+              text: `authorized:${authorization === "Bearer execution-secret" || apiKey === "execution-api-key"}`,
+              type: "text",
+            },
           ],
         },
       });
@@ -370,137 +378,167 @@ describe("OwnerControlPlane remote MCP Connections", () => {
     ).resolves.toEqual({ revoked_at: expect.any(Number), status: "revoked" });
   });
 
-  it("dispatches an admitted bearer tool through the owner ledger without exposing its credential", async () => {
-    const authority = await authorityFor("remote-mcp-execution", [
-      AGENTS_WRITE_SCOPE,
-      AUTONOMY_WRITE_SCOPE,
-      CONNECTIONS_READ_SCOPE,
-      CONNECTIONS_WRITE_SCOPE,
-      OWNER_WRITE_SCOPE,
-      RUNS_WRITE_SCOPE,
-    ]);
-    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
-    const agent = await stub.createAgent(authority, {
-      executionLimits: {
-        maxDurationSeconds: 45,
-        maxModelTokens: 2_000,
-        maxToolCalls: 4,
-        maxTurns: 4,
+  it.each([
+    {
+      authentication: { authKind: "bearer" as const, bearerToken: "execution-secret" },
+      credential: "execution-secret",
+      kind: "bearer",
+    },
+    {
+      authentication: {
+        apiKey: { headerName: "X-API-Key", value: "execution-api-key" },
+        authKind: "api_key" as const,
       },
-      idempotencyKey: "remote-mcp-execution-agent",
-      instructions: "Use the attached remote MCP tool.",
-      name: "Remote MCP execution Agent",
-    });
-    if (!agent.ok) throw new Error("Expected Agent creation.");
-    const connection = createRemoteMcpConnectionResultSchema.parse(
-      await stub.createRemoteMcpConnection(
-        authority,
-        await connectionInput("remote-mcp-execution-connection", {
-          authKind: "bearer",
-          bearerToken: "execution-secret",
-        }),
-      ),
-    );
-    if (!connection.ok) throw new Error("Expected remote MCP Connection creation.");
-    const configured = await stub.configureAgentRemoteMcpConnection(authority, {
-      agentId: agent.agent.id,
-      authorization: "standing",
-      connectionId: connection.connection.connectionId,
-      expectedRevision: agent.agent.revision,
-      expiresAt: null,
-      idempotencyKey: "remote-mcp-execution-attachment",
-      limits: {
-        maxCallsPerRun: 4,
-        maxConcurrency: 1,
-        maxCostMicrousdPerCall: 0,
-        maxDurationMs: 10_000,
-        maxOutputBytes: 32_000,
-      },
-      snapshotDigest: connection.connection.snapshotDigest,
-    });
-    if (!configured.ok) throw new Error("Expected remote MCP Agent attachment.");
-
-    const prompt = "Read project alpha.";
-    const admission = await stub.createRunAdmission(authority, {
-      agentId: configured.agent.id,
-      expectedRevision: configured.agent.revision,
-      idempotencyKey: "remote-mcp-execution-run",
-      promptCharacters: prompt.length,
-      promptDigest: await digest(prompt),
-    });
-    if (!admission.ok || admission.state !== "issued") {
-      throw new Error("Expected remote MCP Run admission.");
-    }
-    await stub.confirmRunAdmission(admission.permit);
-    const grant = admission.permit.budgetReservation.toolGrants[0];
-    if (grant?.capabilityId !== "remote_mcp.tool.execute") {
-      throw new Error("Expected admitted remote MCP grant.");
-    }
-    const action = {
-      agentId: grant.agentId,
-      agentRevision: grant.agentRevision,
-      capabilityId: grant.capabilityId,
-      connectionId: grant.connectionId,
-      effect: grant.effect,
-      estimatedCostMicrousd: 0 as const,
-      grantId: grant.grantId,
-      inputDigest: await digest(JSON.stringify({ projectId: "alpha" })),
-      ownerKey: grant.ownerKey,
-      runId: admission.permit.runId,
-      snapshotDigest: grant.snapshotDigest,
-      targetDigests: grant.targetDigests,
-      toolCallId: `tool_call_${crypto.randomUUID()}`,
-      toolName: grant.toolName,
-    };
-    const reference = {
-      agentId: admission.permit.agentId,
-      agentRevision: admission.permit.agentRevision,
-      budgetReservation: admission.permit.budgetReservation,
-      clientId: admission.permit.clientId,
-      idempotencyKey: admission.permit.idempotencyKey,
-      ownerKey: admission.permit.ownerKey,
-      promptDigest: admission.permit.promptDigest,
-      runId: admission.permit.runId,
-    };
-    const reserved = await stub.reserveToolExecution({ ...reference, action });
-    if (!reserved.ok || reserved.state !== "allowed") {
-      throw new Error("Expected remote MCP tool reservation.");
-    }
-
-    await expect(
-      stub.executeRemoteMcpTool({
-        arguments: { projectId: "different-project" },
-        permit: reserved.permit,
-      }),
-    ).resolves.toEqual({
-      dispatched: false,
-      error: { code: "invalid_execution", message: "Tool execution denied." },
-      ok: false,
-    });
-
-    const fetchMock = remoteMcpFetch();
-    const executed = executeRemoteMcpToolResultSchema.parse(
-      await stub.executeRemoteMcpTool({
-        arguments: { projectId: "alpha" },
-        permit: reserved.permit,
-      }),
-    );
-    fetchMock.mockRestore();
-
-    expect(executed).toMatchObject({ ok: true });
-    if (!executed.ok) throw new Error("Expected remote MCP execution.");
-    expect(JSON.parse(executed.outputJson)).toMatchObject({
-      content: [{ text: "authorized:true", type: "text" }],
-    });
-    await expect(
-      stub.completeToolExecution({
-        outcome: {
-          outputBytes: encoder.encode(executed.outputJson).byteLength,
-          status: "completed",
+      credential: "execution-api-key",
+      kind: "api-key",
+    },
+  ])(
+    "dispatches an admitted $kind tool through the owner ledger without exposing its credential",
+    async ({ authentication, credential, kind }) => {
+      const authority = await authorityFor(`remote-mcp-execution-${kind}`, [
+        AGENTS_WRITE_SCOPE,
+        AUTONOMY_WRITE_SCOPE,
+        CONNECTIONS_READ_SCOPE,
+        CONNECTIONS_WRITE_SCOPE,
+        OWNER_WRITE_SCOPE,
+        RUNS_WRITE_SCOPE,
+      ]);
+      const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+      const agent = await stub.createAgent(authority, {
+        executionLimits: {
+          maxDurationSeconds: 45,
+          maxModelTokens: 2_000,
+          maxToolCalls: 4,
+          maxTurns: 4,
         },
-        permit: reserved.permit,
-      }),
-    ).resolves.toEqual({ completed: true, ok: true });
-    expect(JSON.stringify(executed)).not.toContain("execution-secret");
-  });
+        idempotencyKey: `remote-mcp-execution-agent-${kind}`,
+        instructions: "Use the attached remote MCP tool.",
+        name: "Remote MCP execution Agent",
+      });
+      if (!agent.ok) throw new Error("Expected Agent creation.");
+      const createInput = await connectionInput(
+        `remote-mcp-execution-connection-${kind}`,
+        authentication,
+      );
+      const connection = createRemoteMcpConnectionResultSchema.parse(
+        await stub.createRemoteMcpConnection(authority, createInput),
+      );
+      if (!connection.ok) throw new Error("Expected remote MCP Connection creation.");
+      expect(connection.connection.apiKeyHeaderName).toBe(
+        kind === "api-key" ? "x-api-key" : undefined,
+      );
+      const lookup = await stub.lookupRemoteMcpConnectionCreation(authority, {
+        apiKeyHeaderName: kind === "api-key" ? "x-different-api-key" : undefined,
+        authKind: createInput.authKind,
+        endpoint: createInput.endpoint,
+        idempotencyKey: createInput.idempotencyKey,
+        name: createInput.name,
+      });
+      expect(lookup).toMatchObject(
+        kind === "api-key"
+          ? { error: { code: "idempotency_conflict" }, ok: false }
+          : { connection: { connectionId: connection.connection.connectionId }, ok: true },
+      );
+      const configured = await stub.configureAgentRemoteMcpConnection(authority, {
+        agentId: agent.agent.id,
+        authorization: "standing",
+        connectionId: connection.connection.connectionId,
+        expectedRevision: agent.agent.revision,
+        expiresAt: null,
+        idempotencyKey: `remote-mcp-execution-attachment-${kind}`,
+        limits: {
+          maxCallsPerRun: 4,
+          maxConcurrency: 1,
+          maxCostMicrousdPerCall: 0,
+          maxDurationMs: 10_000,
+          maxOutputBytes: 32_000,
+        },
+        snapshotDigest: connection.connection.snapshotDigest,
+      });
+      if (!configured.ok) throw new Error("Expected remote MCP Agent attachment.");
+
+      const prompt = "Read project alpha.";
+      const admission = await stub.createRunAdmission(authority, {
+        agentId: configured.agent.id,
+        expectedRevision: configured.agent.revision,
+        idempotencyKey: `remote-mcp-execution-run-${kind}`,
+        promptCharacters: prompt.length,
+        promptDigest: await digest(prompt),
+      });
+      if (!admission.ok || admission.state !== "issued") {
+        throw new Error("Expected remote MCP Run admission.");
+      }
+      await stub.confirmRunAdmission(admission.permit);
+      const grant = admission.permit.budgetReservation.toolGrants[0];
+      if (grant?.capabilityId !== "remote_mcp.tool.execute") {
+        throw new Error("Expected admitted remote MCP grant.");
+      }
+      const action = {
+        agentId: grant.agentId,
+        agentRevision: grant.agentRevision,
+        capabilityId: grant.capabilityId,
+        connectionId: grant.connectionId,
+        effect: grant.effect,
+        estimatedCostMicrousd: 0 as const,
+        grantId: grant.grantId,
+        inputDigest: await digest(JSON.stringify({ projectId: "alpha" })),
+        ownerKey: grant.ownerKey,
+        runId: admission.permit.runId,
+        snapshotDigest: grant.snapshotDigest,
+        targetDigests: grant.targetDigests,
+        toolCallId: `tool_call_${crypto.randomUUID()}`,
+        toolName: grant.toolName,
+      };
+      const reference = {
+        agentId: admission.permit.agentId,
+        agentRevision: admission.permit.agentRevision,
+        budgetReservation: admission.permit.budgetReservation,
+        clientId: admission.permit.clientId,
+        idempotencyKey: admission.permit.idempotencyKey,
+        ownerKey: admission.permit.ownerKey,
+        promptDigest: admission.permit.promptDigest,
+        runId: admission.permit.runId,
+      };
+      const reserved = await stub.reserveToolExecution({ ...reference, action });
+      if (!reserved.ok || reserved.state !== "allowed") {
+        throw new Error("Expected remote MCP tool reservation.");
+      }
+
+      await expect(
+        stub.executeRemoteMcpTool({
+          arguments: { projectId: "different-project" },
+          permit: reserved.permit,
+        }),
+      ).resolves.toEqual({
+        dispatched: false,
+        error: { code: "invalid_execution", message: "Tool execution denied." },
+        ok: false,
+      });
+
+      const fetchMock = remoteMcpFetch();
+      const executed = executeRemoteMcpToolResultSchema.parse(
+        await stub.executeRemoteMcpTool({
+          arguments: { projectId: "alpha" },
+          permit: reserved.permit,
+        }),
+      );
+      fetchMock.mockRestore();
+
+      expect(executed).toMatchObject({ ok: true });
+      if (!executed.ok) throw new Error("Expected remote MCP execution.");
+      expect(JSON.parse(executed.outputJson)).toMatchObject({
+        content: [{ text: "authorized:true", type: "text" }],
+      });
+      await expect(
+        stub.completeToolExecution({
+          outcome: {
+            outputBytes: encoder.encode(executed.outputJson).byteLength,
+            status: "completed",
+          },
+          permit: reserved.permit,
+        }),
+      ).resolves.toEqual({ completed: true, ok: true });
+      expect(JSON.stringify(executed)).not.toContain(credential);
+    },
+  );
 });

@@ -17,6 +17,7 @@ import {
   remoteMcpConnectionOperationInputSchema,
   remoteMcpConnectionOperationResultSchema,
   remoteMcpConnectionSchema,
+  remoteMcpApiKeyCredentialSchema,
   type BeginRemoteMcpOAuthResult,
   type CompleteRemoteMcpOAuthResult,
   type CreateRemoteMcpConnectionResult,
@@ -72,6 +73,7 @@ type QueryableDatabase = Database | Transaction;
 type RequestFailure = Extract<CreateRemoteMcpConnectionResult, { ok: false }>;
 type StoredConnection = {
   accountLabel: string | null;
+  apiKeyHeaderName: string | null;
   authKind: RemoteMcpAuthKind;
   catalog: RemoteMcpCatalog;
   catalogBytes: number;
@@ -192,6 +194,7 @@ function storedConnection(
   return database
     .select({
       accountLabel: connections.accountLabel,
+      apiKeyHeaderName: remoteMcpConnections.apiKeyHeaderName,
       authKind: remoteMcpConnections.authKind,
       catalog: remoteMcpConnections.catalog,
       catalogBytes: remoteMcpConnections.catalogBytes,
@@ -221,6 +224,7 @@ function present(row: StoredConnection) {
   }
 
   return remoteMcpConnectionSchema.parse({
+    apiKeyHeaderName: row.apiKeyHeaderName ?? undefined,
     authKind: row.authKind,
     catalog: row.catalog,
     catalogBytes: row.catalogBytes,
@@ -1050,6 +1054,7 @@ export class RemoteMcpConnections {
     if (row === undefined) return denied("connection_not_found");
     if (
       row.authKind !== request.data.authKind ||
+      row.apiKeyHeaderName !== (request.data.apiKeyHeaderName ?? null) ||
       row.endpoint !== request.data.endpoint ||
       row.accountLabel !== request.data.name ||
       JSON.stringify(row.oauthScopes) !== JSON.stringify(request.data.oauthScopes)
@@ -1122,10 +1127,11 @@ export class RemoteMcpConnections {
     }
 
     const connectionId = `connection_${crypto.randomUUID()}`;
+    const credential = request.data.apiKey?.value ?? request.data.bearerToken;
     const encrypted =
-      request.data.bearerToken === undefined
+      credential === undefined
         ? undefined
-        : await encryptCredential(this.#encryptionSecret, connectionId, request.data.bearerToken);
+        : await encryptCredential(this.#encryptionSecret, connectionId, credential);
     const occurredAt = Date.now();
 
     this.#database.transaction((transaction) => {
@@ -1144,6 +1150,7 @@ export class RemoteMcpConnections {
       transaction
         .insert(remoteMcpConnections)
         .values({
+          apiKeyHeaderName: request.data.apiKey?.headerName,
           authKind: request.data.authKind,
           catalog: catalog.data,
           catalogBytes,
@@ -1327,6 +1334,7 @@ export class RemoteMcpConnections {
   }): Promise<unknown> {
     const row = this.#database
       .select({
+        apiKeyHeaderName: remoteMcpConnections.apiKeyHeaderName,
         authKind: remoteMcpConnections.authKind,
         catalog: remoteMcpConnections.catalog,
         ciphertext: remoteMcpConnections.credentialCiphertext,
@@ -1365,6 +1373,7 @@ export class RemoteMcpConnections {
     }
 
     let bearerToken: string | undefined;
+    let apiKey: { headerName: string; value: string } | undefined;
     if (row.authKind !== "public" && row.ciphertext !== null && row.nonce !== null) {
       const plaintext = await decryptCredential(
         this.#encryptionSecret,
@@ -1374,6 +1383,11 @@ export class RemoteMcpConnections {
       );
       if (row.authKind === "bearer") {
         bearerToken = plaintext;
+      } else if (row.authKind === "api_key") {
+        apiKey = remoteMcpApiKeyCredentialSchema.parse({
+          headerName: row.apiKeyHeaderName,
+          value: plaintext,
+        });
       } else {
         const credential = remoteMcpOAuthCredentialSchema.parse(JSON.parse(plaintext));
         bearerToken = remoteMcpOAuthAccessToken(credential) ?? undefined;
@@ -1381,14 +1395,16 @@ export class RemoteMcpConnections {
       }
     }
 
-    return callRemoteMcpTool({
+    const execution = {
       arguments: input.arguments,
-      ...(bearerToken === undefined ? {} : { bearerToken }),
       endpoint: row.endpoint,
       maximumOutputBytes: input.maximumOutputBytes,
       signal: AbortSignal.timeout(input.maximumDurationMs),
       toolName: input.toolName,
-    });
+    };
+    if (apiKey !== undefined) return callRemoteMcpTool({ ...execution, apiKey });
+    if (bearerToken !== undefined) return callRemoteMcpTool({ ...execution, bearerToken });
+    return callRemoteMcpTool(execution);
   }
 
   #failOAuthRequest(requestId: string, occurredAt: number): boolean {

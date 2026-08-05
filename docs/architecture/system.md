@@ -52,7 +52,7 @@ through the Agent object during migration.
 | Cloudflare AI catalog | Live Workers AI inventory plus a synchronized last-known-good third-party catalog, with task, declared capability metadata, source commit, and pricing references; never owner policy, release ordering, or a Crewhelm quality verdict                                                                                                                                               |
 | AI Gateway            | Optional installation-wide hard spend ceiling and model-call cost metadata                                                                                                                                                                                                                                                                                                           |
 | Composio              | Auth-config and connected-account credentials plus supported credential refresh                                                                                                                                                                                                                                                                                                      |
-| Remote MCP server     | Untrusted tool catalog and tool results; Crewhelm retains encrypted bearer or OAuth credentials                                                                                                                                                                                                                                                                                      |
+| Remote MCP server     | Untrusted tool catalog and tool results; Crewhelm retains encrypted named-header API-key, bearer, or OAuth credentials                                                                                                                                                                                                                                                               |
 | Recipe Registry       | Public immutable Recipe and Skill packages plus discovery projections; never owner credentials, grants, installation identity, or runtime state                                                                                                                                                                                                                                      |
 
 The control plane owns admission and administration; the Agent directory owns conversation
@@ -60,11 +60,11 @@ lifecycle; each session owns execution. Cross-object calls
 carry explicit authority because Durable Objects do not share transactions. D1 is not an
 authoritative store for control-plane or Agent domain state.
 
-Provider setup is a same-origin browser handoff. The Worker freezes Composio's bounded field
-metadata by auth-config or connected-account stage, accepts each credential once, and forwards it
-only to that destination. Representable API-key, bearer, basic, service-account, and custom OAuth
-formats share the same Crewhelm form; OAuth continues through a Connect Link. Unsupported formats
-render an informational page without accepting credentials or creating provider state.
+Connected-account credentials supported by Composio's hosted form travel directly from the owner's
+browser to Composio. Crewhelm's same-origin provider setup accepts only the reusable app credentials
+required to create an auth configuration, then continues through a validated Connect Link.
+Unsupported reusable-app formats render an informational page without accepting credentials or
+creating provider state.
 
 Recipe discovery uses the configured canonical public Registry origin. The owner control plane
 fetches bounded metadata and exact package bytes with redirects disabled, verifies every pinned

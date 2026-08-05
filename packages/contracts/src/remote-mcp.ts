@@ -8,13 +8,56 @@ export const MAXIMUM_REMOTE_MCP_ENDPOINT_CHARACTERS = 2_048;
 export const MAXIMUM_REMOTE_MCP_SCHEMA_BYTES = 64 * 1_024;
 export const MAXIMUM_REMOTE_MCP_TOOLS = 100;
 export const MAXIMUM_REMOTE_MCP_OAUTH_SCOPES = 32;
+export const MAXIMUM_REMOTE_MCP_API_KEY_HEADER_NAME_CHARACTERS = 64;
 
 const encoder = new TextEncoder();
 const remoteMcpSha256DigestSchema = z
   .string()
   .regex(/^[0-9a-f]{64}$/, "Expected a lowercase SHA-256 digest.");
 
-export const remoteMcpAuthKindSchema = z.enum(["public", "bearer", "oauth"]);
+const RESERVED_REMOTE_MCP_API_KEY_HEADERS = new Set([
+  "accept",
+  "accept-encoding",
+  "authorization",
+  "connection",
+  "cookie",
+  "forwarded",
+  "host",
+  "origin",
+  "referer",
+  "transfer-encoding",
+  "upgrade",
+  "user-agent",
+]);
+
+export const remoteMcpApiKeyHeaderNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(MAXIMUM_REMOTE_MCP_API_KEY_HEADER_NAME_CHARACTERS)
+  .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, "Expected one HTTP header field name.")
+  .transform((value) => value.toLowerCase())
+  .refine(
+    (value) =>
+      !RESERVED_REMOTE_MCP_API_KEY_HEADERS.has(value) &&
+      !["cf-", "content-", "mcp-", "proxy-", "sec-", "x-forwarded-"].some((prefix) =>
+        value.startsWith(prefix),
+      ),
+    "Expected a non-reserved API-key header name.",
+  )
+  .describe(
+    "Exact HTTP header name for API-key authentication. Enter the credential only in the returned browser setup.",
+  );
+export const remoteMcpApiKeyValueSchema = z
+  .string()
+  .min(1)
+  .max(8 * 1_024)
+  .regex(/^[\x21-\x7e]+$/, "Expected API-key credential material without whitespace.");
+export const remoteMcpApiKeyCredentialSchema = z.strictObject({
+  headerName: remoteMcpApiKeyHeaderNameSchema,
+  value: remoteMcpApiKeyValueSchema,
+});
+export const remoteMcpAuthKindSchema = z.enum(["public", "api_key", "bearer", "oauth"]);
 export const remoteMcpOAuthScopeSchema = z
   .string()
   .min(1)
@@ -83,25 +126,36 @@ export const remoteMcpCatalogSchema = z
     (tools) => encoder.encode(JSON.stringify(tools)).byteLength <= MAXIMUM_REMOTE_MCP_CATALOG_BYTES,
     "Remote MCP catalog exceeds its byte limit.",
   );
-export const remoteMcpConnectionSchema = z.strictObject({
-  authKind: remoteMcpAuthKindSchema,
-  catalog: remoteMcpCatalogSchema,
-  catalogBytes: z.number().int().min(2).max(MAXIMUM_REMOTE_MCP_CATALOG_BYTES),
-  connectionId: connectionIdSchema,
-  createdAt: z.iso.datetime(),
-  endpoint: remoteMcpEndpointSchema,
-  name: remoteMcpConnectionNameSchema,
-  oauthScopes: remoteMcpOAuthScopesSchema,
-  server: z.strictObject({
-    name: z.string().trim().min(1).max(160),
-    version: z.string().trim().min(1).max(160),
-  }),
-  snapshotDigest: remoteMcpSha256DigestSchema,
-  status: connectionStatusSchema,
-});
+export const remoteMcpConnectionSchema = z
+  .strictObject({
+    apiKeyHeaderName: remoteMcpApiKeyHeaderNameSchema.optional(),
+    authKind: remoteMcpAuthKindSchema,
+    catalog: remoteMcpCatalogSchema,
+    catalogBytes: z.number().int().min(2).max(MAXIMUM_REMOTE_MCP_CATALOG_BYTES),
+    connectionId: connectionIdSchema,
+    createdAt: z.iso.datetime(),
+    endpoint: remoteMcpEndpointSchema,
+    name: remoteMcpConnectionNameSchema,
+    oauthScopes: remoteMcpOAuthScopesSchema,
+    server: z.strictObject({
+      name: z.string().trim().min(1).max(160),
+      version: z.string().trim().min(1).max(160),
+    }),
+    snapshotDigest: remoteMcpSha256DigestSchema,
+    status: connectionStatusSchema,
+  })
+  .refine(
+    ({ apiKeyHeaderName, authKind }) =>
+      (authKind === "api_key") === (apiKeyHeaderName !== undefined),
+    {
+      message: "Only API-key Connections must expose one named authentication header.",
+      path: ["apiKeyHeaderName"],
+    },
+  );
 export const createRemoteMcpConnectionInputSchema = z
   .strictObject({
-    authKind: z.enum(["public", "bearer"]),
+    apiKey: remoteMcpApiKeyCredentialSchema.optional(),
+    authKind: z.enum(["public", "api_key", "bearer"]),
     bearerToken: z
       .string()
       .min(1)
@@ -126,6 +180,13 @@ export const createRemoteMcpConnectionInputSchema = z
         code: "custom",
         message: "Bearer authentication must include exactly one bearer token.",
         path: ["bearerToken"],
+      });
+    }
+    if ((input.authKind === "api_key") !== (input.apiKey !== undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "API-key authentication must include exactly one named-header credential.",
+        path: ["apiKey"],
       });
     }
   });
@@ -218,6 +279,14 @@ export const remoteMcpConnectionOperationInputSchema = z.union([
     }),
     z.strictObject({
       action: z.literal("connect"),
+      apiKeyHeaderName: remoteMcpApiKeyHeaderNameSchema,
+      authKind: z.literal("api_key"),
+      endpoint: remoteMcpEndpointSchema,
+      idempotencyKey: createRemoteMcpConnectionInputSchema.shape.idempotencyKey,
+      name: remoteMcpConnectionNameSchema,
+    }),
+    z.strictObject({
+      action: z.literal("connect"),
       authKind: z.literal("bearer"),
       endpoint: remoteMcpEndpointSchema,
       idempotencyKey: createRemoteMcpConnectionInputSchema.shape.idempotencyKey,
@@ -239,6 +308,7 @@ export const remoteMcpConnectionOperationInputSchema = z.union([
 export const remoteMcpConnectionToolInputSchema = z
   .strictObject({
     action: z.enum(["connect", "delete", "inspect", "reauthenticate"]),
+    apiKeyHeaderName: remoteMcpApiKeyHeaderNameSchema.optional(),
     authKind: remoteMcpAuthKindSchema.optional(),
     connectionId: connectionIdSchema.optional(),
     endpoint: remoteMcpEndpointSchema.optional(),
@@ -255,13 +325,23 @@ export const remoteMcpConnectionToolInputSchema = z
       message: "Fields must match the selected remote MCP Connection action.",
     });
   });
-export const lookupRemoteMcpConnectionCreationInputSchema = z.strictObject({
-  authKind: remoteMcpAuthKindSchema,
-  endpoint: remoteMcpEndpointSchema,
-  idempotencyKey: createRemoteMcpConnectionInputSchema.shape.idempotencyKey,
-  name: remoteMcpConnectionNameSchema,
-  oauthScopes: remoteMcpOAuthScopesSchema.default([]),
-});
+export const lookupRemoteMcpConnectionCreationInputSchema = z
+  .strictObject({
+    apiKeyHeaderName: remoteMcpApiKeyHeaderNameSchema.optional(),
+    authKind: remoteMcpAuthKindSchema,
+    endpoint: remoteMcpEndpointSchema,
+    idempotencyKey: createRemoteMcpConnectionInputSchema.shape.idempotencyKey,
+    name: remoteMcpConnectionNameSchema,
+    oauthScopes: remoteMcpOAuthScopesSchema.default([]),
+  })
+  .refine(
+    ({ apiKeyHeaderName, authKind }) =>
+      (authKind === "api_key") === (apiKeyHeaderName !== undefined),
+    {
+      message: "Only API-key creation lookups must include the named authentication header.",
+      path: ["apiKeyHeaderName"],
+    },
+  );
 export const lookupRemoteMcpConnectionCreationResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({ connection: remoteMcpConnectionSchema.nullable(), ok: z.literal(true) }),
   z.strictObject({ error: remoteMcpConnectionRequestErrorSchema, ok: z.literal(false) }),

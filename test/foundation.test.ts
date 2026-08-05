@@ -557,6 +557,13 @@ describe("repository foundation", () => {
     });
   });
 
+  it("reports the validated testing Registry seed count", async () => {
+    const testingUp = await read("scripts/crewhelm-testing-up.ts");
+
+    expect(testingUp).toContain("seededRecipes: seed.seeded");
+    expect(testingUp).not.toContain("seededRecipes: 10");
+  });
+
   it("rejects drift from the pinned executable toolchain", () => {
     const validToolchain = {
       actualNodeVersion: "24.18.0",

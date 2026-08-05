@@ -1,6 +1,6 @@
 ---
 title: Connect a remote MCP server
-description: Review and attach a bounded public, bearer, or OAuth remote MCP tool catalog to an Agent.
+description: Review and attach a bounded public, API-key, bearer, or OAuth remote MCP tool catalog to an Agent.
 type: how-to
 audience: owner
 area: remote-mcp
@@ -20,7 +20,8 @@ whole snapshot to an Agent revision under one authorization mode and bounded lim
 
 - Full control access.
 - A canonical public HTTPS Streamable HTTP endpoint.
-- The server's required authentication kind: public, bearer, or OAuth.
+- The server's required authentication kind: public, API key, bearer, or OAuth.
+- The exact non-reserved HTTP header name for API-key authentication.
 - Explicit OAuth scopes when the server requires them.
 - Trust in the server operator and a reason to grant its complete reviewed catalog to an Agent.
 
@@ -31,15 +32,16 @@ catalog digest; it does not grant ambient network access. Every call is revalida
 active Connection, Agent revision, exact tool, catalog digest, input schema, approval, limits, and
 budget.
 
-Bearer and OAuth credentials enter through a short-lived owner-bound browser setup page. Crewhelm
-encrypts them at rest and never places them in MCP tool arguments or Agent context.
+API-key, bearer, and OAuth credentials enter through a short-lived owner-bound browser setup page.
+For an API key, the header name enters the MCP operation and the key enters only in the browser.
+Crewhelm encrypts credentials at rest and never places them in MCP tool arguments or Agent context.
 
 ## Connect and review the server
 
 1. Call `crewhelm_change_connections` with `operation.kind: "connect_remote_mcp"`, a name, the exact
-   endpoint, authentication kind, and requested OAuth scopes when applicable.
-2. For public authentication, inspect the returned Connection directly. For bearer or OAuth,
-   complete the returned browser setup yourself.
+   endpoint, authentication kind, API-key header name or requested OAuth scopes when applicable.
+2. For public authentication, inspect the returned Connection directly. For API key, bearer, or
+   OAuth, complete the returned browser setup yourself.
 3. Pass the returned Connection unchanged to the same tool with
    `operation.kind: "inspect_remote_mcp"`.
 4. Review every discovered tool, its effect classification, input schema, and the frozen
@@ -67,7 +69,7 @@ default to writes; destructive tools always require approval.
 - Exact inspection reports the Connection active with the reviewed snapshot digest.
 - Agent inspection reports that exact Connection and catalog snapshot.
 - A bounded Run can select only a tool in the frozen catalog.
-- No response or error exposes bearer or OAuth credential material.
+- No response or error exposes API-key, bearer, or OAuth credential material.
 
 ## Recover safely
 

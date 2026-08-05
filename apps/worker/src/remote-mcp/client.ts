@@ -18,6 +18,7 @@ const CLIENT_INFO = { name: "crewhelm", version: "1" } as const;
 const MAXIMUM_DISCOVERY_PAGES = 100;
 const MAXIMUM_PROTOCOL_OVERHEAD_BYTES = 64 * 1_024;
 const MAXIMUM_REMOTE_MCP_REDIRECTS = 3;
+const REMOTE_MCP_USER_AGENT = "crewhelm/1 (+https://crewhelm.app)";
 const encoder = new TextEncoder();
 
 export type DiscoveredRemoteMcpCatalog = {
@@ -27,12 +28,20 @@ export type DiscoveredRemoteMcpCatalog = {
   tools: RemoteMcpTool[];
 };
 
-type RemoteMcpClientOptions = {
-  bearerToken?: string;
+type RemoteMcpAuthentication =
+  | { apiKey?: never; bearerToken?: never }
+  | { apiKey: { headerName: string; value: string }; bearerToken?: never }
+  | { apiKey?: never; bearerToken: string };
+
+type RemoteMcpClientOptions = RemoteMcpAuthentication & {
   endpoint: string;
   fetchImplementation?: typeof fetch;
   signal: AbortSignal;
 };
+
+function credentialValue(options: RemoteMcpAuthentication): string | undefined {
+  return options.apiKey?.value ?? options.bearerToken;
+}
 
 export class RemoteMcpClientError extends Error {
   readonly code:
@@ -43,12 +52,56 @@ export class RemoteMcpClientError extends Error {
     | "output_too_large"
     | "response_too_large"
     | "request_failed";
+  readonly failureKind:
+    | "network_or_protocol"
+    | "timeout"
+    | "upstream_denied"
+    | "upstream_error"
+    | "upstream_rate_limited"
+    | undefined;
+  readonly upstreamStatus: number | undefined;
 
-  constructor(code: RemoteMcpClientError["code"]) {
+  constructor(
+    code: RemoteMcpClientError["code"],
+    details?: {
+      failureKind: NonNullable<RemoteMcpClientError["failureKind"]>;
+      upstreamStatus?: number;
+    },
+  ) {
     super(`Remote MCP request failed: ${code}.`);
     this.name = "RemoteMcpClientError";
     this.code = code;
+    this.failureKind = details?.failureKind;
+    this.upstreamStatus = details?.upstreamStatus;
   }
+}
+
+function upstreamStatusFromError(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const code: unknown = Reflect.get(error, "code");
+  return typeof code === "number" && Number.isInteger(code) && code >= 400 && code <= 599
+    ? code
+    : undefined;
+}
+
+function requestFailureDetails(error: unknown): {
+  failureKind: NonNullable<RemoteMcpClientError["failureKind"]>;
+  upstreamStatus?: number;
+} {
+  const upstreamStatus = upstreamStatusFromError(error);
+  if (upstreamStatus === 401 || upstreamStatus === 403) {
+    return { failureKind: "upstream_denied", upstreamStatus };
+  }
+  if (upstreamStatus === 429) {
+    return { failureKind: "upstream_rate_limited", upstreamStatus };
+  }
+  if (upstreamStatus !== undefined) {
+    return { failureKind: "upstream_error", upstreamStatus };
+  }
+  if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) {
+    return { failureKind: "timeout" };
+  }
+  return { failureKind: "network_or_protocol" };
 }
 
 function isDeniedIpv4(hostname: string): boolean {
@@ -241,7 +294,13 @@ function sameOriginFetch(
         throw new RemoteMcpClientError("invalid_endpoint");
       }
 
-      const response = await implementation(requestUrl, { ...init, redirect: "manual" });
+      const headers = new Headers(init?.headers);
+      headers.set("user-agent", REMOTE_MCP_USER_AGENT);
+      const response = await implementation(requestUrl, {
+        ...init,
+        headers,
+        redirect: "manual",
+      });
       if (response.status !== 307 && response.status !== 308) {
         return boundedResponse(response, maximumResponseBytes);
       }
@@ -261,7 +320,8 @@ function sameOriginFetch(
 async function withRemoteClient<T>(
   options: RemoteMcpClientOptions,
   maximumResponseBytes: number,
-  operation: (client: Client) => Promise<T>,
+  operation: "discovery" | "tool_call",
+  run: (client: Client) => Promise<T>,
 ): Promise<T> {
   const endpoint = normalizeRemoteMcpEndpoint(options.endpoint);
   const transport = new StreamableHTTPClientTransport(new URL(endpoint), {
@@ -273,9 +333,11 @@ async function withRemoteClient<T>(
       reconnectionDelayGrowFactor: 1,
     },
     requestInit: {
-      ...(options.bearerToken === undefined
-        ? {}
-        : { headers: { Authorization: `Bearer ${options.bearerToken}` } }),
+      ...(options.apiKey !== undefined
+        ? { headers: { [options.apiKey.headerName]: options.apiKey.value } }
+        : options.bearerToken === undefined
+          ? {}
+          : { headers: { Authorization: `Bearer ${options.bearerToken}` } }),
       redirect: "manual",
     },
   });
@@ -318,14 +380,25 @@ async function withRemoteClient<T>(
   try {
     // Adapt the SDK's narrower callback declaration to its public Transport interface.
     await client.connect(compatibleTransport, { signal: options.signal });
-    return await operation(client);
+    return await run(client);
   } catch (error) {
     if (error instanceof RemoteMcpClientError) throw error;
+    const details = requestFailureDetails(error);
     console.warn({
+      authKind:
+        options.apiKey !== undefined
+          ? "api_key"
+          : options.bearerToken !== undefined
+            ? "bearer"
+            : "public",
+      endpointHost: new URL(endpoint).hostname,
       errorName: error instanceof Error ? error.name : "unknown",
       event: "crewhelm.remote_mcp.request_failed",
+      failureKind: details.failureKind,
+      operation,
+      ...(details.upstreamStatus === undefined ? {} : { upstreamStatus: details.upstreamStatus }),
     });
-    throw new RemoteMcpClientError("request_failed");
+    throw new RemoteMcpClientError("request_failed", details);
   } finally {
     await client.close().catch(() => undefined);
   }
@@ -337,6 +410,7 @@ export async function discoverRemoteMcpTools(
   return withRemoteClient(
     options,
     MAXIMUM_REMOTE_MCP_CATALOG_BYTES + MAXIMUM_PROTOCOL_OVERHEAD_BYTES,
+    "discovery",
     async (client) => {
       const tools: RemoteMcpTool[] = [];
       let cursor: string | undefined;
@@ -378,9 +452,10 @@ export async function discoverRemoteMcpTools(
 
       const server = client.getServerVersion();
       if (server === undefined) throw new RemoteMcpClientError("invalid_catalog");
+      const credential = credentialValue(options);
       if (
-        options.bearerToken !== undefined &&
-        containsCredential({ server, tools: canonical }, options.bearerToken)
+        credential !== undefined &&
+        containsCredential({ server, tools: canonical }, credential)
       ) {
         throw new RemoteMcpClientError("credential_reflected");
       }
@@ -447,6 +522,7 @@ export async function callRemoteMcpTool(
   return withRemoteClient(
     options,
     options.maximumOutputBytes + MAXIMUM_PROTOCOL_OVERHEAD_BYTES,
+    "tool_call",
     async (client) => {
       const output = await client.callTool(
         { arguments: options.arguments, name: options.toolName },
@@ -459,7 +535,8 @@ export async function callRemoteMcpTool(
         throw new RemoteMcpClientError("output_too_large");
       }
 
-      if (options.bearerToken !== undefined && containsCredential(output, options.bearerToken)) {
+      const credential = credentialValue(options);
+      if (credential !== undefined && containsCredential(output, credential)) {
         throw new RemoteMcpClientError("credential_reflected");
       }
 

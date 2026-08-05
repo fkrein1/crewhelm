@@ -349,6 +349,7 @@ export class Recipes {
           ? undefined
           : this.#database
               .select({
+                apiKeyHeaderName: remoteMcpConnections.apiKeyHeaderName,
                 authConfigId: connections.authConfigId,
                 catalog: remoteMcpConnections.catalog,
                 endpoint: remoteMcpConnections.endpoint,
@@ -380,6 +381,7 @@ export class Recipes {
           : requirement.kind === "composio"
             ? integration === requirement.integration
             : row.endpoint === requirement.endpoint &&
+              row.apiKeyHeaderName === (requirement.apiKeyHeaderName ?? null) &&
               row.remoteAuthKind === requirement.authKind &&
               row.snapshotDigest === requirement.reviewedSnapshotDigest &&
               row.catalog?.length === requirement.reviewedToolCount &&

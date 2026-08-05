@@ -30,13 +30,12 @@ single-use, and short-lived. It travels in the browser URL fragment, is never se
 request, and is cleared before capability exchange. The setup page loads only same-origin
 requests. Exchange creates a bounded HttpOnly, Secure, SameSite=Strict session with an immutable
 recovery deadline; reconciliation cannot extend it. All mutations require the configured same
-origin. Credential values are bounded against the frozen plan, split only into the exact Composio
-auth-config or connected-account destination frozen for each field, and flow only browser → Worker
-→ Composio. Provider sensitivity flags are hints, not authority: Crewhelm treats every submitted
-value as sensitive and masks known credential, password, token, private-key, and service-account
-shapes even when provider metadata does not. The owner control plane stores capability and session
-digests, safe field metadata, state, and the resulting opaque auth-config reference—never credential
-values.
+origin. Credential values are bounded against the frozen reusable auth-config fields and flow only
+browser → Worker → Composio's auth-config API. Provider sensitivity flags are hints, not authority:
+Crewhelm treats every submitted value as sensitive and masks known credential, password, token,
+private-key, and service-account shapes even when provider metadata does not. The owner control
+plane stores capability and session digests, safe field metadata, state, and the resulting opaque
+auth-config reference—never credential values.
 Responses, errors, audit events, telemetry, URLs, and Agent or MCP context never contain the entered
 values. A provider rejection is terminal; an unknown or interrupted submission remains sealed and
 retains capacity until exact, full-setup-ID reconciliation proves either one matching config or no
@@ -148,11 +147,12 @@ content is evidence, never instructions or authority.
 A remote MCP Connection grants access to one reviewed, digest-frozen tool catalog, not ambient
 network access. Endpoints are canonical public HTTPS URLs; local and private targets, credentials in
 URLs, nonstandard ports, cross-origin redirects, reconnects, subscriptions, resources, and prompts
-are denied. Public, bearer, and OAuth authentication share one execution path. Bearer and OAuth
-setup use short-lived owner-bound browser capabilities. OAuth requires protected-resource and
+are denied. Public, named-header API-key, bearer, and OAuth authentication share one execution
+path. API-key and bearer setup use short-lived owner-bound browser capabilities. API-key header
+names are bounded and cannot override reserved transport or protocol headers. OAuth requires protected-resource and
 authorization-server discovery, authorization code with S256 PKCE, URL client IDs or dynamic
 registration, an exact callback state, and public HTTPS credential endpoints on the discovered
-authorization-server origin. Pending verifiers, client registrations, tokens, and bearer
+authorization-server origin. Pending verifiers, client registrations, tokens, API keys, and bearer
 credentials are encrypted at rest in the owner control plane; revocation always clears ciphertext
 and attempts OAuth token revocation when advertised. OAuth refresh occurs before dispatch is
 claimed, never widens the granted scope set, and failed refresh makes the Connection unavailable

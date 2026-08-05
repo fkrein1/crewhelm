@@ -1564,7 +1564,7 @@ const CONNECTION_FACADE_DEFINITIONS = [
       {
         action: "connect",
         kind: "connect_remote_mcp",
-        only: ["authKind", "endpoint", "idempotencyKey", "name", "oauthScopes"],
+        only: ["apiKeyHeaderName", "authKind", "endpoint", "idempotencyKey", "name", "oauthScopes"],
         privateTool: "crewhelm_remote_mcp_connection",
         required: ["authKind", "endpoint", "name"],
       },

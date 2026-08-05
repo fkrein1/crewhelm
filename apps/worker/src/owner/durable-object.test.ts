@@ -204,6 +204,11 @@ describe("OwnerControlPlane", () => {
           name: "0001_expand_provider_auth_schemes",
           version: 2,
         },
+        {
+          checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+          name: "0002_tricky_purple_man",
+          version: 3,
+        },
       ],
       owner: { owner_key: authority.ownerKey },
     });
@@ -851,7 +856,7 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(authority)).resolves.toMatchObject({ ok: true });
     await runInDurableObject(stub, (_instance, state) => {
-      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version = 2");
+      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version >= 2");
       state.storage.sql.exec("DROP INDEX provider_auth_configs_integration");
       state.storage.sql.exec(`CREATE TABLE __old_provider_auth_configs (
         auth_config_id text PRIMARY KEY NOT NULL,
@@ -889,7 +894,7 @@ describe("OwnerControlPlane", () => {
 
     await expect(stub.status(authority)).resolves.toMatchObject({
       ok: true,
-      status: { schemaVersion: 2, status: "ready" },
+      status: { schemaVersion: CONTROL_PLANE_SCHEMA_VERSION, status: "ready" },
     });
     await expect(
       runInDurableObject(stub, (_instance, state) => {
@@ -907,6 +912,65 @@ describe("OwnerControlPlane", () => {
       { auth_config_id: "ac_existing_oauth", auth_scheme: "OAUTH2" },
       { auth_config_id: "ac_service_account", auth_scheme: "GOOGLE_SERVICE_ACCOUNT" },
     ]);
+  });
+
+  it("adds API-key remote MCP authentication without losing existing Connections", async () => {
+    const authority = await authorityFor("109-remote-mcp-api-key-migration");
+    const stub = env.OWNER_CONTROL_PLANE.getByName(authority.ownerKey);
+
+    await expect(stub.status(authority)).resolves.toMatchObject({ ok: true });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("DELETE FROM control_plane_migrations WHERE version = 3");
+      state.storage.sql.exec(`
+        INSERT INTO connections
+          (connection_id, provider, provider_connection_id, auth_config_id, account_label,
+           status, created_at)
+        VALUES ('connection_existing_remote_mcp', 'remote_mcp', NULL, NULL,
+                'Existing MCP', 'active', 1);
+        INSERT INTO remote_mcp_connections
+          (connection_id, endpoint, auth_kind, catalog, catalog_bytes, snapshot_digest,
+           server_name, server_version, credential_ciphertext, credential_nonce, oauth_scopes)
+        VALUES ('connection_existing_remote_mcp', 'https://mcp.example.com/rpc', 'public', '[]', 2,
+                '${"a".repeat(64)}', 'existing-mcp', '1', NULL, NULL, '[]');
+        PRAGMA foreign_keys=OFF;
+        CREATE TABLE __old_remote_mcp_connections AS SELECT * FROM remote_mcp_connections;
+        DROP TABLE remote_mcp_connections;
+        ALTER TABLE __old_remote_mcp_connections RENAME TO remote_mcp_connections;
+        PRAGMA foreign_keys=ON;
+      `);
+    });
+    await evictDurableObject(stub);
+
+    await expect(stub.status(authority)).resolves.toMatchObject({
+      ok: true,
+      status: { schemaVersion: CONTROL_PLANE_SCHEMA_VERSION, status: "ready" },
+    });
+    await expect(
+      runInDurableObject(stub, (_instance, state) => {
+        const existing = state.storage.sql
+          .exec(
+            `SELECT auth_kind, endpoint FROM remote_mcp_connections
+             WHERE connection_id = 'connection_existing_remote_mcp'`,
+          )
+          .one();
+        state.storage.sql.exec(`
+          INSERT INTO connections
+            (connection_id, provider, provider_connection_id, auth_config_id, account_label,
+             status, created_at)
+          VALUES ('connection_api_key_remote_mcp', 'remote_mcp', NULL, NULL,
+                  'API MCP', 'active', 2);
+          INSERT INTO remote_mcp_connections
+            (connection_id, endpoint, auth_kind, api_key_header_name, catalog, catalog_bytes, snapshot_digest,
+             server_name, server_version, credential_ciphertext, credential_nonce, oauth_scopes)
+          VALUES ('connection_api_key_remote_mcp', 'https://api-mcp.example.com/rpc', 'api_key', 'x-api-key',
+                  '[]', 2, '${"b".repeat(64)}', 'api-mcp', '1', 'ciphertext', 'nonce', '[]');
+        `);
+        return existing;
+      }),
+    ).resolves.toEqual({
+      auth_kind: "public",
+      endpoint: "https://mcp.example.com/rpc",
+    });
   });
 
   it("rolls back migration DDL when its journal write fails", async () => {

@@ -461,6 +461,7 @@ export class RecipePublications {
       const slot = uniquePortableName(remote.serverName, "remote-mcp", usedConnectionSlots, 40);
       connectionSlotById.set(connectionId, slot);
       connections.push({
+        apiKeyHeaderName: remote.apiKeyHeaderName ?? undefined,
         authKind: remote.authKind,
         authorization: remoteGrants.some(
           ({ authorization }) => authorization === "approval_required",

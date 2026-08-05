@@ -320,7 +320,7 @@ How to use this tool:
 | `connect_provider` | Resolve provider auth and return a Composio authorization link or, when required, a Crewhelm setup link for reusable app credentials. |
 | `inspect_provider_connection` | Inspect one exact provider Connection. |
 | `grant_provider_actions` | Grant one Agent revision selected actions from one provider Connection. |
-| `connect_remote_mcp` | Create a public, bearer, or OAuth remote MCP Connection. |
+| `connect_remote_mcp` | Create a public, API-key, bearer, or OAuth remote MCP Connection. |
 | `inspect_remote_mcp` | Inspect one exact remote MCP Connection and tool snapshot. |
 | `reauthenticate_remote_mcp` | Create a new authentication setup for one exact remote MCP Connection snapshot. |
 | `delete_remote_mcp` | Delete one exact remote MCP Connection. |
@@ -706,11 +706,12 @@ Grant one Agent revision selected actions from one provider Connection.
 
 #### `connect_remote_mcp`
 
-Create a public, bearer, or OAuth remote MCP Connection.
+Create a public, API-key, bearer, or OAuth remote MCP Connection.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `authKind` | Yes | "public" \| "bearer" \| "oauth" | — |
+| `apiKeyHeaderName` | No | string | Exact HTTP header name for API-key authentication. Enter the credential only in the returned browser setup. minimum length: `1`; maximum length: `64`; pattern: `^[!#$%&'*+.^_`\|~0-9A-Za-z-]+$` |
+| `authKind` | Yes | "public" \| "api_key" \| "bearer" \| "oauth" | — |
 | `endpoint` | Yes | string | maximum length: `2048`; format: `uri` |
 | `name` | Yes | string | minimum length: `1`; maximum length: `80`; pattern: `^[ -~]+$` |
 | `oauthScopes` | No | array of string | maximum items: `32` |
@@ -724,10 +725,18 @@ Create a public, bearer, or OAuth remote MCP Connection.
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "apiKeyHeaderName": {
+      "description": "Exact HTTP header name for API-key authentication. Enter the credential only in the returned browser setup.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+    },
     "authKind": {
       "type": "string",
       "enum": [
         "public",
+        "api_key",
         "bearer",
         "oauth"
       ]
