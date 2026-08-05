@@ -200,6 +200,70 @@ describe("public Recipe Registry", () => {
     expect(wrongMutation.status).toBe(403);
   });
 
+  it("accepts Chrome's opaque origin only for a same-origin top-level authorization form", async () => {
+    const verifier = "registry-opaque-origin-verifier-that-is-long-enough";
+    const created = await SELF.fetch("https://registry.crewhelm.test/v1/publish/authorizations", {
+      body: JSON.stringify({
+        challenge: await sha256Hex(new TextEncoder().encode(verifier)),
+        idempotencyKey: "33bcb82f-cc5c-49df-899e-e946abfe40b0",
+        installationLabel: "Opaque origin test",
+      }),
+      headers: {
+        "cf-connecting-ip": "192.0.2.250",
+        "content-type": "application/json",
+      },
+      method: "POST",
+    });
+    const authorization = registryPublishAuthorizationSchema.parse(await created.json());
+
+    const page = await SELF.fetch(
+      `https://registry.crewhelm.test/publish/authorizations/${authorization.id}`,
+      {
+        headers: {
+          "cf-connecting-ip": "192.0.2.250",
+          cookie: `crewhelm_registry_session=${session}`,
+        },
+      },
+    );
+    const pageBody = await page.text();
+    expect(pageBody).toContain('class="ch-page"');
+    expect(pageBody).toContain('href="/api/registry/styles.css"');
+    expect(pageBody).not.toContain("<style>");
+
+    const crossSite = await SELF.fetch(
+      `https://registry.crewhelm.test/publish/authorizations/${authorization.id}`,
+      {
+        headers: {
+          cookie: `crewhelm_registry_session=${session}`,
+          "cf-connecting-ip": "192.0.2.250",
+          origin: "null",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "cross-site",
+        },
+        method: "POST",
+      },
+    );
+    expect(crossSite.status).toBe(400);
+
+    const sameOrigin = await SELF.fetch(
+      `https://registry.crewhelm.test/publish/authorizations/${authorization.id}`,
+      {
+        headers: {
+          cookie: `crewhelm_registry_session=${session}`,
+          "cf-connecting-ip": "192.0.2.250",
+          origin: "null",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "same-origin",
+        },
+        method: "POST",
+      },
+    );
+    expect(sameOrigin.status).toBe(200);
+    expect(await sameOrigin.text()).toContain("Publishing authorized");
+  });
+
   it("uses the same-origin gateway callback for GitHub OAuth", async () => {
     const response = await SELF.fetch(
       "https://registry.crewhelm.test/auth/github/start?return_to=/publish",

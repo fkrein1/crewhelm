@@ -71,16 +71,16 @@ const configureInputSchema = z
       .describe("Current revision returned by crewhelm_get_config for a fleet preview.")
       .optional(),
     idempotencyKey: agentMutationIdempotencyKeySchema
-      .describe("Required for an exact non-fleet apply retry; omit in preview mode.")
+      .describe("Required for an exact apply retry; omit in preview mode.")
       .optional(),
     mode: z
       .enum(["preview", "apply"])
       .describe(
-        "Preview first. Fleet accepts preview(target, expectedRevision, patch) only. Other targets accept preview(target) or apply(target, idempotencyKey).",
+        "Preview first. Fleet accepts preview or apply with target, expectedRevision, and patch. Other targets accept preview(target) or apply(target, idempotencyKey).",
       ),
     patch: fleetConfigurationPatchSchema
       .optional()
-      .describe("Required only for a fleet preview; omit for every other target."),
+      .describe("Required for a fleet preview or apply; omit for every other target."),
     target: z
       .discriminatedUnion("kind", [
         previewFleetConfigurationInputSchema.shape.target,
@@ -94,18 +94,21 @@ const configureInputSchema = z
   })
   .superRefine((input, context) => {
     if (input.target.kind === "fleet") {
-      if (
-        input.mode !== "preview" ||
-        input.expectedRevision === undefined ||
-        input.patch === undefined
-      ) {
+      if (input.expectedRevision === undefined || input.patch === undefined) {
         context.addIssue({
           code: "custom",
-          message: "Fleet configuration requires preview mode, expected revision, and patch.",
+          message: "Fleet configuration requires an expected revision and patch.",
         });
       }
 
-      if (input.idempotencyKey !== undefined) {
+      if (input.mode === "apply" && input.idempotencyKey === undefined) {
+        context.addIssue({
+          code: "custom",
+          message: "Fleet configuration apply requires an idempotency key.",
+        });
+      }
+
+      if (input.mode === "preview" && input.idempotencyKey !== undefined) {
         context.addIssue({
           code: "custom",
           message: "Fleet configuration preview does not accept an idempotency key.",
@@ -235,7 +238,7 @@ export function registerConfigurationTools(server: McpServer, context: McpToolCo
         readOnlyHint: false,
       },
       description:
-        "Preview fleet policy or preview/apply one bounded Skill or Agent blueprint change. This tool never applies policy changes. Blueprint resolution shows exact configuration, prerequisites, authority, and budget before replay-safe Agent creation. Packages never execute or grant authority.",
+        "Preview or apply fleet policy and bounded Skill or Agent blueprint changes. Preview validates without saving; apply requires an idempotency key. Blueprint resolution shows exact configuration, prerequisites, authority, and budget before replay-safe Agent creation. Packages never execute or grant authority.",
       inputSchema: configureInputSchema,
       title: "Configure Crewhelm",
     },

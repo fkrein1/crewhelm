@@ -1093,7 +1093,7 @@ How to use this tool:
 | `set_responsibility` | Replace the Agent responsibility in a Recipe publication draft. |
 | `set_sample_deliverable` | Replace the sample deliverable in a Recipe publication draft. |
 | `set_setup_parameters` | Replace the setup parameter declarations in a Recipe publication draft. |
-| `set_skill_decision` | Publish, reference, or remove one exact Skill in a Recipe publication draft. |
+| `set_skill_decision` | Choose how to publish, reference, or remove one Skill already attached to the source Agent. |
 | `authorize` | Create a short-lived GitHub authorization for one Recipe publication draft. |
 | `preview_or_publish` | Preview one exact public Recipe package, or publish it after confirming the unchanged digest. |
 | `discard_publish_draft` | Discard one Recipe publication draft. |
@@ -1765,7 +1765,8 @@ Replace the public discovery metadata in a Recipe publication draft.
             "minLength": 1,
             "maxLength": 40,
             "pattern": "^[a-z][a-z0-9-]*$"
-          }
+          },
+          "description": "Up to 12 unique lowercase tags sorted in canonical order."
         }
       },
       "required": [
@@ -3173,11 +3174,11 @@ Replace the setup parameter declarations in a Recipe publication draft.
 
 #### `set_skill_decision`
 
-Publish, reference, or remove one exact Skill in a Recipe publication draft.
+Choose how to publish, reference, or remove one Skill already attached to the source Agent.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `decision` | Yes | value | — |
+| `decision` | Yes | value | Choose publication treatment for one Skill already attached to the source Agent and listed in the draft skills section. |
 | `draft` | Yes | object | — |
 | `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
 
@@ -3353,7 +3354,8 @@ Publish, reference, or remove one exact Skill in a Recipe publication draft.
           ],
           "additionalProperties": false
         }
-      ]
+      ],
+      "description": "Choose publication treatment for one Skill already attached to the source Agent and listed in the draft skills section."
     },
     "draft": {
       "type": "object",

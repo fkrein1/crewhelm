@@ -67,7 +67,6 @@ import {
   MCP_AGENT_WORKFLOWS_TOOL_NAME,
   MCP_AGENT_SESSIONS_TOOL_NAME,
   MCP_BATCH_DISABLE_AGENTS_TOOL_NAME,
-  MCP_CONFIGURE_TOOL_NAME,
   MCP_CHANGE_AGENTS_TOOL_NAME,
   MCP_CHANGE_AUTOMATIONS_TOOL_NAME,
   MCP_CHANGE_CONNECTIONS_TOOL_NAME,
@@ -1291,7 +1290,7 @@ describe("authenticated MCP handler", () => {
     });
   });
 
-  it("reads and previews a documented fleet configuration change through MCP", async () => {
+  it("previews and applies a documented fleet configuration change through MCP", async () => {
     const authority = await ownerAuthority("mcp-configuration-owner", [
       OWNER_READ_SCOPE,
       AUTONOMY_WRITE_SCOPE,
@@ -1329,12 +1328,13 @@ describe("authenticated MCP handler", () => {
           method: "tools/call",
           params: {
             arguments: {
-              expectedRevision: current.configuration.revision,
-              mode: "preview",
-              patch: { integrations: { duplicateToolCallLimit: 3 } },
-              target: { kind: "fleet" },
+              operation: {
+                expectedRevision: current.configuration.revision,
+                kind: "preview_fleet_change",
+                patch: { integrations: { duplicateToolCallLimit: 3 } },
+              },
             },
-            name: MCP_CONFIGURE_TOOL_NAME,
+            name: MCP_CHANGE_CONTEXT_TOOL_NAME,
           },
         }),
       ),
@@ -1364,13 +1364,14 @@ describe("authenticated MCP handler", () => {
           method: "tools/call",
           params: {
             arguments: {
-              expectedRevision: current.configuration.revision,
-              idempotencyKey: "model-must-not-apply-fleet-config",
-              mode: "apply",
-              patch: { integrations: { duplicateToolCallLimit: 3 } },
-              target: { kind: "fleet" },
+              operation: {
+                expectedRevision: current.configuration.revision,
+                kind: "apply_fleet_change",
+                patch: { integrations: { duplicateToolCallLimit: 3 } },
+                requestKey: "mcp-apply-fleet-config",
+              },
             },
-            name: MCP_CONFIGURE_TOOL_NAME,
+            name: MCP_CHANGE_CONTEXT_TOOL_NAME,
           },
         }),
       ),
@@ -1378,12 +1379,15 @@ describe("authenticated MCP handler", () => {
       { authority },
     );
     const applyResult = jsonRpcToolResultSchema.parse(await applyResponse.json()).result;
-    const unchanged = await env.OWNER_CONTROL_PLANE.getByName(
+    const changed = await env.OWNER_CONTROL_PLANE.getByName(
       authority.ownerKey,
     ).getFleetConfiguration(authority, { target: { kind: "fleet" } });
 
-    expect(applyResult.isError).toBe(true);
-    expect(unchanged).toMatchObject({ configuration: { revision: 1 }, ok: true });
+    expect(applyResult.isError).toBe(false);
+    expect(
+      configureFleetConfigurationResultSchema.parse(JSON.parse(applyResult.content[0]?.text ?? "")),
+    ).toMatchObject({ applied: true, configuration: { revision: 2 }, ok: true });
+    expect(changed).toMatchObject({ configuration: { revision: 2 }, ok: true });
   });
 
   it("discovers bounded inference and Sandbox capabilities through the existing configuration surface", async () => {
@@ -1604,17 +1608,37 @@ describe("authenticated MCP handler", () => {
     });
 
     expect(preview.isError).toBe(false);
-    expect(publishSkillResultSchema.parse(preview.result)).toMatchObject({
+    expect(preview.result).toMatchObject({
       applied: false,
+      confirmationDigest: preparedDraft.draft.digest,
       ok: true,
       package: { fileCount: 2 },
       version: 1,
+    });
+    const previewConfirmationDigest = z
+      .object({ confirmationDigest: z.string() })
+      .parse(preview.result).confirmationDigest;
+
+    const mismatchedPublication = await call(MCP_CHANGE_CONTEXT_TOOL_NAME, {
+      operation: {
+        draft: preparedDraft.draft,
+        expectedConfirmationDigest: z
+          .object({ package: z.object({ digest: z.string() }) })
+          .parse(preview.result).package.digest,
+        kind: "apply_package",
+        requestKey: "mcp-skill-publish-mismatched",
+      },
+    });
+    expect(mismatchedPublication.isError).toBe(true);
+    expect(mismatchedPublication.result).toMatchObject({
+      error: { code: "revision_conflict" },
+      ok: false,
     });
 
     const publication = await call(MCP_CHANGE_CONTEXT_TOOL_NAME, {
       operation: {
         draft: preparedDraft.draft,
-        expectedConfirmationDigest: preparedDraft.draft.digest,
+        expectedConfirmationDigest: previewConfirmationDigest,
         kind: "apply_package",
         requestKey: "mcp-skill-publish",
       },
