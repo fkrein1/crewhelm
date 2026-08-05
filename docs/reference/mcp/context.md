@@ -550,6 +550,7 @@ How to use this tool:
 | Subtool | Purpose |
 | --- | --- |
 | `preview_fleet_change` | Preview one bounded fleet policy patch without applying it. |
+| `apply_fleet_change` | Apply one bounded fleet policy patch against its exact current revision. |
 | `prepare_skill` | Create or replace a bounded Skill package draft for review. |
 | `retire_skill` | Preview or retire one exact Skill version. |
 | `prepare_blueprint` | Create or replace a bounded Agent blueprint package draft for review. |
@@ -638,7 +639,7 @@ Preview one bounded fleet policy patch without applying it.
             }
           },
           "additionalProperties": false,
-          "description": "Fleet-wide per-run ceilings; lower Agent-specific limits still win."
+          "description": "Fleet-wide per-run ceilings; lower Agent-specific limits still win. execution.maxToolCalls cannot exceed integrations.maxCallsPerRun; raise both in the same patch when needed."
         },
         "integrations": {
           "type": "object",
@@ -665,13 +666,13 @@ Preview one bounded fleet policy patch without applying it.
               "type": "integer",
               "minimum": 1,
               "maximum": 100,
-              "description": "New maximum integration executions across all tools in one run."
+              "description": "New maximum integration executions across all tools in one run. It must be at least execution.maxToolCalls and maxCallsPerToolPerRun."
             },
             "maxCallsPerToolPerRun": {
               "type": "integer",
               "minimum": 1,
               "maximum": 100,
-              "description": "New maximum executions of one granted integration tool in one run."
+              "description": "New maximum executions of one granted integration tool in one run. It cannot exceed integrations.maxCallsPerRun."
             },
             "maxConcurrencyPerGrant": {
               "type": "integer",
@@ -715,6 +716,179 @@ Preview one bounded fleet policy patch without applying it.
         }
       },
       "additionalProperties": false
+    }
+  },
+  "required": [
+    "expectedRevision",
+    "patch"
+  ],
+  "additionalProperties": false
+}
+```
+
+</details>
+
+#### `apply_fleet_change`
+
+Apply one bounded fleet policy patch against its exact current revision.
+
+| Input | Required | Type | Details |
+| --- | --- | --- | --- |
+| `expectedRevision` | Yes | integer | exclusive minimum: `0`; maximum: `9007199254740991` |
+| `patch` | Yes | object | — |
+| `requestKey` | No | string | Optional retry identity. Omit it on the ordinary happy path. minimum length: `1`; maximum length: `128`; pattern: `^[A-Za-z0-9._~-]+$` |
+
+<details>
+<summary>View exact JSON Schema</summary>
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "expectedRevision": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "patch": {
+      "type": "object",
+      "properties": {
+        "capacity": {
+          "type": "object",
+          "properties": {
+            "maxAgents": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "maxConcurrentRuns": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "maxConnections": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          },
+          "additionalProperties": false,
+          "description": "Fleet resource capacity within Crewhelm's internal safety ceilings."
+        },
+        "execution": {
+          "type": "object",
+          "properties": {
+            "maxDurationSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600,
+              "description": "Maximum wall-clock seconds for one run."
+            },
+            "maxModelTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16384,
+              "description": "Maximum model output tokens for one run."
+            },
+            "maxToolCalls": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100,
+              "description": "Maximum integration tool executions for one run."
+            },
+            "maxTurns": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "description": "Maximum model turns for one run."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Fleet-wide per-run ceilings; lower Agent-specific limits still win. execution.maxToolCalls cannot exceed integrations.maxCallsPerRun; raise both in the same patch when needed."
+        },
+        "integrations": {
+          "type": "object",
+          "properties": {
+            "callsPerDay": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000,
+              "description": "New maximum integration executions across the fleet in a rolling day."
+            },
+            "callsPerThirtyDays": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000,
+              "description": "New maximum integration executions across the fleet in a rolling thirty-day window."
+            },
+            "duplicateToolCallLimit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "description": "New maximum executions of identical tool arguments within one run; bounds accidental loops."
+            },
+            "maxCallsPerRun": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "description": "New maximum integration executions across all tools in one run. It must be at least execution.maxToolCalls and maxCallsPerToolPerRun."
+            },
+            "maxCallsPerToolPerRun": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "description": "New maximum executions of one granted integration tool in one run. It cannot exceed integrations.maxCallsPerRun."
+            },
+            "maxConcurrencyPerGrant": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16,
+              "description": "New maximum simultaneous executions using one tool grant."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Integration usage and loop controls."
+        },
+        "retention": {
+          "type": "object",
+          "properties": {
+            "inboxSeconds": {
+              "type": "integer",
+              "minimum": 3600,
+              "maximum": 31536000
+            },
+            "runSeconds": {
+              "type": "integer",
+              "minimum": 3600,
+              "maximum": 31536000
+            }
+          },
+          "additionalProperties": false,
+          "description": "Run-detail and operational-inbox retention in seconds."
+        },
+        "schedules": {
+          "type": "object",
+          "properties": {
+            "minimumIntervalSeconds": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 604800,
+              "description": "New minimum interval in seconds for recurring Agent schedules."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Recurring schedule controls."
+        }
+      },
+      "additionalProperties": false
+    },
+    "requestKey": {
+      "description": "Optional retry identity. Omit it on the ordinary happy path.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
     }
   },
   "required": [

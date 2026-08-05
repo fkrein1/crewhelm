@@ -6,6 +6,7 @@ import {
   registryRecipeListQuerySchema,
   registrySearchQuerySchema,
 } from "@crewhelm/contracts";
+import { CREWHELM_COMPACT_BRAND_HTML, CREWHELM_WEB_STYLES } from "@crewhelm/design/web";
 import { Hono, type Context } from "hono";
 
 import {
@@ -16,6 +17,7 @@ import {
   endPublisherSession,
   finishGithubAuth,
   inspectPublishAuthorization,
+  publicRegistryPath,
   resolvePublishAuthorization,
   startGithubAuth,
 } from "./auth.js";
@@ -56,7 +58,14 @@ function compactError(context: Context, status: 400 | 401 | 403 | 404 | 409 | 41
 }
 
 function sameOrigin(context: Context<{ Bindings: RegistryEnv }>): boolean {
-  return context.req.header("origin") === new URL(context.env.PUBLIC_ORIGIN).origin;
+  const origin = context.req.header("origin");
+  if (origin === new URL(context.env.PUBLIC_ORIGIN).origin) return true;
+  return (
+    origin === "null" &&
+    context.req.header("sec-fetch-site") === "same-origin" &&
+    context.req.header("sec-fetch-mode") === "navigate" &&
+    context.req.header("sec-fetch-dest") === "document"
+  );
 }
 
 function escapeHtml(value: string): string {
@@ -69,16 +78,38 @@ function escapeHtml(value: string): string {
 }
 
 function publishAuthorizationPage(
-  context: Context,
+  context: Context<{ Bindings: RegistryEnv }>,
   input: { body: string; heading: string; status?: 200 | 400; submit?: boolean },
 ): Response {
   context.header("cache-control", "no-store");
   context.header(
     "content-security-policy",
-    "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; style-src 'unsafe-inline'",
+    "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; style-src 'self'",
   );
+  const tone = input.status === 400 ? "negative" : input.submit === true ? "accent" : "positive";
   return context.html(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(input.heading)}</title><style>:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0e13;color:#f5f1e8;font:16px/1.6 system-ui,sans-serif}main{width:min(36rem,calc(100% - 2rem));padding:2.5rem;border:1px solid #303641;border-radius:1rem;background:#151922;box-shadow:0 1.5rem 5rem #0008}small{display:block;margin-bottom:2rem;color:#d7a84d;font-weight:700;letter-spacing:.12em;text-transform:uppercase}h1{margin:0 0 1rem;font-size:clamp(1.8rem,6vw,2.5rem);line-height:1.1}p{margin:0;color:#c7cbd3}form{margin-top:2rem}button{border:0;border-radius:.65rem;padding:.8rem 1.1rem;background:#e1ae48;color:#171208;font:inherit;font-weight:750;cursor:pointer}button:focus-visible{outline:3px solid #fff;outline-offset:3px}</style></head><body><main><small>Crewhelm Registry</small><h1>${escapeHtml(input.heading)}</h1><p>${escapeHtml(input.body)}</p>${input.submit === true ? '<form method="post"><button type="submit">Authorize publishing</button></form>' : ""}</main></body></html>`,
+    `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>${escapeHtml(input.heading)}</title>
+    <link rel="stylesheet" href="${publicRegistryPath(context.env, "/styles.css")}">
+  </head>
+  <body class="ch-page">
+    <main class="ch-panel" data-tone="${tone}">
+      <div class="ch-panel__bar">
+        <span class="ch-panel__context">Registry publishing</span>
+        ${CREWHELM_COMPACT_BRAND_HTML}
+      </div>
+      <h1>${escapeHtml(input.heading)}</h1>
+      <p class="ch-copy">${escapeHtml(input.body)}</p>
+      ${input.submit === true ? '<div class="ch-actions"><form method="post"><button class="ch-button ch-button--primary" type="submit">Authorize publishing</button></form></div>' : ""}
+    </main>
+  </body>
+</html>
+`,
     input.status ?? 200,
   );
 }
@@ -179,6 +210,12 @@ export function createRegistryServer(): App {
       context.executionCtx.waitUntil(caches.default.put(key, context.res.clone()));
     }
     return context.res;
+  });
+
+  app.get("/styles.css", (context) => {
+    context.header("cache-control", "public, max-age=3600");
+    context.header("content-type", "text/css; charset=utf-8");
+    return context.body(`${CREWHELM_WEB_STYLES}\n`);
   });
 
   app.options("/v1/*", (context) => {

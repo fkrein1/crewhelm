@@ -71,6 +71,9 @@ importers:
       '@crewhelm/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@crewhelm/design':
+        specifier: workspace:*
+        version: link:../../packages/design
       drizzle-orm:
         specifier: 0.45.2
         version: 0.45.2(@cloudflare/workers-types@5.20260724.1)(kysely@0.28.17)(sql.js@1.14.1)

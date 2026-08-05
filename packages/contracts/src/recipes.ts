@@ -567,7 +567,8 @@ export const recipeDiscoverySchema = z.strictObject({
         .regex(/^[a-z][a-z0-9-]*$/, "Expected a lowercase Recipe tag."),
     )
     .max(12)
-    .refine(uniqueInCanonicalOrder, "Expected unique Recipe tags in canonical order."),
+    .refine(uniqueInCanonicalOrder, "Expected unique Recipe tags in canonical order.")
+    .describe("Up to 12 unique lowercase tags sorted in canonical order."),
 });
 
 export const recipePackageSchema = z

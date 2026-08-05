@@ -144,7 +144,7 @@ function safeReturnTo(raw: string | undefined, publicOrigin: string): string {
   }
 }
 
-function publicRegistryPath(env: RegistryEnv, path: string): string {
+export function publicRegistryPath(env: RegistryEnv, path: string): string {
   if (env.PUBLIC_API_PREFIX !== "/api/registry" || !path.startsWith("/")) {
     throw new Error("Invalid public Registry route configuration");
   }

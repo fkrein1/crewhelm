@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as z from "zod";
+import { createAgentInputSchema } from "@crewhelm/contracts";
 
 import { FACADE_TOOL_DEFINITIONS } from "./facade-definitions.js";
 import {
@@ -33,6 +34,7 @@ const EXPECTED_FACADE_OPERATIONS = {
   ],
   crewhelm_change_context: [
     "preview_fleet_change",
+    "apply_fleet_change",
     "prepare_skill",
     "retire_skill",
     "prepare_blueprint",
@@ -252,5 +254,34 @@ describe("MCP facade definitions", () => {
       expect(serialized).toMatch(/"(type|anyOf|oneOf)"/);
       expect(serialized).not.toContain("Crewhelm validates its exact contract");
     }
+  });
+
+  it("guides MCP clients through Agent capability and fleet limit dependencies", () => {
+    expect(FACADE_OPERATION_DESCRIPTIONS.create).toBe(
+      "Create an Agent from one bounded definition.",
+    );
+
+    const capabilities = z.toJSONSchema(createAgentInputSchema.shape.capabilities, { io: "input" });
+    expect(capabilities.description).toContain("inspect_capabilities");
+
+    const fleetPatch = z.toJSONSchema(
+      exposedField("crewhelm_change_context", "preview_fleet_change", "patch"),
+      { io: "input" },
+    );
+    expect(JSON.stringify(fleetPatch)).toContain(
+      "execution.maxToolCalls cannot exceed integrations.maxCallsPerRun",
+    );
+
+    const discovery = z.toJSONSchema(
+      exposedField("crewhelm_publish_recipe", "set_discovery", "value"),
+      { io: "input" },
+    );
+    expect(JSON.stringify(discovery)).toContain("canonical order");
+
+    const skillDecision = z.toJSONSchema(
+      exposedField("crewhelm_publish_recipe", "set_skill_decision", "decision"),
+      { io: "input" },
+    );
+    expect(JSON.stringify(skillDecision)).toContain("already attached to the source Agent");
   });
 });

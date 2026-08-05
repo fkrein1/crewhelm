@@ -111,7 +111,7 @@ describe("progressive MCP facade runtime", () => {
       ok: true,
       operations: [
         {
-          description: "Create a disabled Agent from one bounded definition.",
+          description: "Create an Agent from one bounded definition.",
           name: "create",
         },
       ],

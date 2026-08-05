@@ -45,6 +45,8 @@ import {
   browseCloudflareModelsInputSchema,
   modelCatalogRevisionNumberSchema,
   searchCloudflareModelsInputSchema,
+  publishAgentBlueprintResultSchema,
+  publishSkillResultSchema,
 } from "@crewhelm/contracts";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import * as z from "zod";
@@ -878,7 +880,7 @@ async function useConfigurationDraft(
       mcpAuthoringDraftResultSchema,
     );
   }
-  return catalog.dispatch(
+  const result = await catalog.dispatch(
     "crewhelm_configure",
     {
       ...(input.kind === "apply_package"
@@ -892,6 +894,18 @@ async function useConfigurationDraft(
     },
     extra,
   );
+  if (input.kind !== "preview_package") return result;
+
+  const preview = parsedPrivateResult(
+    result,
+    z.union([publishSkillResultSchema, publishAgentBlueprintResultSchema]),
+  );
+  if (preview?.ok !== true) return result;
+
+  return validatedToolResult(
+    { ...preview, confirmationDigest: read.parsed.draft.digest },
+    z.looseObject({ confirmationDigest: sha256DigestSchema, ok: z.literal(true) }),
+  );
 }
 
 const previewFleetChangeSchema = z.strictObject({
@@ -903,6 +917,17 @@ function previewFleetChangeInput(input: Record<string, unknown>) {
   return {
     expectedRevision: input.expectedRevision,
     mode: "preview",
+    patch: input.patch,
+    target: { kind: "fleet" },
+  };
+}
+
+function applyFleetChangeInput(input: Record<string, unknown>, extra: unknown) {
+  return {
+    expectedRevision: input.expectedRevision,
+    idempotencyKey:
+      typeof input.requestKey === "string" ? input.requestKey : derivedRequestKey(extra),
+    mode: "apply",
     patch: input.patch,
     target: { kind: "fleet" },
   };
@@ -1747,6 +1772,12 @@ const CONTEXT_FACADE_DEFINITIONS = [
         toPrivate: previewFleetChangeInput,
       },
       {
+        kind: "apply_fleet_change",
+        privateTool: "crewhelm_configure",
+        publicSchema: previewFleetChangeSchema.extend({ requestKey: requestKeySchema }),
+        toPrivate: applyFleetChangeInput,
+      },
+      {
         kind: "prepare_skill",
         privateTool: "crewhelm_authoring_drafts",
         publicSchema: prepareSkillDraftSchema,
@@ -2031,7 +2062,9 @@ const RECIPE_FACADE_DEFINITIONS = [
         kind: "set_skill_decision",
         privateTool: "crewhelm_authoring_drafts",
         publicSchema: z.strictObject({
-          decision: recipePublicationSkillDecisionSchema,
+          decision: recipePublicationSkillDecisionSchema.describe(
+            "Choose publication treatment for one Skill already attached to the source Agent and listed in the draft skills section.",
+          ),
           draft: recipePublicationDraftReferenceSchema,
           requestKey: requestKeySchema,
         }),

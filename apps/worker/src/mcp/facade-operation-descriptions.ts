@@ -1,5 +1,6 @@
 export const FACADE_OPERATION_DESCRIPTIONS = {
   acknowledge_inbox: "Acknowledge one exact non-approval inbox item version.",
+  apply_fleet_change: "Apply one bounded fleet policy patch against its exact current revision.",
   apply_package: "Apply one confirmed Skill or Agent blueprint package draft.",
   authorize: "Create a short-lived GitHub authorization for one Recipe publication draft.",
   authorize_provider: "Create an authorization link for one enabled provider integration.",
@@ -12,7 +13,7 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   connect_provider:
     "Resolve provider auth and return an authorization link or a short-lived owner setup link for custom credentials.",
   connect_remote_mcp: "Create a public, bearer, or OAuth remote MCP Connection.",
-  create: "Create a disabled Agent from one bounded definition.",
+  create: "Create an Agent from one bounded definition.",
   create_brief: "Create one bounded owner-provided text Brief.",
   add_model: "Inspect, preview, or enable one exact Cloudflare model ID.",
   create_event_trigger:
@@ -128,7 +129,7 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   set_setup: "Set one declared setup parameter in a Recipe installation draft.",
   set_setup_parameters: "Replace the setup parameter declarations in a Recipe publication draft.",
   set_skill_decision:
-    "Publish, reference, or remove one exact Skill in a Recipe publication draft.",
+    "Choose how to publish, reference, or remove one Skill already attached to the source Agent.",
   start_workflow: "Start two to eight ordered Agent Runs under one durable objective.",
   unresolved_effects:
     "List unresolved external tool effects that require independent verification.",

@@ -233,17 +233,17 @@ How to use this tool:
 
 | Subtool | Purpose |
 | --- | --- |
-| `create` | Create a disabled Agent from one bounded definition. |
+| `create` | Create an Agent from one bounded definition. |
 | `replace` | Replace one exact Agent revision with a new immutable definition. |
 | `disable` | Disable up to 25 exact Agent revisions. |
 
 #### `create`
 
-Create a disabled Agent from one bounded definition.
+Create an Agent from one bounded definition.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `capabilities` | No | array of object | Optional capability module configuration. Omit to use the owner model catalog's default inference module. minimum items: `1`; maximum items: `16` |
+| `capabilities` | No | array of object | Optional capability module configuration. Use crewhelm_inspect_context.inspect_capabilities to discover supported IDs and exact configuration schemas. Omit to use the owner model catalog's default inference module. minimum items: `1`; maximum items: `16` |
 | `executionLimits` | No | object | Optional Agent-specific ceilings. Omit to inherit the current fleet execution defaults. |
 | `instructions` | Yes | string | minimum length: `1`; maximum length: `8192` |
 | `name` | Yes | string | minimum length: `1`; maximum length: `80` |
@@ -458,7 +458,7 @@ Create a disabled Agent from one bounded definition.
         ],
         "additionalProperties": false
       },
-      "description": "Optional capability module configuration. Omit to use the owner model catalog's default inference module."
+      "description": "Optional capability module configuration. Use crewhelm_inspect_context.inspect_capabilities to discover supported IDs and exact configuration schemas. Omit to use the owner model catalog's default inference module."
     },
     "executionLimits": {
       "type": "object",

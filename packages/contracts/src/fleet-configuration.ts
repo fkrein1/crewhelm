@@ -122,7 +122,9 @@ export const fleetConfigurationPatchSchema = z
       .optional(),
     execution: fleetExecutionLimitsSchema
       .partial()
-      .describe("Fleet-wide per-run ceilings; lower Agent-specific limits still win.")
+      .describe(
+        "Fleet-wide per-run ceilings; lower Agent-specific limits still win. execution.maxToolCalls cannot exceed integrations.maxCallsPerRun; raise both in the same patch when needed.",
+      )
       .optional(),
     integrations: z
       .strictObject({
@@ -148,14 +150,18 @@ export const fleetConfigurationPatchSchema = z
           .int()
           .min(1)
           .max(100)
-          .describe("New maximum integration executions across all tools in one run.")
+          .describe(
+            "New maximum integration executions across all tools in one run. It must be at least execution.maxToolCalls and maxCallsPerToolPerRun.",
+          )
           .optional(),
         maxCallsPerToolPerRun: z
           .number()
           .int()
           .min(1)
           .max(100)
-          .describe("New maximum executions of one granted integration tool in one run.")
+          .describe(
+            "New maximum executions of one granted integration tool in one run. It cannot exceed integrations.maxCallsPerRun.",
+          )
           .optional(),
         maxConcurrencyPerGrant: z
           .number()
