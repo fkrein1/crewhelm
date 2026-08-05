@@ -44,10 +44,6 @@ const composioConnectionLinkInputSchema = z.strictObject({
     connectionAuthorizationAuthenticatorSchema,
   ]),
   callbackUrl: connectionAuthorizationCallbackUrlSchema,
-  connectionData: z
-    .record(z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/), z.string().max(8_192))
-    .refine((value) => Object.keys(value).length <= 16)
-    .optional(),
   userId: ownerKeySchema,
 });
 const composioConnectionLinkResponseSchema = z.looseObject({
@@ -87,7 +83,6 @@ export interface ComposioConnectionLinks {
     authConfigId: string;
     callbackSecrets: [string, string];
     callbackUrl: string;
-    connectionData?: Record<string, string>;
     userId: string;
   }): Promise<ComposioConnectionLinkResult>;
   isAvailable(): boolean;
@@ -175,9 +170,6 @@ export function createComposioConnectionLinks(
           body: JSON.stringify({
             auth_config_id: request.data.authConfigId,
             callback_url: request.data.callbackUrl,
-            ...(request.data.connectionData === undefined
-              ? {}
-              : { connection_data: request.data.connectionData }),
             experimental: {
               account_type: "PRIVATE",
             },
@@ -247,11 +239,9 @@ export function createComposioConnectionLinks(
         const serializedResult = JSON.stringify(result);
 
         if (
-          [
-            apiKey.data,
-            ...request.data.callbackSecrets,
-            ...Object.values(request.data.connectionData ?? {}),
-          ].some((secret) => serializedResult.includes(secret))
+          [apiKey.data, ...request.data.callbackSecrets].some((secret) =>
+            serializedResult.includes(secret),
+          )
         ) {
           recordResponse(response.status, "policy_rejected", startedAt);
           return outcomeUnknown();
