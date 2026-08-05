@@ -88,7 +88,7 @@ export const FACADE_OPERATION_DESCRIPTIONS = {
   preview_install:
     "Preview the Agent, authority, bindings, and limits produced by one installation draft.",
   preview_or_publish:
-    "Preview one exact public Recipe package, or publish it after confirming the unchanged digest.",
+    "Preview one exact public Recipe package, then publish the unchanged digest immediately when the owner already requested publication.",
   preview_package:
     "Preview one Skill or Agent blueprint package draft and its confirmation digest.",
   read_brief: "Read the content of one exact immutable Brief revision.",

@@ -231,7 +231,7 @@ Create an Agent from one bounded definition.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `capabilities` | No | array of object | Optional capability module configuration. Use crewhelm_inspect_context.inspect_capabilities to discover supported IDs and exact configuration schemas. Omit to use the owner model catalog's default inference module. minimum items: `1`; maximum items: `16` |
+| `capabilities` | No | array of object | Optional capability modules in canonical ID order. Use crewhelm_inspect_context.inspect_capabilities to discover supported IDs and exact configuration schemas. Omit to use the owner model catalog's default inference module. minimum items: `1`; maximum items: `16` |
 | `executionLimits` | No | object | Optional Agent-specific ceilings. Omit to inherit the current fleet execution defaults. |
 | `instructions` | Yes | string | minimum length: `1`; maximum length: `8192` |
 | `name` | Yes | string | minimum length: `1`; maximum length: `80` |
@@ -446,7 +446,7 @@ Create an Agent from one bounded definition.
         ],
         "additionalProperties": false
       },
-      "description": "Optional capability module configuration. Use crewhelm_inspect_context.inspect_capabilities to discover supported IDs and exact configuration schemas. Omit to use the owner model catalog's default inference module."
+      "description": "Optional capability modules in canonical ID order. Use crewhelm_inspect_context.inspect_capabilities to discover supported IDs and exact configuration schemas. Omit to use the owner model catalog's default inference module."
     },
     "executionLimits": {
       "type": "object",
@@ -515,7 +515,7 @@ Replace one exact Agent revision with a new immutable definition.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `capabilities` | Yes | array of object | minimum items: `1`; maximum items: `16` |
+| `capabilities` | Yes | array of object | One to 16 unique capability modules sorted in canonical ID order. minimum items: `1`; maximum items: `16` |
 | `executionLimits` | Yes | object | — |
 | `instructions` | Yes | string | minimum length: `1`; maximum length: `8192` |
 | `name` | Yes | string | minimum length: `1`; maximum length: `80` |
@@ -730,7 +730,8 @@ Replace one exact Agent revision with a new immutable definition.
           "schemaVersion"
         ],
         "additionalProperties": false
-      }
+      },
+      "description": "One to 16 unique capability modules sorted in canonical ID order."
     },
     "executionLimits": {
       "type": "object",

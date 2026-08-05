@@ -11,8 +11,9 @@ import {
 import { canonicalPackage, sha256Hex } from "./packages.js";
 
 export const TESTING_SEED_NAMESPACE = "crewhelm-labs";
+export const LOCAL_CATALOG_STRESS_NAMESPACE = "crewhelm-stress";
 
-const TOOLKIT_VERSION = "20260724_00";
+export const TOOLKIT_VERSION = "20260724_00";
 const MARKDOWN_OUTPUT = { kind: "markdown" as const };
 const CONNECTION_LIMITS = {
   maxCallsPerRun: 12,
@@ -28,7 +29,7 @@ const EXECUTION_LIMITS = {
   maxTurns: 12,
 };
 
-type SeedDefinition = {
+export type SeedDefinition = {
   boundaries: string[];
   capabilities?: Array<"sandbox" | "web-fetch" | "web-search">;
   connections?: RecipePackage["connections"];
@@ -117,7 +118,7 @@ function capability(
   };
 }
 
-function composioConnection(
+export function composioConnection(
   slot: string,
   integration: string,
   description: string,
@@ -878,6 +879,7 @@ function recipePackage(
   registry: string,
   skillDigest: string,
   version: number,
+  namespace = TESTING_SEED_NAMESPACE,
 ): RecipePackage {
   return recipePackageSchema.parse({
     agent: {
@@ -916,7 +918,7 @@ function recipePackage(
       {
         digest: skillDigest,
         name: definition.skillName,
-        namespace: TESTING_SEED_NAMESPACE,
+        namespace,
         registry,
         requirement: definition.optionalSkill === true ? "optional" : "required",
         version,
@@ -946,6 +948,40 @@ async function buildSeedBundles(registry: string): Promise<RegistryPublishBundle
         }),
       );
     }
+  }
+
+  return bundles;
+}
+
+export async function localCatalogStressSeedBundles(
+  origin: string,
+  definitions: readonly SeedDefinition[],
+): Promise<RegistryPublishBundle[]> {
+  const registry = recipeRegistryOriginSchema.parse(origin);
+  const bundles: RegistryPublishBundle[] = [];
+
+  for (const [definitionIndex, definition] of definitions.entries()) {
+    const version = 1;
+    const skill = skillPackage(definition, version);
+    const skillDigest = await sha256Hex(canonicalPackage(skill));
+    const idempotencySequence = 900_000_000 + definitionIndex;
+    bundles.push(
+      registryPublishBundleSchema.parse({
+        idempotencyKey: `00000000-0000-4000-8000-${String(idempotencySequence).padStart(12, "0")}`,
+        namespace: LOCAL_CATALOG_STRESS_NAMESPACE,
+        recipe: {
+          package: recipePackage(
+            definition,
+            registry,
+            skillDigest,
+            version,
+            LOCAL_CATALOG_STRESS_NAMESPACE,
+          ),
+          version,
+        },
+        skills: [{ package: skill, version }],
+      }),
+    );
   }
 
   return bundles;

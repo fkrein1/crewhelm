@@ -156,7 +156,9 @@ describe("progressive MCP facade runtime", () => {
     expect(unknown).toMatchObject({ isError: true });
     expect(unknown.content[0]).toMatchObject({ text: "Unknown Crewhelm operation." });
     expect(invalid).toMatchObject({ isError: true });
-    expect(invalid.content[0]).toMatchObject({ text: "Invalid Crewhelm operation input." });
+    expect(invalid.content[0]).toMatchObject({
+      text: expect.stringMatching(/^Invalid Crewhelm operation input at agent:/),
+    });
     expect(dispatch).not.toHaveBeenCalled();
   });
 

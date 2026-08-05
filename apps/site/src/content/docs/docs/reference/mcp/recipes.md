@@ -50,7 +50,7 @@ Search immutable public Recipes by bounded text query.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |
-| `limit` | No | integer | minimum: `1`; maximum: `25`; default: `10` |
+| `limit` | No | integer | minimum: `1`; maximum: `30`; default: `10` |
 | `query` | Yes | string | minimum length: `2`; maximum length: `256` |
 
 <details>
@@ -65,7 +65,7 @@ Search immutable public Recipes by bounded text query.
       "default": 10,
       "type": "integer",
       "minimum": 1,
-      "maximum": 25
+      "maximum": 30
     },
     "query": {
       "type": "string",
@@ -1107,7 +1107,7 @@ How to use this tool:
 | `set_setup_parameters` | Replace the setup parameter declarations in a Recipe publication draft. |
 | `set_skill_decision` | Choose how to publish, reference, or remove one Skill already attached to the source Agent. |
 | `authorize` | Create a short-lived GitHub authorization for one Recipe publication draft. |
-| `preview_or_publish` | Preview one exact public Recipe package, or publish it after confirming the unchanged digest. |
+| `preview_or_publish` | Preview one exact public Recipe package, then publish the unchanged digest immediately when the owner already requested publication. |
 | `discard_publish_draft` | Discard one Recipe publication draft. |
 
 #### `prepare`
@@ -3449,7 +3449,7 @@ Create a short-lived GitHub authorization for one Recipe publication draft.
 
 #### `preview_or_publish`
 
-Preview one exact public Recipe package, or publish it after confirming the unchanged digest.
+Preview one exact public Recipe package, then publish the unchanged digest immediately when the owner already requested publication.
 
 | Input | Required | Type | Details |
 | --- | --- | --- | --- |

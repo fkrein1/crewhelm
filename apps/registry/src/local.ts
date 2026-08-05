@@ -2,10 +2,16 @@ import { registryPublishAuthorizationIdSchema } from "@crewhelm/contracts";
 import { and, eq, gte } from "drizzle-orm";
 
 import type { RegistryEnv } from "./env.js";
+import { localCatalogStressDefinitionsA } from "./local-catalog-stress-seed-a.js";
+import { localCatalogStressDefinitionsB } from "./local-catalog-stress-seed-b.js";
 import { publishBundle } from "./registry.js";
 import { publishAuthorizations, publishers, registryDatabase } from "./schema.js";
 import { createRegistryServer } from "./server.js";
-import { TESTING_SEED_ARTIFACT_VERSION, testingSeedBundles } from "./testing-seed.js";
+import {
+  localCatalogStressSeedBundles,
+  TESTING_SEED_ARTIFACT_VERSION,
+  testingSeedBundles,
+} from "./testing-seed.js";
 
 type LocalBindings = Pick<
   RegistryEnv,
@@ -15,7 +21,14 @@ type LocalBindings = Pick<
 const publisher = {
   displayName: "Crewhelm Development Seeds",
   githubUserId: 1,
+  githubLogin: "crewhelm-development-seeds",
   namespace: "crewhelm-labs",
+};
+const stressPublisher = {
+  displayName: "Crewhelm Catalog Stress Seeds",
+  githubUserId: 2,
+  githubLogin: "crewhelm-catalog-stress-seeds",
+  namespace: "crewhelm-stress",
 };
 const allowAll: RateLimit = { limit: () => Promise.resolve({ success: true }) };
 const unavailableAi = {
@@ -50,53 +63,70 @@ function internalPath(request: Request, prefix: string): string {
   return pathname.startsWith(`${prefix}/`) ? pathname.slice(prefix.length) : pathname;
 }
 
-function exactLoopback(request: Request, bindings: LocalBindings): boolean {
-  try {
-    return (
-      bindings.PUBLIC_ORIGIN === "http://127.0.0.1:8788/" &&
-      new URL(request.url).origin === "http://127.0.0.1:8788"
-    );
-  } catch {
-    return false;
-  }
+function localEnvironment(bindings: LocalBindings): boolean {
+  return bindings.PUBLIC_ORIGIN === "http://127.0.0.1:8788/";
 }
 
 export const localRegistry: ExportedHandler<LocalBindings> = {
   async fetch(request, bindings, context): Promise<Response> {
-    if (!exactLoopback(request, bindings)) {
+    if (!localEnvironment(bindings)) {
       return Response.json({ error: "local_environment_required" }, { status: 503 });
     }
     const env = environment(bindings);
     const url = new URL(request.url);
-    if (url.pathname === "/development/seed") {
+    const stressOnly = url.pathname === "/development/seed/stress";
+    if (url.pathname === "/development/seed" || stressOnly) {
       if (request.method !== "POST") {
         return new Response(null, { headers: { allow: "POST" }, status: 405 });
       }
       const now = Math.floor(Date.now() / 1_000);
-      await registryDatabase(env.REGISTRY_DB)
-        .insert(publishers)
-        .values({
-          createdAt: now,
-          displayName: publisher.displayName,
-          githubLogin: "crewhelm-development-seeds",
-          githubUserId: publisher.githubUserId,
-          namespace: publisher.namespace,
-          profileUrl: null,
-          status: "active",
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          set: { displayName: publisher.displayName, updatedAt: now },
-          target: publishers.githubUserId,
-        });
+      for (const seedPublisher of stressOnly ? [stressPublisher] : [publisher, stressPublisher]) {
+        await registryDatabase(env.REGISTRY_DB)
+          .insert(publishers)
+          .values({
+            createdAt: now,
+            displayName: seedPublisher.displayName,
+            githubLogin: seedPublisher.githubLogin,
+            githubUserId: seedPublisher.githubUserId,
+            namespace: seedPublisher.namespace,
+            profileUrl: null,
+            status: "active",
+            updatedAt: now,
+          })
+          .onConflictDoUpdate({
+            set: {
+              displayName: seedPublisher.displayName,
+              githubLogin: seedPublisher.githubLogin,
+              updatedAt: now,
+            },
+            target: publishers.githubUserId,
+          });
+      }
       const recipes = [];
-      for (const bundle of await testingSeedBundles(env.PUBLIC_ORIGIN)) {
-        const result = await publishBundle(env, publisher, bundle);
-        if (result.recipe.artifact.version === TESTING_SEED_ARTIFACT_VERSION) {
-          recipes.push(result.recipe.artifact.name);
+      if (!stressOnly) {
+        for (const bundle of await testingSeedBundles(env.PUBLIC_ORIGIN)) {
+          const result = await publishBundle(env, publisher, bundle);
+          if (result.recipe.artifact.version === TESTING_SEED_ARTIFACT_VERSION) {
+            recipes.push(result.recipe.artifact.name);
+          }
         }
       }
-      return Response.json({ namespace: publisher.namespace, recipes, seeded: recipes.length });
+      const stressDefinitions = [
+        ...localCatalogStressDefinitionsA,
+        ...localCatalogStressDefinitionsB,
+      ];
+      for (const bundle of await localCatalogStressSeedBundles(
+        env.PUBLIC_ORIGIN,
+        stressDefinitions,
+      )) {
+        const result = await publishBundle(env, stressPublisher, bundle);
+        recipes.push(result.recipe.artifact.name);
+      }
+      return Response.json({
+        namespace: stressOnly ? stressPublisher.namespace : publisher.namespace,
+        recipes,
+        seeded: recipes.length,
+      });
     }
     const resolveMatch = internalPath(request, bindings.PUBLIC_API_PREFIX).match(
       /^\/v1\/publish\/authorizations\/([^/]+)\/resolve$/u,

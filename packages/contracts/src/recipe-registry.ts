@@ -12,7 +12,7 @@ import {
 } from "./recipes.js";
 
 export const MAXIMUM_REGISTRY_SEARCH_QUERY_CHARACTERS = 256;
-export const MAXIMUM_REGISTRY_SEARCH_RESULTS = 25;
+export const MAXIMUM_REGISTRY_SEARCH_RESULTS = 30;
 export const MAXIMUM_REGISTRY_PUBLISH_SKILLS = 8;
 
 export const registryPublishAuthorizationIdSchema = z
@@ -84,7 +84,7 @@ export const registryRecipeSearchResponseSchema = z.strictObject({
 });
 
 export const registryRecipeListQuerySchema = z.strictObject({
-  limit: z.number().int().min(1).max(MAXIMUM_REGISTRY_SEARCH_RESULTS).default(25),
+  limit: z.number().int().min(1).max(MAXIMUM_REGISTRY_SEARCH_RESULTS).default(30),
 });
 
 export const registryRecipeListResponseSchema = z.strictObject({

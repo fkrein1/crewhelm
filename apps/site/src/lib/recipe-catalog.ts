@@ -43,8 +43,25 @@ export interface RecipeChoiceSignal {
   label: string;
 }
 
-const maximumCardSignals = 2;
-const maximumVisibleIntegrations = 2;
+export interface RecipeMetadataFitInput {
+  availableWidth: number;
+  baseHiddenCount: number;
+  fixedWidth: number;
+  gapWidth: number;
+  items: readonly { count: number; width: number }[];
+  overflowWidth: number;
+}
+
+export interface RecipeMetadataFit {
+  hiddenCount: number;
+  visibleItems: number;
+}
+
+export const RECIPE_CATALOG_CACHE_CONTROL =
+  "public, max-age=0, s-maxage=30, stale-while-revalidate=30";
+export const RECIPE_DETAIL_CACHE_CONTROL = RECIPE_CATALOG_CACHE_CONTROL;
+
+const maximumVisibleIntegrations = 3;
 const modelLabels: Readonly<Record<string, string>> = {
   "@cf/ibm-granite/granite-4.0-h-micro": "Granite 4 Micro",
   "@cf/meta/llama-4-scout-17b-16e-instruct": "Llama 4 Scout",
@@ -93,6 +110,46 @@ export function getRecipeModelLabel(model: string): string {
   return modelLabels[model] ?? model.split("/").at(-1) ?? model;
 }
 
+export function getRecipeCardModelLabel(modelLabel: string): string {
+  const characters = Array.from(modelLabel);
+  return characters.length <= 15 ? modelLabel : `${characters.slice(0, 14).join("")}…`;
+}
+
+export function getComposioLogoUrl(slug: string): string {
+  return `https://logos.composio.dev/api/${encodeURIComponent(slug)}`;
+}
+
+export function getRecipePublisherLabel(publisher: SiteRecipeProjection["publisher"]): string {
+  return `@${publisher.namespace}`;
+}
+
+export function fitRecipeMetadataItems(input: RecipeMetadataFitInput): RecipeMetadataFit {
+  const totalCount =
+    input.baseHiddenCount + input.items.reduce((count, item) => count + item.count, 0);
+  let visibleCount = 0;
+  let visibleItems = 0;
+  let visibleWidth = 0;
+
+  for (const item of input.items) {
+    const candidateVisibleCount = visibleCount + item.count;
+    const hiddenCount = totalCount - candidateVisibleCount;
+    const renderedItems = 1 + visibleItems + 1 + (hiddenCount > 0 ? 1 : 0);
+    const requiredWidth =
+      input.fixedWidth +
+      visibleWidth +
+      item.width +
+      (hiddenCount > 0 ? input.overflowWidth : 0) +
+      input.gapWidth * (renderedItems - 1);
+
+    if (requiredWidth > input.availableWidth) break;
+    visibleCount = candidateVisibleCount;
+    visibleItems += 1;
+    visibleWidth += item.width;
+  }
+
+  return { hiddenCount: totalCount - visibleCount, visibleItems };
+}
+
 export function getRecipeChoiceSignals(recipe: RecipePreview): RecipeChoiceSignals {
   const capabilities = recipe.capabilities
     .filter((capability) => capability !== "Workers AI")
@@ -110,17 +167,14 @@ export function getRecipeChoiceSignals(recipe: RecipePreview): RecipeChoiceSigna
       : undefined,
   ].filter((signal): signal is RecipeChoiceSignal => signal !== undefined);
   const integrations = recipe.integrations.slice(0, maximumVisibleIntegrations);
-  const signalBudget = maximumCardSignals - (integrations.length > 0 ? 1 : 0);
-  const signals = rankedSignals.slice(0, signalBudget);
 
   return {
     accessibleLabel: [
       ...recipe.integrations.map((integration) => integration.label),
       ...rankedSignals.map(({ label }) => label),
     ].join(", "),
-    hiddenCount:
-      recipe.integrations.length - integrations.length + rankedSignals.length - signals.length,
+    hiddenCount: recipe.integrations.length - integrations.length,
     integrations,
-    signals,
+    signals: rankedSignals,
   };
 }

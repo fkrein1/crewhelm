@@ -206,8 +206,8 @@ if (!seedResponse.ok) {
   throw new Error(`Testing Registry seed failed (${String(seedResponse.status)}).`);
 }
 const seed = object(await seedResponse.json(), "Testing Registry seed");
-if (seed.seeded !== 10 || seed.namespace !== "crewhelm-labs") {
-  throw new Error("Testing Registry did not reconcile the expected ten Recipes.");
+if (seed.seeded !== 30 || seed.namespace !== "crewhelm-labs") {
+  throw new Error("Testing Registry did not reconcile the expected thirty Recipes.");
 }
 
 const cliOutput = await capture("node", [

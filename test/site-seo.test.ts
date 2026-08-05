@@ -108,7 +108,7 @@ describe("Crewhelm Recipe catalog", () => {
     expect(recipePreview.slug).toBe("crewhelm/research-steward");
   });
 
-  it("ranks and caps Recipe choice signals before showing a remainder", () => {
+  it("keeps three integrations and every signal available for width fitting", () => {
     const selection = getRecipeChoiceSignals({
       ...recipePreview,
       capabilities: ["Workers AI", "Python sandbox", "Web search", "Web fetch", "Browser"],
@@ -119,9 +119,21 @@ describe("Crewhelm Recipe catalog", () => {
       ],
     });
 
-    expect(selection.integrations.map(({ label }) => label)).toEqual(["GitHub", "Slack"]);
-    expect(selection.signals).toEqual([{ kind: "capability", label: "Python sandbox" }]);
-    expect(selection.hiddenCount).toBe(7);
+    expect(selection.integrations.map(({ label }) => label)).toEqual([
+      "GitHub",
+      "Slack",
+      "HubSpot",
+    ]);
+    expect(selection.signals).toEqual([
+      { kind: "capability", label: "Python sandbox" },
+      { kind: "capability", label: "Web search" },
+      { kind: "capability", label: "Web fetch" },
+      { kind: "capability", label: "Browser" },
+      { kind: "automation", label: "Event" },
+      { kind: "automation", label: "Scheduled" },
+      { kind: "workflow", label: "Workflow" },
+    ]);
+    expect(selection.hiddenCount).toBe(0);
     expect(selection.accessibleLabel).toContain("HubSpot");
     expect(selection.accessibleLabel).toContain("Workflow");
   });
@@ -132,6 +144,10 @@ describe("Crewhelm Recipe catalog", () => {
     expect(selection.signals).toEqual([
       { kind: "capability", label: "Sandbox" },
       { kind: "capability", label: "Fetch" },
+      { kind: "capability", label: "Search" },
+      { kind: "automation", label: "Event" },
+      { kind: "automation", label: "Scheduled" },
+      { kind: "workflow", label: "Workflow" },
     ]);
     expect(selection.accessibleLabel).not.toContain("Kimi K2.6");
   });
@@ -191,7 +207,9 @@ describe("Crewhelm Recipe catalog", () => {
     expect(explorer).toContain("<dialog");
     expect(explorer).toContain("history.pushState");
     expect(explorer).toContain('window.addEventListener("popstate"');
-    expect(explorer).toContain("startViewTransition");
+    expect(explorer).toContain("@starting-style");
+    expect(explorer).toContain("allow-discrete");
+    expect(explorer).not.toContain("startViewTransition");
     expect(directPage).toContain("<RecipeDetail {recipe} />");
     expect(directPage).not.toContain("<RecipeExplorer");
   });

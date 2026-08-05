@@ -1,6 +1,7 @@
 ---
 import {
   getRecipeModelLabel,
+  getRecipePublisherLabel,
   type RecipePreview,
 } from "../../lib/recipe-catalog";
 import ConnectionLogo from "./ConnectionLogo.astro";
@@ -13,6 +14,7 @@ interface Props {
 const { mode = "page", recipe } = Astro.props;
 const primaryModel = getRecipeModelLabel(recipe.inference.primaryModel);
 const fallbackModels = recipe.inference.fallbackModels.map(getRecipeModelLabel);
+const publisherLabel = getRecipePublisherLabel(recipe.publisher);
 const visibleCapabilities = recipe.capabilities.filter(
   (capability) => capability !== "Workers AI",
 );
@@ -67,7 +69,7 @@ const automationSignals = [
 
         <section aria-labelledby={`publisher-${recipe.slug}`}>
           <p class="section-label" id={`publisher-${recipe.slug}`}>Published by</p>
-          <p>{recipe.publisher.displayName} · v{recipe.artifact.version}</p>
+          <p title={recipe.publisher.displayName}>{publisherLabel}</p>
         </section>
       </div>
     </div>

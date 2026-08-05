@@ -25,20 +25,26 @@ describe("local Registry", () => {
       .run();
   });
 
-  it("serves health only at the exact loopback origin", async () => {
+  it("serves requests only with the fixed local Registry configuration", async () => {
     const context = createExecutionContext();
     const accepted = await localRegistry.fetch!(
       new Request("http://127.0.0.1:8788/health"),
       environment(),
       context,
     );
-    const denied = await localRegistry.fetch!(
-      new Request("http://localhost:8788/health"),
+    const boundSite = await localRegistry.fetch!(
+      new Request("http://crewhelm-registry/health"),
       environment(),
+      context,
+    );
+    const denied = await localRegistry.fetch!(
+      new Request("http://crewhelm-registry/health"),
+      { ...environment(), PUBLIC_ORIGIN: "http://localhost:8788/" },
       context,
     );
 
     expect(accepted.status).toBe(200);
+    expect(boundSite.status).toBe(200);
     expect(denied.status).toBe(503);
   });
 

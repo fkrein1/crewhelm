@@ -263,6 +263,7 @@ describe("MCP facade definitions", () => {
 
     const capabilities = z.toJSONSchema(createAgentInputSchema.shape.capabilities, { io: "input" });
     expect(capabilities.description).toContain("inspect_capabilities");
+    expect(capabilities.description).toContain("canonical ID order");
 
     const fleetPatch = z.toJSONSchema(
       exposedField("crewhelm_change_context", "preview_fleet_change", "patch"),
