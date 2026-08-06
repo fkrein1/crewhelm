@@ -485,7 +485,7 @@ describe("repository foundation", () => {
 
     expect(cliManifest).toMatchObject({
       name: "@crewhelm/cli",
-      version: "0.1.0-beta.5",
+      version: "0.1.0-beta.6",
       bin: {
         crewhelm: "dist/crewhelm.js",
       },
