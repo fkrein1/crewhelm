@@ -16,9 +16,9 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "0.18.8",
-    "@cloudflare/workers-types": "5.20260724.1",
-    "vitest": "4.1.10",
+    "@cloudflare/vitest-pool-workers": "0.22.0",
+    "@cloudflare/workers-types": "5.20260823.1",
+    "vitest": "4.1.11",
     "wrangler": "4.114.0"
   }
 }
