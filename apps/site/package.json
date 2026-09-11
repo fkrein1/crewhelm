@@ -21,7 +21,7 @@
     "@cloudflare/workers-types": "5.20260730.1",
     "@tailwindcss/vite": "4.3.3",
     "tailwindcss": "4.3.3",
-    "vitest": "4.1.10",
+    "vitest": "4.1.11",
     "wrangler": "4.118.0"
   }
 }
