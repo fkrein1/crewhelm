@@ -31,12 +31,10 @@ function testHarness() {
       handler = registeredHandler;
     },
   );
-  const dispatch = vi.fn<PrivateToolCatalog["dispatch"]>(
-    async (): Promise<CallToolResult> => ({
-      content: [{ text: JSON.stringify({ ok: true }), type: "text" }],
-      isError: false,
-    }),
-  );
+  const dispatch = vi.fn<PrivateToolCatalog["dispatch"]>(async (): Promise<CallToolResult> => ({
+    content: [{ text: JSON.stringify({ ok: true }), type: "text" }],
+    isError: false,
+  }));
   const privateInputSchema = z.strictObject({
     agentId: z.string().min(1),
     agentRevision: z.number().int().positive(),

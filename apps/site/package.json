@@ -15,13 +15,13 @@
     "@astrojs/sitemap": "3.7.3",
     "@astrojs/starlight": "0.41.6",
     "@crewhelm/design": "workspace:*",
-    "astro": "7.1.6"
+    "astro": "7.3.3"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20260730.1",
+    "@cloudflare/workers-types": "5.20261004.1",
     "@tailwindcss/vite": "4.3.3",
     "tailwindcss": "4.3.3",
-    "vitest": "4.1.10",
+    "vitest": "4.1.12",
     "wrangler": "4.118.0"
   }
 }

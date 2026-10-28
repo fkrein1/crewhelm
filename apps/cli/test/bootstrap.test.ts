@@ -1151,6 +1151,30 @@ describe("Cloudflare bootstrap", () => {
     }
   });
 
+  it("accepts a 12 MiB packaged Worker and rejects a larger script", async () => {
+    const fixture = await createDeploymentAssets();
+    const scriptPath = resolve(fixture.assets, "index.js");
+    const maximumBytes = 12 * 1_048_576;
+
+    try {
+      const script = await readFile(scriptPath, "utf8");
+      await writeFile(scriptPath, script.padEnd(maximumBytes, " "));
+      await expect(
+        readPackagedDeploymentFingerprint({ deploymentAssetsDirectory: fixture.assets }),
+      ).resolves.toMatch(/^[a-f0-9]{64}$/u);
+
+      await writeFile(scriptPath, script.padEnd(maximumBytes + 1, " "));
+      await expect(
+        readPackagedDeploymentFingerprint({ deploymentAssetsDirectory: fixture.assets }),
+      ).rejects.toMatchObject({
+        message: "Packaged deployment assets are invalid.",
+        stage: "assets",
+      });
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
   it("rejects an unreferenced Worker text module", async () => {
     const fixture = await createDeploymentAssets();
     const unreferencedModule = "1111111111111111111111111111111111111111-0001_extra.sql";
