@@ -38,8 +38,11 @@ SOFTWARE.
 
 The CLI and development environment use the exact Wrangler version in the lockfile. Wrangler's
 Miniflare and Sharp dependency chain downloads platform-specific libvips binaries from the
-`@img/sharp-libvips-*` packages at version 1.3.1. Those packages are licensed under
-`LGPL-3.0-or-later`. They are not included in the deployed Worker bundle.
+`@img/sharp-libvips-*` packages at version 1.3.1. Astro's build-time Sharp toolchain also uses
+`@img/sharp-libvips-*` at version 1.3.4 and the Windows and WebAssembly `@img/sharp-*` binaries at
+version 0.35.5. These binaries include `LGPL-3.0-or-later` material; the Sharp bindings also carry
+Apache-2.0, and the WebAssembly package additionally carries MIT. These packages are build and
+local-development tools and are not included in the deployed Worker bundles.
 
 The dependency-review workflow permits only the exact package names and version represented in the
 lockfile. Any upgrade requires a new license and supply-chain review.

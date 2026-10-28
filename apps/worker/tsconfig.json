@@ -2,8 +2,16 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "lib": ["ES2024"],
-    // Exact-pinned Better Auth, OAuth Provider, Better Fetch, and Drizzle declarations
-    // conflict with the Worker-only environment. AGENTS.md bounds this leaf-only exception.
+    // Recheck with: pnpm exec tsc --noEmit -p apps/worker/tsconfig.json --skipLibCheck false.
+    // The no-skip run reports only third-party declaration errors, with no Crewhelm errors:
+    // Better Auth/OAuth Provider 1.7.0-beta.10, Better Fetch 1.3.1, Drizzle 0.45.2;
+    // AI 7.0.37, provider-utils 5.0.12/5.0.18, Think 0.15.0, Agents 0.19.0;
+    // MCP SDK 1.29.0/1.32.0, Capnweb 0.8.0, Chat 4.35.0, Tinybench 2.9.0.
+    // Diagnostics are missing Node/DOM/optional-adapter globals or modules (TS2304,
+    // TS2307, TS2550, TS2552, TS2591, TS2749, TS2882) and upstream generic/interface/
+    // tuple constraints (TS2344, TS2416, TS2420, TS2515, TS2536, TS2559, TS2574).
+    // Root and shared configs remain strict; recheck on dependency/TypeScript upgrades
+    // and remove this leaf-only exception when the exact-pinned declarations pass.
     "skipLibCheck": true,
     "types": ["@cloudflare/workers-types"]
   },

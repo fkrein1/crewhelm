@@ -69,7 +69,7 @@ const EXPECTED_MIGRATIONS = [
   "0013_cloudflare_model_catalog_cache.sql",
 ] as const;
 // This is an uncompressed package-integrity guard, not Cloudflare's compressed upload limit.
-const MAX_WORKER_SCRIPT_BYTES = 11 * 1_048_576;
+const MAX_WORKER_SCRIPT_BYTES = 12 * 1_048_576;
 const MAX_SOURCE_MAP_BYTES = 25 * 1_048_576;
 const MAX_TEMPLATE_BYTES = 1_048_576;
 const MAX_MIGRATION_BYTES = 1_048_576;

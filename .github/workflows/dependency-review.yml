@@ -25,7 +25,7 @@ jobs:
         with:
           # json-schema-typed ships a BSD-2-Clause license but GitHub reports "BSD-2-Clause AND JSON".
           # rou3@0.7.12 declares and ships MIT, but GitHub reports "MIT AND MS-PL".
-          # Wrangler's development-only Miniflare/Sharp toolchain downloads libvips binaries.
+          # Wrangler and Astro's build-only Sharp toolchains include LGPL libvips binaries.
           # The exact-pinned Think/Agents graph includes the five versioned browser-data,
           # schema, compression, and file-detection dependencies listed after libvips.
           # Astro's YAML parser and Tailwind's Lightning CSS toolchain use Python-2.0 and MPL-2.0.
@@ -43,6 +43,20 @@ jobs:
             pkg:npm/@img/sharp-libvips-linux-x64@1.3.1,
             pkg:npm/@img/sharp-libvips-linuxmusl-arm64@1.3.1,
             pkg:npm/@img/sharp-libvips-linuxmusl-x64@1.3.1,
+            pkg:npm/@img/sharp-libvips-darwin-arm64@1.3.4,
+            pkg:npm/@img/sharp-libvips-darwin-x64@1.3.4,
+            pkg:npm/@img/sharp-libvips-linux-arm64@1.3.4,
+            pkg:npm/@img/sharp-libvips-linux-arm@1.3.4,
+            pkg:npm/@img/sharp-libvips-linux-ppc64@1.3.4,
+            pkg:npm/@img/sharp-libvips-linux-riscv64@1.3.4,
+            pkg:npm/@img/sharp-libvips-linux-s390x@1.3.4,
+            pkg:npm/@img/sharp-libvips-linux-x64@1.3.4,
+            pkg:npm/@img/sharp-libvips-linuxmusl-arm64@1.3.4,
+            pkg:npm/@img/sharp-libvips-linuxmusl-x64@1.3.4,
+            pkg:npm/@img/sharp-wasm32@0.35.5,
+            pkg:npm/@img/sharp-win32-arm64@0.35.5,
+            pkg:npm/@img/sharp-win32-ia32@0.35.5,
+            pkg:npm/@img/sharp-win32-x64@0.35.5,
             pkg:npm/caniuse-lite@1.0.30001806,
             pkg:npm/json-schema@0.4.0,
             pkg:npm/node-liblzma@2.2.0,

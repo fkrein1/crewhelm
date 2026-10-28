@@ -746,7 +746,7 @@ describe("Agent workflows", () => {
       workflowId: started.workflow.workflowId,
     });
     if (!first.ok) throw new Error("Expected first typed Workflow stage.");
-    const firstRun = await terminalRun(controlPlane, authority, first.runId);
+    const firstRun = await completedRunWithOutput(controlPlane, authority, first.runId);
     expect(firstRun).toHaveProperty("output");
     await controlPlane.completeAgentWorkflowStage({
       agentId: created.agent.id,
