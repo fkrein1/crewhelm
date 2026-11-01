@@ -13,7 +13,7 @@
   "dependencies": {
     "@astrojs/cloudflare": "14.1.7",
     "@astrojs/sitemap": "3.7.3",
-    "@astrojs/starlight": "0.41.6",
+    "@astrojs/starlight": "0.42.7",
     "@crewhelm/design": "workspace:*",
     "astro": "7.3.3"
   },
