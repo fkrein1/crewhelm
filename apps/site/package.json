@@ -15,7 +15,7 @@
     "@astrojs/sitemap": "3.7.3",
     "@astrojs/starlight": "0.41.6",
     "@crewhelm/design": "workspace:*",
-    "astro": "7.3.3"
+    "astro": "7.4.7"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261004.1",
