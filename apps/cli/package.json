@@ -38,7 +38,7 @@
     "@crewhelm/contracts": "workspace:*",
     "@crewhelm/design": "workspace:*",
     "chalk": "6.0.1",
-    "commander": "15.0.0",
+    "commander": "15.1.0",
     "esbuild": "0.28.2",
     "vitest": "4.1.12",
     "zod": "4.4.3"
